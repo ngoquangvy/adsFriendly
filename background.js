@@ -380,13 +380,37 @@ function isCoreSystem(hostname) {
   return CORE_SYSTEM_DOMAINS.some(domain => hostname === domain || hostname.endsWith('.' + domain));
 }
 
+// Helper to analyze if an URL is a stealth ad/pop-under
+function isSuspiciousURL(url, globalPatterns = []) {
+    try {
+        const u = new URL(url);
+        // 1. Parameter patterns
+        const suspiciousParams = ['utm_', 'aff_', 'clickid', 'pop_', 'bannerid', 'zoneid'];
+        if (suspiciousParams.some(p => u.search.includes(p))) return true;
+
+        // 2. Domain Match with AI Brain
+        const domainMatch = globalPatterns.some(p => p.type === 'domain' && u.hostname.includes(p.value));
+        if (domainMatch) return true;
+
+        return false;
+    } catch (e) { return false; }
+}
+
+// Get Dynamic Trust Window based on site reputation
+async function getDynamicTrustWindow(hostname) {
+    const { siteReputation = {} } = await chrome.storage.local.get('siteReputation');
+    const rep = siteReputation[hostname];
+    if (rep && rep.blockedAdCount > 10) return 500; // Strict for ad-heavy sites
+    return 2000; // Default
+}
+
 // Listen for new tab creation
 chrome.webNavigation.onCreatedNavigationTarget.addListener(async (details) => {
   const { sourceTabId, tabId, url } = details;
   
   try {
-    const settings = await chrome.storage.local.get(['isEnabled']);
-    if (settings.isEnabled === false) return;
+    const { isEnabled, globalAdPatterns = [] } = await chrome.storage.local.get(['isEnabled', 'globalAdPatterns']);
+    if (isEnabled === false) return;
 
     const sourceTab = await chrome.tabs.get(sourceTabId);
     if (!sourceTab || !sourceTab.url || !sourceTab.url.startsWith('http')) return;
@@ -397,31 +421,36 @@ chrome.webNavigation.onCreatedNavigationTarget.addListener(async (details) => {
 
     if (sourceUrl.hostname === targetDomain) return;
 
-    // 1. Deep Pulse: Check Sharded Trusted Path (O(1) Performance)
+    // v2.5 MUST-KILL Check: If the URL is suspicious, kill it regardless of clicks
+    if (isSuspiciousURL(url, globalAdPatterns)) {
+        console.log(`%c[AdsFriendly AI] Stealth Pop-under neutralized: ${targetDomain}`, "color: #ef4444; font-weight: bold;");
+        await logBlockedNavigation(url, sourceUrl.hostname);
+        const blockedUrl = chrome.runtime.getURL(`ui/blocked.html?url=${encodeURIComponent(url)}&source=${encodeURIComponent(sourceUrl.hostname)}`);
+        chrome.tabs.update(tabId, { url: blockedUrl });
+        return;
+    }
+
+    // 1. Deep Pulse: Check Sharded Trusted Path
     const shardKey = `p:${sourceUrl.hostname}>${targetDomain}`;
     const pulseResult = await chrome.storage.local.get([shardKey]);
     const path = pulseResult[shardKey];
 
-    if (path && (path.isManual || path.visits >= 3)) {
-        console.log(`[AdsFriendly Pulse] Authorized path detected: ${sourceUrl.hostname} -> ${targetDomain}`);
-        return; 
-    }
+    if (path && (path.isManual || path.visits >= 3)) return; 
 
-    // 2. Check Whitelist (User Defined)
+    // 2. Check Whitelist
     const { whitelist = [] } = await chrome.storage.local.get(['whitelist']);
-    if (whitelist.includes(targetDomain)) {
-        syncTrustedPath(sourceUrl.hostname, targetDomain); // Learn the successful path
-        return;
-    }
+    if (whitelist.includes(targetDomain)) return;
 
-    // 3. Evaluation: Cross-domain check
+    // 3. Evaluation: Dynamic Trust Window
+    const trustWindow = await getDynamicTrustWindow(sourceUrl.hostname);
     const timeSinceClick = Date.now() - lastTrustedClick;
-    if (timeSinceClick > 2000) { // Suspicious if no recent manual click
+
+    if (timeSinceClick > trustWindow) {
+      console.log(`[AdsFriendly AI] Blocked unauthorized new tab: ${targetDomain} (Window: ${trustWindow}ms)`);
       await logBlockedNavigation(url, sourceUrl.hostname);
       const blockedUrl = chrome.runtime.getURL(`ui/blocked.html?url=${encodeURIComponent(url)}&source=${encodeURIComponent(sourceUrl.hostname)}`);
       chrome.tabs.update(tabId, { url: blockedUrl });
     } else {
-      // Valid trusted click - Learn this path naturally
       syncTrustedPath(sourceUrl.hostname, targetDomain);
     }
   } catch (err) {
