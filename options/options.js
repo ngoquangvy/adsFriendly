@@ -58,9 +58,34 @@ const feedbackForm = document.getElementById('feedback-form');
 const fbStatus = document.getElementById('fb-status');
 const fbSubmit = document.getElementById('fb-submit');
 
+const COOLDOWN_MS = 3600000; // 1 giờ (60 * 60 * 1000)
+
+
 if (feedbackForm) {
     feedbackForm.onsubmit = async (e) => {
         e.preventDefault();
+        
+        const title = document.getElementById('fb-title').value.trim();
+        const body = document.getElementById('fb-body').value.trim();
+        const rating = document.querySelector('input[name="rating"]:checked').value;
+
+        if (!title || !body) {
+            fbStatus.style.display = 'block';
+            fbStatus.style.color = 'var(--danger)';
+            fbStatus.textContent = "Vui lòng điền đầy đủ tiêu đề và nội dung.";
+            return;
+        }
+
+        // Check cooldown ONLY when clicking send
+        const { lastFeedbackTime = 0 } = await chrome.storage.local.get(['lastFeedbackTime']);
+        const now = Date.now();
+        if (now - lastFeedbackTime < COOLDOWN_MS) {
+            const remainingMin = Math.ceil((COOLDOWN_MS - (now - lastFeedbackTime)) / 60000);
+            fbStatus.style.display = 'block';
+            fbStatus.style.color = '#ff9800';
+            fbStatus.textContent = `Bạn đã gửi góp ý gần đây. Vui lòng đợi thêm ${remainingMin} phút nữa để gửi tiếp.`;
+            return;
+        }
         
         // CONFIG: Production Cloudflare Worker URL for AdsFriendly feedback
         const WORKER_URL = "https://telegarmworker.ngoquangvy97.workers.dev/adsfriendly";
@@ -95,6 +120,9 @@ if (feedbackForm) {
                 fbStatus.style.color = '#22c55e';
                 fbStatus.textContent = "Cảm ơn bạn! Góp ý đã được gửi thành công.";
                 feedbackForm.reset();
+                
+                // Set cooldown
+                await chrome.storage.local.set({ lastFeedbackTime: Date.now() });
             } else {
                 throw new Error(result.error || "Lỗi gửi góp ý");
             }
