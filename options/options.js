@@ -104,11 +104,24 @@ const renderCustomRules = () => {
 
         // Listeners for Delete
         document.querySelectorAll('.btn-delete-rule').forEach(btn => {
-            btn.onclick = (e) => {
+            btn.onclick = async (e) => {
                 const hostname = e.target.getAttribute('data-hostname');
                 if(confirm(`Wipe all memory for ${hostname}?`)) {
+                    const currentRules = rules[hostname];
+                    const { siteResetHistory = {} } = await chrome.storage.local.get('siteResetHistory');
+                    
+                    // Archive the "mistake"
+                    siteResetHistory[hostname] = {
+                        oldRules: currentRules,
+                        timestamp: Date.now()
+                    };
+
                     delete rules[hostname];
-                    chrome.storage.local.set({ userCustomRules: rules }, renderCustomRules);
+                    await chrome.storage.local.set({ 
+                        userCustomRules: rules,
+                        siteResetHistory: siteResetHistory
+                    });
+                    renderCustomRules();
                 }
             };
         });

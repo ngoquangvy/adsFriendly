@@ -189,11 +189,21 @@
     const isOverlay = (el) => el.id && (el.id.includes('overlay') || el.id.includes('panel'));
 
     const updateSelection = (el) => {
-        hoveredElement = el;
-        const selector = generateSelector(el);
+        // AI Smart Expansion: Find a meaningful container if the target is too small
+        let target = el;
+        const findMeaningfulParent = (curr, depth = 0) => {
+            if (!curr || curr === document.body || depth > 3) return curr;
+            const r = curr.getBoundingClientRect();
+            if (r.width > 25 && r.height > 25) return curr;
+            return findMeaningfulParent(curr.parentElement, depth + 1);
+        };
+        target = findMeaningfulParent(el);
+
+        hoveredElement = target;
+        const selector = generateSelector(target);
         const validation = validateSelector(selector);
         
-        const rect = el.getBoundingClientRect();
+        const rect = target.getBoundingClientRect();
         activeOverlay.style.top = rect.top + 'px';
         activeOverlay.style.left = rect.left + 'px';
         activeOverlay.style.width = rect.width + 'px';
@@ -280,16 +290,17 @@
 
     const confirmAllZaps = async () => {
         const hostname = window.location.hostname;
-        const { userCustomRules = {} } = await chrome.storage.local.get('userCustomRules');
+        const { userCustomRules = {}, siteResetHistory = {} } = await chrome.storage.local.get(['userCustomRules', 'siteResetHistory']);
         if (!userCustomRules[hostname]) userCustomRules[hostname] = [];
 
         let addedCount = 0;
+        const resetData = siteResetHistory[hostname];
+        const isCorrectionLoop = resetData && (Date.now() - resetData.timestamp < 3600000); // Within 1 hour
 
         selectedItems.forEach(item => {
-            // Final Safety check
             const validation = validateSelector(item.selector);
             if (!validation.valid) {
-                console.error('[AdsFriendly Picker] Skipping dangerous rule in Zap All:', item.selector, validation.reason);
+                console.error('[AdsFriendly Picker] Skipping dangerous rule:', item.selector, validation.reason);
                 return;
             }
 
@@ -297,8 +308,16 @@
                 selector: item.selector,
                 fingerprint: item.fingerprint,
                 timestamp: Date.now(),
-                timesZapped: 1
+                timesZapped: 1,
+                confidence: isCorrectionLoop ? 1.0 : 0.8,
+                isCorrection: isCorrectionLoop
             };
+
+            if (isCorrectionLoop) {
+                console.log(`%c[AdsFriendly AI] Correction Event detected for ${hostname}. Learning from previous reset...`, "color: #a855f7; font-weight: bold;");
+                // The AI now "understands" that the previous reset was a false positive, 
+                // and this new rule is the intended surgical strike.
+            }
             
             const existingIndex = userCustomRules[hostname].findIndex(r => 
                 (typeof r === 'string' ? r === item.selector : r.selector === item.selector)
