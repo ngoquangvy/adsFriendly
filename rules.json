@@ -88,5 +88,22 @@
       "urlFilter": "*yandex.ru/ads*",
       "resourceTypes": ["script", "image", "sub_frame"]
     }
+  {
+    "id": 14,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": { "urlFilter": "s0.2mdn.net", "resourceTypes": ["sub_frame", "image", "xmlhttprequest"] }
+  },
+  {
+    "id": 15,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": { "urlFilter": "pagead2.googlesyndication.com", "resourceTypes": ["sub_frame", "image", "xmlhttprequest"] }
+  },
+  {
+    "id": 16,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": { "urlFilter": "googleads.g.doubleclick.net/pagead", "resourceTypes": ["xmlhttprequest"] }
   }
 ]

@@ -12,6 +12,47 @@
     }
     injectSpy();
 
+    // YouTube Specialized Neutralization (v2.7 - Tube Surgeon)
+    const neutralizeYouTubeUI = () => {
+        if (window.location.hostname !== 'www.youtube.com') return;
+
+        const adSelectors = [
+            'ytd-masthead-ad-v3-renderer', // Homepage Big Masthead
+            'ytd-promoted-video-renderer', // Search Results Promoted Video
+            'ytd-display-ad-renderer',      // Sidebar Display Ads
+            'ytd-ad-slot-renderer',         // New Ad containers
+            'ytd-promoted-sparkles-web-renderer', // Top of results UI
+            '#masthead-ad',                 // Legacy Masthead
+            '.ytd-video-masthead-ad-v3-renderer',
+            '.ytd-promoted-video-renderer'
+        ];
+
+        adSelectors.forEach(sel => {
+            const elements = document.querySelectorAll(sel);
+            elements.forEach(el => {
+                if (el.style.display !== 'none') {
+                    el.style.setProperty('display', 'none', 'important');
+                    console.log(`[AdsFriendly AI] YouTube UI Ad Neutralized: ${sel}`);
+                }
+            });
+        });
+
+        // Heuristic: Hide anything with "Sponsored" or "Quảng cáo" label in video titles
+        const cards = document.querySelectorAll('ytd-rich-item-renderer, ytd-video-renderer');
+        cards.forEach(card => {
+            const label = card.innerText.trim().toLowerCase();
+            if (label.includes('sponsored') || label.includes('được tài trợ') || label.includes('quảng cáo')) {
+                if (card.style.display !== 'none') {
+                    card.style.setProperty('display', 'none', 'important');
+                    console.log('[AdsFriendly AI] YouTube Promoted Video hidden.');
+                }
+            }
+        });
+    };
+
+    // Run YT neutralization periodically (YouTube is heavy SPA)
+    setInterval(neutralizeYouTubeUI, 2000);
+
     let lastTrustedClick = 0;
 
     // Listen for clicks to track user intent (v2.6 Intent Lock)
