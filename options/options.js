@@ -13,7 +13,7 @@ async function loadLists() {
 
 function renderList(list, element, type) {
     if (list.length === 0) {
-        element.innerHTML = '<div class="empty-msg">Chưa có trang nào</div>';
+        element.innerHTML = '<div class="empty-msg">No sites added yet</div>';
         return;
     }
 
@@ -44,7 +44,7 @@ function renderList(list, element, type) {
 }
 
 resetBtn.onclick = async () => {
-    if (confirm('Bạn có chắc chắn muốn xóa toàn bộ dữ liệu (Whitelist, Blacklist, Số lượng chặn)?')) {
+    if (confirm('Are you sure you want to reset all data (Whitelist, Blacklist, and Block count)?')) {
         await chrome.storage.local.clear();
         await chrome.storage.local.set({ isEnabled: true, blockedCount: 0 });
         chrome.action.setBadgeText({ text: '' });
@@ -71,12 +71,12 @@ if (feedbackForm) {
         if (body.length < 1) { // Only block if completely empty
             fbStatus.style.display = 'block';
             fbStatus.style.color = 'var(--danger)';
-            fbStatus.textContent = "Vui lòng nhập nội dung góp ý.";
+            fbStatus.textContent = "Please enter your feedback.";
             return;
         }
 
         // Confirmation dialog
-        if (!confirm("Bạn có chắc chắn muốn gửi góp ý này không?")) {
+        if (!confirm("Are you sure you want to send this feedback?")) {
             return;
         }
 
@@ -87,7 +87,7 @@ if (feedbackForm) {
             const remainingMin = Math.ceil((COOLDOWN_MS - (now - lastFeedbackTime)) / 60000);
             fbStatus.style.display = 'block';
             fbStatus.style.color = '#ff9800';
-            fbStatus.textContent = `Bạn đã gửi góp ý gần đây. Vui lòng đợi thêm ${remainingMin} phút nữa để gửi tiếp.`;
+            fbStatus.textContent = `You sent a feedback recently. Please wait ${remainingMin} more minutes.`;
             return;
         }
         
@@ -97,16 +97,16 @@ if (feedbackForm) {
         if (WORKER_URL.includes("your-feedback-worker")) {
             fbStatus.style.display = 'block';
             fbStatus.style.color = '#ff9800';
-            fbStatus.textContent = "Lưu ý: Bạn cần thay WORKER_URL trong options.js bằng URL thật sau khi deploy Cloudflare Worker!";
+            fbStatus.textContent = "Note: You need to replace WORKER_URL in options.js with your actual URL!";
             return;
         }
 
 
         fbSubmit.disabled = true;
-        fbSubmit.textContent = "Đang gửi...";
+        fbSubmit.textContent = "Sending...";
         fbStatus.style.display = 'block';
         fbStatus.style.color = '#94a3b8';
-        fbStatus.textContent = "Đang gửi góp ý của bạn...";
+        fbStatus.textContent = "Sending your feedback...";
 
         try {
             const response = await fetch(WORKER_URL, {
@@ -119,20 +119,20 @@ if (feedbackForm) {
 
             if (response.ok) {
                 fbStatus.style.color = '#22c55e';
-                fbStatus.textContent = "Cảm ơn bạn! Góp ý đã được gửi thành công.";
+                fbStatus.textContent = "Thank you! Your feedback has been sent successfully.";
                 feedbackForm.reset();
                 
                 // Set cooldown
                 await chrome.storage.local.set({ lastFeedbackTime: Date.now() });
             } else {
-                throw new Error(result.error || "Lỗi gửi góp ý");
+                throw new Error(result.error || "Sending failed");
             }
         } catch (err) {
             fbStatus.style.color = 'var(--danger)';
-            fbStatus.textContent = "Lỗi: " + err.message;
+            fbStatus.textContent = "Error: " + err.message;
         } finally {
             fbSubmit.disabled = false;
-            fbSubmit.textContent = "Gửi góp ý";
+            fbSubmit.textContent = "Send Feedback";
         }
     };
 }

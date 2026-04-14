@@ -2,7 +2,7 @@
 <html lang="vi">
 <head>
     <meta charset="UTF-8">
-    <title>Smart BlockAd - Cài đặt</title>
+    <title>AdsFriendly - Settings</title>
     <style>
         :root {
             --primary: #22c55e;
@@ -134,7 +134,7 @@
     <div class="container">
         <header>
             <h1>AdsFriendly Settings</h1>
-            <p style="color: #94a3b8;">Quản lý danh sách tin tưởng và chặn của bạn</p>
+            <p style="color: #94a3b8;">Manage your trusted and blocked domains</p>
         </header>
 
         <div class="grid">
@@ -142,10 +142,10 @@
             <div class="card">
                 <h2 style="color: #22c55e;">
                     <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
-                    Trang tin tưởng (Whitelist)
+                    Trusted Sites (Whitelist)
                 </h2>
                 <div id="whitelist-list" class="list-container">
-                    <div class="empty-msg">Chưa có trang nào</div>
+                    <div class="empty-msg">No sites added yet</div>
                 </div>
             </div>
 
@@ -153,27 +153,27 @@
             <div class="card">
                 <h2 style="color: var(--danger);">
                     <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/></svg>
-                    Trang luôn chặn (Blacklist)
+                    Always Blocked (Blacklist)
                 </h2>
                 <div id="blacklist-list" class="list-container">
-                    <div class="empty-msg">Chưa có trang nào</div>
+                    <div class="empty-msg">No sites added yet</div>
                 </div>
             </div>
         </div>
 
         <div class="reset-section">
-            <button class="btn-reset" id="btn-reset">Xóa tất cả dữ liệu</button>
+            <button class="btn-reset" id="btn-reset">Reset All Data</button>
         </div>
 
         <!-- Feedback Section -->
         <div class="card" style="margin-top: 3rem; max-width: 600px; margin-left: auto; margin-right: auto;">
             <h2 style="color: var(--primary);">
                 <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-7 12h-2v-2h2v2zm0-4h-2V6h2v4z"/></svg>
-                Góp ý & Báo lỗi
+                Feedback & Bug Reports
             </h2>
             <form id="feedback-form">
                 <div style="margin-bottom: 1rem; display: flex; align-items: center; gap: 1rem;">
-                    <span style="font-size: 0.9rem; color: #94a3b8;">Đánh giá:</span>
+                    <span style="font-size: 0.9rem; color: #94a3b8;">Rating:</span>
                     <div class="rating-stars" style="display: flex; gap: 5px;">
                         <input type="radio" name="rating" value="5" id="r5" checked><label for="r5">⭐</label>
                         <input type="radio" name="rating" value="4" id="r4"><label for="r4">⭐</label>
@@ -183,9 +183,9 @@
                     </div>
                 </div>
 
-                <textarea id="fb-body" placeholder="Hãy cho tôi biết trải nghiệm của bạn hoặc trang nào đang bị chặn nhầm..." required maxlength="1000" style="width: 100%; height: 120px; padding: 0.8rem; margin-bottom: 1rem; border-radius: 10px; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.2); color: white; resize: none; box-sizing: border-box;"></textarea>
+                <textarea id="fb-body" placeholder="Tell me about your experience or report a bug..." required maxlength="1000" style="width: 100%; height: 120px; padding: 0.8rem; margin-bottom: 1rem; border-radius: 10px; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.2); color: white; resize: none; box-sizing: border-box;"></textarea>
                 
-                <button type="submit" id="fb-submit" style="width: 100%; background: var(--primary); color: white; border: none; padding: 0.8rem; border-radius: 10px; font-weight: 600; cursor: pointer;">Gửi góp ý</button>
+                <button type="submit" id="fb-submit" style="width: 100%; background: var(--primary); color: white; border: none; padding: 0.8rem; border-radius: 10px; font-weight: 600; cursor: pointer;">Send Feedback</button>
             </form>
             <div id="fb-status" style="margin-top: 1rem; text-align: center; font-size: 0.9rem; display: none;"></div>
         </div>

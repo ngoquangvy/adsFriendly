@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AdsFriendly - Kiểm duyệt</title>
+    <title>AdsFriendly - Verification</title>
     <style>
         :root {
             --primary: #22c55e;
@@ -127,26 +127,26 @@
             <div class="icon-circle">
                 <svg viewBox="0 0 24 24"><path d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z"/></svg>
             </div>
-            <h1>AdsFriendly bảo vệ bạn</h1>
-            <div class="source-info">Chúng tôi đã ngăn trang <strong><span id="source-domain"></span></strong> tự động mở tab mới sau lưng bạn:</div>
+            <h1>AdsFriendly Protection</h1>
+            <div class="source-info">We prevented <strong><span id="source-domain"></span></strong> from opening a new tab in the background:</div>
         </div>
 
-        <div class="url-preview" id="target-url">Đang tải...</div>
+        <div class="url-preview" id="target-url">Loading...</div>
         
         <div class="action-grid">
             <button class="btn-whitelist" id="btn-whitelist">
                 <svg width="18" height="18" fill="currentColor" viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
-                Luôn tin tưởng
+                Always Trust
             </button>
             <button class="btn-blacklist" id="btn-blacklist">
                 <svg width="18" height="18" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/></svg>
-                Chặn vĩnh viễn
+                Always Block
             </button>
-            <button class="btn-once" id="btn-once">Chỉ mở lần này</button>
-            <button class="btn-close" id="btn-close">Đóng ngay</button>
+            <button class="btn-once" id="btn-once">Open Once</button>
+            <button class="btn-close" id="btn-close">Close Now</button>
         </div>
 
-        <div class="footer-timer">Tự động đóng sau <span id="seconds">15</span> giây...</div>
+        <div class="footer-timer">Auto-closing in <span id="seconds">15</span> seconds...</div>
     </div>
 
     <script src="blocked.js"></script>

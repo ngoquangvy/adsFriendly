@@ -36,15 +36,23 @@ const blockAds = () => {
 
 // Run blocking periodically ONLY if 'In-page Blocking' is enabled
 setInterval(async () => {
-    const { inPageEnabled, isEnabled } = await chrome.storage.local.get(['inPageEnabled', 'isEnabled']);
-    if (isEnabled !== false && inPageEnabled === true) {
-        blockAds();
+    try {
+        const { inPageEnabled, isEnabled } = await chrome.storage.local.get(['inPageEnabled', 'isEnabled']);
+        if (isEnabled !== false && inPageEnabled === true) {
+            blockAds();
+        }
+    } catch (err) {
+        // Extension context invalidated - safe to ignore
     }
 }, 2000);
 
 // Initial check
-chrome.storage.local.get(['inPageEnabled', 'isEnabled'], (result) => {
-    if (result.isEnabled !== false && result.inPageEnabled === true) {
-        blockAds();
-    }
-});
+try {
+    chrome.storage.local.get(['inPageEnabled', 'isEnabled'], (result) => {
+        if (result && result.isEnabled !== false && result.inPageEnabled === true) {
+            blockAds();
+        }
+    });
+} catch (err) {
+    // Extension context invalidated
+}
