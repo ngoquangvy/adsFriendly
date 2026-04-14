@@ -68,10 +68,15 @@ if (feedbackForm) {
         const body = document.getElementById('fb-body').value.trim();
         const rating = document.querySelector('input[name="rating"]:checked').value;
 
-        if (body.length < 3) {
+        if (body.length < 1) { // Only block if completely empty
             fbStatus.style.display = 'block';
             fbStatus.style.color = 'var(--danger)';
-            fbStatus.textContent = "Nội dung góp ý quá ngắn (tối thiểu 3 ký tự).";
+            fbStatus.textContent = "Vui lòng nhập nội dung góp ý.";
+            return;
+        }
+
+        // Confirmation dialog
+        if (!confirm("Bạn có chắc chắn muốn gửi góp ý này không?")) {
             return;
         }
 
