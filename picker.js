@@ -412,9 +412,6 @@
         };
     };
 
-        stopPicker();
-    };
-
     chrome.runtime.onMessage.addListener((message) => {
         if (message.type === 'START_PICKER') startPicker();
     });
