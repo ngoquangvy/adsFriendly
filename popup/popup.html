@@ -158,6 +158,11 @@
         .settings-btn:active {
             transform: translateY(0);
         }
+
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
     </style>
 </head>
 <body>
@@ -179,10 +184,18 @@
             <span style="font-size: 1.2rem;">🎯</span>
             <span>Zap Ad (Magic Wand)</span>
         </button>
-        <button class="settings-btn" id="reset-rules-btn" style="background: rgba(239, 68, 68, 0.05); border: 1px solid rgba(239, 68, 68, 0.2); margin-bottom: 20px; color: #f87171; font-size: 0.7rem;">
+        <button class="settings-btn" id="reset-rules-btn" style="background: rgba(239, 68, 68, 0.05); border: 1px solid rgba(239, 68, 68, 0.2); margin-bottom: 8px; color: #f87171; font-size: 0.7rem;">
             <span>↻</span>
             <span>Reset Rules for this Site</span>
         </button>
+
+        <!-- Reflex Core: Undo Section -->
+        <div id="undo-section" style="display: none; background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.2); border-radius: 10px; padding: 10px; margin-bottom: 20px; animation: slideIn 0.3s ease;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-size: 0.7rem; color: #10b981;">Lỡ tay xóa nhầm?</span>
+                <button id="undo-btn" style="background: #10b981; color: white; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 0.7rem; font-weight: bold;">Khôi phục</button>
+            </div>
+        </div>
 
         <div class="toggle-container">
             <span>🛡️ General Protection</span>

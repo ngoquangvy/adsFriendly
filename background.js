@@ -16,6 +16,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ status: 'error' });
       });
     return true;
+  } else if (message.type === 'NEGATIVE_LEARNING') {
+    handleNegativeLearning(message.fingerprint)
+      .then(() => sendResponse({ status: 'ok' }))
+      .catch(err => console.error("Negative learning error:", err));
+    return true;
   } else if (message.type === 'USER_DECISION') {
     handleUserDecision(message)
       .then(() => {
@@ -34,40 +39,75 @@ const PROTECTED_KEYWORDS = [
     'swiper', 'carousel', 'slick', 'owl-', 'slide'
 ];
 
+async function handleNegativeLearning(fingerprint) {
+    if (!fingerprint) return;
+    const { safePatterns = [] } = await chrome.storage.local.get('safePatterns');
+    
+    // Add to safe patterns if not already there
+    const entry = { value: fingerprint.alt || fingerprint.title, type: fingerprint.alt ? 'alt' : 'title' };
+    if (entry.value && !safePatterns.some(p => p.value === entry.value)) {
+        safePatterns.push(entry);
+        await chrome.storage.local.set({ safePatterns });
+    }
+
+    // Immediately clean up global patterns
+    const { globalAdPatterns = [] } = await chrome.storage.local.get('globalAdPatterns');
+    const filtered = globalAdPatterns.filter(p => p.value !== entry.value);
+    await chrome.storage.local.set({ globalAdPatterns: filtered });
+
+    console.log("Reflex: Learned safe pattern and cleaned ad database.", entry.value);
+}
+
 /**
  * The 'Brain': Aggregates local custom rules into global patterns
  */
 async function synthesizeGlobalPatterns() {
     const { userCustomRules = {} } = await chrome.storage.local.get('userCustomRules');
-    const attrFrequency = {}; // Track alt/title frequency
+    const { safePatterns = [] } = await chrome.storage.local.get('safePatterns');
+    const attrFrequency = {}; 
+    const domainSpread = {}; // How many domains use this pattern
     
     // Scan all rules across all domains
-    Object.values(userCustomRules).flat().forEach(rule => {
-        if (rule && rule.fingerprint) {
-            const { alt, title } = rule.fingerprint;
-            
-            // AI Guardrail: Only learn if it doesn't contain protected keywords
-            const isProtected = (val) => PROTECTED_KEYWORDS.some(kw => val.toLowerCase().includes(kw));
-
-            if (alt && alt.length > 2 && !isProtected(alt)) {
-                attrFrequency[`alt:${alt}`] = (attrFrequency[`alt:${alt}`] || 0) + 1;
+    Object.entries(userCustomRules).forEach(([domain, rules]) => {
+        rules.forEach(rule => {
+            if (rule && rule.fingerprint) {
+                const { alt, title } = rule.fingerprint;
+                const process = (type, val) => {
+                    if (!val || val.length < 3) return;
+                    const key = `${type}:${val}`;
+                    attrFrequency[key] = (attrFrequency[key] || 0) + 1;
+                    if (!domainSpread[key]) domainSpread[key] = new Set();
+                    domainSpread[key].add(domain);
+                };
+                process('alt', alt);
+                process('title', title);
             }
-            if (title && title.length > 2 && !isProtected(title)) {
-                attrFrequency[`title:${title}`] = (attrFrequency[`title:${title}`] || 0) + 1;
-            }
-        }
+        });
     });
 
-    // Patterns that appeared on more than 1 domain are "High Confidence"
+    const isSafe = (type, val) => safePatterns.some(p => p.type === type && p.value === val);
+    const isProtected = (val) => PROTECTED_KEYWORDS.some(kw => val.toLowerCase().includes(kw));
+
+    // Synthesize: Ad Patterns = (High Frequency + Low Undo Rate)
     const globalPatterns = Object.entries(attrFrequency)
-        .filter(([key, count]) => count >= 1) // Set to >= 2 for production, 1 for testing
+        .filter(([key, count]) => {
+            const [type, value] = key.split(':');
+            const spread = domainSpread[key].size;
+            // Production: spread >= 2. Testing: 1.
+            return !isSafe(type, value) && !isProtected(value) && spread >= 1;
+        })
         .map(([key, count]) => {
             const [type, value] = key.split(':');
-            return { type, value, confidence: Math.min(count / 5, 1.0) };
+            const spread = domainSpread[key].size;
+            return { 
+                type, 
+                value, 
+                confidence: Math.min((count + (spread * 2)) / 10, 1.0) 
+            };
         });
 
     await chrome.storage.local.set({ globalAdPatterns: globalPatterns });
-    console.log("Brain synthesize complete. Patterns learned:", globalPatterns.length);
+    console.log("Brain synthesize complete. Reflex-Active patterns:", globalPatterns.length);
 }
 
 // Layer 2: In-page Blocking (DNR Ruleset)
