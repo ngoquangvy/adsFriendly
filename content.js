@@ -16,6 +16,15 @@ document.addEventListener('mousedown', (event) => {
 
 // BLOCKING STRATEGIES
 // We use a modular approach so we can easily add "Destruction Mode" later.
+const SYSTEM_WHITELIST = ['cloudflare.com', 'google.com', 'github.com', 'stackexchange.com', 'stackoverflow.com'];
+
+// Total System Immunity: If it's a critical domain, abort everything immediately
+const isSystemSafe = SYSTEM_WHITELIST.some(domain => window.location.hostname === domain || window.location.hostname.endsWith('.' + domain));
+if (isSystemSafe) {
+    console.log("[AdsFriendly] System domain detected. Entering Total Immunity mode.");
+    throw new Error('Total Immunity Mode Enabled'); // Force stop the initialization
+}
+
 const BLOCKING_STRATEGIES = {
     STEALTH: (el) => {
         // Hide without changing layout to avoid detection
@@ -30,8 +39,6 @@ const BLOCKING_STRATEGIES = {
         // el.style.setProperty('display', 'none', 'important');
     }
 };
-
-const SYSTEM_WHITELIST = ['cloudflare.com', 'google.com', 'github.com', 'dash.cloudflare.com', 'stackexchange.com', 'stackoverflow.com'];
 
 const blockAds = async () => {
     const hostname = window.location.hostname;
