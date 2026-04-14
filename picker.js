@@ -189,15 +189,48 @@
     const isOverlay = (el) => el.id && (el.id.includes('overlay') || el.id.includes('panel'));
 
     const updateSelection = (el) => {
-        // AI Smart Expansion: Find a meaningful container if the target is too small
-        let target = el;
+        // 1. AI Smart expansion for tiny targets
         const findMeaningfulParent = (curr, depth = 0) => {
             if (!curr || curr === document.body || depth > 3) return curr;
             const r = curr.getBoundingClientRect();
             if (r.width > 25 && r.height > 25) return curr;
             return findMeaningfulParent(curr.parentElement, depth + 1);
         };
-        target = findMeaningfulParent(el);
+        let target = findMeaningfulParent(el);
+
+        // 2. Ad-Wrap Scout (v2.4): Promote to exclusive ad-container
+        const isAdRelated = (node) => {
+            if (node.tagName === 'IMG' || node.tagName === 'A') return true;
+            if (node.tagName === 'BR' || node.tagName === 'CENTER') return true;
+            if (node.id && /ad|pop|banner|promo/i.test(node.id)) return true;
+            return false;
+        };
+
+        const isExclusiveAdWrapper = (container) => {
+            if (!container || container === document.body) return false;
+            // Criteria: No significant plain text and meaningful kids are mostly ads/layout
+            const text = container.innerText.trim();
+            if (text.length > 50) return false; // Contains actual content
+            
+            const children = Array.from(container.children);
+            if (children.length === 0) return false;
+            return children.every(child => isAdRelated(child) || isExclusiveAdWrapper(child));
+        };
+
+        const promoteToWrapper = (curr, depth = 0) => {
+            if (!curr || curr.parentElement === document.body || depth > 3) return curr;
+            const parent = curr.parentElement;
+            if (isExclusiveAdWrapper(parent)) {
+                const rect = parent.getBoundingClientRect();
+                // Safety: Don't promote if it covers too much area automatically
+                if (rect.width * rect.height < (window.innerWidth * window.innerHeight * 0.35)) {
+                    return promoteToWrapper(parent, depth + 1);
+                }
+            }
+            return curr;
+        };
+
+        target = promoteToWrapper(target);
 
         hoveredElement = target;
         const selector = generateSelector(target);
