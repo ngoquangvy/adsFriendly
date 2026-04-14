@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Smart BlockAd",
+  "name": "AdsFriendly",
   "version": "1.0",
-  "description": "Chặn quảng cáo thông minh và bảo vệ người dùng khỏi Pop-up rác.",
+  "description": "Chặn các tab quảng cáo tự động mở (Pop-under) và đảm bảo trải nghiệm không bị gián đoạn mà không can thiệp vào mã nguồn trang web hiện tại.",
   "permissions": [
     "declarativeNetRequest",
     "webNavigation",
