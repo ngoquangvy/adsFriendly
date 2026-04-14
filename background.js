@@ -1,3 +1,5 @@
+// importScripts('core/BrainBridge.js'); // Standardized logic shared with background
+
 // Store the metadata of the last trusted click (v2.6 Intent Lock)
 let lastTrustedClick = { timestamp: 0, intentUrl: null };
 
@@ -47,8 +49,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .then(() => sendResponse({ status: 'ok' }))
       .catch(() => sendResponse({ status: 'error' }));
     return true;
+  } else if (message.type === 'LOG_NEURAL_DECISION') {
+    handleNeuralLogging(message.entry)
+      .then(() => sendResponse({ status: 'ok' }))
+      .catch(() => sendResponse({ status: 'error' }));
+    return true;
   }
 });
+
+async function handleNeuralLogging(entry) {
+    const { neuroLogs = [] } = await chrome.storage.local.get(['neuroLogs']);
+    neuroLogs.unshift({
+        ...entry,
+        timestamp: Date.now()
+    });
+    
+    // Prune to 50 logs
+    if (neuroLogs.length > 50) neuroLogs.length = 50;
+    await chrome.storage.local.set({ neuroLogs });
+}
 
 async function updateSiteReputation(hostname, blockedCount) {
     const { siteReputation = {} } = await chrome.storage.local.get('siteReputation');
@@ -136,8 +155,9 @@ async function handleVideoLearning(data) {
     const { classes, hostname } = data;
     if (!classes) return;
 
+    // Filter relevant architectural classes
     const classList = classes.split(' ').filter(c => 
-        c.includes('ad') || c.includes('player') || c.includes('video')
+        (c.includes('ad') || c.includes('player') || c.includes('video')) && !c.includes('content')
     );
 
     if (classList.length === 0) return;
@@ -145,23 +165,28 @@ async function handleVideoLearning(data) {
     const { globalAdPatterns = [] } = await chrome.storage.local.get(['globalAdPatterns']);
     
     classList.forEach(cls => {
-        const patternValue = `.${cls}`;
+        // Simple client-side standardization (will be moved to BrainBridge later)
+        const normalizedCls = cls.replace(/-\d+$/, '-*').replace(/:\d+$/, ':*');
+        const patternValue = `.${normalizedCls}`;
+        
         const existing = globalAdPatterns.find(p => p.type === 'video_marker' && p.value === patternValue);
         
         if (existing) {
             existing.confidence = Math.min(1.0, existing.confidence + 0.1);
+            existing.lastSeen = Date.now();
         } else {
             globalAdPatterns.push({
                 type: 'video_marker',
                 value: patternValue,
                 confidence: 0.5,
-                source: hostname
+                source: hostname,
+                lastSeen: Date.now()
             });
         }
     });
 
-    await chrome.storage.local.set({ globalAdPatterns });
-    console.log('[AdsFriendly Brain] Video ad tokens learned:', classList);
+    await chrome.storage.local.set({ globalAdPatterns: globalAdPatterns.slice(-200) });
+    console.log('[AdsFriendly Brain] Hybrid learning synced for', hostname);
 }
 
 const PROTECTED_KEYWORDS = [
@@ -408,9 +433,8 @@ async function getDynamicTrustWindow(hostname) {
 // Listen for new tab creation (v2.6 Intent Lock Core)
 chrome.webNavigation.onCreatedNavigationTarget.addListener(async (details) => {
   const { sourceTabId, tabId, url } = details;
-  
   try {
-    const { isEnabled, globalAdPatterns = [] } = await chrome.storage.local.get(['isEnabled', 'globalAdPatterns']);
+    const { isEnabled, globalAdPatterns = [], blacklist = [] } = await chrome.storage.local.get(['isEnabled', 'globalAdPatterns', 'blacklist']);
     if (isEnabled === false) return;
 
     const sourceTab = await chrome.tabs.get(sourceTabId);
@@ -419,6 +443,21 @@ chrome.webNavigation.onCreatedNavigationTarget.addListener(async (details) => {
     const sourceUrl = new URL(sourceTab.url);
     const targetUrl = new URL(url);
     const targetDomain = targetUrl.hostname;
+
+    // v4.4 SILENT BLACKLIST KILLER
+    // If domain is already blacklisted (or ends with blacklisted pattern), kill silently
+    const isBlacklisted = blacklist.some(entry => {
+        const pattern = entry.replace(/^\|\|/, '').replace(/\^$/, '');
+        return targetDomain === pattern || targetDomain.endsWith('.' + pattern);
+    });
+
+    if (isBlacklisted) {
+        console.log(`%c[AdsFriendly AI] Silent Kill: Blacklisted domain ${targetDomain} neutralized.`, "color: #ef4444; font-weight: bold;");
+        await incrementBlockedCount();
+        await logBlockedNavigation(url, sourceUrl.hostname);
+        chrome.tabs.remove(tabId); // Direct closure for blacklist
+        return;
+    }
 
     if (sourceUrl.hostname === targetDomain) return;
 

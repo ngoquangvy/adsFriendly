@@ -1,5 +1,9 @@
-(function() {
-    // 1. Inject the Spy into the Main World
+(async function () {
+    // GLOBAL GOVERNANCE: Check status before moving an inch
+    const { isEnabled, friendlyMode } = await chrome.storage.local.get(['isEnabled', 'friendlyMode']);
+    if (isEnabled === false) return;
+
+    // 1. Inject the Spy into the Main World (Only in Nuclear Mode)
     function injectSpy() {
         try {
             const script = document.createElement('script');
@@ -10,7 +14,10 @@
             console.error('[AdsFriendly] Injection failed:', e);
         }
     }
-    injectSpy();
+
+    if (friendlyMode === true) {
+        injectSpy();
+    }
 
     // YouTube Specialized Neutralization (v2.7 - Tube Surgeon)
     const neutralizeYouTubeUI = () => {
@@ -63,13 +70,13 @@
                     // Capture the intended destination
                     const link = event.target.closest('a');
                     const intentUrl = link ? link.href : null;
-                    
-                    chrome.runtime.sendMessage({ 
+
+                    chrome.runtime.sendMessage({
                         type: 'TRUSTED_CLICK',
-                        intentUrl: intentUrl 
+                        intentUrl: intentUrl
                     });
                 }
-            } catch (e) {}
+            } catch (e) { }
         }
     }, true);
 
@@ -97,7 +104,7 @@
             if (result && result.siteResetHistory && result.siteResetHistory[hostname]) {
                 resetHistory = result.siteResetHistory[hostname];
             }
-        } catch (e) {}
+        } catch (e) { }
 
         const adSelectors = [
             '[id*="google_ads"]', '[class*="adsbygoogle"]',
@@ -118,15 +125,15 @@
                 if (typeof oldRule === 'string') return false;
                 const oldF = oldRule.fingerprint;
                 if (!oldF) return false;
-                return (el.id && el.id === oldF.id) || 
-                       (el.className && el.className === oldF.className && el.tagName.toLowerCase() === oldF.tag);
+                return (el.id && el.id === oldF.id) ||
+                    (el.className && el.className === oldF.className && el.tagName.toLowerCase() === oldF.tag);
             });
         };
 
         customSelectors.forEach(rule => {
             const selector = typeof rule === 'string' ? rule : rule.selector;
             if (dangerousTags.includes(selector.toLowerCase().trim())) return;
-            
+
             document.querySelectorAll(selector).forEach(el => {
                 if (isBlacklisted(el)) return;
                 BLOCKING_STRATEGIES.STEALTH(el);
@@ -152,61 +159,64 @@
     setInterval(async () => {
         try {
             const { friendlyMode, isEnabled, globalAdPatterns = [] } = await chrome.storage.local.get(['friendlyMode', 'isEnabled', 'globalAdPatterns']);
-            if (isEnabled !== false && friendlyMode === false) {
-                blockAds();
+            if (isEnabled === false) return;
 
-                if (globalAdPatterns.length > 0) {
-                    const elements = document.querySelectorAll('img, div, a');
-                    elements.forEach(el => {
-                        if (el.style.opacity === '0' || (el.id && el.id.includes('adsfriendly'))) return;
+            // 1. Basic Static Blocking (Always active if enabled)
+            blockAds();
 
-                        let score = 0;
-                        let matchDetails = [];
-                        const calculateScore = (target) => {
-                            let s = 0;
-                            globalAdPatterns.forEach(pattern => {
-                                if (pattern.type === 'alt' && target.alt === pattern.value) { s += pattern.confidence; matchDetails.push(`alt='${pattern.value}'`); }
-                                if (pattern.type === 'title' && target.title === pattern.value) { s += pattern.confidence; matchDetails.push(`title='${pattern.value}'`); }
-                                if (pattern.type === 'domain') {
-                                    const link = target.closest('a');
-                                    if (link && link.href && link.href.includes(pattern.value)) { s += pattern.confidence; matchDetails.push(`domain='${pattern.value}'`); }
-                                }
-                            });
-                            return s;
-                        };
+            // 2. High-Confidence AI Perception
+            if (globalAdPatterns.length > 0) {
+                const elements = document.querySelectorAll('img, div, a');
+                elements.forEach(el => {
+                    if (el.style.opacity === '0' || (el.id && el.id.includes('adsfriendly'))) return;
 
-                        score = calculateScore(el);
-
-                        if (score < 0.7 && el.children.length > 0) {
-                            let childAdCount = 0;
-                            const children = el.querySelectorAll('img, a');
-                            children.forEach(child => {
-                                if (calculateScore(child) >= 0.7) childAdCount++;
-                            });
-                            if (children.length >= 2 && childAdCount / children.length >= 0.6) {
-                                score = 1.0; 
-                                matchDetails.push("Ad Cluster identified via children analysis");
+                    let score = 0;
+                    let matchDetails = [];
+                    const calculateScore = (target) => {
+                        let s = 0;
+                        globalAdPatterns.forEach(pattern => {
+                            if (pattern.type === 'alt' && target.alt === pattern.value) { s += pattern.confidence; matchDetails.push(`alt='${pattern.value}'`); }
+                            if (pattern.type === 'title' && target.title === pattern.value) { s += pattern.confidence; matchDetails.push(`title='${pattern.value}'`); }
+                            if (pattern.type === 'domain') {
+                                const link = target.closest('a');
+                                if (link && link.href && link.href.includes(pattern.value)) { s += pattern.confidence; matchDetails.push(`domain='${pattern.value}'`); }
                             }
-                        }
+                        });
+                        return s;
+                    };
 
-                        const link = el.closest('a');
-                        if (link && link.href) {
-                            try {
-                                const url = new URL(link.href);
-                                if (url.hostname === window.location.hostname) {
-                                    score -= 1.0;
-                                }
-                            } catch (e) {}
-                        }
+                    score = calculateScore(el);
 
-                        if (score >= 0.8) {
-                            console.log(`%c[AdsFriendly AI] Hiding predicted ad (%c${(score*100).toFixed(0)}% confidence%c) Reason: ${matchDetails.join(', ')}`, "color: #10b981; font-weight: bold;", "color: #fbd38d;", "color: #10b981;", el);
-                            BLOCKING_STRATEGIES.STEALTH(el);
+                    if (score < 0.7 && el.children.length > 0) {
+                        let childAdCount = 0;
+                        const children = el.querySelectorAll('img, a');
+                        children.forEach(child => {
+                            if (calculateScore(child) >= 0.7) childAdCount++;
+                        });
+                        if (children.length >= 2 && childAdCount / children.length >= 0.6) {
+                            score = 1.0;
+                            matchDetails.push("Ad Cluster identified via children analysis");
                         }
-                    });
-                }
+                    }
+
+                    const link = el.closest('a');
+                    if (link && link.href) {
+                        try {
+                            const url = new URL(link.href);
+                            if (url.hostname === window.location.hostname) {
+                                score -= 1.0;
+                            }
+                        } catch (e) { }
+                    }
+
+                    if (score >= 0.8) {
+                        console.log(`%c[AdsFriendly AI] Hiding predicted ad (%c${(score * 100).toFixed(0)}% confidence%c) Reason: ${matchDetails.join(', ')}`, "color: #10b981; font-weight: bold;", "color: #fbd38d;", "color: #10b981;", el);
+                        BLOCKING_STRATEGIES.STEALTH(el);
+                    }
+                });
             }
-        } catch (err) {}
+        }
+        catch (err) { }
     }, 2000);
 
     try {
@@ -215,5 +225,5 @@
                 blockAds();
             }
         });
-    } catch (err) {}
+    } catch (err) { }
 })();

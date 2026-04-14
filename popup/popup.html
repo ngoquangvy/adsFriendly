@@ -120,8 +120,12 @@
             background-color: var(--primary);
         }
 
+        .slider.friendly {
+            background-color: #3b82f6; /* Blue for Full AI (Left) */
+        }
+
         input:checked + .slider.friendly {
-            background-color: var(--emerald);
+            background-color: var(--emerald); /* Emerald for Friendly (Right) */
         }
 
         input:checked + .slider:before {
@@ -205,12 +209,9 @@
             </label>
         </div>
         <div class="toggle-container" style="border-top: 1px solid rgba(255,255,255,0.05); padding-top: 15px; margin-top: 15px;">
-            <div style="display: flex; flex-direction: column; gap: 4px;">
-                <span>🧹 Friendly Mode</span>
-                <span style="font-size: 0.6rem; color: #64748b;">(ON: Stealth & Bypass | OFF: Basic Blocking)</span>
-            </div>
+            <span>✨ Friendly Mode (AI)</span>
             <label class="switch">
-                <input type="checkbox" id="friendly-mode-toggle" checked>
+                <input type="checkbox" checked id="friendly-mode-toggle">
                 <span class="slider friendly"></span>
             </label>
         </div>

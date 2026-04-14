@@ -189,6 +189,32 @@
             </div>
         </section>
 
+        <!-- Neural Insights & Audit Dashboard -->
+        <section class="config-section" style="margin-top: 2rem;">
+            <div class="card" style="border: 1px solid #60a5fa; background: rgba(30, 58, 138, 0.1);">
+                <h2 style="color: #60a5fa;">
+                    <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
+                    Neural Insights & Audit (Fusion Brain v3.0)
+                </h2>
+                <p style="color: #94a3b8; font-size: 0.85rem; margin-bottom: 1.5rem;">Explainable AI: View the raw decision matrix and audit learned patterns before they are federated.</p>
+                
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+                    <div>
+                        <h3 style="font-size: 0.9rem; color: #e2e8f0; margin-bottom: 1rem;">Recent Decision Logs (NeuroLog)</h3>
+                        <div id="neurolog-container" class="list-container" style="max-height: 300px; font-size: 0.8rem;">
+                            <div class="empty-msg">No decision telemetry data yet.</div>
+                        </div>
+                    </div>
+                    <div>
+                        <h3 style="font-size: 0.9rem; color: #e2e8f0; margin-bottom: 1rem;">Brain Upstream (Pending Rules)</h3>
+                        <div id="pending-rules-container" class="list-container" style="max-height: 300px; font-size: 0.8rem;">
+                            <div class="empty-msg">No pending rules yet. AI is still calibrating.</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
         <!-- Blocked Navigation History -->
         <section class="config-section" style="margin-top: 2rem;">
             <div class="card">

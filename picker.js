@@ -11,7 +11,7 @@
         'lazyloaded', 'ls-is-cached', 'active', 'show', 'showing', 'visible', 'container', 'inner', 'wrapper', 'img-responsive',
         'swiper-wrapper', 'swiper-slide', 'swiper-container', 'owl-stage', 'owl-item', 'slick-track', 'slick-slide', 'carousel-inner'
     ];
-    const STRUCTURAL_TAGS = ['html', 'body', 'header', 'footer', 'nav', 'main', 'section', 'article', 'aside'];
+    const STRUCTURAL_TAGS = ['html', 'body', 'header', 'footer', 'nav', 'main', 'section', 'article', 'aside', 'iframe'];
 
     // Initialize UI elements
     const createUI = () => {
@@ -207,30 +207,52 @@
         };
 
         const isExclusiveAdWrapper = (container) => {
-            if (!container || container === document.body) return false;
+            if (!container || container === document.body || container === document.documentElement) return false;
+            
+            // Structural Guard inside wrapper check
+            if (STRUCTURAL_TAGS.includes(container.tagName.toLowerCase())) return false;
+
             // Criteria: No significant plain text and meaningful kids are mostly ads/layout
             const text = container.innerText.trim();
-            if (text.length > 50) return false; // Contains actual content
+            if (text.length > 150) return false; // Contains actual content
             
             const children = Array.from(container.children);
             if (children.length === 0) return false;
+            
+            // If it has too many siblings that look like real content, it's likely part of a layout, not an isolated ad
+            if (container.parentElement && container.parentElement.children.length > 5) {
+                const siblings = Array.from(container.parentElement.children).filter(s => s !== container);
+                const contentSiblings = siblings.filter(s => s.innerText.trim().length > 50);
+                if (contentSiblings.length > 2) return false; 
+            }
+
             return children.every(child => isAdRelated(child) || isExclusiveAdWrapper(child));
         };
 
         const promoteToWrapper = (curr, depth = 0) => {
-            if (!curr || curr.parentElement === document.body || depth > 3) return curr;
+            if (!curr || !curr.parentElement || curr.parentElement === document.body || depth > 3) return curr;
             const parent = curr.parentElement;
+
+            // Structural Guard: Never promote to main page structures
+            if (STRUCTURAL_TAGS.includes(parent.tagName.toLowerCase())) return curr;
+
             if (isExclusiveAdWrapper(parent)) {
                 const rect = parent.getBoundingClientRect();
                 // Safety: Don't promote if it covers too much area automatically
-                if (rect.width * rect.height < (window.innerWidth * window.innerHeight * 0.35)) {
+                if (rect.width * rect.height < (window.innerWidth * window.innerHeight * 0.25)) {
                     return promoteToWrapper(parent, depth + 1);
                 }
             }
             return curr;
         };
 
-        target = promoteToWrapper(target);
+        // Ad-ID Stop Point: If current element is a clear ad container, don't climb higher
+        const adKeywords = /ad|quangcao|catfish|banner|pop|promo/i;
+        if (target && target.id && adKeywords.test(target.id)) {
+            // target remains target
+        } else {
+            target = promoteToWrapper(target);
+        }
 
         hoveredElement = target;
         const selector = generateSelector(target);

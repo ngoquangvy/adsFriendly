@@ -27,17 +27,24 @@ chrome.storage.local.get(['blockedCount', 'isEnabled', 'friendlyMode'], async (r
 });
 
 // Handle global toggle changes
-statusToggle.addEventListener('change', () => {
+statusToggle.addEventListener('change', async () => {
     const isEnabled = statusToggle.checked;
-    chrome.storage.local.set({ isEnabled });
+    await chrome.storage.local.set({ isEnabled });
     chrome.runtime.sendMessage({ type: 'TOGGLE_STATUS', isEnabled });
+    
+    // Auto-reload to apply new state
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab && tab.url.startsWith('http')) chrome.tabs.reload(tab.id);
 });
 
-// Handle friendly mode toggle changes (Inverted Logic)
-inPageToggle.addEventListener('change', () => {
+// Handle friendly mode toggle changes
+inPageToggle.addEventListener('change', async () => {
     const friendlyMode = inPageToggle.checked;
-    chrome.storage.local.set({ friendlyMode });
-    chrome.runtime.sendMessage({ type: 'TOGGLE_FRIENDLY', enabled: friendlyMode });
+    await chrome.storage.local.set({ friendlyMode });
+    
+    // Auto-reload to apply new state
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab && tab.url.startsWith('http')) chrome.tabs.reload(tab.id);
 });
 
 // Handle settings button
@@ -47,13 +54,6 @@ document.getElementById('settings-btn').addEventListener('click', () => {
 
 // Handle Magic Wand (Zapper)
 document.getElementById('magic-wand-btn').addEventListener('click', async () => {
-    const { friendlyMode } = await chrome.storage.local.get('friendlyMode');
-    
-    if (friendlyMode === true) {
-        alert('⚠️ Magic Wand requires Friendly Mode to be OFF. Please toggle it off first.');
-        return;
-    }
-
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tab) {
         try {

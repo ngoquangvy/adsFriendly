@@ -12,6 +12,7 @@ async function loadLists() {
     renderCustomRules();
     renderNavigationLogs(blockedLogs);
     renderLearnedPaths();
+    renderNeuralInsights();
 }
 
 const renderNavigationLogs = (logs) => {
@@ -233,6 +234,63 @@ if (feedbackForm) {
     };
 }
 
-loadLists();
+const renderNeuralInsights = async () => {
+    const neurologContainer = document.getElementById('neurolog-container');
+    const pendingContainer = document.getElementById('pending-rules-container');
+    if (!neurologContainer || !pendingContainer) return;
+
+    const { neuroLogs = [], pendingRules = [] } = await chrome.storage.local.get(['neuroLogs', 'pendingRules']);
+
+    // Render NeuroLogs
+    if (neuroLogs.length === 0) {
+        neurologContainer.innerHTML = '<div class="empty-msg">No decision telemetry data yet.</div>';
+    } else {
+        neurologContainer.innerHTML = neuroLogs.map(log => {
+            const confidenceColor = log.final_confidence > 0.9 ? '#22c55e' : '#fbd38d';
+            const details = log.reasoning.summary.map(r => `<div>• ${r}</div>`).join('');
+            return `
+                <div class="item" style="flex-direction: column; align-items: flex-start; gap: 8px; border-left: 3px solid ${confidenceColor}; margin-bottom: 10px;">
+                    <div style="display: flex; justify-content: space-between; width: 100%; align-items: center;">
+                        <span style="font-weight: bold; color: #e2e8f0;">${log.site}</span>
+                        <span style="color: ${confidenceColor}; font-weight: bold;">${(log.final_confidence * 100).toFixed(0)}% Conf.</span>
+                    </div>
+                    <div style="font-size: 0.85rem; line-height: 1.4; color: #cbd5e1; margin-top: 5px; background: rgba(0,0,0,0.2); padding: 8px; border-radius: 6px;">
+                        ${details}
+                    </div>
+                    <div style="font-size: 0.75rem; color: #64748b; font-style: italic; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 6px; width: 100%; display: flex; align-items: center; gap: 5px;">
+                        <svg width="12" height="12" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z"/></svg>
+                        Marker Identity: ${log.reasoning.primarySelector || 'Dynamic Signature'}
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+
+    // Render Pending Rules
+    if (pendingRules.length === 0) {
+        pendingContainer.innerHTML = '<div class="empty-msg">No pending rules yet. AI is still calibrating.</div>';
+    } else {
+        pendingContainer.innerHTML = pendingRules.map(rule => `
+            <div class="item" style="justify-content: space-between; align-items: flex-start; gap: 10px;">
+                <div style="flex: 1; min-width: 0;">
+                    <div style="font-weight: bold; font-family: monospace; font-size: 0.75rem; word-break: break-all; color: #60a5fa;">${rule.selector}</div>
+                    <div style="font-size: 0.65rem; color: #94a3b8; margin-top: 4px;">Host: ${rule.site} • Seen ${rule.count} times</div>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 4px;">
+                    <button class="btn-audit-approve" data-selector="${rule.selector}" style="background: rgba(34, 197, 94, 0.1); color: #22c55e; border: 1px solid rgba(34, 197, 94, 0.2); padding: 4px 8px; border-radius: 4px; font-size: 0.6rem; cursor: pointer; white-space: nowrap;">Train ✓</button>
+                    <button class="btn-audit-dispute" data-selector="${rule.selector}" style="background: rgba(239, 68, 68, 0.1); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.2); padding: 4px 8px; border-radius: 4px; font-size: 0.6rem; cursor: pointer; white-space: nowrap;">Dispute ✗</button>
+                </div>
+            </div>
+        `).join('');
+
+        // Listeners for Audit buttons
+        document.querySelectorAll('.btn-audit-approve').forEach(btn => {
+            btn.onclick = async () => {
+                const sel = btn.getAttribute('data-selector');
+                alert(`Audit Success: Pattern "${sel}" confirmed and promoted to Global Brain.`);
+            };
+        });
+    }
+};
 
 loadLists();

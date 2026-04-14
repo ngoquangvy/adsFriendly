@@ -1,14 +1,15 @@
 {
   "manifest_version": 3,
   "name": "AdsFriendly",
-  "version": "2.0",
-  "description": "Chặn các tab quảng cáo tự động mở (Pop-under) và đảm bảo trải nghiệm không bị gián đoạn mà không can thiệp vào mã nguồn trang web hiện tại.",
+  "version": "2.5.9",
+  "description": "Chặn quảng cáo thông minh dựa trên AI đa lớp (Fusion Brain), Pop-under và bảo vệ hành vi người dùng.",
   "permissions": [
     "declarativeNetRequest",
     "webNavigation",
     "tabs",
     "storage",
-    "scripting"
+    "scripting",
+    "webRequest"
   ],
   "options_ui": {
     "page": "options/options.html",
@@ -22,8 +23,16 @@
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["content.js", "picker.js", "video_surgeon.js"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "core/BrainBridge.js",
+        "telemetry/evaluator.js",
+        "content.js",
+        "picker.js",
+        "video_surgeon.js"
+      ],
       "run_at": "document_start"
     }
   ],
@@ -46,8 +55,13 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["ui/blocked.html", "injected_spy.js"],
-      "matches": ["<all_urls>"]
+      "resources": [
+        "ui/blocked.html",
+        "injected_spy.js"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ]
 }
