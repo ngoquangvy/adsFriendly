@@ -187,49 +187,47 @@ const COOLDOWN_MS = 3600000;
 if (feedbackForm) {
     feedbackForm.onsubmit = async (e) => {
         e.preventDefault();
+        const title = document.getElementById('fb-title').value.trim();
         const body = document.getElementById('fb-body').value.trim();
         const rating = document.querySelector('input[name="rating"]:checked').value;
 
-        if (body.length < 1) {
+        if (body.length < 1 || title.length < 1) {
             fbStatus.style.display = 'block';
             fbStatus.style.color = 'var(--danger)';
-            fbStatus.textContent = "Please enter your feedback.";
+            fbStatus.textContent = "Vui lòng nhập tiêu đề và nội dung góp ý.";
             return;
         }
 
-        if (!confirm("Send feedback?")) return;
+        if (!confirm("Gửi góp ý của bạn?")) return;
 
         const { lastFeedbackTime = 0 } = await chrome.storage.local.get(['lastFeedbackTime']);
         if (Date.now() - lastFeedbackTime < COOLDOWN_MS) {
             fbStatus.style.display = 'block';
-            fbStatus.textContent = `Please wait before sending again.`;
+            fbStatus.textContent = `Vui lòng đợi một chút trước khi gửi lại.`;
             return;
         }
         
-        const WORKER_URL = "https://your-dedicated-worker.workers.dev/adsfriendly";
-        if (WORKER_URL.includes("your-dedicated")) {
-            fbStatus.style.display = 'block';
-            fbStatus.textContent = "Worker URL not configured.";
-            return;
-        }
-
+        // RESTORED: Production Cloudflare Worker URL
+        const WORKER_URL = "https://telegarmworker.ngoquangvy97.workers.dev/adsfriendly";
+        
         fbSubmit.disabled = true;
         fbStatus.style.display = 'block';
-        fbStatus.textContent = "Sending...";
+        fbStatus.style.color = '#94a3b8';
+        fbStatus.textContent = "Đang gửi...";
 
         try {
             await fetch(WORKER_URL, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ body, rating: parseInt(rating) })
+                body: JSON.stringify({ title, body, rating: parseInt(rating) })
             });
             fbStatus.style.color = '#22c55e';
-            fbStatus.textContent = "Success!";
+            fbStatus.textContent = "Gửi thành công! Cảm ơn bạn.";
             feedbackForm.reset();
             await chrome.storage.local.set({ lastFeedbackTime: Date.now() });
         } catch (err) {
             fbStatus.style.color = 'var(--danger)';
-            fbStatus.textContent = "Error: " + err.message;
+            fbStatus.textContent = "Lỗi: " + err.message;
         } finally {
             fbSubmit.disabled = false;
         }
