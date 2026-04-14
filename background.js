@@ -7,16 +7,57 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'TRUSTED_CLICK') {
     lastTrustedClick = Date.now();
   } else if (message.type === 'TOGGLE_STATUS') {
-    // Optionally handle any immediate logic when disabled
     console.log("Protection status:", message.isEnabled);
+  } else if (message.type === 'USER_DECISION') {
+    handleUserDecision(message)
+      .then(() => {
+        sendResponse({ status: 'ok' });
+      })
+      .catch(err => {
+        console.error("User decision error:", err);
+        sendResponse({ status: 'error', error: err.message });
+      });
+    return true; // Keep channel open for async response
   }
 });
+
+// Separate handler for cleaner async/await
+async function handleUserDecision(message) {
+  const { action, domain } = message;
+  
+  if (action === 'WHITELIST') {
+    const { whitelist = [] } = await chrome.storage.local.get(['whitelist']);
+    if (!whitelist.includes(domain)) {
+      whitelist.push(domain);
+      await chrome.storage.local.set({ whitelist });
+    }
+  } else if (action === 'BLACKLIST') {
+    const { blacklist = [] } = await chrome.storage.local.get(['blacklist']);
+    const standardRule = `||${domain}^`;
+    if (!blacklist.includes(standardRule)) {
+      blacklist.push(standardRule);
+      await chrome.storage.local.set({ blacklist });
+    }
+  }
+}
+
+// Helper to update badge
+async function updateBadge() {
+  const { blockedCount = 0 } = await chrome.storage.local.get(['blockedCount']);
+  if (blockedCount > 0) {
+    chrome.action.setBadgeText({ text: blockedCount.toString() });
+    chrome.action.setBadgeBackgroundColor({ color: '#FF4D4C' });
+  } else {
+    chrome.action.setBadgeText({ text: '' });
+  }
+}
 
 // Helper to increment blocked count
 async function incrementBlockedCount() {
   const result = await chrome.storage.local.get(['blockedCount']);
   const count = (result.blockedCount || 0) + 1;
   await chrome.storage.local.set({ blockedCount: count });
+  updateBadge();
 }
 
 // Listen for new tab creation
@@ -30,21 +71,37 @@ chrome.webNavigation.onCreatedNavigationTarget.addListener(async (details) => {
 
     // Get info about the tab that opened this new one
     const sourceTab = await chrome.tabs.get(sourceTabId);
-    if (!sourceTab || !sourceTab.url) return;
+    if (!sourceTab || !sourceTab.url || !sourceTab.url.startsWith('http')) return;
 
     const sourceUrl = new URL(sourceTab.url);
     const targetUrl = new URL(url);
+    const targetDomain = targetUrl.hostname;
 
-    // If target domain is different from source domain
+    // 1. Check Whitelist
+    const { whitelist = [] } = await chrome.storage.local.get(['whitelist']);
+    if (whitelist.includes(targetDomain)) return;
+
+    // 2. Check Blacklist (Silent Kill) - Custom JS Logic
+    const { blacklist = [] } = await chrome.storage.local.get(['blacklist']);
+    const isBlacklisted = blacklist.some(rule => {
+      const domain = rule.replace('||', '').replace('^', '');
+      return targetDomain === domain || targetDomain.endsWith('.' + domain);
+    });
+
+    if (isBlacklisted) {
+      chrome.tabs.remove(tabId);
+      await incrementBlockedCount();
+      return;
+    }
+
+    // 3. Cross-domain check
     if (sourceUrl.hostname !== targetUrl.hostname) {
       const timeSinceClick = Date.now() - lastTrustedClick;
       
-      // If no trusted click recently OR just suspicious different domain
-      // Redirect the NEW tab to our blocked page
+      // If it's a suspicious different domain
       const blockedUrl = chrome.runtime.getURL(`ui/blocked.html?url=${encodeURIComponent(url)}&source=${encodeURIComponent(sourceUrl.hostname)}`);
       
       chrome.tabs.update(tabId, { url: blockedUrl });
-      await incrementBlockedCount();
     }
   } catch (err) {
     console.error("Error evaluating navigation:", err);

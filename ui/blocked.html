@@ -3,11 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Smart BlockAd - Cảnh báo</title>
+    <title>Smart BlockAd - Kiểm duyệt</title>
     <style>
         :root {
             --primary: #00f2fe;
             --secondary: #4facfe;
+            --danger: #ff4d4d;
             --bg: #0f172a;
             --text: #f8fafc;
         }
@@ -27,150 +28,127 @@
 
         .container {
             text-align: center;
-            padding: 3rem;
+            padding: 2.5rem;
             background: rgba(30, 41, 59, 0.7);
-            backdrop-filter: blur(12px);
-            border-radius: 24px;
+            backdrop-filter: blur(16px);
+            border-radius: 28px;
             border: 1px solid rgba(255, 255, 255, 0.1);
             box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-            max-width: 500px;
+            max-width: 550px;
             width: 90%;
-            animation: fadeIn 0.6s ease-out;
+            animation: fadeIn 0.5s cubic-bezier(0.16, 1, 0.3, 1);
         }
 
         @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
+            from { opacity: 0; transform: scale(0.95); }
+            to { opacity: 1; transform: scale(1); }
         }
 
-        .icon-box {
-            width: 80px;
-            height: 80px;
+        .header { margin-bottom: 2rem; }
+        
+        .icon-circle {
+            width: 70px;
+            height: 70px;
             background: linear-gradient(135deg, var(--primary), var(--secondary));
-            border-radius: 20px;
-            margin: 0 auto 2rem;
+            border-radius: 50%;
+            margin: 0 auto 1.5rem;
             display: flex;
             align-items: center;
             justify-content: center;
-            box-shadow: 0 10px 20px rgba(0, 242, 254, 0.3);
+            box-shadow: 0 0 30px rgba(0, 242, 254, 0.3);
         }
 
-        .icon-box svg {
-            width: 40px;
-            height: 40px;
-            fill: white;
-        }
+        .icon-circle svg { width: 35px; height: 35px; fill: #000; }
 
-        h1 {
-            font-size: 1.8rem;
-            margin-bottom: 1rem;
-            background: linear-gradient(to right, #fff, #cbd5e1);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
+        h1 { font-size: 1.6rem; margin: 0 0 0.5rem; color: #fff; }
+        .source-info { color: #94a3b8; font-size: 0.95rem; margin-bottom: 2rem; }
+        .source-info strong { color: var(--primary); }
 
-        p {
-            color: #94a3b8;
-            line-height: 1.6;
-            margin-bottom: 2rem;
-        }
-
-        .url-display {
-            background: rgba(0, 0, 0, 0.2);
-            padding: 0.75rem 1rem;
-            border-radius: 12px;
-            font-family: monospace;
-            color: var(--primary);
+        .url-preview {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 1rem;
+            border-radius: 14px;
+            font-family: 'JetBrains Mono', monospace;
+            color: #cbd5e1;
             word-break: break-all;
-            margin-bottom: 2rem;
-            font-size: 0.9rem;
+            margin-bottom: 2.5rem;
+            font-size: 0.85rem;
+            border: 1px dashed rgba(255, 255, 255, 0.1);
         }
 
-        .buttons {
-            display: flex;
+        .action-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
             gap: 1rem;
-            justify-content: center;
+            margin-bottom: 1.5rem;
         }
 
         button {
-            padding: 0.75rem 1.5rem;
-            border-radius: 12px;
+            padding: 0.9rem 1rem;
+            border-radius: 14px;
             border: none;
             cursor: pointer;
             font-weight: 600;
-            transition: all 0.3s ease;
+            transition: all 0.2s ease;
+            font-size: 0.9rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
         }
 
-        .btn-primary {
-            background: linear-gradient(135deg, var(--primary), var(--secondary));
-            color: #000;
+        .btn-whitelist { background: #22c55e; color: #fff; }
+        .btn-whitelist:hover { background: #16a34a; transform: translateY(-2px); }
+
+        .btn-blacklist { background: var(--danger); color: #fff; }
+        .btn-blacklist:hover { background: #e60000; transform: translateY(-2px); }
+
+        .btn-once { background: #334155; color: #fff; grid-column: span 2; }
+        .btn-once:hover { background: #475569; }
+
+        .btn-close { 
+            background: transparent; 
+            color: #64748b; 
+            grid-column: span 2; 
+            font-weight: 400;
+            text-decoration: underline;
         }
 
-        .btn-primary:hover {
-            transform: scale(1.05);
-            box-shadow: 0 0 20px rgba(0, 242, 254, 0.4);
-        }
-
-        .btn-secondary {
-            background: rgba(255, 255, 255, 0.05);
-            color: #fff;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-        }
-
-        .btn-secondary:hover {
-            background: rgba(255, 255, 255, 0.1);
-        }
-
-        .timer {
-            margin-top: 2rem;
-            font-size: 0.85rem;
-            color: #64748b;
+        .footer-timer {
+            margin-top: 1.5rem;
+            font-size: 0.8rem;
+            color: #475569;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <div class="icon-box">
-            <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z"/></svg>
-        </div>
-        <h1>Phát hiện Tab Lạ!</h1>
-        <p>Trang web <strong><span id="source-domain"></span></strong> vừa cố gắng mở một liên kết khác tên miền. Đây có thể là quảng cáo.</p>
-        <div class="url-display" id="target-url">Đang tải...</div>
-        
-        <div class="buttons">
-            <button class="btn-primary" id="continue">Tiếp tục mở</button>
-            <button class="btn-secondary" id="close">Đóng ngay</button>
+        <div class="header">
+            <div class="icon-circle">
+                <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm4.59-12.42L10 14.17l-2.59-2.58L6 13l4 4 8-8z"/></svg>
+            </div>
+            <h1>Yêu cầu mở Tab mới</h1>
+            <div class="source-info">Trang <strong><span id="source-domain"></span></strong> muốn mở một liên kết lạ:</div>
         </div>
 
-        <div class="timer">Tự động đóng sau <span id="seconds">10</span> giây...</div>
+        <div class="url-preview" id="target-url">Đang tải...</div>
+        
+        <div class="action-grid">
+            <button class="btn-whitelist" id="btn-whitelist">
+                <svg width="18" height="18" fill="currentColor" viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                Luôn tin tưởng
+            </button>
+            <button class="btn-blacklist" id="btn-blacklist">
+                <svg width="18" height="18" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/></svg>
+                Chặn vĩnh viễn
+            </button>
+            <button class="btn-once" id="btn-once">Chỉ mở lần này</button>
+            <button class="btn-close" id="btn-close">Đóng ngay</button>
+        </div>
+
+        <div class="footer-timer">Tự động đóng sau <span id="seconds">15</span> giây...</div>
     </div>
 
-    <script>
-        const params = new URLSearchParams(window.location.search);
-        const urlToOpen = params.get('url');
-        const sourceDomain = params.get('source');
-
-        document.getElementById('target-url').textContent = urlToOpen;
-        document.getElementById('source-domain').textContent = sourceDomain;
-
-        document.getElementById('continue').onclick = () => {
-            window.location.href = urlToOpen;
-        };
-
-        document.getElementById('close').onclick = () => {
-            window.close();
-        };
-
-        let timeLeft = 10;
-        const timerElement = document.getElementById('seconds');
-        const countdown = setInterval(() => {
-            timeLeft--;
-            timerElement.textContent = timeLeft;
-            if (timeLeft <= 0) {
-                clearInterval(countdown);
-                window.close();
-            }
-        }, 1000);
-    </script>
+    <script src="blocked.js"></script>
 </body>
 </html>

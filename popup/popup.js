@@ -21,10 +21,13 @@ chrome.storage.local.get(['blockedCount', 'isEnabled'], (result) => {
 statusToggle.addEventListener('change', () => {
     const isEnabled = statusToggle.checked;
     chrome.storage.local.set({ isEnabled });
-    
-    // Notify background script if needed
     chrome.runtime.sendMessage({ type: 'TOGGLE_STATUS', isEnabled });
 });
+
+// Handle settings button
+document.getElementById('open-settings').onclick = () => {
+    chrome.runtime.openOptionsPage();
+};
 
 // Optionally: Periodically poll for updated count
 setInterval(() => {

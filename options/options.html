@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>Smart BlockAd - Cài đặt</title>
+    <style>
+        :root {
+            --primary: #00f2fe;
+            --secondary: #4facfe;
+            --danger: #ff4d4d;
+            --bg: #0f172a;
+            --text: #f8fafc;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 2rem;
+            display: flex;
+            justify-content: center;
+        }
+
+        .container {
+            max-width: 800px;
+            width: 100%;
+        }
+
+        header {
+            margin-bottom: 3rem;
+            text-align: center;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            background: linear-gradient(to right, var(--primary), var(--secondary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 2rem;
+        }
+
+        .card {
+            background: rgba(30, 41, 59, 0.7);
+            border-radius: 20px;
+            padding: 1.5rem;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+        }
+
+        h2 {
+            font-size: 1.2rem;
+            margin-top: 0;
+            margin-bottom: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .list-container {
+            max-height: 400px;
+            overflow-y: auto;
+            border-radius: 12px;
+        }
+
+        .item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.75rem 1rem;
+            background: rgba(255, 255, 255, 0.03);
+            margin-bottom: 0.5rem;
+            border-radius: 8px;
+            transition: background 0.2s;
+        }
+
+        .item:hover {
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        .item span {
+            font-family: monospace;
+            font-size: 0.9rem;
+        }
+
+        .btn-delete {
+            background: transparent;
+            border: none;
+            color: #64748b;
+            cursor: pointer;
+            padding: 5px;
+            border-radius: 5px;
+        }
+
+        .btn-delete:hover {
+            color: var(--danger);
+            background: rgba(255, 77, 77, 0.1);
+        }
+
+        .empty-msg {
+            text-align: center;
+            color: #475569;
+            padding: 2rem;
+            font-style: italic;
+        }
+
+        .reset-section {
+            margin-top: 3rem;
+            text-align: center;
+        }
+
+        .btn-reset {
+            background: rgba(255, 77, 77, 0.1);
+            color: var(--danger);
+            border: 1px solid var(--danger);
+            padding: 0.75rem 1.5rem;
+            border-radius: 10px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        .btn-reset:hover {
+            background: var(--danger);
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>AdsFriendly Settings</h1>
+            <p style="color: #94a3b8;">Quản lý danh sách tin tưởng và chặn của bạn</p>
+        </header>
+
+        <div class="grid">
+            <!-- Whitelist -->
+            <div class="card">
+                <h2 style="color: #22c55e;">
+                    <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                    Trang tin tưởng (Whitelist)
+                </h2>
+                <div id="whitelist-list" class="list-container">
+                    <div class="empty-msg">Chưa có trang nào</div>
+                </div>
+            </div>
+
+            <!-- Blacklist -->
+            <div class="card">
+                <h2 style="color: var(--danger);">
+                    <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/></svg>
+                    Trang luôn chặn (Blacklist)
+                </h2>
+                <div id="blacklist-list" class="list-container">
+                    <div class="empty-msg">Chưa có trang nào</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="reset-section">
+            <button class="btn-reset" id="btn-reset">Xóa tất cả dữ liệu</button>
+        </div>
+    </div>
+    <script src="options.js"></script>
+</body>
+</html>
