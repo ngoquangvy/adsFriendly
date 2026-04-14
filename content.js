@@ -36,10 +36,15 @@ const blockAds = () => {
         '[id*="google_ads"]',
         '[class*="adsbygoogle"]',
         '[class*="ad-container"]',
+        '[class*="ad-box"]',
         '[id*="ad-"]',
         'ins.adsbygoogle',
         'iframe[src*="doubleclick"]',
-        'a[href*="googleadservices.com"]'
+        'a[href*="googleadservices.com"]',
+        'img[src*="googleusercontent.com"][title]', // Banners often have titles
+        'img[src*="googleusercontent.com"][alt*="ads"]',
+        'div[class*="popup-ad"]',
+        'div[id*="popup-ad"]'
     ];
     
     adSelectors.forEach(selector => {
