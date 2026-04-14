@@ -31,20 +31,33 @@ const BLOCKING_STRATEGIES = {
     }
 };
 
-const blockAds = () => {
-    // 1. Generalized Ad Selectors (Based on common patterns, not site-specific)
+const blockAds = async () => {
+    const hostname = window.location.hostname;
+    let customSelectors = [];
+    
+    try {
+        const result = await chrome.storage.local.get('userCustomRules');
+        if (result && result.userCustomRules && result.userCustomRules[hostname]) {
+            customSelectors = result.userCustomRules[hostname];
+        }
+    } catch (e) {
+        // Storage access might fail during extension reload
+    }
+
+    // 1. Generalized Ad Selectors + User Custom Selectors
     const adSelectors = [
         '[id*="google_ads"]', '[class*="adsbygoogle"]',
         '[class*="ad-container"]', '[class*="ad-box"]', '[id*="ad-"]',
         '[class*="banner"]', '[id*="banner"]',
         'ins.adsbygoogle', 'iframe[src*="doubleclick"]',
         'a[href*="googleadservices.com"]',
-        'a[href*="utm_"]', 'a[href*="clickid="]', 'a[href*="aff_id="]', // Universal tracking
-        'a[href*="javascript:hide_"]', // Catfish/Banners close functions
+        'a[href*="utm_"]', 'a[href*="clickid="]', 'a[href*="aff_id="]',
+        'a[href*="javascript:hide_"]',
         'img[src*="googleusercontent.com"][title]',
         'img[src*="googleusercontent.com"][alt*="bet"]',
         'img[src*="googleusercontent.com"][alt*="win"]',
-        'div[class*="popup-ad"]', 'div[id*="popup-ad"]'
+        'div[class*="popup-ad"]', 'div[id*="popup-ad"]',
+        ...customSelectors
     ];
     
     adSelectors.forEach(selector => {

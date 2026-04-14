@@ -31,9 +31,22 @@ inPageToggle.addEventListener('change', () => {
 });
 
 // Handle settings button
-document.getElementById('open-settings').onclick = () => {
+document.getElementById('settings-btn').addEventListener('click', () => {
     chrome.runtime.openOptionsPage();
-};
+});
+
+// Handle Magic Wand (Zapper)
+document.getElementById('magic-wand-btn').addEventListener('click', async () => {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab) {
+        try {
+            chrome.tabs.sendMessage(tab.id, { type: 'START_PICKER' });
+            window.close(); // Close popup to let user interact with the page
+        } catch (err) {
+            console.error('Could not send message to content script:', err);
+        }
+    }
+});
 
 // Optionally: Periodically poll for updated count
 setInterval(() => {
