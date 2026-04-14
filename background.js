@@ -23,14 +23,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   } else if (message.type === 'USER_DECISION') {
     handleUserDecision(message)
-      .then(() => {
-        sendResponse({ status: 'ok' });
-      })
-      .catch(err => {
-        console.error("User decision error:", err);
-        sendResponse({ status: 'error', error: err.message });
-      });
-    return true; // Keep channel open for async response
+      .then(() => sendResponse({ status: 'ok' }))
+      .catch(err => sendResponse({ status: 'error', error: err.message }));
+    return true;
+  } else if (message.type === 'PATH_RESTORED') {
+    syncTrustedPath(message.source, message.target, true)
+      .then(() => sendResponse({ status: 'ok' }))
+      .catch(err => sendResponse({ status: 'error' }));
+    return true;
   }
 });
 
@@ -179,6 +179,36 @@ async function handleUserDecision(message) {
   }
 }
 
+/**
+ * Deep Pulse: Workflow Learning Engine
+ */
+async function syncTrustedPath(source, target, isManual = false) {
+    if (!source || !target || source === target) return;
+    const shardKey = `p:${source}>${target}`;
+    
+    const result = await chrome.storage.local.get([shardKey]);
+    const entry = result[shardKey] || { source, target, visits: 0, isManual: false, lastUpdated: Date.now() };
+    
+    entry.visits++;
+    if (isManual) {
+        entry.isManual = true;
+        entry.visits = Math.max(entry.visits, 99); // Immediate trust threshold
+    }
+    entry.lastUpdated = Date.now();
+    
+    await chrome.storage.local.set({ [shardKey]: entry });
+    console.log(`[AdsFriendly Pulse] Path learned: ${source} -> ${target} (Visits: ${entry.visits}, Manual: ${entry.isManual})`);
+}
+
+async function logBlockedNavigation(url, source) {
+    const { blockedLogs = [] } = await chrome.storage.local.get(['blockedLogs']);
+    const entry = { url, source, timestamp: Date.now() };
+    
+    // Keep only last 20 events
+    const updated = [entry, ...blockedLogs].slice(0, 20);
+    await chrome.storage.local.set({ blockedLogs: updated });
+}
+
 // Helper to update badge
 async function updateBadge() {
   const { blockedCount = 0 } = await chrome.storage.local.get(['blockedCount']);
@@ -198,16 +228,20 @@ async function incrementBlockedCount() {
   updateBadge();
 }
 
+// Core System Whitelist (Total Immunity - Optional SOFT usage)
+const CORE_SYSTEM_DOMAINS = ['cloudflare.com', 'google.com', 'github.com', 'stackexchange.com', 'stackoverflow.com'];
+function isCoreSystem(hostname) {
+  return CORE_SYSTEM_DOMAINS.some(domain => hostname === domain || hostname.endsWith('.' + domain));
+}
+
 // Listen for new tab creation
 chrome.webNavigation.onCreatedNavigationTarget.addListener(async (details) => {
   const { sourceTabId, tabId, url } = details;
   
   try {
-    // Check if protection is enabled
     const settings = await chrome.storage.local.get(['isEnabled']);
     if (settings.isEnabled === false) return;
 
-    // Get info about the tab that opened this new one
     const sourceTab = await chrome.tabs.get(sourceTabId);
     if (!sourceTab || !sourceTab.url || !sourceTab.url.startsWith('http')) return;
 
@@ -215,31 +249,34 @@ chrome.webNavigation.onCreatedNavigationTarget.addListener(async (details) => {
     const targetUrl = new URL(url);
     const targetDomain = targetUrl.hostname;
 
-    // 1. Check Whitelist (User Defined)
-    const { whitelist = [] } = await chrome.storage.local.get(['whitelist']);
-    if (whitelist.includes(targetDomain)) return;
+    if (sourceUrl.hostname === targetDomain) return;
 
-    // 2. Check Blacklist (Silent Kill) - Custom JS Logic
-    const { blacklist = [] } = await chrome.storage.local.get(['blacklist']);
-    const isBlacklisted = blacklist.some(rule => {
-      const domain = rule.replace('||', '').replace('^', '');
-      return targetDomain === domain || targetDomain.endsWith('.' + domain);
-    });
+    // 1. Deep Pulse: Check Sharded Trusted Path (O(1) Performance)
+    const shardKey = `p:${sourceUrl.hostname}>${targetDomain}`;
+    const pulseResult = await chrome.storage.local.get([shardKey]);
+    const path = pulseResult[shardKey];
 
-    if (isBlacklisted) {
-      chrome.tabs.remove(tabId);
-      await incrementBlockedCount();
-      return;
+    if (path && (path.isManual || path.visits >= 3)) {
+        console.log(`[AdsFriendly Pulse] Authorized path detected: ${sourceUrl.hostname} -> ${targetDomain}`);
+        return; 
     }
 
-    // 3. Cross-domain check
-    if (sourceUrl.hostname !== targetUrl.hostname) {
-      const timeSinceClick = Date.now() - lastTrustedClick;
-      
-      // If it's a suspicious different domain
+    // 2. Check Whitelist (User Defined)
+    const { whitelist = [] } = await chrome.storage.local.get(['whitelist']);
+    if (whitelist.includes(targetDomain)) {
+        syncTrustedPath(sourceUrl.hostname, targetDomain); // Learn the successful path
+        return;
+    }
+
+    // 3. Evaluation: Cross-domain check
+    const timeSinceClick = Date.now() - lastTrustedClick;
+    if (timeSinceClick > 2000) { // Suspicious if no recent manual click
+      await logBlockedNavigation(url, sourceUrl.hostname);
       const blockedUrl = chrome.runtime.getURL(`ui/blocked.html?url=${encodeURIComponent(url)}&source=${encodeURIComponent(sourceUrl.hostname)}`);
-      
       chrome.tabs.update(tabId, { url: blockedUrl });
+    } else {
+      // Valid trusted click - Learn this path naturally
+      syncTrustedPath(sourceUrl.hostname, targetDomain);
     }
   } catch (err) {
     console.error("Error evaluating navigation:", err);

@@ -16,6 +16,15 @@ document.getElementById('target-url').textContent = urlToOpen;
 document.getElementById('source-domain').textContent = sourceDomain;
 
 const sendMessage = (action) => {
+    // Deep Pulse: If continuing, notify background to learn this path
+    if (action === 'ONCE' || action === 'WHITELIST') {
+        chrome.runtime.sendMessage({
+            type: 'PATH_RESTORED',
+            source: sourceDomain,
+            target: targetDomain
+        });
+    }
+
     chrome.runtime.sendMessage({
         type: 'USER_DECISION',
         action: action,
