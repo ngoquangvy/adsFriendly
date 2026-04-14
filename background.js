@@ -29,7 +29,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-const PROTECTED_KEYWORDS = ['messenger', 'chat', 'inbox', 'cart', 'checkout', 'search', 'account', 'login', 'social', 'notification'];
+const PROTECTED_KEYWORDS = [
+    'messenger', 'chat', 'inbox', 'cart', 'checkout', 'search', 'account', 'login', 'social', 'notification',
+    'swiper', 'carousel', 'slick', 'owl-', 'slide'
+];
 
 /**
  * The 'Brain': Aggregates local custom rules into global patterns

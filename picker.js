@@ -7,7 +7,10 @@
     let activeOverlay = null; // The one following the cursor
     let controlPanel = null;
 
-    const GENERIC_CLASSES = ['lazyloaded', 'ls-is-cached', 'active', 'show', 'showing', 'visible', 'container', 'inner', 'wrapper', 'img-responsive'];
+    const GENERIC_CLASSES = [
+        'lazyloaded', 'ls-is-cached', 'active', 'show', 'showing', 'visible', 'container', 'inner', 'wrapper', 'img-responsive',
+        'swiper-wrapper', 'swiper-slide', 'swiper-container', 'owl-stage', 'owl-item', 'slick-track', 'slick-slide', 'carousel-inner'
+    ];
     const STRUCTURAL_TAGS = ['html', 'body', 'header', 'footer', 'nav', 'main', 'section', 'article', 'aside'];
 
     // Initialize UI elements
