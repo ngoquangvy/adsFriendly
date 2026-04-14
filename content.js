@@ -34,11 +34,11 @@ const blockAds = () => {
     });
 };
 
-// Run blocking periodically ONLY if 'In-page Blocking' is enabled
+// Run blocking periodically ONLY if 'Friendly Mode' is OFF
 setInterval(async () => {
     try {
-        const { inPageEnabled, isEnabled } = await chrome.storage.local.get(['inPageEnabled', 'isEnabled']);
-        if (isEnabled !== false && inPageEnabled === true) {
+        const { friendlyMode, isEnabled } = await chrome.storage.local.get(['friendlyMode', 'isEnabled']);
+        if (isEnabled !== false && friendlyMode === false) {
             blockAds();
         }
     } catch (err) {
@@ -48,8 +48,8 @@ setInterval(async () => {
 
 // Initial check
 try {
-    chrome.storage.local.get(['inPageEnabled', 'isEnabled'], (result) => {
-        if (result && result.isEnabled !== false && result.inPageEnabled === true) {
+    chrome.storage.local.get(['friendlyMode', 'isEnabled'], (result) => {
+        if (result && result.isEnabled !== false && result.friendlyMode === false) {
             blockAds();
         }
     });

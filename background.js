@@ -8,8 +8,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     lastTrustedClick = Date.now();
   } else if (message.type === 'TOGGLE_STATUS') {
     console.log("Protection status:", message.isEnabled);
-  } else if (message.type === 'TOGGLE_IN_PAGE') {
-    toggleInPageBlocking(message.enabled);
+  } else if (message.type === 'TOGGLE_FRIENDLY') {
+    toggleInPageBlocking(!message.enabled); // Invert: Friendly ON = Blocking OFF
   } else if (message.type === 'USER_DECISION') {
     handleUserDecision(message)
       .then(() => {
@@ -43,13 +43,13 @@ async function toggleInPageBlocking(enabled) {
 
 // Auto-off: Reset on startup and installation
 chrome.runtime.onStartup.addListener(() => {
-  chrome.storage.local.set({ inPageEnabled: false });
-  toggleInPageBlocking(false);
+  chrome.storage.local.set({ friendlyMode: true });
+  toggleInPageBlocking(false); // Friendly ON = Blocking OFF
 });
 
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.storage.local.set({ inPageEnabled: false });
-  toggleInPageBlocking(false);
+  chrome.storage.local.set({ friendlyMode: true });
+  toggleInPageBlocking(false); // Friendly ON = Blocking OFF
 });
 
 // Separate handler for cleaner async/await
