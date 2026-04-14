@@ -1,16 +1,19 @@
 (function() {
     let isActive = false;
     let hoveredElement = null;
-    let overlay = null;
+    let selectedItems = []; // Array of { element, selector, fingerprint }
+    let overlays = []; // Array of overlay DOM elements
+    
+    let activeOverlay = null; // The one following the cursor
     let controlPanel = null;
 
     // Initialize UI elements
     const createUI = () => {
-        if (overlay) return;
+        if (activeOverlay) return;
         
-        overlay = document.createElement('div');
-        overlay.id = 'adsfriendly-picker-overlay';
-        overlay.style.cssText = `
+        activeOverlay = document.createElement('div');
+        activeOverlay.id = 'adsfriendly-picker-active-overlay';
+        activeOverlay.style.cssText = `
             position: fixed;
             pointer-events: none;
             z-index: 2147483647;
@@ -21,7 +24,7 @@
             display: none;
             border-radius: 4px;
         `;
-        document.body.appendChild(overlay);
+        document.body.appendChild(activeOverlay);
 
         controlPanel = document.createElement('div');
         controlPanel.id = 'adsfriendly-picker-panel';
@@ -30,37 +33,46 @@
             z-index: 2147483647;
             background: #1e293b;
             color: white;
-            padding: 8px 12px;
-            border-radius: 8px;
-            box-shadow: 0 10px 25px rgba(0,0,0,0.3);
+            padding: 10px 16px;
+            border-radius: 10px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.4);
             display: none;
             flex-direction: row;
             align-items: center;
-            gap: 12px;
+            gap: 15px;
             font-family: system-ui, -apple-system, sans-serif;
             border: 1px solid rgba(255,255,255,0.1);
             pointer-events: auto;
         `;
-        controlPanel.innerHTML = `
-            <div style="font-weight: bold; font-size: 0.8rem; color: #10b981;">🎯</div>
-            <div id="selector-display" style="font-family: monospace; font-size: 0.7rem; background: #0f172a; padding: 4px 8px; border-radius: 4px; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">...</div>
-            <div style="display: flex; gap: 6px;">
-                <button id="zap-confirm" style="background: #10b981; color: white; border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 0.75rem; font-weight: bold;">Zap</button>
-                <button id="zap-cancel" style="background: #ef4444; color: white; border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 0.75rem;">X</button>
-            </div>
-        `;
         document.body.appendChild(controlPanel);
 
-        document.getElementById('zap-cancel').onclick = stopPicker;
-        document.getElementById('zap-confirm').onclick = confirmZap;
+        updatePanelUI();
+    };
+
+    const updatePanelUI = () => {
+        if (!controlPanel) return;
+        const count = selectedItems.length;
+        controlPanel.innerHTML = `
+            <div style="font-weight: bold; font-size: 1rem; color: #10b981;">🎯</div>
+            <div style="display: flex; flex-direction: column;">
+                <div style="font-weight: bold; font-size: 0.85rem;">${count > 0 ? `${count} Ads Marked` : 'Select Ads to Zap'}</div>
+                <div style="font-size: 0.7rem; color: #94a3b8;">${count > 0 ? 'Press <b>Enter</b> to Zap all, <b>Esc</b> to Cancel' : 'Click to mark, Scroll to expand'}</div>
+            </div>
+            ${count > 0 ? `<button id="zap-confirm-btn" style="background: #10b981; color: white; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.8rem; font-weight: bold;">Zap All</button>` : ''}
+        `;
+        const btn = document.getElementById('zap-confirm-btn');
+        if (btn) btn.onclick = confirmAllZaps;
     };
 
     const startPicker = () => {
         if (isActive) return;
         isActive = true;
         createUI();
-        overlay.style.display = 'block';
+        activeOverlay.style.display = 'block';
         controlPanel.style.display = 'flex';
+        selectedItems = [];
+        clearOverlays();
+        
         document.addEventListener('mousemove', handleMouseMove);
         document.addEventListener('click', handleClick, true);
         document.addEventListener('scroll', handleScroll, true);
@@ -69,144 +81,151 @@
 
     const stopPicker = () => {
         isActive = false;
-        if (overlay) overlay.style.display = 'none';
+        if (activeOverlay) activeOverlay.style.display = 'none';
         if (controlPanel) controlPanel.style.display = 'none';
+        clearOverlays();
         document.removeEventListener('mousemove', handleMouseMove);
         document.removeEventListener('click', handleClick, true);
         document.removeEventListener('scroll', handleScroll, true);
         document.removeEventListener('keydown', handleKeyDown);
     };
 
+    const clearOverlays = () => {
+        overlays.forEach(o => o.remove());
+        overlays = [];
+    };
+
     const handleMouseMove = (e) => {
         if (!isActive) return;
-        
         const el = document.elementFromPoint(e.clientX, e.clientY);
-        if (el && el !== overlay && !controlPanel.contains(el)) {
+        if (el && el !== activeOverlay && !controlPanel.contains(el) && !isOverlay(el)) {
             updateSelection(el);
         }
     };
+
+    const isOverlay = (el) => el.id && (el.id.includes('overlay') || el.id.includes('panel'));
 
     const updateSelection = (el) => {
         hoveredElement = el;
         const rect = el.getBoundingClientRect();
         
-        // Update Overlay
-        overlay.style.top = rect.top + 'px';
-        overlay.style.left = rect.left + 'px';
-        overlay.style.width = rect.width + 'px';
-        overlay.style.height = rect.height + 'px';
+        activeOverlay.style.top = rect.top + 'px';
+        activeOverlay.style.left = rect.left + 'px';
+        activeOverlay.style.width = rect.width + 'px';
+        activeOverlay.style.height = rect.height + 'px';
         
         // Update Floating Panel Position
-        const panelHeight = controlPanel.offsetHeight || 40;
-        let panelTop = rect.top - panelHeight - 8;
-        if (panelTop < 8) panelTop = rect.bottom + 8; // Flip to bottom if no space at top
+        const panelHeight = controlPanel.offsetHeight || 50;
+        let panelTop = rect.top - panelHeight - 12;
+        if (panelTop < 12) panelTop = rect.bottom + 12;
         
         controlPanel.style.top = panelTop + 'px';
-        controlPanel.style.left = Math.max(8, Math.min(window.innerWidth - controlPanel.offsetWidth - 8, rect.left)) + 'px';
-
-        const selector = generateSelector(el);
-        document.getElementById('selector-display').textContent = selector;
-    };
-
-    const handleScroll = (e) => {
-        if (!isActive || !hoveredElement) return;
-        
-        // Prevent default scroll when picking
-        e.preventDefault();
-
-        // Up/Down wheel to expand/shrink selection hierarchy
-        if (e.deltaY < 0 && hoveredElement.parentElement && hoveredElement.parentElement !== document.body) {
-            // Expand
-            updateSelection(hoveredElement.parentElement);
-        } else if (e.deltaY > 0) {
-            // Shrink (Requires storing history, let's keep it simple for now and just allow re-hovering)
-        }
+        controlPanel.style.left = Math.max(12, Math.min(window.innerWidth - controlPanel.offsetWidth - 12, rect.left)) + 'px';
     };
 
     const handleClick = (e) => {
         if (!isActive) return;
         e.preventDefault();
         e.stopPropagation();
-        confirmZap();
+
+        const el = document.elementFromPoint(e.clientX, e.clientY);
+        if (el && !selectedItems.some(item => item.element === el)) {
+            markElement(el);
+        }
+    };
+
+    const markElement = (el) => {
+        const selector = generateSelector(el);
+        const fingerprint = generateFingerprint(el);
+        
+        selectedItems.push({ element: el, selector, fingerprint });
+        
+        // Add permanent highlight
+        const rect = el.getBoundingClientRect();
+        const pOverlay = document.createElement('div');
+        pOverlay.style.cssText = `
+            position: fixed;
+            top: ${rect.top}px;
+            left: ${rect.left}px;
+            width: ${rect.width}px;
+            height: ${rect.height}px;
+            background: rgba(16, 185, 129, 0.3);
+            border: 2px solid #10b981;
+            pointer-events: none;
+            z-index: 2147483646;
+            border-radius: 4px;
+        `;
+        document.body.appendChild(pOverlay);
+        overlays.push(pOverlay);
+        
+        updatePanelUI();
+    };
+
+    const handleScroll = (e) => {
+        if (!isActive || !hoveredElement) return;
+        e.preventDefault();
+        if (e.deltaY < 0 && hoveredElement.parentElement && hoveredElement.parentElement !== document.body) {
+            updateSelection(hoveredElement.parentElement);
+        }
     };
 
     const handleKeyDown = (e) => {
         if (e.key === 'Escape') stopPicker();
+        if (e.key === 'Enter' && selectedItems.length > 0) confirmAllZaps();
     };
 
     const generateSelector = (el) => {
         if (el.id) return `#${el.id}`;
-        
-        // Try to find a meaningful class container if it looks like an ad
         let current = el;
         while (current && current !== document.body) {
-            if (current.id && (current.id.includes('ad') || current.id.includes('banner'))) {
-                return `#${current.id}`;
-            }
+            if (current.id && (current.id.includes('ad') || current.id.includes('banner'))) return `#${current.id}`;
             if (current.className && typeof current.className === 'string') {
-                const parts = current.className.split(' ').filter(c => c.includes('ad') || c.includes('banner') || c.includes('container'));
+                const parts = current.className.split(' ').filter(c => c.includes('ad') || c.includes('banner'));
                 if (parts.length > 0) return `.${parts[0]}`;
             }
             current = current.parentElement;
         }
-
-        // Fallback to a simple hierarchical path if no "ad" marks found
-        return el.tagName.toLowerCase() + (el.className ? '.' + el.className.trim().split(/\s+/).join('.') : '');
+        return el.tagName.toLowerCase() + (el.className ? '.' + el.className.split(/\s+/).join('.') : '');
     };
 
-    const generateFingerprint = (el) => {
-        return {
-            tag: el.tagName.toLowerCase(),
-            className: el.className,
-            parentId: el.parentElement ? el.parentElement.id : null,
-            parentClass: el.parentElement ? el.parentElement.className : null
-        };
-    };
+    const generateFingerprint = (el) => ({
+        tag: el.tagName.toLowerCase(),
+        className: el.className,
+        parentId: el.parentElement ? el.parentElement.id : null,
+        parentClass: el.parentElement ? el.parentElement.className : null
+    });
 
-    const confirmZap = async () => {
-        const selector = document.getElementById('selector-display').textContent;
+    const confirmAllZaps = async () => {
         const hostname = window.location.hostname;
-        const fingerprint = generateFingerprint(hoveredElement);
-
-        // Save rule as a structured object
         const { userCustomRules = {} } = await chrome.storage.local.get('userCustomRules');
         if (!userCustomRules[hostname]) userCustomRules[hostname] = [];
-        
-        // Find if this selector already exists (to update it) or add new
-        const existingIndex = userCustomRules[hostname].findIndex(r => 
-            (typeof r === 'string' ? r === selector : r.selector === selector)
-        );
 
-        const ruleObject = {
-            selector,
-            fingerprint,
-            timestamp: Date.now(),
-            timesZapped: 1
-        };
+        selectedItems.forEach(item => {
+            const ruleObject = {
+                selector: item.selector,
+                fingerprint: item.fingerprint,
+                timestamp: Date.now(),
+                timesZapped: 1
+            };
+            
+            const existingIndex = userCustomRules[hostname].findIndex(r => 
+                (typeof r === 'string' ? r === item.selector : r.selector === item.selector)
+            );
 
-        if (existingIndex > -1) {
-            // Update existing (maybe increment zap count later)
-            userCustomRules[hostname][existingIndex] = ruleObject;
-        } else {
-            userCustomRules[hostname].push(ruleObject);
-        }
+            if (existingIndex > -1) userCustomRules[hostname][existingIndex] = ruleObject;
+            else userCustomRules[hostname].push(ruleObject);
+
+            // Hide immediately
+            item.element.style.opacity = '0';
+            item.element.style.pointerEvents = 'none';
+        });
 
         await chrome.storage.local.set({ userCustomRules });
-
-        // Apply immediately
-        if (hoveredElement) {
-            hoveredElement.style.opacity = '0';
-            hoveredElement.style.pointerEvents = 'none';
-        }
-
         stopPicker();
     };
 
-    // Listen for activation from background/popup
     chrome.runtime.onMessage.addListener((message) => {
-        if (message.type === 'START_PICKER') {
-            startPicker();
-        }
+        if (message.type === 'START_PICKER') startPicker();
     });
 
 })();

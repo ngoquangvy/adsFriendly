@@ -37,6 +37,13 @@ document.getElementById('settings-btn').addEventListener('click', () => {
 
 // Handle Magic Wand (Zapper)
 document.getElementById('magic-wand-btn').addEventListener('click', async () => {
+    const { friendlyMode } = await chrome.storage.local.get('friendlyMode');
+    
+    if (friendlyMode === true) {
+        alert('⚠️ Magic Wand requires Friendly Mode to be OFF. Please toggle it off first.');
+        return;
+    }
+
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tab) {
         try {
