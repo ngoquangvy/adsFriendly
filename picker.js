@@ -412,32 +412,6 @@
         };
     };
 
-    const confirmAllZaps = async () => {
-        const hostname = window.location.hostname;
-        const { userCustomRules = {} } = await chrome.storage.local.get('userCustomRules');
-        if (!userCustomRules[hostname]) userCustomRules[hostname] = [];
-
-        selectedItems.forEach(item => {
-            const ruleObject = {
-                selector: item.selector,
-                fingerprint: item.fingerprint,
-                timestamp: Date.now(),
-                timesZapped: 1
-            };
-            
-            const existingIndex = userCustomRules[hostname].findIndex(r => 
-                (typeof r === 'string' ? r === item.selector : r.selector === item.selector)
-            );
-
-            if (existingIndex > -1) userCustomRules[hostname][existingIndex] = ruleObject;
-            else userCustomRules[hostname].push(ruleObject);
-
-            item.element.style.opacity = '0';
-            item.element.style.pointerEvents = 'none';
-        });
-
-        await chrome.storage.local.set({ userCustomRules });
-        chrome.runtime.sendMessage({ type: 'SYNC_LEARNING' });
         stopPicker();
     };
 
