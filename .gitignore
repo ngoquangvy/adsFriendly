@@ -1,0 +1,16 @@
+# Chrome Extension
+*.crx
+*.pem
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+logs
+*.log
+
+# Project specific
+node_modules/
+dist/
+.env
