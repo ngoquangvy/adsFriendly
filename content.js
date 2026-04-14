@@ -14,7 +14,23 @@ document.addEventListener('mousedown', (event) => {
   }
 }, true); // Use capture phase to ensure we catch it before other scripts
 
-// Cosmetic Filtering: Periodically check for common ad elements and hide them
+// BLOCKING STRATEGIES
+// We use a modular approach so we can easily add "Destruction Mode" later.
+const BLOCKING_STRATEGIES = {
+    STEALTH: (el) => {
+        // Hide without changing layout to avoid detection
+        if (el.style.opacity !== '0') {
+            el.style.setProperty('opacity', '0', 'important');
+            el.style.setProperty('visibility', 'hidden', 'important');
+            el.style.setProperty('pointer-events', 'none', 'important');
+        }
+    },
+    DESTRUCTIVE: (el) => {
+        // Placeholder for future aggressive removal
+        // el.style.setProperty('display', 'none', 'important');
+    }
+};
+
 const blockAds = () => {
     const adSelectors = [
         '[id*="google_ads"]',
@@ -22,14 +38,14 @@ const blockAds = () => {
         '[class*="ad-container"]',
         '[id*="ad-"]',
         'ins.adsbygoogle',
-        'iframe[src*="doubleclick"]'
+        'iframe[src*="doubleclick"]',
+        'a[href*="googleadservices.com"]'
     ];
     
     adSelectors.forEach(selector => {
         document.querySelectorAll(selector).forEach(el => {
-            if (el.style.display !== 'none') {
-                el.style.setProperty('display', 'none', 'important');
-            }
+            // Apply current active strategy: STEALTH
+            BLOCKING_STRATEGIES.STEALTH(el);
         });
     });
 };

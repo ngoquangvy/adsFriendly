@@ -41,15 +41,19 @@ async function toggleInPageBlocking(enabled) {
   }
 }
 
-// Auto-off: Reset on startup and installation
-chrome.runtime.onStartup.addListener(() => {
-  chrome.storage.local.set({ friendlyMode: true });
-  toggleInPageBlocking(false); // Friendly ON = Blocking OFF
-});
-
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.storage.local.set({ friendlyMode: true });
-  toggleInPageBlocking(false); // Friendly ON = Blocking OFF
+// Auto-off: No longer used on startup to persist user choice
+// Reset ONLY on first installation if not set
+chrome.runtime.onInstalled.addListener(async () => {
+  const result = await chrome.storage.local.get(['friendlyMode', 'isEnabled']);
+  
+  if (result.friendlyMode === undefined) {
+    await chrome.storage.local.set({ friendlyMode: true });
+    toggleInPageBlocking(false); // Friendly ON = Blocking OFF
+  }
+  
+  if (result.isEnabled === undefined) {
+    await chrome.storage.local.set({ isEnabled: true });
+  }
 });
 
 // Separate handler for cleaner async/await
