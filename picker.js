@@ -8,6 +8,7 @@
     let controlPanel = null;
 
     const GENERIC_CLASSES = ['lazyloaded', 'ls-is-cached', 'active', 'show', 'showing', 'visible', 'container', 'inner', 'wrapper', 'img-responsive'];
+    const STRUCTURAL_TAGS = ['html', 'body', 'header', 'footer', 'nav', 'main', 'section', 'article', 'aside'];
 
     // Initialize UI elements
     const createUI = () => {
@@ -51,16 +52,18 @@
         updatePanelUI();
     };
 
-    const updatePanelUI = () => {
+    const updatePanelUI = (errorMsg = null) => {
         if (!controlPanel) return;
         const count = selectedItems.length;
+        const color = errorMsg ? '#ef4444' : '#10b981';
+        
         controlPanel.innerHTML = `
-            <div style="font-weight: bold; font-size: 1rem; color: #10b981;">🎯</div>
+            <div style="font-weight: bold; font-size: 1rem; color: ${color};">${errorMsg ? '⚠️' : '🎯'}</div>
             <div style="display: flex; flex-direction: column;">
-                <div style="font-weight: bold; font-size: 0.85rem;">${count > 0 ? `${count} Ads Marked` : 'Select Ads to Zap'}</div>
-                <div style="font-size: 0.7rem; color: #94a3b8;">${count > 0 ? 'Press <b>Enter</b> to Zap all, <b>Esc</b> to Cancel' : 'Click to mark, Scroll to expand'}</div>
+                <div style="font-weight: bold; font-size: 0.85rem; color: ${errorMsg ? '#f87171' : 'white'};">${errorMsg || (count > 0 ? `${count} Ads Marked` : 'Select Ads to Zap')}</div>
+                <div style="font-size: 0.7rem; color: #94a3b8;">${errorMsg ? 'Please select a smaller area' : (count > 0 ? 'Press <b>Enter</b> to Zap all, <b>Esc</b> to Cancel' : 'Click to mark, Scroll to expand')}</div>
             </div>
-            ${count > 0 ? `<button id="zap-confirm-btn" style="background: #10b981; color: white; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.8rem; font-weight: bold;">Zap All</button>` : ''}
+            ${(count > 0 && !errorMsg) ? `<button id="zap-confirm-btn" style="background: #10b981; color: white; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.8rem; font-weight: bold;">Zap All</button>` : ''}
         `;
         const btn = document.getElementById('zap-confirm-btn');
         if (btn) btn.onclick = confirmAllZaps;
@@ -99,7 +102,13 @@
 
     const handleMouseMove = (e) => {
         if (!isActive) return;
-        const el = document.elementFromPoint(e.clientX, e.clientY);
+        let el = document.elementFromPoint(e.clientX, e.clientY);
+        
+        // Safety: Prevent selecting structural tags
+        if (el && STRUCTURAL_TAGS.includes(el.tagName.toLowerCase())) {
+            return;
+        }
+
         if (el && el !== activeOverlay && !controlPanel.contains(el) && !isOverlay(el)) {
             updateSelection(el);
         }
@@ -111,11 +120,26 @@
         hoveredElement = el;
         const rect = el.getBoundingClientRect();
         
+        // AREA CHECK: If area is > 75% of viewport, it's a "Nuke" risk
+        const area = rect.width * rect.height;
+        const viewportArea = window.innerWidth * window.innerHeight;
+        const isDangerous = area > viewportArea * 0.75;
+
         activeOverlay.style.top = rect.top + 'px';
         activeOverlay.style.left = rect.left + 'px';
         activeOverlay.style.width = rect.width + 'px';
         activeOverlay.style.height = rect.height + 'px';
         
+        if (isDangerous) {
+            activeOverlay.style.background = 'rgba(239, 68, 68, 0.3)';
+            activeOverlay.style.outlineColor = '#ef4444';
+            updatePanelUI("Vùng chọn quá lớn (Rủi ro xóa toàn trang)");
+        } else {
+            activeOverlay.style.background = 'rgba(16, 185, 129, 0.2)';
+            activeOverlay.style.outlineColor = '#10b981';
+            updatePanelUI();
+        }
+
         // Update Floating Panel Position
         const panelHeight = controlPanel.offsetHeight || 50;
         let panelTop = rect.top - panelHeight - 12;
@@ -123,14 +147,17 @@
         
         controlPanel.style.top = panelTop + 'px';
         controlPanel.style.left = Math.max(12, Math.min(window.innerWidth - controlPanel.offsetWidth - 12, rect.left)) + 'px';
-
-        const selector = generateSelector(el);
-        // Display hint of selector (shortened)
-        // document.getElementById('selector-display').textContent = selector;
     };
 
     const handleClick = (e) => {
         if (!isActive) return;
+        
+        // Prevent click if area is dangerous
+        const rect = hoveredElement.getBoundingClientRect();
+        if (rect.width * rect.height > window.innerWidth * window.innerHeight * 0.75) {
+            return;
+        }
+
         e.preventDefault();
         e.stopPropagation();
 
@@ -142,8 +169,9 @@
 
     const markElement = (el) => {
         const selector = generateSelector(el);
+        if (!selector) return; // Silent reject dangerous selectors
+
         const fingerprint = generateFingerprint(el);
-        
         selectedItems.push({ element: el, selector, fingerprint });
         
         // Add permanent highlight
@@ -181,6 +209,8 @@
     };
 
     const generateSelector = (el) => {
+        const tag = el.tagName.toLowerCase();
+        
         // High Priority: ID
         if (el.id && !GENERIC_CLASSES.some(gc => el.id.includes(gc))) return `#${el.id}`;
         
@@ -189,40 +219,37 @@
         if (parentLink && parentLink.href) {
             try {
                 const url = new URL(parentLink.href);
-                const domain = url.hostname.split('.').slice(-2).join('.'); // e.g. f8page06.com
+                const domain = url.hostname.split('.').slice(-2).join('.');
                 if (domain && domain.length > 4) {
-                    return `${el.tagName.toLowerCase()}[href*="${domain}"], a[href*="${domain}"] ${el.tagName.toLowerCase()}`;
+                    return `${tag}[href*="${domain}"], a[href*="${domain}"] ${tag}`;
                 }
             } catch (e) {}
         }
 
-        // Mid Priority: Specific Classes (Filtered)
-        if (el.className && typeof el.className === 'string') {
-            const classes = el.className.split(/\s+/).filter(c => c && !GENERIC_CLASSES.includes(c));
-            if (classes.length > 0) {
-                return `${el.tagName.toLowerCase()}.${classes.join('.')}`;
-            }
-        }
-
-        // Low Priority: Parental Anchoring
+        // Parent Anchoring (MUST NOT be tag-only for structural tags)
         let current = el.parentElement;
         let depth = 0;
         while (current && current !== document.body && depth < 3) {
             if (current.id && !GENERIC_CLASSES.some(gc => current.id.includes(gc))) {
-                return `#${current.id} ${el.tagName.toLowerCase()}`;
+                return `#${current.id} ${tag}`;
             }
             if (current.className && typeof current.className === 'string') {
                 const pClasses = current.className.split(/\s+/).filter(c => c && !GENERIC_CLASSES.includes(c));
                 if (pClasses.length > 0) {
-                    return `.${pClasses[0]} ${el.tagName.toLowerCase()}`;
+                    return `.${pClasses[0]} ${tag}`;
                 }
             }
             current = current.parentElement;
             depth++;
         }
 
-        // Fallback: Extremely Specific Child Index (Risky but precise)
-        return el.tagName.toLowerCase();
+        // REJECT single common tags (Anti-Nuke Guardrail)
+        const dangerousTags = ['div', 'span', 'p', 'a', 'li', 'ul', 'img', 'section'];
+        if (dangerousTags.includes(tag)) {
+            return null; // Too broad to be safe
+        }
+
+        return tag;
     };
 
     const generateFingerprint = (el) => ({
@@ -254,7 +281,6 @@
             if (existingIndex > -1) userCustomRules[hostname][existingIndex] = ruleObject;
             else userCustomRules[hostname].push(ruleObject);
 
-            // Hide immediately
             item.element.style.opacity = '0';
             item.element.style.pointerEvents = 'none';
         });

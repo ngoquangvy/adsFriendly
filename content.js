@@ -60,8 +60,16 @@ const blockAds = async () => {
     ];
 
     // Handle User Custom Rules (Support both strings and objects)
+    const dangerousTags = ['div', 'span', 'p', 'a', 'li', 'ul', 'img', 'section'];
+
     customSelectors.forEach(rule => {
         const selector = typeof rule === 'string' ? rule : rule.selector;
+        
+        // Safety: skip if selector is just a single dangerous tag
+        if (dangerousTags.includes(selector.toLowerCase().trim())) {
+            return;
+        }
+
         adSelectors.push(selector);
 
         // Pattern Matching: If it's an object with a fingerprint, find similar siblings
