@@ -3,8 +3,14 @@
 // Listen for clicks to track user intent
 document.addEventListener('mousedown', (event) => {
   if (event.isTrusted) {
-    // Notify background script that a trusted user interaction occurred
-    chrome.runtime.sendMessage({ type: 'TRUSTED_CLICK' });
+    try {
+      if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id) {
+        // Notify background script that a trusted user interaction occurred
+        chrome.runtime.sendMessage({ type: 'TRUSTED_CLICK' });
+      }
+    } catch (e) {
+      // Ignored: extension context invalidated
+    }
   }
 }, true); // Use capture phase to ensure we catch it before other scripts
 
