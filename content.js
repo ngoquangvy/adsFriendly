@@ -31,24 +31,24 @@ const BLOCKING_STRATEGIES = {
     }
 };
 
+const SYSTEM_WHITELIST = ['cloudflare.com', 'google.com', 'github.com', 'dash.cloudflare.com', 'stackexchange.com', 'stackoverflow.com'];
+
 const blockAds = async () => {
     const hostname = window.location.hostname;
-    let customSelectors = [];
+    const isSystemSafe = SYSTEM_WHITELIST.some(domain => hostname.includes(domain));
     
+    let customSelectors = [];
     try {
         const result = await chrome.storage.local.get('userCustomRules');
         if (result && result.userCustomRules && result.userCustomRules[hostname]) {
             customSelectors = result.userCustomRules[hostname];
         }
-    } catch (e) {
-        // Storage access might fail during extension reload
-    }
+    } catch (e) {}
 
     // 1. Generalized Ad Selectors + User Custom Selectors
     const adSelectors = [
         '[id*="google_ads"]', '[class*="adsbygoogle"]',
         '[class*="ad-container"]', '[class*="ad-box"]', '[id*="ad-"]',
-        '[class*="banner"]', '[id*="banner"]',
         'ins.adsbygoogle', 'iframe[src*="doubleclick"]',
         'a[href*="googleadservices.com"]',
         'a[href*="utm_"]', 'a[href*="clickid="]', 'a[href*="aff_id="]',
@@ -59,6 +59,11 @@ const blockAds = async () => {
         'div[class*="popup-ad"]', 'div[id*="popup-ad"]',
         ...customSelectors
     ];
+
+    // Add greedy selectors ONLY if not on a system-critical page
+    if (!isSystemSafe) {
+        adSelectors.push('[class*="banner"]', '[id*="banner"]');
+    }
     
     adSelectors.forEach(selector => {
         document.querySelectorAll(selector).forEach(el => {
@@ -67,29 +72,37 @@ const blockAds = async () => {
     });
 
     // 2. Invisible Overlay Shield (Heuristic for click-jackers)
-    const fixedElements = document.querySelectorAll('div, a');
-    fixedElements.forEach(el => {
-        const style = window.getComputedStyle(el);
-        if (style.position === 'fixed' || style.position === 'absolute') {
-            const zIndex = parseInt(style.zIndex);
-            if (zIndex > 990) {
-                const rect = el.getBoundingClientRect();
-                const vWidth = window.innerWidth;
-                const vHeight = window.innerHeight;
-                
-                // If it covers more than 50% of the viewport and is nearly transparent
-                // it's likely a pop-under trigger overlay
-                if (rect.width > vWidth * 0.5 && rect.height > vHeight * 0.5) {
-                    const bgColor = style.backgroundColor;
-                    const isTransparent = bgColor.includes('rgba') && bgColor.endsWith(' 0)') || bgColor === 'transparent';
+    // SKIP if on a system-critical page to protect sidebars and challenge modals
+    if (!isSystemSafe) {
+        const fixedElements = document.querySelectorAll('div, a');
+        fixedElements.forEach(el => {
+            // Safety: Skip system elements and interactive forms
+            const id = el.id || '';
+            const className = typeof el.className === 'string' ? el.className : '';
+            if (id.includes('cf-') || className.includes('cf-') || id.includes('turnstile') || el.querySelector('form, input, select')) {
+                return;
+            }
+
+            const style = window.getComputedStyle(el);
+            if (style.position === 'fixed' || style.position === 'absolute') {
+                const zIndex = parseInt(style.zIndex);
+                if (zIndex > 990) {
+                    const rect = el.getBoundingClientRect();
+                    const vWidth = window.innerWidth;
+                    const vHeight = window.innerHeight;
                     
-                    if (isTransparent || parseFloat(style.opacity) < 0.1) {
-                        BLOCKING_STRATEGIES.STEALTH(el);
+                    if (rect.width > vWidth * 0.5 && rect.height > vHeight * 0.5) {
+                        const bgColor = style.backgroundColor;
+                        const isTransparent = bgColor.includes('rgba') && bgColor.endsWith(' 0)') || bgColor === 'transparent';
+                        
+                        if (isTransparent || parseFloat(style.opacity) < 0.1) {
+                            BLOCKING_STRATEGIES.STEALTH(el);
+                        }
                     }
                 }
             }
-        }
-    });
+        });
+    }
 };
 
 // Run blocking periodically ONLY if 'Friendly Mode' is OFF
