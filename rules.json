@@ -79,5 +79,23 @@
       "urlFilter": "*nhatvip*",
       "resourceTypes": ["main_frame", "sub_frame", "image"]
     }
+  },
+  {
+    "id": 10,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": {
+      "urlFilter": "*6789x.site*",
+      "resourceTypes": ["main_frame", "sub_frame", "image", "script"]
+    }
+  },
+  {
+    "id": 11,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": {
+      "urlFilter": "*hitclub*",
+      "resourceTypes": ["main_frame", "sub_frame", "image", "script"]
+    }
   }
 ]
