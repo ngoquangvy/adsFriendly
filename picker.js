@@ -14,7 +14,7 @@
             position: fixed;
             pointer-events: none;
             z-index: 2147483647;
-            background: transparent;
+            background: rgba(16, 185, 129, 0.2);
             outline: 2px solid #10b981;
             box-shadow: 0 0 15px rgba(16, 185, 129, 0.4);
             transition: all 0.1s ease;
@@ -27,29 +27,26 @@
         controlPanel.id = 'adsfriendly-picker-panel';
         controlPanel.style.cssText = `
             position: fixed;
-            bottom: 20px;
-            left: 50%;
-            transform: translateX(-50%);
             z-index: 2147483647;
             background: #1e293b;
             color: white;
-            padding: 12px 20px;
-            border-radius: 12px;
+            padding: 8px 12px;
+            border-radius: 8px;
             box-shadow: 0 10px 25px rgba(0,0,0,0.3);
             display: none;
-            flex-direction: column;
-            gap: 10px;
+            flex-direction: row;
+            align-items: center;
+            gap: 12px;
             font-family: system-ui, -apple-system, sans-serif;
             border: 1px solid rgba(255,255,255,0.1);
-            transition: opacity 0.3s ease;
+            pointer-events: auto;
         `;
         controlPanel.innerHTML = `
-            <div style="font-weight: bold; font-size: 0.9rem; color: #10b981;">🎯 Magic Wand Active</div>
-            <div style="font-size: 0.75rem; color: #94a3b8;">Click an ad to zap it. Use Scroll to expand area.</div>
-            <div id="selector-display" style="font-family: monospace; font-size: 0.7rem; background: #0f172a; padding: 5px; border-radius: 4px; max-width: 300px; overflow: hidden; text-overflow: ellipsis;">...</div>
-            <div style="display: flex; gap: 8px;">
-                <button id="zap-confirm" style="flex: 1; background: #10b981; color: white; border: none; padding: 6px; border-radius: 6px; cursor: pointer; font-size: 0.8rem; font-weight: bold;">Zap It!</button>
-                <button id="zap-cancel" style="background: #ef4444; color: white; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.8rem;">Cancel</button>
+            <div style="font-weight: bold; font-size: 0.8rem; color: #10b981;">🎯</div>
+            <div id="selector-display" style="font-family: monospace; font-size: 0.7rem; background: #0f172a; padding: 4px 8px; border-radius: 4px; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">...</div>
+            <div style="display: flex; gap: 6px;">
+                <button id="zap-confirm" style="background: #10b981; color: white; border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 0.75rem; font-weight: bold;">Zap</button>
+                <button id="zap-cancel" style="background: #ef4444; color: white; border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 0.75rem;">X</button>
             </div>
         `;
         document.body.appendChild(controlPanel);
@@ -83,11 +80,6 @@
     const handleMouseMove = (e) => {
         if (!isActive) return;
         
-        // Auto-fade control panel if mouse is far from it
-        const panelRect = controlPanel.getBoundingClientRect();
-        const distToPanel = Math.hypot(e.clientX - (panelRect.left + panelRect.width/2), e.clientY - (panelRect.top + panelRect.height/2));
-        controlPanel.style.opacity = distToPanel < 200 ? '1' : '0.4';
-
         const el = document.elementFromPoint(e.clientX, e.clientY);
         if (el && el !== overlay && !controlPanel.contains(el)) {
             updateSelection(el);
@@ -97,11 +89,21 @@
     const updateSelection = (el) => {
         hoveredElement = el;
         const rect = el.getBoundingClientRect();
+        
+        // Update Overlay
         overlay.style.top = rect.top + 'px';
         overlay.style.left = rect.left + 'px';
         overlay.style.width = rect.width + 'px';
         overlay.style.height = rect.height + 'px';
         
+        // Update Floating Panel Position
+        const panelHeight = controlPanel.offsetHeight || 40;
+        let panelTop = rect.top - panelHeight - 8;
+        if (panelTop < 8) panelTop = rect.bottom + 8; // Flip to bottom if no space at top
+        
+        controlPanel.style.top = panelTop + 'px';
+        controlPanel.style.left = Math.max(8, Math.min(window.innerWidth - controlPanel.offsetWidth - 8, rect.left)) + 'px';
+
         const selector = generateSelector(el);
         document.getElementById('selector-display').textContent = selector;
     };
