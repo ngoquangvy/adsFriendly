@@ -1,3 +1,19 @@
+(function() {
+    // 1. Inject the Spy into the Main World
+    function injectSpy() {
+        try {
+            const script = document.createElement('script');
+            script.src = chrome.runtime.getURL('injected_spy.js');
+            (document.head || document.documentElement).appendChild(script);
+            script.onload = () => script.remove();
+        } catch (e) {
+            console.error('[AdsFriendly] Injection failed:', e);
+        }
+    }
+    injectSpy();
+
+    let lastTrustedClick = 0;
+
     // Listen for clicks to track user intent
     document.addEventListener('mousedown', (event) => {
         if (event.isTrusted) {

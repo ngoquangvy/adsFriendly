@@ -31,8 +31,45 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .then(() => sendResponse({ status: 'ok' }))
       .catch(err => sendResponse({ status: 'error' }));
     return true;
+  } else if (message.type === 'SYNC_VIDEO_LEARNING') {
+    handleVideoLearning(message)
+      .then(() => sendResponse({ status: 'ok' }))
+      .catch(() => sendResponse({ status: 'error' }));
+    return true;
   }
 });
+
+async function handleVideoLearning(data) {
+    const { classes, hostname } = data;
+    if (!classes) return;
+
+    const classList = classes.split(' ').filter(c => 
+        c.includes('ad') || c.includes('player') || c.includes('video')
+    );
+
+    if (classList.length === 0) return;
+
+    const { globalAdPatterns = [] } = await chrome.storage.local.get(['globalAdPatterns']);
+    
+    classList.forEach(cls => {
+        const patternValue = `.${cls}`;
+        const existing = globalAdPatterns.find(p => p.type === 'video_marker' && p.value === patternValue);
+        
+        if (existing) {
+            existing.confidence = Math.min(1.0, existing.confidence + 0.1);
+        } else {
+            globalAdPatterns.push({
+                type: 'video_marker',
+                value: patternValue,
+                confidence: 0.5,
+                source: hostname
+            });
+        }
+    });
+
+    await chrome.storage.local.set({ globalAdPatterns });
+    console.log('[AdsFriendly Brain] Video ad tokens learned:', classList);
+}
 
 const PROTECTED_KEYWORDS = [
     'messenger', 'chat', 'inbox', 'cart', 'checkout', 'search', 'account', 'login', 'social', 'notification',

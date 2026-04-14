@@ -7,7 +7,8 @@
     "declarativeNetRequest",
     "webNavigation",
     "tabs",
-    "storage"
+    "storage",
+    "scripting"
   ],
   "options_ui": {
     "page": "options/options.html",
@@ -22,7 +23,7 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content.js", "picker.js"],
+      "js": ["content.js", "picker.js", "video_surgeon.js"],
       "run_at": "document_start"
     }
   ],
@@ -45,7 +46,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["ui/blocked.html"],
+      "resources": ["ui/blocked.html", "injected_spy.js"],
       "matches": ["<all_urls>"]
     }
   ]
