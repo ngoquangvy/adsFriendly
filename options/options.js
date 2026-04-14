@@ -49,6 +49,59 @@ resetBtn.onclick = async () => {
         await chrome.storage.local.set({ isEnabled: true, blockedCount: 0 });
         chrome.action.setBadgeText({ text: '' });
         loadLists();
+
+// Feedback Logic
+const feedbackForm = document.getElementById('feedback-form');
+const fbStatus = document.getElementById('fb-status');
+const fbSubmit = document.getElementById('fb-submit');
+
+feedbackForm.onsubmit = async (e) => {
+    e.preventDefault();
+    
+    // CONFIG: Replace this with your actual Cloudflare Worker URL after deployment
+    const WORKER_URL = "https://your-feedback-worker.workers.dev/";
+
+    if (WORKER_URL.includes("your-feedback-worker")) {
+        fbStatus.style.display = 'block';
+        fbStatus.style.color = '#ff9800';
+        fbStatus.textContent = "Lưu ý: Bạn cần thay WORKER_URL trong options.js bằng URL thật sau khi deploy Cloudflare Worker!";
+        return;
+    }
+
+    const title = document.getElementById('fb-title').value;
+    const body = document.getElementById('fb-body').value;
+    const rating = document.querySelector('input[name="rating"]:checked').value;
+
+    fbSubmit.disabled = true;
+    fbSubmit.textContent = "Đang gửi...";
+    fbStatus.style.display = 'block';
+    fbStatus.style.color = '#94a3b8';
+    fbStatus.textContent = "Đang gửi góp ý của bạn...";
+
+    try {
+        const response = await fetch(WORKER_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title, body, rating: parseInt(rating) })
+        });
+
+        const result = await response.json();
+
+        if (response.ok) {
+            fbStatus.style.color = '#22c55e';
+            fbStatus.textContent = "Cảm ơn bạn! Góp ý đã được gửi thành công.";
+            feedbackForm.reset();
+        } else {
+            throw new Error(result.error || "Lỗi gửi góp ý");
+        }
+    } catch (err) {
+        fbStatus.style.color = var(--danger);
+        fbStatus.textContent = "Lỗi: " + err.message;
+    } finally {
+        fbSubmit.disabled = false;
+        fbSubmit.textContent = "Gửi góp ý";
+    }
+};
     }
 };
 

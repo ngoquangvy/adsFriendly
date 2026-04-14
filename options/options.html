@@ -164,6 +164,33 @@
         <div class="reset-section">
             <button class="btn-reset" id="btn-reset">Xóa tất cả dữ liệu</button>
         </div>
+
+        <!-- Feedback Section -->
+        <div class="card" style="margin-top: 3rem; max-width: 600px; margin-left: auto; margin-right: auto;">
+            <h2 style="color: var(--primary);">
+                <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-7 12h-2v-2h2v2zm0-4h-2V6h2v4z"/></svg>
+                Góp ý & Báo lỗi
+            </h2>
+            <form id="feedback-form">
+                <input type="text" id="fb-title" placeholder="Tiêu đề góp ý..." required style="width: 100%; padding: 0.8rem; margin-bottom: 1rem; border-radius: 10px; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.2); color: white; box-sizing: border-box;">
+                
+                <div style="margin-bottom: 1rem; display: flex; align-items: center; gap: 1rem;">
+                    <span style="font-size: 0.9rem; color: #94a3b8;">Đánh giá:</span>
+                    <div class="rating-stars" style="display: flex; gap: 5px;">
+                        <input type="radio" name="rating" value="5" id="r5" checked><label for="r5">⭐</label>
+                        <input type="radio" name="rating" value="4" id="r4"><label for="r4">⭐</label>
+                        <input type="radio" name="rating" value="3" id="r3"><label for="r3">⭐</label>
+                        <input type="radio" name="rating" value="2" id="r2"><label for="r2">⭐</label>
+                        <input type="radio" name="rating" value="1" id="r1"><label for="r1">⭐</label>
+                    </div>
+                </div>
+
+                <textarea id="fb-body" placeholder="Hãy cho tôi biết trải nghiệm của bạn hoặc trang nào đang bị chặn nhầm..." required style="width: 100%; height: 120px; padding: 0.8rem; margin-bottom: 1rem; border-radius: 10px; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.2); color: white; resize: none; box-sizing: border-box;"></textarea>
+                
+                <button type="submit" id="fb-submit" style="width: 100%; background: var(--primary); color: white; border: none; padding: 0.8rem; border-radius: 10px; font-weight: 600; cursor: pointer;">Gửi góp ý</button>
+            </form>
+            <div id="fb-status" style="margin-top: 1rem; text-align: center; font-size: 0.9rem; display: none;"></div>
+        </div>
     </div>
     <script src="options.js"></script>
 </body>
