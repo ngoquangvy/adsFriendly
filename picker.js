@@ -7,6 +7,8 @@
     let activeOverlay = null; // The one following the cursor
     let controlPanel = null;
 
+    const GENERIC_CLASSES = ['lazyloaded', 'ls-is-cached', 'active', 'show', 'showing', 'visible', 'container', 'inner', 'wrapper', 'img-responsive'];
+
     // Initialize UI elements
     const createUI = () => {
         if (activeOverlay) return;
@@ -121,6 +123,10 @@
         
         controlPanel.style.top = panelTop + 'px';
         controlPanel.style.left = Math.max(12, Math.min(window.innerWidth - controlPanel.offsetWidth - 12, rect.left)) + 'px';
+
+        const selector = generateSelector(el);
+        // Display hint of selector (shortened)
+        // document.getElementById('selector-display').textContent = selector;
     };
 
     const handleClick = (e) => {
@@ -175,24 +181,57 @@
     };
 
     const generateSelector = (el) => {
-        if (el.id) return `#${el.id}`;
-        let current = el;
-        while (current && current !== document.body) {
-            if (current.id && (current.id.includes('ad') || current.id.includes('banner'))) return `#${current.id}`;
+        // High Priority: ID
+        if (el.id && !GENERIC_CLASSES.some(gc => el.id.includes(gc))) return `#${el.id}`;
+        
+        // Specialized Priority: Ad Attributes (href domain)
+        const parentLink = el.closest('a');
+        if (parentLink && parentLink.href) {
+            try {
+                const url = new URL(parentLink.href);
+                const domain = url.hostname.split('.').slice(-2).join('.'); // e.g. f8page06.com
+                if (domain && domain.length > 4) {
+                    return `${el.tagName.toLowerCase()}[href*="${domain}"], a[href*="${domain}"] ${el.tagName.toLowerCase()}`;
+                }
+            } catch (e) {}
+        }
+
+        // Mid Priority: Specific Classes (Filtered)
+        if (el.className && typeof el.className === 'string') {
+            const classes = el.className.split(/\s+/).filter(c => c && !GENERIC_CLASSES.includes(c));
+            if (classes.length > 0) {
+                return `${el.tagName.toLowerCase()}.${classes.join('.')}`;
+            }
+        }
+
+        // Low Priority: Parental Anchoring
+        let current = el.parentElement;
+        let depth = 0;
+        while (current && current !== document.body && depth < 3) {
+            if (current.id && !GENERIC_CLASSES.some(gc => current.id.includes(gc))) {
+                return `#${current.id} ${el.tagName.toLowerCase()}`;
+            }
             if (current.className && typeof current.className === 'string') {
-                const parts = current.className.split(' ').filter(c => c.includes('ad') || c.includes('banner'));
-                if (parts.length > 0) return `.${parts[0]}`;
+                const pClasses = current.className.split(/\s+/).filter(c => c && !GENERIC_CLASSES.includes(c));
+                if (pClasses.length > 0) {
+                    return `.${pClasses[0]} ${el.tagName.toLowerCase()}`;
+                }
             }
             current = current.parentElement;
+            depth++;
         }
-        return el.tagName.toLowerCase() + (el.className ? '.' + el.className.split(/\s+/).join('.') : '');
+
+        // Fallback: Extremely Specific Child Index (Risky but precise)
+        return el.tagName.toLowerCase();
     };
 
     const generateFingerprint = (el) => ({
         tag: el.tagName.toLowerCase(),
         className: el.className,
         parentId: el.parentElement ? el.parentElement.id : null,
-        parentClass: el.parentElement ? el.parentElement.className : null
+        parentClass: el.parentElement ? el.parentElement.className : null,
+        alt: el.alt || null,
+        title: el.title || null
     });
 
     const confirmAllZaps = async () => {
