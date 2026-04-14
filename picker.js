@@ -99,9 +99,17 @@
 
     const handleScroll = (e) => {
         if (!isActive || !hoveredElement) return;
-        // Expand selection on wheel/scroll logic could be added here
-        // For now, let's keep it simple and just update overlay pos
-        updateSelection(hoveredElement);
+        
+        // Prevent default scroll when picking
+        e.preventDefault();
+
+        // Up/Down wheel to expand/shrink selection hierarchy
+        if (e.deltaY < 0 && hoveredElement.parentElement && hoveredElement.parentElement !== document.body) {
+            // Expand
+            updateSelection(hoveredElement.parentElement);
+        } else if (e.deltaY > 0) {
+            // Shrink (Requires storing history, let's keep it simple for now and just allow re-hovering)
+        }
     };
 
     const handleClick = (e) => {

@@ -48,6 +48,22 @@ document.getElementById('magic-wand-btn').addEventListener('click', async () => 
     }
 });
 
+// Handle Reset Site Rules
+document.getElementById('reset-rules-btn').addEventListener('click', async () => {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab) {
+        const hostname = new URL(tab.url).hostname;
+        const { userCustomRules = {} } = await chrome.storage.local.get('userCustomRules');
+        
+        if (userCustomRules[hostname]) {
+            delete userCustomRules[hostname];
+            await chrome.storage.local.set({ userCustomRules });
+            chrome.tabs.reload(tab.id);
+            window.close();
+        }
+    }
+});
+
 // Optionally: Periodically poll for updated count
 setInterval(() => {
     chrome.storage.local.get(['blockedCount'], (result) => {

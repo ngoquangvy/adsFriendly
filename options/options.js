@@ -9,7 +9,47 @@ async function loadLists() {
     
     renderList(whitelist, whitelistEl, 'WHITELIST');
     renderList(blacklist, blacklistEl, 'BLACKLIST');
+    renderCustomRules();
 }
+
+const renderCustomRules = () => {
+    const container = document.getElementById('custom-rules-container');
+    if (!container) return;
+    chrome.storage.local.get('userCustomRules', (result) => {
+        const rules = result.userCustomRules || {};
+        const hostnames = Object.keys(rules);
+
+        if (hostnames.length === 0) {
+            container.innerHTML = `<p style="color: #64748b; font-size: 0.8rem; font-style: italic;">No custom rules found yet. Use the Magic Wand to start zapping ads!</p>`;
+            return;
+        }
+
+        let html = '<div style="display: flex; flex-direction: column; gap: 10px;">';
+        hostnames.forEach(hostname => {
+            const count = rules[hostname].length;
+            html += `
+                <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); padding: 12px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <div style="font-weight: bold; font-size: 0.9rem; color: #e2e8f0;">${hostname}</div>
+                        <div style="font-size: 0.75rem; color: #64748b;">${count} rules active</div>
+                    </div>
+                    <button class="btn-delete-rule" data-hostname="${hostname}" style="background: rgba(239, 68, 68, 0.1); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.2); padding: 5px 10px; border-radius: 6px; cursor: pointer; font-size: 0.7rem;">Delete All</button>
+                </div>
+            `;
+        });
+        html += '</div>';
+        container.innerHTML = html;
+
+        // Add event listeners for delete buttons
+        document.querySelectorAll('.btn-delete-rule').forEach(btn => {
+            btn.onclick = (e) => {
+                const hostname = e.target.getAttribute('data-hostname');
+                delete rules[hostname];
+                chrome.storage.local.set({ userCustomRules: rules }, renderCustomRules);
+            };
+        });
+    });
+};
 
 function renderList(list, element, type) {
     if (list.length === 0) {
