@@ -2,6 +2,7 @@
 
 // Link UI elements
 const blockedCountEl = document.getElementById('blocked-count');
+const statusToggle = document.getElementById('status-toggle');
 const inPageToggle = document.getElementById('friendly-mode-toggle');
 
 // Load initial state from storage
