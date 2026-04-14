@@ -91,8 +91,8 @@ if (feedbackForm) {
             return;
         }
         
-        // CONFIG: Production Cloudflare Worker URL for AdsFriendly feedback
-        const WORKER_URL = "https://telegarmworker.ngoquangvy97.workers.dev/adsfriendly";
+        // CONFIG: Replace this with your actual Cloudflare Worker URL after deployment
+        const WORKER_URL = "https://your-dedicated-worker.workers.dev/adsfriendly";
 
         if (WORKER_URL.includes("your-feedback-worker")) {
             fbStatus.style.display = 'block';
