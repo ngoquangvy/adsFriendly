@@ -150,10 +150,30 @@ setInterval(async () => {
                     if (el.style.opacity === '0' || (el.id && el.id.includes('adsfriendly'))) return;
 
                     let score = 0;
-                    globalAdPatterns.forEach(pattern => {
-                        if (pattern.type === 'alt' && el.alt === pattern.value) score += pattern.confidence;
-                        if (pattern.type === 'title' && el.title === pattern.value) score += pattern.confidence;
-                    });
+                    const calculateScore = (target) => {
+                        let s = 0;
+                        globalAdPatterns.forEach(pattern => {
+                            if (pattern.type === 'alt' && target.alt === pattern.value) s += pattern.confidence;
+                            if (pattern.type === 'title' && target.title === pattern.value) s += pattern.confidence;
+                        });
+                        return s;
+                    };
+
+                    score = calculateScore(el);
+
+                    // Deep Reflex: Cluster Scoring (Check children)
+                    if (score < 0.7 && el.children.length > 0) {
+                        let childAdCount = 0;
+                        const children = el.querySelectorAll('img, a');
+                        children.forEach(child => {
+                            if (calculateScore(child) >= 0.7) childAdCount++;
+                        });
+                        
+                        // If more than 50% of identifiable children are ads, zap the cluster
+                        if (children.length >= 2 && childAdCount / children.length >= 0.6) {
+                            score = 1.0; 
+                        }
+                    }
 
                     // Same-Origin Shield: If it leads to the same domain, it's likely a legit UI feature
                     const link = el.closest('a');

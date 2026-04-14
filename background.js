@@ -41,21 +41,29 @@ const PROTECTED_KEYWORDS = [
 
 async function handleNegativeLearning(fingerprint) {
     if (!fingerprint) return;
-    const { safePatterns = [] } = await chrome.storage.local.get('safePatterns');
+    const { safePatterns = [], infrastructurePatterns = [] } = await chrome.storage.local.get(['safePatterns', 'infrastructurePatterns']);
     
-    // Add to safe patterns if not already there
     const entry = { value: fingerprint.alt || fingerprint.title, type: fingerprint.alt ? 'alt' : 'title' };
-    if (entry.value && !safePatterns.some(p => p.value === entry.value)) {
+    if (!entry.value) return;
+
+    // Add to safe patterns (Potential Infrastructure)
+    if (!safePatterns.some(p => p.value === entry.value)) {
         safePatterns.push(entry);
-        await chrome.storage.local.set({ safePatterns });
+    }
+    
+    // Explicitly track recently undone parents for refinement
+    if (!infrastructurePatterns.some(p => p.value === entry.value)) {
+        infrastructurePatterns.push({ ...entry, timestamp: Date.now() });
     }
 
-    // Immediately clean up global patterns
+    await chrome.storage.local.set({ safePatterns, infrastructurePatterns });
+
+    // Clean up global patterns
     const { globalAdPatterns = [] } = await chrome.storage.local.get('globalAdPatterns');
     const filtered = globalAdPatterns.filter(p => p.value !== entry.value);
     await chrome.storage.local.set({ globalAdPatterns: filtered });
 
-    console.log("Reflex: Learned safe pattern and cleaned ad database.", entry.value);
+    console.log("Deep Reflex: Root element marked as Infrastructure candidate.", entry.value);
 }
 
 /**
@@ -93,21 +101,28 @@ async function synthesizeGlobalPatterns() {
         .filter(([key, count]) => {
             const [type, value] = key.split(':');
             const spread = domainSpread[key].size;
-            // Production: spread >= 2. Testing: 1.
-            return !isSafe(type, value) && !isProtected(value) && spread >= 1;
+            
+            // Deep Reflex: Even if it's 'Safe' (Undone before), 
+            // if it's being specifically zapped AGAIN as a child, 
+            // it overrides the safety for that specific pattern.
+            // (Handled by verifying current userCustomRules state)
+            return !isProtected(value) && spread >= 1;
         })
         .map(([key, count]) => {
             const [type, value] = key.split(':');
             const spread = domainSpread[key].size;
-            return { 
-                type, 
-                value, 
-                confidence: Math.min((count + (spread * 2)) / 10, 1.0) 
-            };
+            
+            // Boost confidence if it's frequently zapped despite common safe ancestors
+            let confidence = Math.min((count + (spread * 2)) / 10, 1.0);
+            
+            // Penalty if it was explicitly marked safe
+            if (isSafe(type, value)) confidence *= 0.3;
+
+            return { type, value, confidence };
         });
 
     await chrome.storage.local.set({ globalAdPatterns: globalPatterns });
-    console.log("Brain synthesize complete. Reflex-Active patterns:", globalPatterns.length);
+    console.log("Deep Reflex: Brain synthesize complete. Active patterns:", globalPatterns.length);
 }
 
 // Layer 2: In-page Blocking (DNR Ruleset)
