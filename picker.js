@@ -143,18 +143,44 @@
         return el.tagName.toLowerCase() + (el.className ? '.' + el.className.trim().split(/\s+/).join('.') : '');
     };
 
+    const generateFingerprint = (el) => {
+        return {
+            tag: el.tagName.toLowerCase(),
+            className: el.className,
+            parentId: el.parentElement ? el.parentElement.id : null,
+            parentClass: el.parentElement ? el.parentElement.className : null
+        };
+    };
+
     const confirmZap = async () => {
         const selector = document.getElementById('selector-display').textContent;
         const hostname = window.location.hostname;
+        const fingerprint = generateFingerprint(hoveredElement);
 
-        // Save rule
+        // Save rule as a structured object
         const { userCustomRules = {} } = await chrome.storage.local.get('userCustomRules');
         if (!userCustomRules[hostname]) userCustomRules[hostname] = [];
         
-        if (!userCustomRules[hostname].includes(selector)) {
-            userCustomRules[hostname].push(selector);
-            await chrome.storage.local.set({ userCustomRules });
+        // Find if this selector already exists (to update it) or add new
+        const existingIndex = userCustomRules[hostname].findIndex(r => 
+            (typeof r === 'string' ? r === selector : r.selector === selector)
+        );
+
+        const ruleObject = {
+            selector,
+            fingerprint,
+            timestamp: Date.now(),
+            timesZapped: 1
+        };
+
+        if (existingIndex > -1) {
+            // Update existing (maybe increment zap count later)
+            userCustomRules[hostname][existingIndex] = ruleObject;
+        } else {
+            userCustomRules[hostname].push(ruleObject);
         }
+
+        await chrome.storage.local.set({ userCustomRules });
 
         // Apply immediately
         if (hoveredElement) {
@@ -163,7 +189,6 @@
         }
 
         stopPicker();
-        // Optional: Notify background to update counts or rules
     };
 
     // Listen for activation from background/popup

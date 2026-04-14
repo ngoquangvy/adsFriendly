@@ -56,9 +56,31 @@ const blockAds = async () => {
         'img[src*="googleusercontent.com"][title]',
         'img[src*="googleusercontent.com"][alt*="bet"]',
         'img[src*="googleusercontent.com"][alt*="win"]',
-        'div[class*="popup-ad"]', 'div[id*="popup-ad"]',
-        ...customSelectors
+        'div[class*="popup-ad"]', 'div[id*="popup-ad"]'
     ];
+
+    // Handle User Custom Rules (Support both strings and objects)
+    customSelectors.forEach(rule => {
+        const selector = typeof rule === 'string' ? rule : rule.selector;
+        adSelectors.push(selector);
+
+        // Pattern Matching: If it's an object with a fingerprint, find similar siblings
+        if (typeof rule === 'object' && rule.fingerprint) {
+            const { tag, parentClass, parentId } = rule.fingerprint;
+            let parent = null;
+            if (parentId) parent = document.getElementById(parentId);
+            else if (parentClass) parent = document.querySelector(`.${parentClass.split(' ')[0]}`);
+
+            if (parent) {
+                parent.querySelectorAll(tag).forEach(sibling => {
+                    // If sibling matches the fingerprint's class signature, mark it for hiding
+                    if (!rule.fingerprint.className || sibling.className === rule.fingerprint.className) {
+                        BLOCKING_STRATEGIES.STEALTH(sibling);
+                    }
+                });
+            }
+        }
+    });
 
     // Add greedy selectors ONLY if not on a system-critical page
     if (!isSystemSafe) {
