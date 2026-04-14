@@ -8,8 +8,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     lastTrustedClick = Date.now();
   } else if (message.type === 'TOGGLE_STATUS') {
     console.log("Protection status:", message.isEnabled);
-  } else if (message.type === 'TOGGLE_FRIENDLY') {
-    toggleInPageBlocking(!message.enabled); // Invert: Friendly ON = Blocking OFF
+  } else if (message.type === 'SYNC_LEARNING') {
+    synthesizeGlobalPatterns()
+      .then(() => sendResponse({ status: 'ok' }))
+      .catch(err => {
+        console.error("Learning error:", err);
+        sendResponse({ status: 'error' });
+      });
+    return true;
   } else if (message.type === 'USER_DECISION') {
     handleUserDecision(message)
       .then(() => {
@@ -22,6 +28,34 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // Keep channel open for async response
   }
 });
+
+/**
+ * The 'Brain': Aggregates local custom rules into global patterns
+ */
+async function synthesizeGlobalPatterns() {
+    const { userCustomRules = {} } = await chrome.storage.local.get('userCustomRules');
+    const attrFrequency = {}; // Track alt/title frequency
+    
+    // Scan all rules across all domains
+    Object.values(userCustomRules).flat().forEach(rule => {
+        if (rule && rule.fingerprint) {
+            const { alt, title } = rule.fingerprint;
+            if (alt && alt.length > 2) attrFrequency[`alt:${alt}`] = (attrFrequency[`alt:${alt}`] || 0) + 1;
+            if (title && title.length > 2) attrFrequency[`title:${title}`] = (attrFrequency[`title:${title}`] || 0) + 1;
+        }
+    });
+
+    // Patterns that appeared on more than 1 domain are "High Confidence"
+    const globalPatterns = Object.entries(attrFrequency)
+        .filter(([key, count]) => count >= 1) // Set to >= 2 for production, 1 for testing
+        .map(([key, count]) => {
+            const [type, value] = key.split(':');
+            return { type, value, confidence: Math.min(count / 5, 1.0) };
+        });
+
+    await chrome.storage.local.set({ globalAdPatterns: globalPatterns });
+    console.log("Brain synthesize complete. Patterns learned:", globalPatterns.length);
+}
 
 // Layer 2: In-page Blocking (DNR Ruleset)
 async function toggleInPageBlocking(enabled) {

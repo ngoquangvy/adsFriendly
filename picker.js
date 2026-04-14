@@ -286,6 +286,10 @@
         });
 
         await chrome.storage.local.set({ userCustomRules });
+        
+        // Notify the 'Brain' (background script) to synthesize new patterns
+        chrome.runtime.sendMessage({ type: 'SYNC_LEARNING' });
+
         stopPicker();
     };
 

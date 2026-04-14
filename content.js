@@ -138,13 +138,30 @@ const blockAds = async () => {
 // Run blocking periodically ONLY if 'Friendly Mode' is OFF
 setInterval(async () => {
     try {
-        const { friendlyMode, isEnabled } = await chrome.storage.local.get(['friendlyMode', 'isEnabled']);
+        const { friendlyMode, isEnabled, globalAdPatterns = [] } = await chrome.storage.local.get(['friendlyMode', 'isEnabled', 'globalAdPatterns']);
         if (isEnabled !== false && friendlyMode === false) {
             blockAds();
+
+            // 3. AI Predictive Blocking (The Brain)
+            if (globalAdPatterns.length > 0) {
+                const elements = document.querySelectorAll('img, div, a');
+                elements.forEach(el => {
+                    // Skip if already hidden or is a UI element
+                    if (el.style.opacity === '0' || (el.id && el.id.includes('adsfriendly'))) return;
+
+                    let score = 0;
+                    globalAdPatterns.forEach(pattern => {
+                        if (pattern.type === 'alt' && el.alt === pattern.value) score += pattern.confidence;
+                        if (pattern.type === 'title' && el.title === pattern.value) score += pattern.confidence;
+                    });
+
+                    if (score >= 0.7) {
+                        BLOCKING_STRATEGIES.STEALTH(el);
+                    }
+                });
+            }
         }
-    } catch (err) {
-        // Extension context invalidated - safe to ignore
-    }
+    } catch (err) {}
 }, 2000);
 
 // Initial check
