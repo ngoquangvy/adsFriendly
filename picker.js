@@ -14,10 +14,12 @@
             position: fixed;
             pointer-events: none;
             z-index: 2147483647;
-            background: rgba(16, 185, 129, 0.2);
-            border: 2px solid #10b981;
+            background: transparent;
+            outline: 2px solid #10b981;
+            box-shadow: 0 0 15px rgba(16, 185, 129, 0.4);
             transition: all 0.1s ease;
             display: none;
+            border-radius: 4px;
         `;
         document.body.appendChild(overlay);
 
@@ -39,6 +41,7 @@
             gap: 10px;
             font-family: system-ui, -apple-system, sans-serif;
             border: 1px solid rgba(255,255,255,0.1);
+            transition: opacity 0.3s ease;
         `;
         controlPanel.innerHTML = `
             <div style="font-weight: bold; font-size: 0.9rem; color: #10b981;">🎯 Magic Wand Active</div>
@@ -79,6 +82,12 @@
 
     const handleMouseMove = (e) => {
         if (!isActive) return;
+        
+        // Auto-fade control panel if mouse is far from it
+        const panelRect = controlPanel.getBoundingClientRect();
+        const distToPanel = Math.hypot(e.clientX - (panelRect.left + panelRect.width/2), e.clientY - (panelRect.top + panelRect.height/2));
+        controlPanel.style.opacity = distToPanel < 200 ? '1' : '0.4';
+
         const el = document.elementFromPoint(e.clientX, e.clientY);
         if (el && el !== overlay && !controlPanel.contains(el)) {
             updateSelection(el);
