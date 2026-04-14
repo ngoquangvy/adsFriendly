@@ -31,6 +31,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .then(() => sendResponse({ status: 'ok' }))
       .catch(err => sendResponse({ status: 'error' }));
     return true;
+  } else if (message.type === 'LEARN_VIDEO_AD') {
+    handleLearnVideoAd(message)
+      .then(() => sendResponse({ status: 'ok' }))
+      .catch(() => sendResponse({ status: 'error' }));
+    return true;
   } else if (message.type === 'SYNC_VIDEO_LEARNING') {
     handleVideoLearning(message)
       .then(() => sendResponse({ status: 'ok' }))
@@ -38,6 +43,45 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 });
+
+async function handleLearnVideoAd(data) {
+    const { src, hostname } = data;
+    if (!src) return;
+
+    let patternValue = src;
+    try {
+        const url = new URL(src);
+        // If it's a known cloud host, learn the domain. If it's a specific path, find the pattern.
+        if (url.hostname.includes('github') || url.hostname.includes('s3') || url.hostname.includes('cdn')) {
+            patternValue = url.hostname;
+        } else {
+            // Take the domain + first part of path
+            const pathParts = url.pathname.split('/');
+            patternValue = url.hostname + (pathParts[1] ? '/' + pathParts[1] : '');
+        }
+    } catch (e) {
+        // Fallback to substring if not a valid URL
+        patternValue = src.split('?')[0].substring(0, 50);
+    }
+
+    const { globalAdPatterns = [] } = await chrome.storage.local.get(['globalAdPatterns']);
+    
+    const existing = globalAdPatterns.find(p => p.type === 'video_source_marker' && p.value === patternValue);
+    
+    if (existing) {
+        existing.confidence = 1.0; // User manual mark is definitive
+    } else {
+        globalAdPatterns.push({
+            type: 'video_source_marker',
+            value: patternValue,
+            confidence: 1.0,
+            source: hostname
+        });
+    }
+
+    await chrome.storage.local.set({ globalAdPatterns });
+    console.log('[AdsFriendly Brain] New Video Ad Source learned:', patternValue);
+}
 
 async function handleVideoLearning(data) {
     const { classes, hostname } = data;

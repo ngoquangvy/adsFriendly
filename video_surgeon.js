@@ -11,7 +11,8 @@ const VideoSurgeon = {
         this.isInitialized = true;
         console.log('[AdsFriendly Video] Surgeon v1.8.1 (Surgical Strike) initialized.');
 
-        // 1. Initial Scan
+        // 1. Initial Scan & Pattern Load
+        this.loadPatterns();
         this.scanAndObserve();
 
         // 2. Continuous Monitoring (Catch new videos)
@@ -21,7 +22,7 @@ const VideoSurgeon = {
         // 3. Auto-Skip Loop
         setInterval(() => this.autoSkip(), 500);
 
-        // 4. Hear from the Spy
+        // 4. Hear from the Spy & Background Brain
         window.addEventListener('message', (event) => {
             if (event.data && event.data.source === 'adsfriendly-spy') {
                 if (event.data.type === 'AD_MAP_DETECTED') {
@@ -29,6 +30,20 @@ const VideoSurgeon = {
                 }
             }
         });
+
+        chrome.runtime.onMessage.addListener((message) => {
+            if (message.type === 'SYNC_LEARNING') {
+                this.loadPatterns();
+            }
+        });
+    },
+
+    async loadPatterns() {
+        try {
+            const { globalAdPatterns = [] } = await chrome.storage.local.get('globalAdPatterns');
+            this.cachedPatterns = globalAdPatterns;
+            console.log('[AdsFriendly Video] AI Patterns loaded:', this.cachedPatterns.length);
+        } catch (e) {}
     },
 
     scanAndObserve() {
@@ -70,6 +85,14 @@ const VideoSurgeon = {
     isAdVideo(video) {
         const src = video.currentSrc || video.src || '';
         if (!src) return false;
+
+        // 0. AI Brain Check (Learned Patterns)
+        if (this.cachedPatterns && this.cachedPatterns.length > 0) {
+            for (const p of this.cachedPatterns) {
+                if (p.type === 'video_source_marker' && src.includes(p.value)) return true;
+                if (p.type === 'video_marker' && video.closest(p.value)) return true;
+            }
+        }
 
         // 1. Masked Ad Hosts (GitHub etc)
         if (src.includes('githubusercontent.com') || src.includes('github.io')) return true;

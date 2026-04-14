@@ -60,16 +60,54 @@
         const count = selectedItems.length;
         const color = errorMsg ? '#ef4444' : '#10b981';
         
+        let videoContext = false;
+        if (hoveredElement) {
+            videoContext = hoveredElement.tagName === 'VIDEO' || hoveredElement.querySelector('video') || hoveredElement.closest('.jw-video, .video-js, .fluid_player_instance');
+        }
+
         controlPanel.innerHTML = `
-            <div style="font-weight: bold; font-size: 1rem; color: ${color};">${errorMsg ? '⚠️' : '🎯'}</div>
+            <div style="font-weight: bold; font-size: 1rem; color: ${color};">${errorMsg ? '⚠️' : (videoContext ? '🎥' : '🎯')}</div>
             <div style="display: flex; flex-direction: column;">
-                <div style="font-weight: bold; font-size: 0.85rem; color: ${errorMsg ? '#f87171' : 'white'};">${errorMsg || (count > 0 ? `${count} Ads Marked` : 'Select Ads to Zap')}</div>
-                <div style="font-size: 0.7rem; color: #94a3b8;">${errorMsg ? 'Please select a smaller area' : (count > 0 ? 'Press <b>Enter</b> to Zap all, <b>Esc</b> to Cancel' : 'Click to mark, Scroll to expand')}</div>
+                <div style="font-weight: bold; font-size: 0.85rem; color: ${errorMsg ? '#f87171' : 'white'};">${errorMsg || (videoContext ? 'Video Player Detected' : (count > 0 ? `${count} Ads Marked` : 'Select Ads to Zap'))}</div>
+                <div style="font-size: 0.7rem; color: #94a3b8;">${errorMsg ? 'Please select a smaller area' : (videoContext ? 'Is this a Video Ad? Mark it to Neutralize.' : (count > 0 ? 'Press <b>Enter</b> to Zap all, <b>Esc</b> to Cancel' : 'Click to mark, Scroll to expand'))}</div>
             </div>
-            ${(count > 0 && !errorMsg) ? `<button id="zap-confirm-btn" style="background: #10b981; color: white; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.8rem; font-weight: bold;">Zap All</button>` : ''}
+            <div style="display: flex; gap: 8px;">
+                ${videoContext ? `<button id="neutralize-video-btn" style="background: #a855f7; color: white; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.8rem; font-weight: bold;">Neutralize</button>` : ''}
+                ${(count > 0 && !errorMsg) ? `<button id="zap-confirm-btn" style="background: #10b981; color: white; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.8rem; font-weight: bold;">Zap All</button>` : ''}
+            </div>
         `;
-        const btn = document.getElementById('zap-confirm-btn');
-        if (btn) btn.onclick = confirmAllZaps;
+
+        const zapBtn = document.getElementById('zap-confirm-btn');
+        if (zapBtn) zapBtn.onclick = confirmAllZaps;
+
+        const neuBtn = document.getElementById('neutralize-video-btn');
+        if (neuBtn) neuBtn.onclick = handleNeutralizeVideo;
+    };
+
+    const handleNeutralizeVideo = async () => {
+        if (!hoveredElement) return;
+        const video = hoveredElement.tagName === 'VIDEO' ? hoveredElement : hoveredElement.querySelector('video') || hoveredElement.closest('div').querySelector('video');
+        
+        if (video) {
+            console.log('[AdsFriendly Picker] Neutralizing Video Ad manually:', video.currentSrc);
+            
+            // 1. Immediate Action (Locally speed up)
+            if (typeof VideoSurgeon !== 'undefined') {
+                VideoSurgeon.accelerate(video);
+            }
+
+            // 2. Training (Notify Brain)
+            chrome.runtime.sendMessage({
+                type: 'LEARN_VIDEO_AD',
+                hostname: window.location.hostname,
+                src: video.currentSrc || video.src,
+                classes: video.className + ' ' + (video.parentElement ? video.parentElement.className : '')
+            });
+
+            // 3. UI Feedback
+            updatePanelUI("Video Neutralized! (Learning pattern...)");
+            setTimeout(() => stopPicker(), 1500);
+        }
     };
 
     const startPicker = async () => {
