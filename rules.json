@@ -4,7 +4,7 @@
     "priority": 1,
     "action": { "type": "block" },
     "condition": {
-      "urlFilter": "||doubleclick.net^",
+      "urlFilter": "*googleadservices.com*",
       "resourceTypes": ["script", "image", "xmlhttprequest"]
     }
   },
@@ -13,8 +13,8 @@
     "priority": 1,
     "action": { "type": "block" },
     "condition": {
-      "urlFilter": "||googleadservices.com^",
-      "resourceTypes": ["script", "xmlhttprequest"]
+      "urlFilter": "*googlesyndication.com*",
+      "resourceTypes": ["script", "sub_frame"]
     }
   },
   {
@@ -22,8 +22,8 @@
     "priority": 1,
     "action": { "type": "block" },
     "condition": {
-      "urlFilter": "||taboola.com^",
-      "resourceTypes": ["main_frame", "sub_frame", "script"]
+      "urlFilter": "*doubleclick.net*",
+      "resourceTypes": ["script", "sub_frame", "image"]
     }
   },
   {
@@ -31,8 +31,53 @@
     "priority": 1,
     "action": { "type": "block" },
     "condition": {
-      "urlFilter": "||outbrain.com^",
-      "resourceTypes": ["main_frame", "sub_frame", "script"]
+      "urlFilter": "*popads.net*",
+      "resourceTypes": ["script", "main_frame", "sub_frame"]
+    }
+  },
+  {
+    "id": 5,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": {
+      "urlFilter": "*propellerads.com*",
+      "resourceTypes": ["script", "main_frame", "sub_frame"]
+    }
+  },
+  {
+    "id": 6,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": {
+      "urlFilter": "*sunwin*",
+      "resourceTypes": ["main_frame", "sub_frame", "image"]
+    }
+  },
+  {
+    "id": 7,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": {
+      "urlFilter": "*go88*",
+      "resourceTypes": ["main_frame", "sub_frame", "image"]
+    }
+  },
+  {
+    "id": 8,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": {
+      "urlFilter": "*789bet*",
+      "resourceTypes": ["main_frame", "sub_frame", "image"]
+    }
+  },
+  {
+    "id": 9,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": {
+      "urlFilter": "*nhatvip*",
+      "resourceTypes": ["main_frame", "sub_frame", "image"]
     }
   }
 ]

@@ -32,26 +32,47 @@ const BLOCKING_STRATEGIES = {
 };
 
 const blockAds = () => {
+    // 1. Generalized Ad Selectors (Based on common patterns, not site-specific)
     const adSelectors = [
-        '[id*="google_ads"]',
-        '[class*="adsbygoogle"]',
-        '[class*="ad-container"]',
-        '[class*="ad-box"]',
-        '[id*="ad-"]',
-        'ins.adsbygoogle',
-        'iframe[src*="doubleclick"]',
+        '[id*="google_ads"]', '[class*="adsbygoogle"]',
+        '[class*="ad-container"]', '[class*="ad-box"]', '[id*="ad-"]',
+        '[class*="banner"]', '[id*="banner"]',
+        'ins.adsbygoogle', 'iframe[src*="doubleclick"]',
         'a[href*="googleadservices.com"]',
-        'img[src*="googleusercontent.com"][title]', // Banners often have titles
-        'img[src*="googleusercontent.com"][alt*="ads"]',
-        'div[class*="popup-ad"]',
-        'div[id*="popup-ad"]'
+        'a[href*="utm_"]', 'a[href*="clickid="]', 'a[href*="aff_id="]', // Universal tracking
+        'img[src*="googleusercontent.com"][title]',
+        'div[class*="popup-ad"]', 'div[id*="popup-ad"]'
     ];
     
     adSelectors.forEach(selector => {
         document.querySelectorAll(selector).forEach(el => {
-            // Apply current active strategy: STEALTH
             BLOCKING_STRATEGIES.STEALTH(el);
         });
+    });
+
+    // 2. Invisible Overlay Shield (Heuristic for click-jackers)
+    const fixedElements = document.querySelectorAll('div, a');
+    fixedElements.forEach(el => {
+        const style = window.getComputedStyle(el);
+        if (style.position === 'fixed' || style.position === 'absolute') {
+            const zIndex = parseInt(style.zIndex);
+            if (zIndex > 990) {
+                const rect = el.getBoundingClientRect();
+                const vWidth = window.innerWidth;
+                const vHeight = window.innerHeight;
+                
+                // If it covers more than 50% of the viewport and is nearly transparent
+                // it's likely a pop-under trigger overlay
+                if (rect.width > vWidth * 0.5 && rect.height > vHeight * 0.5) {
+                    const bgColor = style.backgroundColor;
+                    const isTransparent = bgColor.includes('rgba') && bgColor.endsWith(' 0)') || bgColor === 'transparent';
+                    
+                    if (isTransparent || parseFloat(style.opacity) < 0.1) {
+                        BLOCKING_STRATEGIES.STEALTH(el);
+                    }
+                }
+            }
+        }
     });
 };
 
