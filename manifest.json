@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AdsFriendly",
-  "version": "1.0",
+  "version": "2.0",
   "description": "Chặn các tab quảng cáo tự động mở (Pop-under) và đảm bảo trải nghiệm không bị gián đoạn mà không can thiệp vào mã nguồn trang web hiện tại.",
   "permissions": [
     "declarativeNetRequest",
