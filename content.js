@@ -150,11 +150,16 @@ setInterval(async () => {
                     if (el.style.opacity === '0' || (el.id && el.id.includes('adsfriendly'))) return;
 
                     let score = 0;
+                    let matchDetails = [];
                     const calculateScore = (target) => {
                         let s = 0;
                         globalAdPatterns.forEach(pattern => {
-                            if (pattern.type === 'alt' && target.alt === pattern.value) s += pattern.confidence;
-                            if (pattern.type === 'title' && target.title === pattern.value) s += pattern.confidence;
+                            if (pattern.type === 'alt' && target.alt === pattern.value) { s += pattern.confidence; matchDetails.push(`alt='${pattern.value}'`); }
+                            if (pattern.type === 'title' && target.title === pattern.value) { s += pattern.confidence; matchDetails.push(`title='${pattern.value}'`); }
+                            if (pattern.type === 'domain') {
+                                const link = target.closest('a');
+                                if (link && link.href && link.href.includes(pattern.value)) { s += pattern.confidence; matchDetails.push(`domain='${pattern.value}'`); }
+                            }
                         });
                         return s;
                     };
@@ -172,6 +177,7 @@ setInterval(async () => {
                         // If more than 50% of identifiable children are ads, zap the cluster
                         if (children.length >= 2 && childAdCount / children.length >= 0.6) {
                             score = 1.0; 
+                            matchDetails.push("Ad Cluster identified via children analysis");
                         }
                     }
 
@@ -187,6 +193,7 @@ setInterval(async () => {
                     }
 
                     if (score >= 0.7) {
+                        console.log(`%c[AdsFriendly AI] Hiding predicted ad (%c${(score*100).toFixed(0)}% confidence%c) Reason: ${matchDetails.join(', ')}`, "color: #10b981; font-weight: bold;", "color: #fbd38d;", "color: #10b981;", el);
                         BLOCKING_STRATEGIES.STEALTH(el);
                     }
                 });

@@ -72,7 +72,7 @@
         if (btn) btn.onclick = confirmAllZaps;
     };
 
-    const startPicker = () => {
+    const startPicker = async () => {
         if (isActive) return;
         isActive = true;
         createUI();
@@ -85,6 +85,38 @@
         document.addEventListener('click', handleClick, true);
         document.addEventListener('scroll', handleScroll, true);
         document.addEventListener('keydown', handleKeyDown);
+
+        // Shadow Brain: Auto-Prediction Phase
+        console.log("%c[AdsFriendly AI] Starting Picker - Predictive Scan initiated...", "color: #10b981; font-weight: bold;");
+        const { globalAdPatterns = [] } = await chrome.storage.local.get('globalAdPatterns');
+        if (globalAdPatterns.length > 0) {
+            const elements = document.querySelectorAll('img, a, div[style*="background-image"], [href*="http"]');
+            let autoMarkedCount = 0;
+            elements.forEach(el => {
+                if (STRUCTURAL_TAGS.includes(el.tagName.toLowerCase())) return;
+                
+                let score = 0;
+                let reasons = [];
+                globalAdPatterns.forEach(p => {
+                    if (p.type === 'alt' && el.alt === p.value) { score += p.confidence; reasons.push(`alt='${p.value}'`); }
+                    if (p.type === 'title' && el.title === p.value) { score += p.confidence; reasons.push(`title='${p.value}'`); }
+                    if (p.type === 'domain') {
+                        const link = el.closest('a');
+                        if (link && link.href && link.href.includes(p.value)) { score += p.confidence; reasons.push(`domain='${p.value}'`); }
+                    }
+                });
+
+                if (score >= 0.9) {
+                    markElement(el);
+                    autoMarkedCount++;
+                    console.log(`[AdsFriendly AI] Auto-marked element: %o\nConfidence: ${(score*100).toFixed(1)}%\nReason: ${reasons.join(', ')}`, el);
+                }
+            });
+            if (autoMarkedCount > 0) {
+                console.log(`[AdsFriendly AI] Auto-marked ${autoMarkedCount} high-confidence ads.`);
+                updatePanelUI();
+            }
+        }
     };
 
     const stopPicker = () => {
@@ -107,7 +139,6 @@
         if (!isActive) return;
         let el = document.elementFromPoint(e.clientX, e.clientY);
         
-        // Safety: Prevent selecting structural tags
         if (el && STRUCTURAL_TAGS.includes(el.tagName.toLowerCase())) {
             return;
         }
@@ -123,7 +154,6 @@
         hoveredElement = el;
         const rect = el.getBoundingClientRect();
         
-        // AREA CHECK: If area is > 75% of viewport, it's a "Nuke" risk
         const area = rect.width * rect.height;
         const viewportArea = window.innerWidth * window.innerHeight;
         const isDangerous = area > viewportArea * 0.75;
@@ -143,7 +173,6 @@
             updatePanelUI();
         }
 
-        // Update Floating Panel Position
         const panelHeight = controlPanel.offsetHeight || 50;
         let panelTop = rect.top - panelHeight - 12;
         if (panelTop < 12) panelTop = rect.bottom + 12;
@@ -155,7 +184,6 @@
     const handleClick = (e) => {
         if (!isActive) return;
         
-        // Prevent click if area is dangerous
         const rect = hoveredElement.getBoundingClientRect();
         if (rect.width * rect.height > window.innerWidth * window.innerHeight * 0.75) {
             return;
@@ -172,12 +200,11 @@
 
     const markElement = (el) => {
         const selector = generateSelector(el);
-        if (!selector) return; // Silent reject dangerous selectors
+        if (!selector) return; 
 
         const fingerprint = generateFingerprint(el);
         selectedItems.push({ element: el, selector, fingerprint });
         
-        // Add permanent highlight
         const rect = el.getBoundingClientRect();
         const pOverlay = document.createElement('div');
         pOverlay.style.cssText = `
@@ -214,10 +241,8 @@
     const generateSelector = (el) => {
         const tag = el.tagName.toLowerCase();
         
-        // High Priority: ID
         if (el.id && !GENERIC_CLASSES.some(gc => el.id.includes(gc))) return `#${el.id}`;
         
-        // Specialized Priority: Ad Attributes (href domain)
         const parentLink = el.closest('a');
         if (parentLink && parentLink.href) {
             try {
@@ -229,7 +254,6 @@
             } catch (e) {}
         }
 
-        // Parent Anchoring (MUST NOT be tag-only for structural tags)
         let current = el.parentElement;
         let depth = 0;
         while (current && current !== document.body && depth < 3) {
@@ -246,24 +270,31 @@
             depth++;
         }
 
-        // REJECT single common tags (Anti-Nuke Guardrail)
         const dangerousTags = ['div', 'span', 'p', 'a', 'li', 'ul', 'img', 'section'];
         if (dangerousTags.includes(tag)) {
-            return null; // Too broad to be safe
+            return null;
         }
 
         return tag;
     };
 
     const generateFingerprint = (el) => {
-        // Data Cleaning: Strip "Noisy IDs" (random strings used by frameworks)
         const cleanId = (id) => (id && !/(_[a-z0-9]{1,3}_|[0-9]{5,})/.test(id)) ? id : null;
-        
-        // Data Cleaning: Normalize classes (remove dynamic states)
         const cleanClass = (cls) => {
             if (!cls || typeof cls !== 'string') return null;
             return cls.split(/\s+/).filter(c => !/(active|hover|focus|selected|clicked)/.test(c)).join(' ');
         };
+
+        let linkDomain = null;
+        const link = el.closest('a');
+        if (link && link.href) {
+            try {
+                const url = new URL(link.href);
+                if (url.hostname !== window.location.hostname) {
+                    linkDomain = url.hostname.split('.').slice(-2).join('.');
+                }
+            } catch (e) {}
+        }
 
         return {
             tag: el.tagName.toLowerCase(),
@@ -271,7 +302,8 @@
             parentId: el.parentElement ? cleanId(el.parentElement.id) : null,
             parentClass: el.parentElement ? cleanClass(el.parentElement.className) : null,
             alt: el.alt || null,
-            title: el.title || null
+            title: el.title || null,
+            linkDomain: linkDomain
         };
     };
 
@@ -300,10 +332,7 @@
         });
 
         await chrome.storage.local.set({ userCustomRules });
-        
-        // Notify the 'Brain' (background script) to synthesize new patterns
         chrome.runtime.sendMessage({ type: 'SYNC_LEARNING' });
-
         stopPicker();
     };
 

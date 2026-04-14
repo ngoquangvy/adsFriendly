@@ -79,7 +79,7 @@ async function synthesizeGlobalPatterns() {
     Object.entries(userCustomRules).forEach(([domain, rules]) => {
         rules.forEach(rule => {
             if (rule && rule.fingerprint) {
-                const { alt, title } = rule.fingerprint;
+                const { alt, title, linkDomain } = rule.fingerprint;
                 const process = (type, val) => {
                     if (!val || val.length < 3) return;
                     const key = `${type}:${val}`;
@@ -89,6 +89,7 @@ async function synthesizeGlobalPatterns() {
                 };
                 process('alt', alt);
                 process('title', title);
+                process('domain', linkDomain);
             }
         });
     });
