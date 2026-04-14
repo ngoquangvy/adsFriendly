@@ -38,6 +38,8 @@
     const blockAds = async () => {
         const hostname = window.location.hostname;
         let customSelectors = [];
+        let blockedCount = 0;
+
         try {
             const result = await chrome.storage.local.get('userCustomRules');
             if (result && result.userCustomRules && result.userCustomRules[hostname]) {
@@ -74,6 +76,7 @@
                     parent.querySelectorAll(tag).forEach(sibling => {
                         if (!rule.fingerprint.className || sibling.className === rule.fingerprint.className) {
                             BLOCKING_STRATEGIES.STEALTH(sibling);
+                            blockedCount++;
                         }
                     });
                 }
@@ -83,8 +86,15 @@
         adSelectors.forEach(selector => {
             document.querySelectorAll(selector).forEach(el => {
                 BLOCKING_STRATEGIES.STEALTH(el);
+                blockedCount++;
             });
         });
+
+        // Report density to background and other modules
+        if (blockedCount > 0) {
+            chrome.runtime.sendMessage({ type: 'REPORT_AD_DENSITY', hostname, count: blockedCount });
+            window.postMessage({ source: 'adsfriendly-content', type: 'AD_DENSITY_VALUE', value: blockedCount }, '*');
+        }
     };
 
     setInterval(async () => {
@@ -154,3 +164,4 @@
             }
         });
     } catch (err) {}
+})();

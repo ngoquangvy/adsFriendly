@@ -41,8 +41,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .then(() => sendResponse({ status: 'ok' }))
       .catch(() => sendResponse({ status: 'error' }));
     return true;
+  } else if (message.type === 'REPORT_AD_DENSITY') {
+    updateSiteReputation(message.hostname, message.count)
+      .then(() => sendResponse({ status: 'ok' }))
+      .catch(() => sendResponse({ status: 'error' }));
+    return true;
   }
 });
+
+async function updateSiteReputation(hostname, blockedCount) {
+    const { siteReputation = {} } = await chrome.storage.local.get('siteReputation');
+    if (!siteReputation[hostname]) {
+        siteReputation[hostname] = { trustScore: 0.5, blockActivity: 0 };
+    }
+
+    const data = siteReputation[hostname];
+    data.blockActivity = Math.max(data.blockActivity, blockedCount);
+    
+    // If a site has more than 10 blocks, it starts losing trust
+    if (blockedCount > 10) {
+        data.trustScore = Math.max(0, data.trustScore - 0.05);
+    } else if (blockedCount <= 1) {
+        data.trustScore = Math.min(1, data.trustScore + 0.01);
+    }
+
+    await chrome.storage.local.set({ siteReputation });
+}
 
 async function handleLearnVideoAd(data) {
     const { src, hostname } = data;

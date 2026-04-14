@@ -9,40 +9,53 @@ const VideoSurgeon = {
     init() {
         if (this.isInitialized) return;
         this.isInitialized = true;
-        console.log('[AdsFriendly Video] Surgeon v1.8.1 (Surgical Strike) initialized.');
+        console.log('[AdsFriendly Video] Surgeon v1.9.2 (Reputation AI) initialized.');
 
-        // 1. Initial Scan & Pattern Load
-        this.loadPatterns();
+        this.currentAdDensity = 0;
+        this.siteTrustScore = 0.5;
+
+        // 1. Initial Scan & Load
+        this.loadPatternsAndReputation();
         this.scanAndObserve();
 
-        // 2. Continuous Monitoring (Catch new videos)
-        const bodyObserver = new MutationObserver(() => this.scanAndObserve());
-        bodyObserver.observe(document.body, { childList: true, subtree: true });
+        // 2. Monitoring (Safe check for document.body)
+        const startObserving = () => {
+            if (document.body) {
+                const bodyObserver = new MutationObserver(() => this.scanAndObserve());
+                bodyObserver.observe(document.body, { childList: true, subtree: true });
+            } else {
+                setTimeout(startObserving, 50);
+            }
+        };
+        startObserving();
 
-        // 3. Auto-Skip Loop
+        // 3. Loops
         setInterval(() => this.autoSkip(), 500);
 
-        // 4. Hear from the Spy & Background Brain
+        // 4. Message Bus
         window.addEventListener('message', (event) => {
             if (event.data && event.data.source === 'adsfriendly-spy') {
-                if (event.data.type === 'AD_MAP_DETECTED') {
-                    this.onAdDetected();
+                if (event.data.type === 'AD_MAP_DETECTED') this.onAdDetected();
+            }
+            if (event.data && event.data.source === 'adsfriendly-content') {
+                if (event.data.type === 'AD_DENSITY_VALUE') {
+                    this.currentAdDensity = event.data.value;
                 }
             }
         });
 
         chrome.runtime.onMessage.addListener((message) => {
-            if (message.type === 'SYNC_LEARNING') {
-                this.loadPatterns();
-            }
+            if (message.type === 'SYNC_LEARNING') this.loadPatternsAndReputation();
         });
     },
 
-    async loadPatterns() {
+    async loadPatternsAndReputation() {
         try {
-            const { globalAdPatterns = [] } = await chrome.storage.local.get('globalAdPatterns');
+            const { globalAdPatterns = [], siteReputation = {} } = await chrome.storage.local.get(['globalAdPatterns', 'siteReputation']);
             this.cachedPatterns = globalAdPatterns;
-            console.log('[AdsFriendly Video] AI Patterns loaded:', this.cachedPatterns.length);
+            const rep = siteReputation[window.location.hostname];
+            if (rep) this.siteTrustScore = rep.trustScore;
+            console.log(`[AdsFriendly Video] Brain Synced. Site Trust: ${this.siteTrustScore.toFixed(2)}`);
         } catch (e) {}
     },
 
@@ -68,12 +81,51 @@ const VideoSurgeon = {
     },
 
     checkAndExecute(video) {
-        if (this.isAdVideo(video)) {
+        const score = this.calculateAdScore(video);
+        if (score >= 0.8) {
+            console.log(`%c[AdsFriendly Video] Neutralizing Ad (%c${(score*100).toFixed(0)}% confidence%c) Site Trust: ${this.siteTrustScore.toFixed(2)}`, "color: #a855f7; font-weight: bold;", "color: #fbd38d;", "color: #a855f7;");
             this.accelerate(video);
             this.notifySpy(true);
         } else {
             this.restore(video);
         }
+    },
+
+    calculateAdScore(video) {
+        let score = 0;
+        const src = video.currentSrc || video.src || '';
+        if (!src) return 0;
+
+        // 1. Learned Patterns (High weight)
+        if (this.cachedPatterns) {
+            this.cachedPatterns.forEach(p => {
+                if (p.type === 'video_source_marker' && src.includes(p.value)) score += 0.8;
+                if (p.type === 'video_marker' && video.closest(p.value)) score += 0.6;
+            });
+        }
+
+        // 2. Location Reputation (Crucial)
+        // If site trust is low, we are more suspicious
+        if (this.siteTrustScore < 0.3) score += 0.3;
+        if (this.siteTrustScore > 0.8) score -= 0.6;
+
+        // 3. Ad Density (Current page environment)
+        if (this.currentAdDensity > 5) score += 0.2;
+        if (this.currentAdDensity > 15) score += 0.4;
+
+        // 4. Technical Heuristics
+        const isExternal = !src.startsWith('blob:') && !src.includes(window.location.hostname);
+        if (isExternal) {
+            score += 0.3;
+            if (src.includes('githubusercontent.com') || src.includes('github.io')) score += 0.2;
+            if (src.toLowerCase().endsWith('.mp4')) score += 0.2;
+        }
+
+        // 5. Short Duration
+        if (video.duration > 0 && video.duration < 65) score += 0.2;
+        if (video.duration > 300) score -= 1.0; // Long videos are likely content
+
+        return Math.min(1.0, score);
     },
 
     onAdDetected() {
@@ -83,44 +135,7 @@ const VideoSurgeon = {
     },
 
     isAdVideo(video) {
-        const src = video.currentSrc || video.src || '';
-        if (!src) return false;
-
-        // 0. AI Brain Check (Learned Patterns)
-        if (this.cachedPatterns && this.cachedPatterns.length > 0) {
-            for (const p of this.cachedPatterns) {
-                if (p.type === 'video_source_marker' && src.includes(p.value)) return true;
-                if (p.type === 'video_marker' && video.closest(p.value)) return true;
-            }
-        }
-
-        // 1. Masked Ad Hosts (GitHub etc)
-        if (src.includes('githubusercontent.com') || src.includes('github.io')) return true;
-        
-        // 2. Aggressive External MP4 Heuristic
-        const isExternal = !src.startsWith('blob:') && !src.includes(window.location.hostname);
-        if (isExternal && src.toLowerCase().endsWith('.mp4')) {
-            // High suspicion: External hard-linked MP4 on a streaming site is almost always an ad
-            return true;
-        }
-
-        // 3. YouTube/JW Specifics
-        if (window.location.hostname.includes('youtube.com')) {
-            if (document.querySelector('.ad-showing, .ad-interrupting')) return true;
-        }
-        
-        if (video.className.includes('jw-video')) {
-            // If JW is playing something that isn't a blob, it's highly likely a pre-roll ad
-            if (!src.startsWith('blob:') && isExternal) return true;
-        }
-
-        // 4. Duration Check (Secondary signal)
-        if (video.duration > 0 && video.duration < 65) { 
-            const playerContainer = video.closest('[class*="player"], [class*="video-js"], [class*="jwplayer"]');
-            if (playerContainer && (playerContainer.className.includes('ad-') || playerContainer.className.includes('-ad'))) return true;
-        }
-
-        return false;
+        return this.calculateAdScore(video) >= 0.8;
     },
 
     accelerate(video) {
