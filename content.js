@@ -14,12 +14,19 @@
 
     let lastTrustedClick = 0;
 
-    // Listen for clicks to track user intent
+    // Listen for clicks to track user intent (v2.6 Intent Lock)
     document.addEventListener('mousedown', (event) => {
         if (event.isTrusted) {
             try {
                 if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id) {
-                    chrome.runtime.sendMessage({ type: 'TRUSTED_CLICK' });
+                    // Capture the intended destination
+                    const link = event.target.closest('a');
+                    const intentUrl = link ? link.href : null;
+                    
+                    chrome.runtime.sendMessage({ 
+                        type: 'TRUSTED_CLICK',
+                        intentUrl: intentUrl 
+                    });
                 }
             } catch (e) {}
         }

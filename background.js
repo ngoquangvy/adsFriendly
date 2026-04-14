@@ -1,11 +1,12 @@
-// Background Service Worker for Smart BlockAd
-
-// Store the timestamp of the last trusted click from content scripts
-let lastTrustedClick = 0;
+// Store the metadata of the last trusted click (v2.6 Intent Lock)
+let lastTrustedClick = { timestamp: 0, intentUrl: null };
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'TRUSTED_CLICK') {
-    lastTrustedClick = Date.now();
+    lastTrustedClick = { 
+        timestamp: Date.now(), 
+        intentUrl: message.intentUrl 
+    };
   } else if (message.type === 'TOGGLE_STATUS') {
     console.log("Protection status:", message.isEnabled);
   } else if (message.type === 'SYNC_LEARNING') {
@@ -404,7 +405,7 @@ async function getDynamicTrustWindow(hostname) {
     return 2000; // Default
 }
 
-// Listen for new tab creation
+// Listen for new tab creation (v2.6 Intent Lock Core)
 chrome.webNavigation.onCreatedNavigationTarget.addListener(async (details) => {
   const { sourceTabId, tabId, url } = details;
   
@@ -421,13 +422,25 @@ chrome.webNavigation.onCreatedNavigationTarget.addListener(async (details) => {
 
     if (sourceUrl.hostname === targetDomain) return;
 
-    // v2.5 MUST-KILL Check: If the URL is suspicious, kill it regardless of clicks
+    // v2.5 MUST-KILL Check: If the URL is suspicious, kill it
     if (isSuspiciousURL(url, globalAdPatterns)) {
         console.log(`%c[AdsFriendly AI] Stealth Pop-under neutralized: ${targetDomain}`, "color: #ef4444; font-weight: bold;");
         await logBlockedNavigation(url, sourceUrl.hostname);
         const blockedUrl = chrome.runtime.getURL(`ui/blocked.html?url=${encodeURIComponent(url)}&source=${encodeURIComponent(sourceUrl.hostname)}`);
         chrome.tabs.update(tabId, { url: blockedUrl });
         return;
+    }
+
+    // v2.6 Intent Lock Core: Is this tab what the user actually clicked?
+    let isIntentMatched = false;
+    if (lastTrustedClick.intentUrl) {
+        try {
+            const intentUrl = new URL(lastTrustedClick.intentUrl);
+            // Match if same domain or subdomain
+            if (targetDomain === intentUrl.hostname || targetDomain.endsWith('.' + intentUrl.hostname)) {
+                isIntentMatched = true;
+            }
+        } catch (e) {}
     }
 
     // 1. Deep Pulse: Check Sharded Trusted Path
@@ -441,12 +454,21 @@ chrome.webNavigation.onCreatedNavigationTarget.addListener(async (details) => {
     const { whitelist = [] } = await chrome.storage.local.get(['whitelist']);
     if (whitelist.includes(targetDomain)) return;
 
-    // 3. Evaluation: Dynamic Trust Window
+    // 3. Evaluation: Intent and Dynamic Trust Window
     const trustWindow = await getDynamicTrustWindow(sourceUrl.hostname);
-    const timeSinceClick = Date.now() - lastTrustedClick;
+    const timeSinceClick = Date.now() - lastTrustedClick.timestamp;
+
+    // If intent doesn't match AND it's a cross-domain navigation, it's a Click-jack
+    if (!isIntentMatched && timeSinceClick < trustWindow) {
+        console.log(`%c[AdsFriendly AI] Click-jack detected! Destination ${targetDomain} does not match intent.`, "color: #f59e0b; font-weight: bold;");
+        await logBlockedNavigation(url, sourceUrl.hostname);
+        const blockedUrl = chrome.runtime.getURL(`ui/blocked.html?url=${encodeURIComponent(url)}&source=${encodeURIComponent(sourceUrl.hostname)}`);
+        chrome.tabs.update(tabId, { url: blockedUrl });
+        return;
+    }
 
     if (timeSinceClick > trustWindow) {
-      console.log(`[AdsFriendly AI] Blocked unauthorized new tab: ${targetDomain} (Window: ${trustWindow}ms)`);
+      console.log(`[AdsFriendly AI] Blocked unauthorized new tab: ${targetDomain}`);
       await logBlockedNavigation(url, sourceUrl.hostname);
       const blockedUrl = chrome.runtime.getURL(`ui/blocked.html?url=${encodeURIComponent(url)}&source=${encodeURIComponent(sourceUrl.hostname)}`);
       chrome.tabs.update(tabId, { url: blockedUrl });
