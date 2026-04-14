@@ -68,6 +68,30 @@ async function updateSiteReputation(hostname, blockedCount) {
     await chrome.storage.local.set({ siteReputation });
 }
 
+async function cleanupStaleMemory() {
+    const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const { siteResetHistory = {} } = await chrome.storage.local.get('siteResetHistory');
+    
+    let changed = false;
+    for (const hostname in siteResetHistory) {
+        if (now - siteResetHistory[hostname].timestamp > THIRTY_DAYS) {
+            delete siteResetHistory[hostname];
+            changed = true;
+        }
+    }
+
+    if (changed) {
+        await chrome.storage.local.set({ siteResetHistory });
+        console.log('[AdsFriendly Background] Stale behavioral memory cleaned up.');
+    }
+}
+
+// Trigger cleanup on Startup
+chrome.runtime.onStartup.addListener(cleanupStaleMemory);
+// Also run it now if just installed or updated
+cleanupStaleMemory();
+
 async function handleLearnVideoAd(data) {
     const { src, hostname } = data;
     if (!src) return;

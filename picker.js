@@ -295,7 +295,9 @@
 
         let addedCount = 0;
         const resetData = siteResetHistory[hostname];
-        const isCorrectionLoop = resetData && (Date.now() - resetData.timestamp < 3600000); // Within 1 hour
+        // Persistent check: If a reset exists, we learn from it regardless of time 
+        // (The 30-day limit is handled by the background cleanup task)
+        const isCorrectionLoop = !!resetData; 
 
         selectedItems.forEach(item => {
             const validation = validateSelector(item.selector);
