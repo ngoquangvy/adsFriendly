@@ -65,14 +65,13 @@ if (feedbackForm) {
     feedbackForm.onsubmit = async (e) => {
         e.preventDefault();
         
-        const title = document.getElementById('fb-title').value.trim();
         const body = document.getElementById('fb-body').value.trim();
         const rating = document.querySelector('input[name="rating"]:checked').value;
 
-        if (!title || !body) {
+        if (body.length < 3) {
             fbStatus.style.display = 'block';
             fbStatus.style.color = 'var(--danger)';
-            fbStatus.textContent = "Vui lòng điền đầy đủ tiêu đề và nội dung.";
+            fbStatus.textContent = "Nội dung góp ý quá ngắn (tối thiểu 3 ký tự).";
             return;
         }
 
@@ -111,7 +110,7 @@ if (feedbackForm) {
             const response = await fetch(WORKER_URL, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ title, body, rating: parseInt(rating) })
+                body: JSON.stringify({ body, rating: parseInt(rating) })
             });
 
             const result = await response.json();
