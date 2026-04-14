@@ -327,7 +327,20 @@
         const isSafeId = (id) => id && !GENERIC_CLASSES.some(gc => id.includes(gc)) && !/[0-9]{5,}/.test(id);
         const isSafeClass = (cls) => cls && typeof cls === 'string' && cls.split(/\s+/).some(c => c && !GENERIC_CLASSES.includes(c) && !/[0-9]{5,}/.test(c));
 
-        // 1. Specific ID is best
+        // 0. Specialized Ad-Close Button Intelligence (NEW)
+        if (tag === 'a' && el.href && el.href.includes('javascript:')) {
+            if (isSafeId(el.id)) return `#${el.id}`;
+            if (el.parentElement && isSafeId(el.parentElement.id)) return `#${el.parentElement.id} > ${tag}`;
+            // If it's a specific close function like 'an_catfish'
+            const jsMatch = el.href.match(/javascript:([a-zA-Z0-9_]+)/);
+            if (jsMatch && jsMatch[1].length > 3) {
+                return `${tag}[href*="${jsMatch[1]}"]`;
+            }
+        }
+
+        // 1. Specific ID is best (Special check for ad-related IDs)
+        const adKeywords = ['quangcao', 'catfish', 'ads', 'popup', 'banner'];
+        if (el.id && adKeywords.some(k => el.id.toLowerCase().includes(k))) return `#${el.id}`;
         if (isSafeId(el.id)) return `#${el.id}`;
         
         // 2. Try to build a parent-child relationship for better specificity
@@ -335,6 +348,8 @@
             if (!curr || curr === document.body || depth > 2) return '';
             
             let part = curr.tagName.toLowerCase();
+            // If parent has a very specific ad-related ID, stop there
+            if (curr.id && adKeywords.some(k => curr.id.toLowerCase().includes(k))) return `#${curr.id} ${part}`.trim();
             if (isSafeId(curr.id)) return `#${curr.id} ${part}`.trim();
             
             if (curr.className && typeof curr.className === 'string') {
