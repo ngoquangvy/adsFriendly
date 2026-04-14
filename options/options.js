@@ -187,14 +187,13 @@ const COOLDOWN_MS = 3600000;
 if (feedbackForm) {
     feedbackForm.onsubmit = async (e) => {
         e.preventDefault();
-        const title = document.getElementById('fb-title').value.trim();
         const body = document.getElementById('fb-body').value.trim();
         const rating = document.querySelector('input[name="rating"]:checked').value;
 
-        if (body.length < 1 || title.length < 1) {
+        if (body.length < 1) {
             fbStatus.style.display = 'block';
             fbStatus.style.color = 'var(--danger)';
-            fbStatus.textContent = "Vui lòng nhập tiêu đề và nội dung góp ý.";
+            fbStatus.textContent = "Vui lòng nhập nội dung góp ý.";
             return;
         }
 
@@ -219,7 +218,7 @@ if (feedbackForm) {
             await fetch(WORKER_URL, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ title, body, rating: parseInt(rating) })
+                body: JSON.stringify({ body, rating: parseInt(rating) })
             });
             fbStatus.style.color = '#22c55e';
             fbStatus.textContent = "Gửi thành công! Cảm ơn bạn.";
