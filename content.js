@@ -34,6 +34,17 @@ const blockAds = () => {
     });
 };
 
-// Run blocking periodically (or use MutationObserver for better performance)
-setInterval(blockAds, 2000);
-blockAds();
+// Run blocking periodically ONLY if 'In-page Blocking' is enabled
+setInterval(async () => {
+    const { inPageEnabled, isEnabled } = await chrome.storage.local.get(['inPageEnabled', 'isEnabled']);
+    if (isEnabled !== false && inPageEnabled === true) {
+        blockAds();
+    }
+}, 2000);
+
+// Initial check
+chrome.storage.local.get(['inPageEnabled', 'isEnabled'], (result) => {
+    if (result.isEnabled !== false && result.inPageEnabled === true) {
+        blockAds();
+    }
+});

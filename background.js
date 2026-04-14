@@ -8,6 +8,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     lastTrustedClick = Date.now();
   } else if (message.type === 'TOGGLE_STATUS') {
     console.log("Protection status:", message.isEnabled);
+  } else if (message.type === 'TOGGLE_IN_PAGE') {
+    toggleInPageBlocking(message.enabled);
   } else if (message.type === 'USER_DECISION') {
     handleUserDecision(message)
       .then(() => {
@@ -19,6 +21,35 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
     return true; // Keep channel open for async response
   }
+});
+
+// Layer 2: In-page Blocking (DNR Ruleset)
+async function toggleInPageBlocking(enabled) {
+  try {
+    if (enabled) {
+      await chrome.declarativeNetRequest.updateEnabledRulesets({
+        enableRulesetIds: ["ruleset_1"]
+      });
+    } else {
+      await chrome.declarativeNetRequest.updateEnabledRulesets({
+        disableRulesetIds: ["ruleset_1"]
+      });
+    }
+    console.log("DNR Ruleset updated:", enabled);
+  } catch (err) {
+    console.error("DNR update error:", err);
+  }
+}
+
+// Auto-off: Reset on startup and installation
+chrome.runtime.onStartup.addListener(() => {
+  chrome.storage.local.set({ inPageEnabled: false });
+  toggleInPageBlocking(false);
+});
+
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.storage.local.set({ inPageEnabled: false });
+  toggleInPageBlocking(false);
 });
 
 // Separate handler for cleaner async/await

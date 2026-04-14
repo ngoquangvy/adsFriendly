@@ -6,6 +6,7 @@
         :root {
             --primary: #22c55e;
             --secondary: #16a34a;
+            --emerald: #10b981;
             --bg: #0f172a;
             --text: #f8fafc;
         }
@@ -147,10 +148,20 @@
         <div class="stat-value" id="blocked-count">0</div>
         
         <div class="toggle-container">
-            <span>Trạng thái bảo vệ</span>
+            <span>🛡️ Bảo vệ tổng quát</span>
             <label class="switch">
                 <input type="checkbox" checked id="status-toggle">
                 <span class="slider"></span>
+            </label>
+        </div>
+        <div class="toggle-container" style="border-top: 1px solid rgba(255,255,255,0.05); padding-top: 15px; margin-top: 15px;">
+            <div style="display: flex; flex-direction: column; gap: 4px;">
+                <span>🧹 Chặn nội dung trang</span>
+                <span style="font-size: 0.6rem; color: #64748b;">Dễ bị website phát hiện hơn</span>
+            </div>
+            <label class="switch">
+                <input type="checkbox" id="in-page-toggle">
+                <span class="slider" style="background-color: var(--secondary);"></span>
             </label>
         </div>
     </div>

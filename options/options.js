@@ -101,9 +101,6 @@ if (feedbackForm) {
             return;
         }
 
-        const title = document.getElementById('fb-title').value;
-        const body = document.getElementById('fb-body').value;
-        const rating = document.querySelector('input[name="rating"]:checked').value;
 
         fbSubmit.disabled = true;
         fbSubmit.textContent = "Đang gửi...";

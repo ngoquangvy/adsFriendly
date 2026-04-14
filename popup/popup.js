@@ -2,26 +2,31 @@
 
 // Link UI elements
 const blockedCountEl = document.getElementById('blocked-count');
-const statusToggle = document.getElementById('status-toggle');
+const inPageToggle = document.getElementById('in-page-toggle');
 
 // Load initial state from storage
-chrome.storage.local.get(['blockedCount', 'isEnabled'], (result) => {
+chrome.storage.local.get(['blockedCount', 'isEnabled', 'inPageEnabled'], (result) => {
     if (result.blockedCount !== undefined) {
         blockedCountEl.textContent = result.blockedCount;
     }
-    if (result.isEnabled !== undefined) {
-        statusToggle.checked = result.isEnabled;
-    } else {
-        // Default to enabled
-        statusToggle.checked = true;
-    }
+    
+    // Default global to true, in-page to false
+    statusToggle.checked = result.isEnabled !== false;
+    inPageToggle.checked = result.inPageEnabled === true;
 });
 
-// Handle toggle changes
+// Handle global toggle changes
 statusToggle.addEventListener('change', () => {
     const isEnabled = statusToggle.checked;
     chrome.storage.local.set({ isEnabled });
     chrome.runtime.sendMessage({ type: 'TOGGLE_STATUS', isEnabled });
+});
+
+// Handle in-page toggle changes (Layer 2)
+inPageToggle.addEventListener('change', () => {
+    const inPageEnabled = inPageToggle.checked;
+    chrome.storage.local.set({ inPageEnabled });
+    chrome.runtime.sendMessage({ type: 'TOGGLE_IN_PAGE', enabled: inPageEnabled });
 });
 
 // Handle settings button
