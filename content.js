@@ -39,11 +39,15 @@
         const hostname = window.location.hostname;
         let customSelectors = [];
         let blockedCount = 0;
+        let resetHistory = { oldRules: [] };
 
         try {
-            const result = await chrome.storage.local.get('userCustomRules');
+            const result = await chrome.storage.local.get(['userCustomRules', 'siteResetHistory']);
             if (result && result.userCustomRules && result.userCustomRules[hostname]) {
                 customSelectors = result.userCustomRules[hostname];
+            }
+            if (result && result.siteResetHistory && result.siteResetHistory[hostname]) {
+                resetHistory = result.siteResetHistory[hostname];
             }
         } catch (e) {}
 
@@ -61,30 +65,30 @@
 
         const dangerousTags = ['div', 'span', 'p', 'a', 'li', 'ul', 'img', 'section'];
 
+        const isBlacklisted = (el) => {
+            return resetHistory.oldRules.some(oldRule => {
+                if (typeof oldRule === 'string') return false;
+                const oldF = oldRule.fingerprint;
+                if (!oldF) return false;
+                return (el.id && el.id === oldF.id) || 
+                       (el.className && el.className === oldF.className && el.tagName.toLowerCase() === oldF.tag);
+            });
+        };
+
         customSelectors.forEach(rule => {
             const selector = typeof rule === 'string' ? rule : rule.selector;
             if (dangerousTags.includes(selector.toLowerCase().trim())) return;
-            adSelectors.push(selector);
-
-            if (typeof rule === 'object' && rule.fingerprint) {
-                const { tag, parentClass, parentId } = rule.fingerprint;
-                let parent = null;
-                if (parentId) parent = document.getElementById(parentId);
-                else if (parentClass) parent = document.querySelector(`.${parentClass.split(' ')[0]}`);
-
-                if (parent) {
-                    parent.querySelectorAll(tag).forEach(sibling => {
-                        if (!rule.fingerprint.className || sibling.className === rule.fingerprint.className) {
-                            BLOCKING_STRATEGIES.STEALTH(sibling);
-                            blockedCount++;
-                        }
-                    });
-                }
-            }
+            
+            document.querySelectorAll(selector).forEach(el => {
+                if (isBlacklisted(el)) return;
+                BLOCKING_STRATEGIES.STEALTH(el);
+                blockedCount++;
+            });
         });
 
         adSelectors.forEach(selector => {
             document.querySelectorAll(selector).forEach(el => {
+                if (isBlacklisted(el)) return;
                 BLOCKING_STRATEGIES.STEALTH(el);
                 blockedCount++;
             });

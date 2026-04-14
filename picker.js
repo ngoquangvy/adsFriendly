@@ -306,8 +306,31 @@
                 return;
             }
 
+            let finalSelector = item.selector;
+
+            // Recursive Intelligence v2.3: Differential Analysis
+            if (isCorrectionLoop && resetData.oldRules) {
+                console.log(`%c[AdsFriendly AI] Differential Analysis triggered for ${hostname}`, "color: #a855f7; font-weight: bold;");
+                
+                // Compare new fingerprint with old failed rules to find the most discriminative feature
+                resetData.oldRules.forEach(oldRule => {
+                    const oldF = typeof oldRule === 'string' ? null : oldRule.fingerprint;
+                    if (oldF && oldF.tag === item.fingerprint.tag) {
+                        const delta = findFingerprintDelta(oldF, item.fingerprint);
+                        if (delta) {
+                            console.log('[AdsFriendly AI] Found learning delta:', delta);
+                            if (delta.type === 'dataAttr') {
+                                finalSelector = `${item.selector.split(' > ').pop()}[${delta.key}="${delta.value}"]`;
+                            } else if (delta.type === 'class' && delta.value) {
+                                finalSelector = `${item.selector.split(' > ').pop()}.${delta.value.split(' ')[0]}`;
+                            }
+                        }
+                    }
+                });
+            }
+
             const ruleObject = {
-                selector: item.selector,
+                selector: finalSelector,
                 fingerprint: item.fingerprint,
                 timestamp: Date.now(),
                 timesZapped: 1,
@@ -316,13 +339,11 @@
             };
 
             if (isCorrectionLoop) {
-                console.log(`%c[AdsFriendly AI] Correction Event detected for ${hostname}. Learning from previous reset...`, "color: #a855f7; font-weight: bold;");
-                // The AI now "understands" that the previous reset was a false positive, 
-                // and this new rule is the intended surgical strike.
+                console.log(`%c[AdsFriendly AI] Correction learned: ${finalSelector}`, "color: #10b981; font-weight: bold;");
             }
             
             const existingIndex = userCustomRules[hostname].findIndex(r => 
-                (typeof r === 'string' ? r === item.selector : r.selector === item.selector)
+                (typeof r === 'string' ? r === finalSelector : r.selector === finalSelector)
             );
 
             if (existingIndex > -1) userCustomRules[hostname][existingIndex] = ruleObject;
@@ -437,6 +458,16 @@
             } catch (e) {}
         }
 
+        // Recursive Intelligence v2.3: Deep Attributes
+        const dataAttrs = {};
+        if (el.attributes) {
+            Array.from(el.attributes).forEach(attr => {
+                if (attr.name.startsWith('data-') && attr.value.length < 50) {
+                    dataAttrs[attr.name] = attr.value;
+                }
+            });
+        }
+
         return {
             tag: el.tagName.toLowerCase(),
             className: cleanClass(el.className),
@@ -444,8 +475,26 @@
             parentClass: el.parentElement ? cleanClass(el.parentElement.className) : null,
             alt: el.alt || null,
             title: el.title || null,
-            linkDomain: linkDomain
+            linkDomain: linkDomain,
+            childCount: el.children ? el.children.length : 0,
+            dataAttrs: dataAttrs
         };
+    };
+
+    const findFingerprintDelta = (oldF, newF) => {
+        if (!oldF || !newF) return null;
+        // 1. Data Attributes Delta (Highest precision)
+        for (const key in newF.dataAttrs) {
+            if (!oldF.dataAttrs || oldF.dataAttrs[key] !== newF.dataAttrs[key]) {
+                return { type: 'dataAttr', key: key, value: newF.dataAttrs[key] };
+            }
+        }
+        // 2. Class Delta
+        if (newF.className !== oldF.className) return { type: 'class', value: newF.className };
+        // 3. Child Count Delta
+        if (newF.childCount !== oldF.childCount) return { type: 'childCount', value: newF.childCount };
+        
+        return null;
     };
 
     chrome.runtime.onMessage.addListener((message) => {
