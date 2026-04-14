@@ -48,7 +48,6 @@ const blockAds = async () => {
     // 1. Generalized Ad Selectors + User Custom Selectors
     const adSelectors = [
         '[id*="google_ads"]', '[class*="adsbygoogle"]',
-        '[class*="ad-container"]', '[class*="ad-box"]', '[id*="ad-"]',
         'ins.adsbygoogle', 'iframe[src*="doubleclick"]',
         'a[href*="googleadservices.com"]',
         'a[href*="utm_"]', 'a[href*="clickid="]', 'a[href*="aff_id="]',
@@ -90,49 +89,11 @@ const blockAds = async () => {
         }
     });
 
-    // Add greedy selectors ONLY if not on a system-critical page
-    if (!isSystemSafe) {
-        adSelectors.push('[class*="banner"]', '[id*="banner"]');
-    }
-    
     adSelectors.forEach(selector => {
         document.querySelectorAll(selector).forEach(el => {
             BLOCKING_STRATEGIES.STEALTH(el);
         });
     });
-
-    // 2. Invisible Overlay Shield (Heuristic for click-jackers)
-    // SKIP if on a system-critical page to protect sidebars and challenge modals
-    if (!isSystemSafe) {
-        const fixedElements = document.querySelectorAll('div, a');
-        fixedElements.forEach(el => {
-            // Safety: Skip system elements and interactive forms
-            const id = el.id || '';
-            const className = typeof el.className === 'string' ? el.className : '';
-            if (id.includes('cf-') || className.includes('cf-') || id.includes('turnstile') || el.querySelector('form, input, select')) {
-                return;
-            }
-
-            const style = window.getComputedStyle(el);
-            if (style.position === 'fixed' || style.position === 'absolute') {
-                const zIndex = parseInt(style.zIndex);
-                if (zIndex > 990) {
-                    const rect = el.getBoundingClientRect();
-                    const vWidth = window.innerWidth;
-                    const vHeight = window.innerHeight;
-                    
-                    if (rect.width > vWidth * 0.5 && rect.height > vHeight * 0.5) {
-                        const bgColor = style.backgroundColor;
-                        const isTransparent = bgColor.includes('rgba') && bgColor.endsWith(' 0)') || bgColor === 'transparent';
-                        
-                        if (isTransparent || parseFloat(style.opacity) < 0.1) {
-                            BLOCKING_STRATEGIES.STEALTH(el);
-                        }
-                    }
-                }
-            }
-        });
-    }
 };
 
 // Run blocking periodically ONLY if 'Friendly Mode' is OFF
@@ -192,7 +153,7 @@ setInterval(async () => {
                         } catch (e) {}
                     }
 
-                    if (score >= 0.7) {
+                    if (score >= 0.8) {
                         console.log(`%c[AdsFriendly AI] Hiding predicted ad (%c${(score*100).toFixed(0)}% confidence%c) Reason: ${matchDetails.join(', ')}`, "color: #10b981; font-weight: bold;", "color: #fbd38d;", "color: #10b981;", el);
                         BLOCKING_STRATEGIES.STEALTH(el);
                     }
