@@ -198,14 +198,6 @@ async function incrementBlockedCount() {
   updateBadge();
 }
 
-// Core System Whitelist (Total Immunity)
-const CORE_SYSTEM_DOMAINS = ['cloudflare.com', 'google.com', 'github.com', 'stackexchange.com', 'stackoverflow.com'];
-
-// Helper to check if a hostname is a core system domain
-function isCoreSystem(hostname) {
-  return CORE_SYSTEM_DOMAINS.some(domain => hostname === domain || hostname.endsWith('.' + domain));
-}
-
 // Listen for new tab creation
 chrome.webNavigation.onCreatedNavigationTarget.addListener(async (details) => {
   const { sourceTabId, tabId, url } = details;
@@ -222,11 +214,6 @@ chrome.webNavigation.onCreatedNavigationTarget.addListener(async (details) => {
     const sourceUrl = new URL(sourceTab.url);
     const targetUrl = new URL(url);
     const targetDomain = targetUrl.hostname;
-
-    // Total System Immunity: Bypass if source or target is a core administrative domain
-    if (isCoreSystem(sourceUrl.hostname) || isCoreSystem(targetDomain)) {
-        return;
-    }
 
     // 1. Check Whitelist (User Defined)
     const { whitelist = [] } = await chrome.storage.local.get(['whitelist']);

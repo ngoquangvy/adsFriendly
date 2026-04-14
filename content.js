@@ -1,9 +1,3 @@
-const SYSTEM_WHITELIST = ['cloudflare.com', 'google.com', 'github.com', 'stackexchange.com', 'stackoverflow.com'];
-const isSystemSafe = SYSTEM_WHITELIST.some(domain => window.location.hostname === domain || window.location.hostname.endsWith('.' + domain));
-
-if (isSystemSafe) {
-    console.log("[AdsFriendly] System domain detected. Entering Total Immunity mode.");
-} else {
     // Listen for clicks to track user intent
     document.addEventListener('mousedown', (event) => {
         if (event.isTrusted) {
@@ -144,4 +138,3 @@ if (isSystemSafe) {
             }
         });
     } catch (err) {}
-}
