@@ -15,7 +15,7 @@
         }
     }
 
-    if (friendlyMode === true) {
+    if (friendlyMode === false) {
         injectSpy();
     }
 
@@ -159,12 +159,12 @@
     setInterval(async () => {
         try {
             const { friendlyMode, isEnabled, globalAdPatterns = [] } = await chrome.storage.local.get(['friendlyMode', 'isEnabled', 'globalAdPatterns']);
-            if (isEnabled === false) return;
+            if (isEnabled === false || friendlyMode === true) return;
 
-            // 1. Basic Static Blocking (Always active if enabled)
+            // 1. Static Blocking
             blockAds();
 
-            // 2. High-Confidence AI Perception
+            // 2. High-Confidence AI Perception (Only in Full AI Mode)
             if (globalAdPatterns.length > 0) {
                 const elements = document.querySelectorAll('img, div, a');
                 elements.forEach(el => {
@@ -172,6 +172,7 @@
 
                     let score = 0;
                     let matchDetails = [];
+
                     const calculateScore = (target) => {
                         let s = 0;
                         globalAdPatterns.forEach(pattern => {
@@ -215,8 +216,7 @@
                     }
                 });
             }
-        }
-        catch (err) { }
+        } catch (err) { }
     }, 2000);
 
     try {

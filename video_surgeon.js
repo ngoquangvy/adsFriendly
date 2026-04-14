@@ -10,12 +10,12 @@ const VideoSurgeon = {
     async init() {
         if (this.isInitialized) return;
 
-        // GLOBAL GOVERNANCE: Check if extension is enabled and if AI Mode is ON
+        // GLOBAL GOVERNANCE: Check if AI Mode is ACTIVE (Full AI = false, Friendly = true)
         const { isEnabled, friendlyMode } = await chrome.storage.local.get(['isEnabled', 'friendlyMode']);
         
-        // If extension is OFF OR AI Mode is OFF (false), stay dormant
-        if (isEnabled === false || friendlyMode === false) {
-            console.log('[AdsFriendly Video] Dormant Mode: Extension is disabled or AI Mode is off.');
+        // If extension is OFF OR in Friendly Mode (true), stay dormant for aggressive features
+        if (isEnabled === false || friendlyMode === true) {
+            console.log('[AdsFriendly Video] Dormant Mode: Extension is disabled or in Standard (Friendly) mode.');
             return;
         }
 
@@ -147,6 +147,13 @@ const VideoSurgeon = {
         const domResults = NeuralEvaluator.evaluateDOM(player, skipBtn);
         const behaviorResults = NeuralEvaluator.evaluateBehavior(video, this.siteTrustScore);
         const streamResults = NeuralEvaluator.evaluateStream();
+        
+        // 2.5.9 Legacy Support: Inject heuristic calculation into behavior sensor
+        const heuristicScore = this.calculateAdScore(video);
+        if (heuristicScore >= 0.7) {
+            behaviorResults.score = Math.max(behaviorResults.score, heuristicScore);
+            behaviorResults.reasons.push(`Heuristic match (Confidence: ${(heuristicScore*100).toFixed(0)}%)`);
+        }
 
         const decision = NeuralEvaluator.arbitrate(domResults, behaviorResults, streamResults);
 

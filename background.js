@@ -49,6 +49,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .then(() => sendResponse({ status: 'ok' }))
       .catch(() => sendResponse({ status: 'error' }));
     return true;
+  } else if (message.type === 'LEARN_DOMAINS') {
+    handleLearnDomains(message.domains)
+      .then(() => sendResponse({ status: 'ok' }))
+      .catch(() => sendResponse({ status: 'error' }));
+    return true;
   } else if (message.type === 'LOG_NEURAL_DECISION') {
     handleNeuralLogging(message.entry)
       .then(() => sendResponse({ status: 'ok' }))
@@ -148,7 +153,34 @@ async function handleLearnVideoAd(data) {
     }
 
     await chrome.storage.local.set({ globalAdPatterns });
-    console.log('[AdsFriendly Brain] New Video Ad Source learned:', patternValue);
+}
+
+async function handleLearnDomains(domains) {
+    if (!domains || !Array.isArray(domains)) return;
+
+    const { globalAdPatterns = [] } = await chrome.storage.local.get(['globalAdPatterns']);
+    let changed = false;
+
+    domains.forEach(domain => {
+        // Sanitize: Ignore very common domains or invalid ones
+        if (domain.length < 4 || domain.includes('google.com') || domain.includes('facebook.com')) return;
+
+        const existing = globalAdPatterns.find(p => p.type === 'domain' && p.value === domain);
+        if (!existing) {
+            console.log(`%c[AdsFriendly AI] Neural Learning: Blacklisting ad-domain from user zap: ${domain}`, "color: #10b981; font-weight: bold;");
+            globalAdPatterns.push({
+                type: 'domain',
+                value: domain,
+                confidence: 1.0, // Definitive user signal
+                timestamp: Date.now()
+            });
+            changed = true;
+        }
+    });
+
+    if (changed) {
+        await chrome.storage.local.set({ globalAdPatterns });
+    }
 }
 
 async function handleVideoLearning(data) {

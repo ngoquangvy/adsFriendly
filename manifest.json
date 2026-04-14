@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AdsFriendly",
-  "version": "2.5.9",
+  "version": "2.8.4",
   "description": "Chặn quảng cáo thông minh dựa trên AI đa lớp (Fusion Brain), Pop-under và bảo vệ hành vi người dùng.",
   "permissions": [
     "declarativeNetRequest",

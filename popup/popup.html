@@ -196,24 +196,24 @@
         <!-- Reflex Core: Undo Section -->
         <div id="undo-section" style="display: none; background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.2); border-radius: 10px; padding: 10px; margin-bottom: 20px; animation: slideIn 0.3s ease;">
             <div style="display: flex; justify-content: space-between; align-items: center;">
-                <span style="font-size: 0.7rem; color: #10b981;">Lỡ tay xóa nhầm?</span>
-                <button id="undo-btn" style="background: #10b981; color: white; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 0.7rem; font-weight: bold;">Khôi phục</button>
+                <span style="font-size: 0.7rem; color: #10b981;">Mistake? Bring it back</span>
+                <button id="undo-btn" style="background: #10b981; color: white; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 0.7rem; font-weight: bold;">Restore</button>
             </div>
         </div>
 
-        <div class="toggle-container">
-            <span>🛡️ General Protection</span>
-            <label class="switch">
-                <input type="checkbox" checked id="status-toggle">
-                <span class="slider global"></span>
-            </label>
-        </div>
         <div class="toggle-container" style="border-top: 1px solid rgba(255,255,255,0.05); padding-top: 15px; margin-top: 15px;">
-            <span>✨ Friendly Mode (AI)</span>
-            <label class="switch">
-                <input type="checkbox" checked id="friendly-mode-toggle">
-                <span class="slider friendly"></span>
-            </label>
+            <div style="display: flex; flex-direction: column; gap: 4px;">
+                <span>🛡️ Operation Mode</span>
+                <span style="font-size: 0.6rem; color: #64748b;">Switch between styles</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-size: 0.7rem; color: #94a3b8;">Full AI</span>
+                <label class="switch">
+                    <input type="checkbox" id="friendly-mode-toggle" checked>
+                    <span class="slider friendly"></span>
+                </label>
+                <span style="font-size: 0.7rem; color: #10b981;">Friendly</span>
+            </div>
         </div>
     </div>
 

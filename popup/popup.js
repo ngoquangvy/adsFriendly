@@ -2,17 +2,15 @@
 
 // Link UI elements
 const blockedCountEl = document.getElementById('blocked-count');
-const statusToggle = document.getElementById('status-toggle');
 const inPageToggle = document.getElementById('friendly-mode-toggle');
 
 // Load initial state from storage
-chrome.storage.local.get(['blockedCount', 'isEnabled', 'friendlyMode'], async (result) => {
+chrome.storage.local.get(['blockedCount', 'friendlyMode'], async (result) => {
     if (result.blockedCount !== undefined) {
         blockedCountEl.textContent = result.blockedCount;
     }
     
-    // Default global to true, friendly to true
-    statusToggle.checked = result.isEnabled !== false;
+    // Default friendly to true
     inPageToggle.checked = result.friendlyMode !== false;
 
     // Reflex Core: Check for recent zaps to show Undo
@@ -26,23 +24,12 @@ chrome.storage.local.get(['blockedCount', 'isEnabled', 'friendlyMode'], async (r
     }
 });
 
-// Handle global toggle changes
-statusToggle.addEventListener('change', async () => {
-    const isEnabled = statusToggle.checked;
-    await chrome.storage.local.set({ isEnabled });
-    chrome.runtime.sendMessage({ type: 'TOGGLE_STATUS', isEnabled });
-    
-    // Auto-reload to apply new state
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab && tab.url.startsWith('http')) chrome.tabs.reload(tab.id);
-});
-
-// Handle friendly mode toggle changes
+// Handle mode selector changes
 inPageToggle.addEventListener('change', async () => {
-    const friendlyMode = inPageToggle.checked;
+    const friendlyMode = inPageToggle.checked; // true = Friendly (Right), false = Full AI (Left)
     await chrome.storage.local.set({ friendlyMode });
     
-    // Auto-reload to apply new state
+    // Auto-reload current tab to apply changes
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tab && tab.url.startsWith('http')) chrome.tabs.reload(tab.id);
 });
@@ -54,6 +41,14 @@ document.getElementById('settings-btn').addEventListener('click', () => {
 
 // Handle Magic Wand (Zapper)
 document.getElementById('magic-wand-btn').addEventListener('click', async () => {
+    const { friendlyMode } = await chrome.storage.local.get('friendlyMode');
+    
+    // Restriction: Magic Wand is ONLY for Full AI Mode (Left/False)
+    if (friendlyMode === true) {
+        alert('⚠️ Vui lòng chuyển sang Chế độ Full AI (gạt sang Trái) để sử dụng Gậy phép.');
+        return;
+    }
+
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tab) {
         try {

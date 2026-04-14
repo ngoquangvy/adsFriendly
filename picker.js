@@ -1,9 +1,9 @@
-(function() {
+(function () {
     let isActive = false;
     let hoveredElement = null;
     let selectedItems = []; // Array of { element, selector, fingerprint }
     let overlays = []; // Array of overlay DOM elements
-    
+
     let activeOverlay = null; // The one following the cursor
     let controlPanel = null;
 
@@ -16,7 +16,7 @@
     // Initialize UI elements
     const createUI = () => {
         if (activeOverlay) return;
-        
+
         activeOverlay = document.createElement('div');
         activeOverlay.id = 'adsfriendly-picker-active-overlay';
         activeOverlay.style.cssText = `
@@ -59,7 +59,7 @@
         if (!controlPanel) return;
         const count = selectedItems.length;
         const color = errorMsg ? '#ef4444' : '#10b981';
-        
+
         let videoContext = false;
         if (hoveredElement) {
             videoContext = hoveredElement.tagName === 'VIDEO' || hoveredElement.querySelector('video') || hoveredElement.closest('.jw-video, .video-js, .fluid_player_instance');
@@ -87,10 +87,10 @@
     const handleNeutralizeVideo = async () => {
         if (!hoveredElement) return;
         const video = hoveredElement.tagName === 'VIDEO' ? hoveredElement : hoveredElement.querySelector('video') || hoveredElement.closest('div').querySelector('video');
-        
+
         if (video) {
             console.log('[AdsFriendly Picker] Neutralizing Video Ad manually:', video.currentSrc);
-            
+
             // 1. Immediate Action (Locally speed up)
             if (typeof VideoSurgeon !== 'undefined') {
                 VideoSurgeon.accelerate(video);
@@ -118,7 +118,7 @@
         controlPanel.style.display = 'flex';
         selectedItems = [];
         clearOverlays();
-        
+
         document.addEventListener('mousemove', handleMouseMove);
         document.addEventListener('click', handleClick, true);
         document.addEventListener('scroll', handleScroll, true);
@@ -132,7 +132,7 @@
             let autoMarkedCount = 0;
             elements.forEach(el => {
                 if (STRUCTURAL_TAGS.includes(el.tagName.toLowerCase())) return;
-                
+
                 let score = 0;
                 let reasons = [];
                 globalAdPatterns.forEach(p => {
@@ -147,7 +147,7 @@
                 if (score >= 0.9) {
                     markElement(el);
                     autoMarkedCount++;
-                    console.log(`[AdsFriendly AI] Auto-marked element: %o\nConfidence: ${(score*100).toFixed(1)}%\nReason: ${reasons.join(', ')}`, el);
+                    console.log(`[AdsFriendly AI] Auto-marked element: %o\nConfidence: ${(score * 100).toFixed(1)}%\nReason: ${reasons.join(', ')}`, el);
                 }
             });
             if (autoMarkedCount > 0) {
@@ -176,7 +176,7 @@
     const handleMouseMove = (e) => {
         if (!isActive) return;
         let el = document.elementFromPoint(e.clientX, e.clientY);
-        
+
         if (el && STRUCTURAL_TAGS.includes(el.tagName.toLowerCase())) {
             return;
         }
@@ -206,64 +206,49 @@
             return false;
         };
 
-        const isExclusiveAdWrapper = (container) => {
-            if (!container || container === document.body || container === document.documentElement) return false;
+        const isMeaningful = (node) => {
+            if (node.nodeType === Node.TEXT_NODE) return node.textContent.trim().length > 5;
+            if (node.nodeType !== Node.ELEMENT_NODE) return false;
+            const tag = node.tagName.toLowerCase();
+            if (['script', 'style', 'link', 'br', 'noscript', 'template'].includes(tag)) return false;
             
-            // Structural Guard inside wrapper check
-            if (STRUCTURAL_TAGS.includes(container.tagName.toLowerCase())) return false;
-
-            // Criteria: No significant plain text and meaningful kids are mostly ads/layout
-            const text = container.innerText.trim();
-            if (text.length > 150) return false; // Contains actual content
-            
-            const children = Array.from(container.children);
-            if (children.length === 0) return false;
-            
-            // If it has too many siblings that look like real content, it's likely part of a layout, not an isolated ad
-            if (container.parentElement && container.parentElement.children.length > 5) {
-                const siblings = Array.from(container.parentElement.children).filter(s => s !== container);
-                const contentSiblings = siblings.filter(s => s.innerText.trim().length > 50);
-                if (contentSiblings.length > 2) return false; 
-            }
-
-            return children.every(child => isAdRelated(child) || isExclusiveAdWrapper(child));
+            const rect = node.getBoundingClientRect();
+            return rect.width > 2 && rect.height > 2;
         };
 
-        const promoteToWrapper = (curr, depth = 0) => {
-            if (!curr || !curr.parentElement || curr.parentElement === document.body || depth > 3) return curr;
+        const promoteToWrapper = (curr) => {
+            if (!curr || !curr.parentElement || curr.parentElement === document.body) return curr;
             const parent = curr.parentElement;
 
-            // Structural Guard: Never promote to main page structures
+            // 1. Structural Stop: Never eat major landmarks
             if (STRUCTURAL_TAGS.includes(parent.tagName.toLowerCase())) return curr;
 
-            if (isExclusiveAdWrapper(parent)) {
-                const rect = parent.getBoundingClientRect();
-                // Safety: Don't promote if it covers too much area automatically
-                if (rect.width * rect.height < (window.innerWidth * window.innerHeight * 0.25)) {
-                    return promoteToWrapper(parent, depth + 1);
-                }
-            }
-            return curr;
+            // 2. Sibling Check: Does parent contain ONLY this child (or irrelevant siblings)?
+            const visualSiblings = Array.from(parent.childNodes).filter(node => node !== curr && isMeaningful(node));
+            
+            // If parent has meaningful other content, stop here.
+            if (visualSiblings.length > 0) return curr;
+
+            // 3. Area Check: Don't promote if it covers too much area (>40%)
+            const rect = parent.getBoundingClientRect();
+            if (rect.width * rect.height > (window.innerWidth * window.innerHeight * 0.4)) return curr;
+
+            // Recursive climb
+            return promoteToWrapper(parent);
         };
 
-        // Ad-ID Stop Point: If current element is a clear ad container, don't climb higher
-        const adKeywords = /ad|quangcao|catfish|banner|pop|promo/i;
-        if (target && target.id && adKeywords.test(target.id)) {
-            // target remains target
-        } else {
-            target = promoteToWrapper(target);
-        }
+        target = promoteToWrapper(target);
 
         hoveredElement = target;
         const selector = generateSelector(target);
         const validation = validateSelector(selector);
-        
+
         const rect = target.getBoundingClientRect();
         activeOverlay.style.top = rect.top + 'px';
         activeOverlay.style.left = rect.left + 'px';
         activeOverlay.style.width = rect.width + 'px';
         activeOverlay.style.height = rect.height + 'px';
-        
+
         if (!validation.valid) {
             activeOverlay.style.background = 'rgba(239, 68, 68, 0.3)';
             activeOverlay.style.outlineColor = '#ef4444';
@@ -279,17 +264,17 @@
         const panelHeight = controlPanel.offsetHeight || 50;
         let panelTop = rect.top - panelHeight - 12;
         if (panelTop < 12) panelTop = rect.bottom + 12;
-        
+
         controlPanel.style.top = panelTop + 'px';
         controlPanel.style.left = Math.max(12, Math.min(window.innerWidth - controlPanel.offsetWidth - 12, rect.left)) + 'px';
     };
 
     const handleClick = (e) => {
         if (!isActive || !hoveredElement) return;
-        
+
         const selector = generateSelector(hoveredElement);
         const validation = validateSelector(selector);
-        
+
         if (!validation.valid) {
             console.warn('[AdsFriendly Picker] Blocked dangerous selection:', validation.reason);
             return;
@@ -298,18 +283,18 @@
         e.preventDefault();
         e.stopPropagation();
 
-        const el = document.elementFromPoint(e.clientX, e.clientY);
-        if (el && !selectedItems.some(item => item.element === el)) {
-            markElement(el, selector);
+        // Fix: Always use the hoveredElement (the blue area) instead of re-calculating at point
+        if (!selectedItems.some(item => item.element === hoveredElement)) {
+            markElement(hoveredElement, selector);
         }
     };
 
     const markElement = (el, selector) => {
-        if (!selector) return; 
+        if (!selector) return;
 
         const fingerprint = generateFingerprint(el);
         selectedItems.push({ element: el, selector, fingerprint });
-        
+
         const rect = el.getBoundingClientRect();
         const pOverlay = document.createElement('div');
         pOverlay.style.cssText = `
@@ -326,7 +311,7 @@
         `;
         document.body.appendChild(pOverlay);
         overlays.push(pOverlay);
-        
+
         updatePanelUI();
     };
 
@@ -349,10 +334,9 @@
         if (!userCustomRules[hostname]) userCustomRules[hostname] = [];
 
         let addedCount = 0;
+        let learnedDomains = new Set();
         const resetData = siteResetHistory[hostname];
-        // Persistent check: If a reset exists, we learn from it regardless of time 
-        // (The 30-day limit is handled by the background cleanup task)
-        const isCorrectionLoop = !!resetData; 
+        const isCorrectionLoop = !!resetData;
 
         selectedItems.forEach(item => {
             const validation = validateSelector(item.selector);
@@ -361,12 +345,23 @@
                 return;
             }
 
+            // Neural Link Extraction: Find all unique domains to learn
+            const links = item.element.tagName === 'A' ? [item.element] : Array.from(item.element.querySelectorAll('a'));
+            links.forEach(link => {
+                try {
+                    const url = new URL(link.href);
+                    if (url.hostname && url.hostname !== hostname && !url.hostname.includes('javascript:')) {
+                        learnedDomains.add(url.hostname.replace('www.', ''));
+                    }
+                } catch (e) { }
+            });
+
             let finalSelector = item.selector;
 
             // Recursive Intelligence v2.3: Differential Analysis
             if (isCorrectionLoop && resetData.oldRules) {
                 console.log(`%c[AdsFriendly AI] Differential Analysis triggered for ${hostname}`, "color: #a855f7; font-weight: bold;");
-                
+
                 // Compare new fingerprint with old failed rules to find the most discriminative feature
                 resetData.oldRules.forEach(oldRule => {
                     const oldF = typeof oldRule === 'string' ? null : oldRule.fingerprint;
@@ -396,8 +391,8 @@
             if (isCorrectionLoop) {
                 console.log(`%c[AdsFriendly AI] Correction learned: ${finalSelector}`, "color: #10b981; font-weight: bold;");
             }
-            
-            const existingIndex = userCustomRules[hostname].findIndex(r => 
+
+            const existingIndex = userCustomRules[hostname].findIndex(r =>
                 (typeof r === 'string' ? r === finalSelector : r.selector === finalSelector)
             );
 
@@ -411,16 +406,25 @@
 
         if (addedCount > 0) {
             await chrome.storage.local.set({ userCustomRules });
+            
+            // Broadcast learning to the Brain
+            if (learnedDomains.size > 0) {
+                chrome.runtime.sendMessage({ 
+                    type: 'LEARN_DOMAINS', 
+                    domains: Array.from(learnedDomains) 
+                });
+            }
+            
             chrome.runtime.sendMessage({ type: 'SYNC_LEARNING' });
         }
-        
+
         stopPicker();
     };
 
     const generateSelector = (el) => {
         const tag = el.tagName.toLowerCase();
         const structuralTags = ['div', 'span', 'p', 'a', 'li', 'ul', 'img', 'section', 'article', 'main', 'aside'];
-        
+
         const isSafeId = (id) => id && !GENERIC_CLASSES.some(gc => id.includes(gc)) && !/[0-9]{5,}/.test(id);
         const isSafeClass = (cls) => cls && typeof cls === 'string' && cls.split(/\s+/).some(c => c && !GENERIC_CLASSES.includes(c) && !/[0-9]{5,}/.test(c));
 
@@ -439,16 +443,16 @@
         const adKeywords = ['quangcao', 'catfish', 'ads', 'popup', 'banner'];
         if (el.id && adKeywords.some(k => el.id.toLowerCase().includes(k))) return `#${el.id}`;
         if (isSafeId(el.id)) return `#${el.id}`;
-        
+
         // 2. Try to build a parent-child relationship for better specificity
         const buildPath = (curr, depth = 0) => {
             if (!curr || curr === document.body || depth > 2) return '';
-            
+
             let part = curr.tagName.toLowerCase();
             // If parent has a very specific ad-related ID, stop there
             if (curr.id && adKeywords.some(k => curr.id.toLowerCase().includes(k))) return `#${curr.id} ${part}`.trim();
             if (isSafeId(curr.id)) return `#${curr.id} ${part}`.trim();
-            
+
             if (curr.className && typeof curr.className === 'string') {
                 const validClass = curr.className.split(/\s+/).find(c => c && !GENERIC_CLASSES.includes(c) && !/[0-9]{5,}/.test(c));
                 if (validClass) part = `.${validClass}`;
@@ -459,7 +463,7 @@
         };
 
         const path = buildPath(el);
-        
+
         // 3. Last resort fallback (only for non-structural tags or very small elements)
         if (!path || structuralTags.includes(path.split(' > ').pop())) {
             const rect = el.getBoundingClientRect();
@@ -474,21 +478,21 @@
 
     const validateSelector = (selector) => {
         if (!selector) return { valid: false, reason: "No selector generated" };
-        
+
         try {
             const matches = document.querySelectorAll(selector);
             if (matches.length > 5) return { valid: false, reason: `Matches too many elements (${matches.length})` };
-            
+
             let totalArea = 0;
             const viewportArea = window.innerWidth * window.innerHeight;
-            
+
             matches.forEach(m => {
                 const r = m.getBoundingClientRect();
                 totalArea += r.width * r.height;
             });
 
             if (totalArea > viewportArea * 0.35) return { valid: false, reason: "Selector area is too large (>35%)" };
-            
+
             return { valid: true };
         } catch (e) {
             return { valid: false, reason: "Invalid selector logic" };
@@ -510,7 +514,7 @@
                 if (url.hostname !== window.location.hostname) {
                     linkDomain = url.hostname.split('.').slice(-2).join('.');
                 }
-            } catch (e) {}
+            } catch (e) { }
         }
 
         // Recursive Intelligence v2.3: Deep Attributes
@@ -548,7 +552,7 @@
         if (newF.className !== oldF.className) return { type: 'class', value: newF.className };
         // 3. Child Count Delta
         if (newF.childCount !== oldF.childCount) return { type: 'childCount', value: newF.childCount };
-        
+
         return null;
     };
 
