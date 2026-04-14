@@ -190,24 +190,24 @@
 
     const updateSelection = (el) => {
         hoveredElement = el;
-        const rect = el.getBoundingClientRect();
+        const selector = generateSelector(el);
+        const validation = validateSelector(selector);
         
-        const area = rect.width * rect.height;
-        const viewportArea = window.innerWidth * window.innerHeight;
-        const isDangerous = area > viewportArea * 0.75;
-
+        const rect = el.getBoundingClientRect();
         activeOverlay.style.top = rect.top + 'px';
         activeOverlay.style.left = rect.left + 'px';
         activeOverlay.style.width = rect.width + 'px';
         activeOverlay.style.height = rect.height + 'px';
         
-        if (isDangerous) {
+        if (!validation.valid) {
             activeOverlay.style.background = 'rgba(239, 68, 68, 0.3)';
             activeOverlay.style.outlineColor = '#ef4444';
-            updatePanelUI("Vùng chọn quá lớn (Rủi ro xóa toàn trang)");
+            activeOverlay.style.boxShadow = '0 0 20px rgba(239, 68, 68, 0.5)';
+            updatePanelUI(`⚠️ DANGEROUS: ${validation.reason}`);
         } else {
             activeOverlay.style.background = 'rgba(16, 185, 129, 0.2)';
             activeOverlay.style.outlineColor = '#10b981';
+            activeOverlay.style.boxShadow = '0 0 15px rgba(16, 185, 129, 0.4)';
             updatePanelUI();
         }
 
@@ -220,10 +220,13 @@
     };
 
     const handleClick = (e) => {
-        if (!isActive) return;
+        if (!isActive || !hoveredElement) return;
         
-        const rect = hoveredElement.getBoundingClientRect();
-        if (rect.width * rect.height > window.innerWidth * window.innerHeight * 0.75) {
+        const selector = generateSelector(hoveredElement);
+        const validation = validateSelector(selector);
+        
+        if (!validation.valid) {
+            console.warn('[AdsFriendly Picker] Blocked dangerous selection:', validation.reason);
             return;
         }
 
@@ -232,12 +235,11 @@
 
         const el = document.elementFromPoint(e.clientX, e.clientY);
         if (el && !selectedItems.some(item => item.element === el)) {
-            markElement(el);
+            markElement(el, selector);
         }
     };
 
-    const markElement = (el) => {
-        const selector = generateSelector(el);
+    const markElement = (el, selector) => {
         if (!selector) return; 
 
         const fingerprint = generateFingerprint(el);
@@ -276,44 +278,109 @@
         if (e.key === 'Enter' && selectedItems.length > 0) confirmAllZaps();
     };
 
+    const confirmAllZaps = async () => {
+        const hostname = window.location.hostname;
+        const { userCustomRules = {} } = await chrome.storage.local.get('userCustomRules');
+        if (!userCustomRules[hostname]) userCustomRules[hostname] = [];
+
+        let addedCount = 0;
+
+        selectedItems.forEach(item => {
+            // Final Safety check
+            const validation = validateSelector(item.selector);
+            if (!validation.valid) {
+                console.error('[AdsFriendly Picker] Skipping dangerous rule in Zap All:', item.selector, validation.reason);
+                return;
+            }
+
+            const ruleObject = {
+                selector: item.selector,
+                fingerprint: item.fingerprint,
+                timestamp: Date.now(),
+                timesZapped: 1
+            };
+            
+            const existingIndex = userCustomRules[hostname].findIndex(r => 
+                (typeof r === 'string' ? r === item.selector : r.selector === item.selector)
+            );
+
+            if (existingIndex > -1) userCustomRules[hostname][existingIndex] = ruleObject;
+            else userCustomRules[hostname].push(ruleObject);
+
+            item.element.style.opacity = '0';
+            item.element.style.pointerEvents = 'none';
+            addedCount++;
+        });
+
+        if (addedCount > 0) {
+            await chrome.storage.local.set({ userCustomRules });
+            chrome.runtime.sendMessage({ type: 'SYNC_LEARNING' });
+        }
+        
+        stopPicker();
+    };
+
     const generateSelector = (el) => {
         const tag = el.tagName.toLowerCase();
+        const structuralTags = ['div', 'span', 'p', 'a', 'li', 'ul', 'img', 'section', 'article', 'main', 'aside'];
         
-        if (el.id && !GENERIC_CLASSES.some(gc => el.id.includes(gc))) return `#${el.id}`;
+        const isSafeId = (id) => id && !GENERIC_CLASSES.some(gc => id.includes(gc)) && !/[0-9]{5,}/.test(id);
+        const isSafeClass = (cls) => cls && typeof cls === 'string' && cls.split(/\s+/).some(c => c && !GENERIC_CLASSES.includes(c) && !/[0-9]{5,}/.test(c));
+
+        // 1. Specific ID is best
+        if (isSafeId(el.id)) return `#${el.id}`;
         
-        const parentLink = el.closest('a');
-        if (parentLink && parentLink.href) {
-            try {
-                const url = new URL(parentLink.href);
-                const domain = url.hostname.split('.').slice(-2).join('.');
-                if (domain && domain.length > 4) {
-                    return `${tag}[href*="${domain}"], a[href*="${domain}"] ${tag}`;
-                }
-            } catch (e) {}
-        }
-
-        let current = el.parentElement;
-        let depth = 0;
-        while (current && current !== document.body && depth < 3) {
-            if (current.id && !GENERIC_CLASSES.some(gc => current.id.includes(gc))) {
-                return `#${current.id} ${tag}`;
+        // 2. Try to build a parent-child relationship for better specificity
+        const buildPath = (curr, depth = 0) => {
+            if (!curr || curr === document.body || depth > 2) return '';
+            
+            let part = curr.tagName.toLowerCase();
+            if (isSafeId(curr.id)) return `#${curr.id} ${part}`.trim();
+            
+            if (curr.className && typeof curr.className === 'string') {
+                const validClass = curr.className.split(/\s+/).find(c => c && !GENERIC_CLASSES.includes(c) && !/[0-9]{5,}/.test(c));
+                if (validClass) part = `.${validClass}`;
             }
-            if (current.className && typeof current.className === 'string') {
-                const pClasses = current.className.split(/\s+/).filter(c => c && !GENERIC_CLASSES.includes(c));
-                if (pClasses.length > 0) {
-                    return `.${pClasses[0]} ${tag}`;
-                }
+
+            const parentPart = buildPath(curr.parentElement, depth + 1);
+            return (parentPart ? parentPart + ' > ' : '') + part;
+        };
+
+        const path = buildPath(el);
+        
+        // 3. Last resort fallback (only for non-structural tags or very small elements)
+        if (!path || structuralTags.includes(path.split(' > ').pop())) {
+            const rect = el.getBoundingClientRect();
+            if (rect.width * rect.height > 10000 || structuralTags.includes(tag)) {
+                return null; // Too dangerous to use bare tag
             }
-            current = current.parentElement;
-            depth++;
+            return tag;
         }
 
-        const dangerousTags = ['div', 'span', 'p', 'a', 'li', 'ul', 'img', 'section'];
-        if (dangerousTags.includes(tag)) {
-            return null;
-        }
+        return path;
+    };
 
-        return tag;
+    const validateSelector = (selector) => {
+        if (!selector) return { valid: false, reason: "No selector generated" };
+        
+        try {
+            const matches = document.querySelectorAll(selector);
+            if (matches.length > 5) return { valid: false, reason: `Matches too many elements (${matches.length})` };
+            
+            let totalArea = 0;
+            const viewportArea = window.innerWidth * window.innerHeight;
+            
+            matches.forEach(m => {
+                const r = m.getBoundingClientRect();
+                totalArea += r.width * r.height;
+            });
+
+            if (totalArea > viewportArea * 0.35) return { valid: false, reason: "Selector area is too large (>35%)" };
+            
+            return { valid: true };
+        } catch (e) {
+            return { valid: false, reason: "Invalid selector logic" };
+        }
     };
 
     const generateFingerprint = (el) => {
