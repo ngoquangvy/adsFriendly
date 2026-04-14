@@ -49,8 +49,8 @@
     "priority": 1,
     "action": { "type": "block" },
     "condition": {
-      "urlFilter": "*sunwin*",
-      "resourceTypes": ["main_frame", "sub_frame", "image"]
+      "urlFilter": "*adnxs.com*",
+      "resourceTypes": ["script", "image", "sub_frame"]
     }
   },
   {
@@ -58,8 +58,8 @@
     "priority": 1,
     "action": { "type": "block" },
     "condition": {
-      "urlFilter": "*go88*",
-      "resourceTypes": ["main_frame", "sub_frame", "image"]
+      "urlFilter": "*taboola.com*",
+      "resourceTypes": ["script", "image", "sub_frame"]
     }
   },
   {
@@ -67,8 +67,8 @@
     "priority": 1,
     "action": { "type": "block" },
     "condition": {
-      "urlFilter": "*789bet*",
-      "resourceTypes": ["main_frame", "sub_frame", "image"]
+      "urlFilter": "*outbrain.com*",
+      "resourceTypes": ["script", "image", "sub_frame"]
     }
   },
   {
@@ -76,8 +76,8 @@
     "priority": 1,
     "action": { "type": "block" },
     "condition": {
-      "urlFilter": "*nhatvip*",
-      "resourceTypes": ["main_frame", "sub_frame", "image"]
+      "urlFilter": "*mgid.com*",
+      "resourceTypes": ["script", "image", "sub_frame"]
     }
   },
   {
@@ -85,17 +85,8 @@
     "priority": 1,
     "action": { "type": "block" },
     "condition": {
-      "urlFilter": "*6789x.site*",
-      "resourceTypes": ["main_frame", "sub_frame", "image", "script"]
-    }
-  },
-  {
-    "id": 11,
-    "priority": 1,
-    "action": { "type": "block" },
-    "condition": {
-      "urlFilter": "*hitclub*",
-      "resourceTypes": ["main_frame", "sub_frame", "image", "script"]
+      "urlFilter": "*yandex.ru/ads*",
+      "resourceTypes": ["script", "image", "sub_frame"]
     }
   }
 ]

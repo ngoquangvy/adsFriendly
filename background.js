@@ -276,11 +276,28 @@ async function toggleInPageBlocking(enabled) {
 // Auto-off: No longer used on startup to persist user choice
 // Reset ONLY on first installation if not set
 chrome.runtime.onInstalled.addListener(async () => {
-  const result = await chrome.storage.local.get(['friendlyMode', 'isEnabled']);
+  const result = await chrome.storage.local.get(['friendlyMode', 'isEnabled', 'globalAdPatterns']);
   
+  // Seed the "Basic Brain" (Global Ad Patterns) for Public Baseline v1.0
+  if (!result.globalAdPatterns || result.globalAdPatterns.length === 0) {
+    const baselineSeeds = [
+      { type: 'alt', value: 'Ad', confidence: 0.9 },
+      { type: 'alt', value: 'Advertisement', confidence: 0.9 },
+      { type: 'alt', value: 'Sponsored', confidence: 0.9 },
+      { type: 'alt', value: 'Promoted', confidence: 0.9 },
+      { type: 'title', value: 'Ads by Google', confidence: 1.0 },
+      { type: 'domain', value: 'taboola.com', confidence: 1.0 },
+      { type: 'domain', value: 'outbrain.com', confidence: 1.0 },
+      { type: 'domain', value: 'mgid.com', confidence: 1.0 },
+      { type: 'domain', value: 'adnxs.com', confidence: 1.0 }
+    ];
+    await chrome.storage.local.set({ globalAdPatterns: baselineSeeds });
+    console.log('[AdsFriendly AI] Basic Brain seeded with baseline patterns for public release.');
+  }
+
   if (result.friendlyMode === undefined) {
     await chrome.storage.local.set({ friendlyMode: true });
-    toggleInPageBlocking(false); // Friendly ON = Blocking OFF
+    toggleInPageBlocking(false); 
   }
   
   if (result.isEnabled === undefined) {
