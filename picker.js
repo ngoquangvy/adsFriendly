@@ -252,14 +252,25 @@
         return tag;
     };
 
-    const generateFingerprint = (el) => ({
-        tag: el.tagName.toLowerCase(),
-        className: el.className,
-        parentId: el.parentElement ? el.parentElement.id : null,
-        parentClass: el.parentElement ? el.parentElement.className : null,
-        alt: el.alt || null,
-        title: el.title || null
-    });
+    const generateFingerprint = (el) => {
+        // Data Cleaning: Strip "Noisy IDs" (random strings used by frameworks)
+        const cleanId = (id) => (id && !/(_[a-z0-9]{1,3}_|[0-9]{5,})/.test(id)) ? id : null;
+        
+        // Data Cleaning: Normalize classes (remove dynamic states)
+        const cleanClass = (cls) => {
+            if (!cls || typeof cls !== 'string') return null;
+            return cls.split(/\s+/).filter(c => !/(active|hover|focus|selected|clicked)/.test(c)).join(' ');
+        };
+
+        return {
+            tag: el.tagName.toLowerCase(),
+            className: cleanClass(el.className),
+            parentId: el.parentElement ? cleanId(el.parentElement.id) : null,
+            parentClass: el.parentElement ? cleanClass(el.parentElement.className) : null,
+            alt: el.alt || null,
+            title: el.title || null
+        };
+    };
 
     const confirmAllZaps = async () => {
         const hostname = window.location.hostname;

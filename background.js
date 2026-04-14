@@ -29,6 +29,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
+const PROTECTED_KEYWORDS = ['messenger', 'chat', 'inbox', 'cart', 'checkout', 'search', 'account', 'login', 'social', 'notification'];
+
 /**
  * The 'Brain': Aggregates local custom rules into global patterns
  */
@@ -40,8 +42,16 @@ async function synthesizeGlobalPatterns() {
     Object.values(userCustomRules).flat().forEach(rule => {
         if (rule && rule.fingerprint) {
             const { alt, title } = rule.fingerprint;
-            if (alt && alt.length > 2) attrFrequency[`alt:${alt}`] = (attrFrequency[`alt:${alt}`] || 0) + 1;
-            if (title && title.length > 2) attrFrequency[`title:${title}`] = (attrFrequency[`title:${title}`] || 0) + 1;
+            
+            // AI Guardrail: Only learn if it doesn't contain protected keywords
+            const isProtected = (val) => PROTECTED_KEYWORDS.some(kw => val.toLowerCase().includes(kw));
+
+            if (alt && alt.length > 2 && !isProtected(alt)) {
+                attrFrequency[`alt:${alt}`] = (attrFrequency[`alt:${alt}`] || 0) + 1;
+            }
+            if (title && title.length > 2 && !isProtected(title)) {
+                attrFrequency[`title:${title}`] = (attrFrequency[`title:${title}`] || 0) + 1;
+            }
         }
     });
 

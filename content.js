@@ -155,6 +155,17 @@ setInterval(async () => {
                         if (pattern.type === 'title' && el.title === pattern.value) score += pattern.confidence;
                     });
 
+                    // Same-Origin Shield: If it leads to the same domain, it's likely a legit UI feature
+                    const link = el.closest('a');
+                    if (link && link.href) {
+                        try {
+                            const url = new URL(link.href);
+                            if (url.hostname === window.location.hostname) {
+                                score -= 1.0; // Penalty for same-domain links
+                            }
+                        } catch (e) {}
+                    }
+
                     if (score >= 0.7) {
                         BLOCKING_STRATEGIES.STEALTH(el);
                     }
