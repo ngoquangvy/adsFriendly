@@ -6,6 +6,12 @@ const VideoSurgeon = {
     activeAds: new Set(),
     lastClickTime: 0,
     isInitialized: false,
+    
+    // v2.8.20: Session Logic Properties
+    isAdSessionActive: false,
+    trackedAdElement: null,
+    adMonitorInterval: null,
+    sessionStartTime: 0,
 
     async init() {
         if (this.isInitialized) return;
@@ -143,7 +149,7 @@ const VideoSurgeon = {
         try {
             const hostname = window.location.hostname;
             const src = video.currentSrc || video.src || '';
-            
+
             // EMERGENCY SHIELD (v2.8.13): Long content protection
             // If it's a movie (> 5 mins), it is IMMUNE to ad-acceleration logic.
             if (video.duration > 300) {
@@ -153,20 +159,14 @@ const VideoSurgeon = {
             }
 
             const player = video.closest('#movie_player, .html5-video-player, #preroll-player, [class*="jw-flag-ads"], [class*="ad-"]');
-            
-            // v2.8.11: Fetch Source Trust from the Brain
-            const sourceDomain = src ? new URL(src).hostname : 'unknown';
-            const sourceStats = await new Promise(resolve => {
-                chrome.runtime.sendMessage({ type: 'GET_VIDEO_SOURCE_STATS' }, resolve);
-            });
+            const sourceDomain = this.getSourceDomain(src);
+            const sourceStats = await this.getVideoSourceStats();
+            const skipBtn = this.findSkipButton(player || document);
 
             // 1. First Principle: Source Disparity (Domain check)
             const isExternal = src && !src.startsWith('blob:') && !src.includes(hostname);
             const isShort = video.duration > 0 && video.duration < 65;
-            
-            // 2. Interaction Principle: Search for Skip UI specifically in proximity
-            const skipBtn = document.querySelector('#preroll-player-skip, .jw-skip, .ytp-skip-ad-button, .ytp-ad-skip-button');
-            
+
             let isConfirmedCountdown = false;
             if (player) {
                 const playerText = player.innerText;
@@ -174,31 +174,43 @@ const VideoSurgeon = {
                 isConfirmedCountdown = /((skip|bỏ qua).*\d)|(\d.*(skip|bỏ qua))|skip|bỏ qua/i.test(playerText);
             }
 
-            // 3. Absolute Justice Logic: Behavior Supremacy
-            const adHeuristic = (isConfirmedCountdown && isExternal) || (isExternal && isShort);
-            
-            // Integrate Source History (v2.8.12: Neural Fusion)
-            let historyPenalty = 0;
-            if (sourceStats && sourceStats[sourceDomain]) {
-                const stats = sourceStats[sourceDomain];
-                if (stats.adCount > (stats.contentCount || 0) * 2) historyPenalty = 0.4;
-                if (stats.contentCount > (stats.adCount || 0) * 2) historyPenalty = -0.4;
+            const playerStateText = player ? `${player.id || ''} ${player.className || ''}`.toLowerCase() : '';
+            const playerLooksLikeAd = /preroll|ad-showing|jw-flag-ads|ad-break|ad-/.test(playerStateText);
+            const isNearEnd = video.duration > 0 && Number.isFinite(video.duration) && video.currentTime >= (video.duration - 0.5);
+            if (video.dataset.accelerated && isNearEnd && !skipBtn && !playerLooksLikeAd && !isConfirmedCountdown) {
+                this.restore(video);
+                delete video.dataset.accelerated;
+                return;
             }
 
-            const isDefinitelyAd = skipBtn || isConfirmedCountdown || (adHeuristic) || (player && player.id.includes('preroll'));
+            // 3. Absolute Justice Logic: Behavior Supremacy
+            const adHeuristic = (isConfirmedCountdown && isExternal) || (isExternal && isShort);
+            const heuristicScore = this.calculateAdScore(video);
+            let historyBias = 0;
+            if (sourceStats && sourceStats[sourceDomain]) {
+                const stats = sourceStats[sourceDomain];
+                if (stats.adCount > (stats.contentCount || 0) * 2) historyBias = 0.4;
+                if (stats.contentCount > (stats.adCount || 0) * 2) historyBias = -0.4;
+            }
+            const finalHeuristicScore = heuristicScore + historyBias;
+
+            const isDefinitelyAd = Boolean(
+                skipBtn ||
+                isConfirmedCountdown ||
+                adHeuristic ||
+                (player && player.id.includes('preroll')) ||
+                finalHeuristicScore >= 0.8
+            );
 
             if (isDefinitelyAd) {
-                if (!video.dataset.accelerated) {
-                    console.log('%c[AdsFriendly AI] Neutralizing confirmed ad from:', sourceDomain);
-                    this.notifySpy(true);
-                    this.accelerate(video);
-                    video.dataset.accelerated = 'true';
-                    
-                    // Learn as we go
-                    chrome.runtime.sendMessage({ type: 'REPORT_VIDEO_DECISION', data: { domain: sourceDomain, type: 'AD' } });
+                // v2.8.20: Optimized Ad Session Entry
+                if (!this.isAdSessionActive || (this.trackedAdElement !== video && video.duration < 65)) {
+                    this.startAdSession(video);
                 }
                 this.rely(video);
-            } else {
+            } else if (this.isAdSessionActive && this.trackedAdElement === video) {
+                this.endAdSession('Heuristic: No longer identified as ad');
+            } else if (!this.isAdSessionActive) {
                 this.restore(video);
                 
                 // If it played for a while and wasn't flagged, it's content
@@ -206,12 +218,162 @@ const VideoSurgeon = {
                     chrome.runtime.sendMessage({ type: 'REPORT_VIDEO_DECISION', data: { domain: sourceDomain, type: 'CONTENT' } });
                     video.dataset.reportedContent = 'true';
                 }
-                delete video.dataset.accelerated;
             }
         } catch (err) {
             console.error('[AdsFriendly AI] Critical Surgeon Error - Recovering Speed:', err);
-            this.restore(video);
+            this.endAdSession('Critical execution error');
         }
+    },
+
+    // v2.8.20: Unified Ad Session Orchestration
+    startAdSession(video) {
+        if (this.isAdSessionActive && this.trackedAdElement === video) return;
+        
+        // If switching from another ad video, end previous first
+        if (this.isAdSessionActive) {
+            this.endAdSession('Context switch to new ad element');
+        }
+
+        console.log('%c[AdsFriendly AI] Ad Session Started:', 'color: #10b981; font-weight: bold;', video.src || 'Dynamic Stream');
+        
+        this.isAdSessionActive = true;
+        this.trackedAdElement = video;
+        this.sessionStartTime = Date.now();
+        
+        // 1. Mark and Prepare
+        video.dataset.adsfriendlyAdActive = '1';
+        video.dataset.adsfriendlyPrevMuted = video.muted ? '1' : '0';
+        
+        // 2. Immediate Neutralization
+        this.notifySpy(true);
+        this.accelerate(video);
+
+        // 3. Persistent Monitoring
+        if (this.adMonitorInterval) clearInterval(this.adMonitorInterval);
+        this.adMonitorInterval = setInterval(() => this.monitorAdSession(), 200);
+    },
+
+    endAdSession(reason) {
+        if (!this.isAdSessionActive) return;
+        
+        console.log(`%c[AdsFriendly AI] Ad Session Ended: ${reason}`, 'color: #f59e0b; font-weight: bold;');
+        
+        const video = this.trackedAdElement;
+        
+        // 1. Clear Tracking
+        this.isAdSessionActive = false;
+        this.trackedAdElement = null;
+        if (this.adMonitorInterval) {
+            clearInterval(this.adMonitorInterval);
+            this.adMonitorInterval = null;
+        }
+
+        // 2. Global Stabilization
+        this.notifySpy(false);
+        if (this.overlay) this.overlay.style.display = 'none';
+
+        // 3. Element Restoration (if still in DOM)
+        if (video) {
+            this.restore(video);
+            delete video.dataset.accelerated;
+            delete video.dataset.adsfriendlyAdActive;
+            delete video.dataset.adsfriendlyPrevMuted;
+            
+            // Auto-resume content
+            if (video.paused && video.duration > 300) {
+                video.play().catch(() => {});
+            }
+        }
+
+        // Universal cleanup scan
+        this.activeAds.clear();
+        this.lastClickTime = 0;
+    },
+
+    monitorAdSession() {
+        if (!this.isAdSessionActive || !this.trackedAdElement) return;
+
+        const video = this.trackedAdElement;
+
+        // Condition 1: Element detached from DOM
+        if (!document.contains(video)) {
+            this.endAdSession('Element removed from DOM');
+            return;
+        }
+
+        // Condition 2: Check for Player State disappearance
+        const player = video.closest('#movie_player, .html5-video-player, #preroll-player, [class*="jw-flag-ads"], [class*="ad-"]');
+        const skipBtn = this.findSkipButton(player || document);
+        
+        const playerStateText = player ? `${player.id || ''} ${player.className || ''}`.toLowerCase() : '';
+        const playerLooksLikeAd = /preroll|ad-showing|jw-flag-ads|ad-break|ad-/.test(playerStateText);
+
+        // Matches countdowns specifically (v2.8.13)
+        let hasAdText = false;
+        if (player) {
+            hasAdText = /((skip|bỏ qua).*\d)|(\d.*(skip|bỏ qua))|skip|bỏ qua/i.test(player.innerText);
+        }
+
+        // Decision: If all ad indicators are gone, end session
+        // Note: We ignore short duration during an active session unless UI markers are gone
+        if (skipBtn) {
+            // v2.8.21: Instant Skip Impulse (Accelerated loop)
+            this.autoSkip();
+        } else if (!playerLooksLikeAd && !hasAdText) {
+            // Safety: Give it a moment to confirm (at least 1s in session)
+            if (Date.now() - this.sessionStartTime > 1000) {
+                this.endAdSession('Ad UI markers disappeared');
+            }
+        }
+
+        // Condition 3: Video reached the end
+        if (video.ended || video.currentTime >= (video.duration - 0.2)) {
+            this.endAdSession('Ad video reached the end');
+        }
+    },
+
+    getSourceDomain(src) {
+        if (!src) return 'unknown';
+        try {
+            return new URL(src, window.location.href).hostname || 'unknown';
+        } catch (e) {
+            return 'unknown';
+        }
+    },
+
+    async getVideoSourceStats() {
+        if (!chrome.runtime || !chrome.runtime.id) return {};
+        try {
+            return await new Promise(resolve => {
+                chrome.runtime.sendMessage({ type: 'GET_VIDEO_SOURCE_STATS' }, response => {
+                    resolve(response || {});
+                });
+            });
+        } catch (e) {
+            return {};
+        }
+    },
+
+    findSkipButton(root) {
+        const selectors = [
+            '#preroll-player-skip',
+            '.jw-skip',
+            '.jw-skip-button',
+            '.ytp-skip-ad-button',
+            '.ytp-ad-skip-button',
+            '.ytp-ad-skip-button-modern',
+            '.videoAdUiSkipButton'
+        ];
+
+        for (const sel of selectors) {
+            const btn = this.pierceShadow(root || document, sel) || (root !== document ? this.pierceShadow(document, sel) : null);
+            if (!btn) continue;
+            const style = getComputedStyle(btn);
+            if (style.display === 'none' || style.visibility === 'hidden' || btn.getClientRects().length === 0) continue;
+            return btn;
+        }
+
+        return null;
     },
 
     rely(video) {
@@ -284,7 +446,7 @@ const VideoSurgeon = {
         this.notifyBrainOfAdState(video);
 
         // Show Ninja Overlay over the player
-        if (this.overlay) {
+        if (false && this.overlay) {
             const player = document.getElementById('movie_player') || video.parentElement;
             if (player && !player.contains(this.overlay)) {
                 player.appendChild(this.overlay);
@@ -321,6 +483,8 @@ const VideoSurgeon = {
     autoSkip() {
         const skipSelectors = [
             ...this.learnedSelectors,      // Prioritize locally learned patterns
+            '.jw-skip',
+            '.jw-skip-button',
             '.ytp-skip-ad-button',         // Modern YouTube
             '[id^="skip-button:"]',        // Dynamic colon-IDs (e.g., skip-button:q)
             '.ytp-ad-skip-button',         // Legacy YouTube
@@ -345,25 +509,27 @@ const VideoSurgeon = {
             }
         }
 
-        const tryUltimateClick = (btn, method, isDiscovery = false) => {
-            const style = getComputedStyle(btn);
-            const isVisible = style.display !== 'none' && style.visibility !== 'hidden' && btn.getClientRects().length > 0;
+    const tryUltimateClick = (btn, method, isDiscovery = false) => {
+        const style = getComputedStyle(btn);
+        const isVisible = style.display !== 'none' && style.visibility !== 'hidden' && btn.getClientRects().length > 0;
+        const isDisabled = btn.disabled || btn.getAttribute('aria-disabled') === 'true' || btn.classList.contains('disabled');
 
-            if (isVisible) {
-                // Click Throttling: Only click once every 2 seconds
-                const now = Date.now();
-                if (now - this.lastClickTime < 2000) return true;
-                this.lastClickTime = now;
+        if (isVisible && !isDisabled) {
+            // Click Throttling (v2.8.22): Optimized to 400ms for high-frequency environments
+            const now = Date.now();
+            if (now - this.lastClickTime < 400) return true; // Already handled recently
+            
+            this.lastClickTime = now; // Set ONLY when we are actually proceeding to dispatch
 
-                if (isDiscovery) {
-                    this.verifyAndLearn(btn);
-                }
-
-                this.dispatchHighFidelityClick(btn, method);
-                return true;
+            if (isDiscovery && typeof this.verifyAndLearn === 'function') {
+                this.verifyAndLearn(btn);
             }
-            return false;
-        };
+
+            this.dispatchHighFidelityClick(btn, method);
+            return true;
+        }
+        return false;
+    };
 
         // 1. Selector search (Ordered by Trust + Shadow Piercing)
         for (const sel of skipSelectors) {

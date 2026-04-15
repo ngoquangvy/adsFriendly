@@ -14,9 +14,37 @@
     let userVolume = 100;
     let userWasMuted = false;
     let hammerInterval = null;
+    const videoSnapshots = new WeakMap();
 
     function getTrackedAdVideos() {
         return Array.from(document.querySelectorAll('video[data-adsfriendly-ad-active="1"]'));
+    }
+
+    // v2.8.14: Smart Audio Memory (Respect user preference)
+    function snapshotAudioState() {
+        document.querySelectorAll('video').forEach(v => {
+            // Only snapshot non-ad videos (likely the content/main video)
+            if (!v.dataset.adsfriendlyAdActive) {
+                videoSnapshots.set(v, {
+                    muted: v.muted,
+                    volume: v.volume
+                });
+            }
+        });
+    }
+
+    function restoreAudioState() {
+        document.querySelectorAll('video').forEach(v => {
+            const snap = videoSnapshots.get(v);
+            if (snap) {
+                // Restoration Principle: Only unmute if it was UNMUTED by the user, but is now MUTED (likely by us/site)
+                if (snap.muted === false && v.muted === true) {
+                    console.log('[AdsFriendly Spy] Smart Audio: Restoring unmuted state for content video.');
+                    v.muted = false;
+                    v.volume = snap.volume;
+                }
+            }
+        });
     }
 
     // 1. Networking Interception (Fetch)
@@ -148,6 +176,9 @@
                         }
                     }
                     
+                    // v2.8.14: Take snapshot of all video states before hammering
+                    snapshotAudioState();
+
                     // PERSISTENT SPEED HAMMER: 100ms Frequency
                     if (!hammerInterval) {
                         hammerInterval = originalInterval(() => {
@@ -193,46 +224,34 @@
                         hammerInterval = null;
                     }
 
-                    // Universal Restoration (v2.8.12): Generic <video> tags
-                    const allVideos = Array.from(document.querySelectorAll('video[data-adsfriendly-spy-touched="1"], video[data-adsfriendly-ad-active="1"]'));
-                    allVideos.forEach(v => {
-                        try {
+                    // v2.8.14: Recovery Pulse (Restore audio iteratively over 1s)
+                    const pulseRestore = () => {
+                        if (isAdMode) return;
+                        
+                        // 1. Restore generic videos based on snapshot (Smart Recovery)
+                        restoreAudioState();
+
+                        // 2. Fallback for videos we touched directly
+                        document.querySelectorAll('video[data-adsfriendly-spy-touched="1"], video[data-adsfriendly-ad-active="1"]').forEach(v => {
                             if (v.playbackRate === 16) v.playbackRate = 1.0;
                             v.muted = v.dataset.adsfriendlyPrevMuted === '1';
                             delete v.dataset.adsfriendlySpyTouched;
                             delete v.dataset.adsfriendlyPrevMuted;
-                        } catch (e) {}
-                    });
+                        });
 
-                    if (player) {
-                        try {
-                            if (!userWasMuted && typeof player.unMute === 'function') player.unMute();
-                            if (userWasMuted && typeof player.mute === 'function') player.mute();
-                            if (typeof player.setPlaybackRate === 'function') player.setPlaybackRate(1);
-                            if (typeof player.setVolume === 'function') player.setVolume(userVolume);
-                            if (typeof player.playVideo === 'function') player.playVideo();
-
-                            // SAFETY: Late cleanup in 250ms to catch race conditions
-                            originalTimeout(() => {
-                                if (!isAdMode && player) {
-                                    if (!userWasMuted && typeof player.unMute === 'function') player.unMute();
-                                    if (userWasMuted && typeof player.mute === 'function') player.mute();
-                                    if (typeof player.setPlaybackRate === 'function') player.setPlaybackRate(1);
-                                    if (typeof player.setVolume === 'function') player.setVolume(userVolume);
-                                    
-                                    // Final check for all videos
-                                    document.querySelectorAll('video[data-adsfriendly-spy-touched="1"], video[data-adsfriendly-ad-active="1"]').forEach(v => {
-                                        if (v.playbackRate === 16) v.playbackRate = 1.0;
-                                        v.muted = v.dataset.adsfriendlyPrevMuted === '1';
-                                        delete v.dataset.adsfriendlySpyTouched;
-                                        delete v.dataset.adsfriendlyPrevMuted;
-                                    });
-                                }
-                            }, 250);
-                        } catch (e) {
-                            console.error('[AdsFriendly Spy] Restoration failed:', e);
+                        // 3. YouTube API Restoration
+                        if (player) {
+                            try {
+                                if (!userWasMuted && typeof player.unMute === 'function') player.unMute();
+                                if (userWasMuted && typeof player.mute === 'function') player.mute();
+                                if (typeof player.setPlaybackRate === 'function') player.setPlaybackRate(1);
+                                if (typeof player.setVolume === 'function') player.setVolume(userVolume);
+                            } catch (e) {}
                         }
-                    }
+                    };
+
+                    // Execute pulse at 0ms, 100ms, 300ms, 600ms, 1000ms
+                    [0, 100, 300, 600, 1000].forEach(delay => originalTimeout(pulseRestore, delay));
                 }
             }
         }

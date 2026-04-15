@@ -428,34 +428,39 @@
         const isSafeId = (id) => id && !GENERIC_CLASSES.some(gc => id.includes(gc)) && !/[0-9]{5,}/.test(id);
         const isSafeClass = (cls) => cls && typeof cls === 'string' && cls.split(/\s+/).some(c => c && !GENERIC_CLASSES.includes(c) && !/[0-9]{5,}/.test(c));
 
-        // 0. Specialized Ad-Close Button Intelligence (NEW)
-        if (tag === 'a' && el.href && el.href.includes('javascript:')) {
-            if (isSafeId(el.id)) return `#${el.id}`;
-            if (el.parentElement && isSafeId(el.parentElement.id)) return `#${el.parentElement.id} > ${tag}`;
-            // If it's a specific close function like 'an_catfish'
-            const jsMatch = el.href.match(/javascript:([a-zA-Z0-9_]+)/);
-            if (jsMatch && jsMatch[1].length > 3) {
-                return `${tag}[href*="${jsMatch[1]}"]`;
+        // 0. Attribute Intelligence (v2.8.15: Identification by essence)
+        if (tag === 'img' && el.src) {
+            const srcMatch = el.src.split('/').pop().split('?')[0];
+            if (srcMatch && srcMatch.length > 5 && !/[0-9]{8,}/.test(srcMatch)) {
+                return `img[src*="${srcMatch}"]`;
             }
         }
+        if (tag === 'a' && el.href && !el.href.startsWith('javascript:') && !el.href.startsWith('#')) {
+            try {
+                const url = new URL(el.href);
+                if (url.hostname !== window.location.hostname) {
+                    const domainPart = url.hostname.split('.').slice(-2).join('.');
+                    return `a[href*="${domainPart}"]`;
+                }
+            } catch (e) {}
+        }
 
-        // 1. Specific ID is best (Special check for ad-related IDs)
-        const adKeywords = ['quangcao', 'catfish', 'ads', 'popup', 'banner'];
+        // 1. Specific ID Intelligence
+        const adKeywords = ['quangcao', 'catfish', 'ads', 'popup', 'banner', 'close', 'hide'];
         if (el.id && adKeywords.some(k => el.id.toLowerCase().includes(k))) return `#${el.id}`;
         if (isSafeId(el.id)) return `#${el.id}`;
 
-        // 2. Try to build a parent-child relationship for better specificity
+        // 2. Structural Path with Class Intelligence
         const buildPath = (curr, depth = 0) => {
-            if (!curr || curr === document.body || depth > 2) return '';
+            if (!curr || curr === document.body || depth > 3) return '';
 
             let part = curr.tagName.toLowerCase();
-            // If parent has a very specific ad-related ID, stop there
             if (curr.id && adKeywords.some(k => curr.id.toLowerCase().includes(k))) return `#${curr.id} ${part}`.trim();
             if (isSafeId(curr.id)) return `#${curr.id} ${part}`.trim();
 
             if (curr.className && typeof curr.className === 'string') {
                 const validClass = curr.className.split(/\s+/).find(c => c && !GENERIC_CLASSES.includes(c) && !/[0-9]{5,}/.test(c));
-                if (validClass) part = `.${validClass}`;
+                if (validClass) part = `${curr.tagName.toLowerCase()}.${validClass}`;
             }
 
             const parentPart = buildPath(curr.parentElement, depth + 1);
@@ -464,11 +469,15 @@
 
         const path = buildPath(el);
 
-        // 3. Last resort fallback (only for non-structural tags or very small elements)
+        // 3. Safety Fallback (Refined v2.8.15)
         if (!path || structuralTags.includes(path.split(' > ').pop())) {
             const rect = el.getBoundingClientRect();
-            if (rect.width * rect.height > 10000 || structuralTags.includes(tag)) {
-                return null; // Too dangerous to use bare tag
+            // If it's a structural tag but has a specific ad-like attribute, it's SAFE
+            if (tag === 'iframe' && el.src) return 'iframe[src*="' + el.src.split('/')[2] + '"]';
+            
+            // Dangerous Block: Selection too generic for a large area
+            if (rect.width * rect.height > 15000 || structuralTags.includes(tag)) {
+                return null; 
             }
             return tag;
         }
