@@ -7,12 +7,17 @@
 
     const originalFetch = window.fetch;
     const originalXHR = XMLHttpRequest.prototype.send;
-    const originalTimeout = window.setTimeout;
-    const originalInterval = window.setInterval;
+    const originalTimeout = window.setTimeout.bind(window);
+    const originalInterval = window.setInterval.bind(window);
 
     let isAdMode = false;
     let userVolume = 100;
+    let userWasMuted = false;
     let hammerInterval = null;
+
+    function getTrackedAdVideos() {
+        return Array.from(document.querySelectorAll('video[data-adsfriendly-ad-active="1"]'));
+    }
 
     // 1. Networking Interception (Fetch)
     window.fetch = async function(...args) {
@@ -133,25 +138,50 @@
                 
                 if (isAdMode) {
                     // Start Ad Mode: Save volume if it's not already 0
-                    if (player && typeof player.getVolume === 'function') {
-                        const currentVol = player.getVolume();
-                        if (currentVol > 0) userVolume = currentVol;
+                    if (player) {
+                        if (typeof player.getVolume === 'function') {
+                            const currentVol = player.getVolume();
+                            if (currentVol > 0) userVolume = currentVol;
+                        }
+                        if (typeof player.isMuted === 'function') {
+                            userWasMuted = player.isMuted();
+                        }
                     }
                     
-                    // PERSISTENT SPEED HAMMER: 100ms Frequency to fight YouTube resets
+                    // PERSISTENT SPEED HAMMER: 100ms Frequency
                     if (!hammerInterval) {
-                        hammerInterval = setInterval(() => {
-                            if (!isAdMode || !player) return;
+                        hammerInterval = originalInterval(() => {
+                            if (!isAdMode) return;
                             try {
-                                if (player.getPlaybackRate() !== 16) {
+                                const activeVideos = getTrackedAdVideos();
+                                
+                                activeVideos.forEach(v => {
+                                    if (!v || v.duration === 0) return;
+                                     
+                                    // 1. Force Speed
+                                    if (v.playbackRate !== 16) v.playbackRate = 16;
+                                    if (!('adsfriendlyPrevMuted' in v.dataset)) {
+                                        v.dataset.adsfriendlyPrevMuted = v.muted ? '1' : '0';
+                                    }
+                                    v.muted = true;
+                                    v.dataset.adsfriendlySpyTouched = '1';
+
+                                    // 2. Instant Leap only when the stream is actually seekable.
+                                    const canSeek = v.seekable && v.seekable.length > 0 && Number.isFinite(v.duration);
+                                    if (canSeek && v.duration < 65) {
+                                        v.currentTime = v.duration - 0.1;
+                                    }
+                                });
+
+                                // YouTube API fallback
+                                const playerShowingAd =
+                                    player &&
+                                    ((typeof player.isAdShowing === 'function' && player.isAdShowing()) ||
+                                     player.classList.contains('ad-showing'));
+
+                                if (playerShowingAd && typeof player.setPlaybackRate === 'function' && player.getPlaybackRate() !== 16) {
                                     player.setPlaybackRate(16);
                                     player.setVolume(0);
-                                    if (typeof player.mute === 'function') player.mute();
-                                }
-                                // Instant Leap for non-SSAI ads (Short videos)
-                                const videoObj = player.querySelector('video');
-                                if (videoObj && videoObj.duration > 0 && videoObj.duration < 65) {
-                                    videoObj.currentTime = videoObj.duration - 0.1;
                                 }
                             } catch (e) {}
                         }, 100);
@@ -162,19 +192,41 @@
                         clearInterval(hammerInterval);
                         hammerInterval = null;
                     }
+
+                    // Universal Restoration (v2.8.12): Generic <video> tags
+                    const allVideos = Array.from(document.querySelectorAll('video[data-adsfriendly-spy-touched="1"], video[data-adsfriendly-ad-active="1"]'));
+                    allVideos.forEach(v => {
+                        try {
+                            if (v.playbackRate === 16) v.playbackRate = 1.0;
+                            v.muted = v.dataset.adsfriendlyPrevMuted === '1';
+                            delete v.dataset.adsfriendlySpyTouched;
+                            delete v.dataset.adsfriendlyPrevMuted;
+                        } catch (e) {}
+                    });
+
                     if (player) {
                         try {
-                            if (typeof player.unMute === 'function') player.unMute();
+                            if (!userWasMuted && typeof player.unMute === 'function') player.unMute();
+                            if (userWasMuted && typeof player.mute === 'function') player.mute();
                             if (typeof player.setPlaybackRate === 'function') player.setPlaybackRate(1);
                             if (typeof player.setVolume === 'function') player.setVolume(userVolume);
                             if (typeof player.playVideo === 'function') player.playVideo();
 
                             // SAFETY: Late cleanup in 250ms to catch race conditions
-                            setTimeout(() => {
+                            originalTimeout(() => {
                                 if (!isAdMode && player) {
-                                    if (typeof player.unMute === 'function') player.unMute();
+                                    if (!userWasMuted && typeof player.unMute === 'function') player.unMute();
+                                    if (userWasMuted && typeof player.mute === 'function') player.mute();
                                     if (typeof player.setPlaybackRate === 'function') player.setPlaybackRate(1);
                                     if (typeof player.setVolume === 'function') player.setVolume(userVolume);
+                                    
+                                    // Final check for all videos
+                                    document.querySelectorAll('video[data-adsfriendly-spy-touched="1"], video[data-adsfriendly-ad-active="1"]').forEach(v => {
+                                        if (v.playbackRate === 16) v.playbackRate = 1.0;
+                                        v.muted = v.dataset.adsfriendlyPrevMuted === '1';
+                                        delete v.dataset.adsfriendlySpyTouched;
+                                        delete v.dataset.adsfriendlyPrevMuted;
+                                    });
                                 }
                             }, 250);
                         } catch (e) {

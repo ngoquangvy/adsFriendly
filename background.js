@@ -59,6 +59,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .then(() => sendResponse({ status: 'ok' }))
       .catch(() => sendResponse({ status: 'error' }));
     return true;
+  } else if (message.type === 'REPORT_VIDEO_DECISION') {
+    handleReportVideoDecision(message.data)
+      .then(() => sendResponse({ status: 'ok' }))
+      .catch(() => sendResponse({ status: 'error' }));
+    return true;
+  } else if (message.type === 'GET_VIDEO_SOURCE_STATS') {
+    chrome.storage.local.get(['globalAdPatterns']).then(data => {
+      const stats = {};
+      const patterns = data.globalAdPatterns || [];
+      patterns.forEach(p => {
+          if (p.type === 'reputation') stats[p.value] = p;
+      });
+      sendResponse(stats);
+    });
+    return true;
   }
 });
 
@@ -197,7 +212,6 @@ async function handleVideoLearning(data) {
     const { globalAdPatterns = [] } = await chrome.storage.local.get(['globalAdPatterns']);
     
     classList.forEach(cls => {
-        // Simple client-side standardization (will be moved to BrainBridge later)
         const normalizedCls = cls.replace(/-\d+$/, '-*').replace(/:\d+$/, ':*');
         const patternValue = `.${normalizedCls}`;
         
@@ -218,7 +232,38 @@ async function handleVideoLearning(data) {
     });
 
     await chrome.storage.local.set({ globalAdPatterns: globalAdPatterns.slice(-200) });
-    console.log('[AdsFriendly Brain] Hybrid learning synced for', hostname);
+}
+
+// v2.8.12: Neural Fusion (Unified Brain)
+async function handleReportVideoDecision(data) {
+    const { domain, type } = data; // type: 'AD' or 'CONTENT'
+    if (!domain || domain === 'unknown') return;
+
+    const { globalAdPatterns = [] } = await chrome.storage.local.get(['globalAdPatterns']);
+    
+    let existing = globalAdPatterns.find(p => p.type === 'reputation' && p.value === domain);
+    
+    if (!existing) {
+        existing = {
+            type: 'reputation',
+            value: domain,
+            adCount: 0,
+            contentCount: 0,
+            lastSeen: Date.now()
+        };
+        globalAdPatterns.push(existing);
+    }
+
+    if (type === 'AD') existing.adCount++;
+    else if (type === 'CONTENT') existing.contentCount++;
+    
+    existing.lastSeen = Date.now();
+
+    // Cap at reasonable limits to prevent overflow
+    if (existing.adCount > 100) existing.adCount = 100;
+    if (existing.contentCount > 100) existing.contentCount = 100;
+
+    await chrome.storage.local.set({ globalAdPatterns: globalAdPatterns.slice(-300) });
 }
 
 const PROTECTED_KEYWORDS = [
