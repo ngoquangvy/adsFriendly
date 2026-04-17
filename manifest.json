@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AdsFriendly",
-  "version": "2.8.22",
+  "version": "3.0.0",
   "description": "Chặn quảng cáo thông minh dựa trên AI đa lớp (Fusion Brain), Pop-under và bảo vệ hành vi người dùng.",
   "permissions": [
     "declarativeNetRequest",
@@ -26,8 +26,27 @@
       "matches": [
         "<all_urls>"
       ],
+      "all_frames": true,
+      "match_about_blank": true,
       "js": [
+        "core/api_gateway.js",
         "core/BrainBridge.js",
+        "core/modules/dom_vision.js",
+        "core/modules/heuristics.js",
+        "core/modules/trusted_clicker.js",
+        "core/modules/danger_zone.js",
+        "core/modules/playback_control.js",
+        "core/modules/skip_engine.js",
+        "core/modules/session_manager.js",
+        "core/modules/telemetry_sentinel.js",
+        "core/adapters/base_adapter.js",
+        "core/adapters/hls_adapter.js",
+        "core/adapters/jw_adapter.js",
+        "core/adapters/youtube_adapter.js",
+        "core/adapters/dash_adapter.js",
+        "core/adapters/custom_adapter.js",
+        "core/ad_detection.js",
+        "core/strategy_engine.js",
         "telemetry/evaluator.js",
         "content.js",
         "picker.js",
@@ -57,7 +76,8 @@
     {
       "resources": [
         "ui/blocked.html",
-        "injected_spy.js"
+        "core/modules/proxy_shield.js",
+        "core/modules/xhr_radar.js"
       ],
       "matches": [
         "<all_urls>"

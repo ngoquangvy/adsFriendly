@@ -1,0 +1,8 @@
+{
+  "global_patterns": [
+    { "type": "video_source_marker", "value": "doubleclick.net", "confidence": 0.99 },
+    { "type": "video_source_marker", "value": "innovid.com", "confidence": 0.95 },
+    { "type": "player_state_marker", "value": "ad-showing", "confidence": 0.90 }
+  ],
+  "banned_selectors": [ ".ad-overlay", "#preroll-player" ]
+}

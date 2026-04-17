@@ -74,8 +74,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse(stats);
     });
     return true;
+  } else if (message.type === 'DEBUG_LOG') {
+    handleDiagnosticLogging(message)
+      .then(() => sendResponse({ status: 'ok' }))
+      .catch(() => sendResponse({ status: 'error' }));
+    return true;
   }
 });
+
+async function handleDiagnosticLogging(payload) {
+    const { crash_log_phimmoichill = [] } = await chrome.storage.local.get(['crash_log_phimmoichill']);
+    
+    const entry = {
+        type: payload.logType,
+        domain: payload.identity?.site_domain || 'unknown',
+        url: payload.data?.url || 'unknown',
+        details: payload.data?.content || {},
+        timestamp: payload.timestamp || Date.now()
+    };
+
+    // FIFO: Newest first, limit to 10
+    crash_log_phimmoichill.unshift(entry);
+    if (crash_log_phimmoichill.length > 10) crash_log_phimmoichill.length = 10;
+
+    await chrome.storage.local.set({ crash_log_phimmoichill });
+    console.log(`[AdsFriendly Background] 📝 Diagnostic Logged: ${entry.type} on ${entry.domain}`);
+}
 
 async function handleNeuralLogging(entry) {
     const { neuroLogs = [] } = await chrome.storage.local.get(['neuroLogs']);

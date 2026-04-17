@@ -1,18 +1,31 @@
 /**
  * AdsFriendly: Video Surgeon (Content Script Context)
- * Specialized module for neutralizing video ads via speed manipulation and auto-skipping.
+ * Core Orchestrator - Delegates all logic to specialized modules.
+ * 
+ * Module Dependencies (loaded via manifest.json before this file):
+ *   - core/modules/dom_vision.js       → findSkipButton, pierceShadow, generateSelector, createNeutralizeOverlay
+ *   - core/modules/heuristics.js       → calculateAdScore, getSourceDomain, getVideoSourceStats
+ *   - core/modules/trusted_clicker.js  → dispatchHighFidelityClick
+ *   - core/modules/danger_zone.js      → dangerZones, onAdMapDetected, getDangerZoneInfo, isInDangerZone
+ *   - core/modules/playback_control.js → accelerate, restore
+ *   - core/modules/skip_engine.js      → autoSkip, rely, verifyAndLearn
+ *   - core/modules/session_manager.js  → startAdSession, endAdSession, monitorAdSession
+ *   - core/modules/telemetry_sentinel.js → diagnosticLog, notifyBrainOfAdState, submitFinalTelemetry
  */
 const VideoSurgeon = {
+    // ─── State Properties ───
     activeAds: new Set(),
     lastClickTime: 0,
     isInitialized: false,
-    
+
     // v2.8.20: Session Logic Properties
     isAdSessionActive: false,
     trackedAdElement: null,
     adMonitorInterval: null,
     sessionStartTime: 0,
+    activeSessionZone: null, // Capture zone info for telemetry
 
+    // ─── Orchestrator Init ───
     async init() {
         if (this.isInitialized) return;
 
@@ -65,9 +78,27 @@ const VideoSurgeon = {
         setInterval(() => this.autoSkip(), 500);
 
         // 4. Message Bus
+        this._initMessageBus();
+
+        chrome.runtime.onMessage.addListener((message) => {
+            if (message.type === 'SYNC_LEARNING') this.loadPatternsAndReputation();
+        });
+    },
+
+    // ─── Message Bus (Centralized Event Router) ───
+    _initMessageBus() {
         window.addEventListener('message', (event) => {
             if (event.data && event.data.source === 'adsfriendly-spy') {
-                if (event.data.type === 'AD_MAP_DETECTED') this.onAdDetected();
+                if (event.data.type === 'AD_MAP_DETECTED') {
+                    this.onAdMapDetected(event.data);
+                }
+
+                // v4.7: Diagnostic Relay (Log Exhaust Pipe)
+                if (event.data.type === 'DEBUG_LOG') {
+                    if (chrome.runtime && chrome.runtime.id) {
+                        chrome.runtime.sendMessage(event.data).catch(() => {});
+                    }
+                }
 
                 // DATA SENTINEL: Harvest ad signatures and player states
                 if (event.data.type === 'AD_GENOME_HARVEST' || event.data.type === 'PLAYER_STATE_HARVEST') {
@@ -79,79 +110,33 @@ const VideoSurgeon = {
                     this.currentAdDensity = event.data.value;
                 }
             }
-        });
 
-        chrome.runtime.onMessage.addListener((message) => {
-            if (message.type === 'SYNC_LEARNING') this.loadPatternsAndReputation();
-        });
-    },
-
-    createNeutralizeOverlay() {
-        if (document.getElementById('adsfriendly-neutralize-overlay')) return;
-        if (!document.body) {
-            setTimeout(() => this.createNeutralizeOverlay(), 50);
-            return;
-        }
-
-        this.overlay = document.createElement('div');
-        this.overlay.id = 'adsfriendly-neutralize-overlay';
-        this.overlay.innerHTML = `
-            <div style="text-align: center;">
-                <div style="font-size: 24px; font-weight: bold; margin-bottom: 8px;">AdsFriendly AI</div>
-                <div style="font-size: 14px; opacity: 0.8;">Neutralizing Ad...</div>
-                <div style="margin-top: 15px; width: 40px; height: 40px; border: 3px solid #22c55e; border-top-color: transparent; border-radius: 50%; animation: adsfriendly-spin 1s linear infinite; margin-left: auto; margin-right: auto;"></div>
-            </div>
-            <style>
-                #adsfriendly-neutralize-overlay {
-                    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-                    background: rgba(0,0,0,0.9); backdrop-filter: blur(15px);
-                    z-index: 1000; display: none; align-items: center; justify-content: center;
-                    color: #22c55e; font-family: sans-serif; pointer-events: none;
+            // v4.8: Developer Backdoor (Show logs in main console - No source check for convenience)
+            if (event.data && event.data.type === 'SHOW_ADS_LOGS') {
+                console.log('[AdsFriendly] 🚪 Nhận lệnh SHOW_ADS_LOGS. Đang kiểm tra Chrome Runtime...');
+                if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id) {
+                    chrome.storage.local.get(['crash_log_phimmoichill'], (res) => {
+                        console.log('%c[AdsFriendly AI] 📂 DUMP FULL JSON:', 'color: #8b5cf6; font-weight: bold;');
+                        if (res.crash_log_phimmoichill && res.crash_log_phimmoichill.length > 0) {
+                            console.log(JSON.stringify(res.crash_log_phimmoichill, null, 2));
+                        } else {
+                            console.log('%c > Hiện chưa có dữ liệu log (Mảng rỗng hoặc chưa lưu).', 'color: #94a3b8;');
+                        }
+                    });
+                } else {
+                    console.error('[AdsFriendly] ❌ Mất kết nối với Extension (Chrome Runtime invalid). Vui lòng F5 lại trang web!');
                 }
-                @keyframes adsfriendly-spin { to { transform: rotate(360deg); } }
-            </style>
-        `;
-        document.body.appendChild(this.overlay);
-    },
-
-    async loadPatternsAndReputation() {
-        try {
-            const { globalAdPatterns = [], siteReputation = {} } = await chrome.storage.local.get(['globalAdPatterns', 'siteReputation']);
-            this.cachedPatterns = globalAdPatterns;
-            const rep = siteReputation[window.location.hostname];
-            if (rep) this.siteTrustScore = rep.trustScore;
-            console.log(`[AdsFriendly Video] Brain Synced. Site Trust: ${this.siteTrustScore.toFixed(2)}`);
-        } catch (e) { }
-    },
-
-    scanAndObserve() {
-        const videos = document.querySelectorAll('video');
-        videos.forEach(v => {
-            if (!v.dataset.observed) {
-                v.dataset.observed = 'true';
-                this.attachSourceObserver(v);
-                this.checkAndExecute(v);
             }
         });
     },
 
-    attachSourceObserver(video) {
-        // Watch for src changes (Zero-latency detection)
-        const observer = new MutationObserver(() => this.checkAndExecute(video));
-        observer.observe(video, { attributes: true, attributeFilter: ['src'] });
-
-        // Also listen for play events
-        video.addEventListener('play', () => this.checkAndExecute(video));
-        video.addEventListener('playing', () => this.checkAndExecute(video));
-    },
-
+    // ─── Core Decision Engine (checkAndExecute) ───
     async checkAndExecute(video) {
         try {
             const hostname = window.location.hostname;
             const src = video.currentSrc || video.src || '';
 
             // EMERGENCY SHIELD (v2.8.13): Long content protection
-            // If it's a movie (> 5 mins), it is IMMUNE to ad-acceleration logic.
             if (video.duration > 300) {
                 this.restore(video);
                 delete video.dataset.accelerated;
@@ -198,6 +183,7 @@ const VideoSurgeon = {
                 skipBtn ||
                 isConfirmedCountdown ||
                 adHeuristic ||
+                this.isInDangerZone(video) || // v3.2: Predictive Timing Supremacy
                 (player && player.id.includes('preroll')) ||
                 finalHeuristicScore >= 0.8
             );
@@ -207,12 +193,11 @@ const VideoSurgeon = {
                 if (!this.isAdSessionActive || (this.trackedAdElement !== video && video.duration < 65)) {
                     this.startAdSession(video);
                 }
-                this.rely(video);
             } else if (this.isAdSessionActive && this.trackedAdElement === video) {
                 this.endAdSession('Heuristic: No longer identified as ad');
             } else if (!this.isAdSessionActive) {
                 this.restore(video);
-                
+
                 // If it played for a while and wasn't flagged, it's content
                 if (video.currentTime > 300 && !video.dataset.reportedContent) {
                     chrome.runtime.sendMessage({ type: 'REPORT_VIDEO_DECISION', data: { domain: sourceDomain, type: 'CONTENT' } });
@@ -225,203 +210,41 @@ const VideoSurgeon = {
         }
     },
 
-    // v2.8.20: Unified Ad Session Orchestration
-    startAdSession(video) {
-        if (this.isAdSessionActive && this.trackedAdElement === video) return;
-        
-        // If switching from another ad video, end previous first
-        if (this.isAdSessionActive) {
-            this.endAdSession('Context switch to new ad element');
-        }
-
-        console.log('%c[AdsFriendly AI] Ad Session Started:', 'color: #10b981; font-weight: bold;', video.src || 'Dynamic Stream');
-        
-        this.isAdSessionActive = true;
-        this.trackedAdElement = video;
-        this.sessionStartTime = Date.now();
-        
-        // 1. Mark and Prepare
-        video.dataset.adsfriendlyAdActive = '1';
-        video.dataset.adsfriendlyPrevMuted = video.muted ? '1' : '0';
-        
-        // 2. Immediate Neutralization
-        this.notifySpy(true);
-        this.accelerate(video);
-
-        // 3. Persistent Monitoring
-        if (this.adMonitorInterval) clearInterval(this.adMonitorInterval);
-        this.adMonitorInterval = setInterval(() => this.monitorAdSession(), 200);
-    },
-
-    endAdSession(reason) {
-        if (!this.isAdSessionActive) return;
-        
-        console.log(`%c[AdsFriendly AI] Ad Session Ended: ${reason}`, 'color: #f59e0b; font-weight: bold;');
-        
-        const video = this.trackedAdElement;
-        
-        // 1. Clear Tracking
-        this.isAdSessionActive = false;
-        this.trackedAdElement = null;
-        if (this.adMonitorInterval) {
-            clearInterval(this.adMonitorInterval);
-            this.adMonitorInterval = null;
-        }
-
-        // 2. Global Stabilization
-        this.notifySpy(false);
-        if (this.overlay) this.overlay.style.display = 'none';
-
-        // 3. Element Restoration (if still in DOM)
-        if (video) {
-            this.restore(video);
-            delete video.dataset.accelerated;
-            delete video.dataset.adsfriendlyAdActive;
-            delete video.dataset.adsfriendlyPrevMuted;
-            
-            // Auto-resume content
-            if (video.paused && video.duration > 300) {
-                video.play().catch(() => {});
-            }
-        }
-
-        // Universal cleanup scan
-        this.activeAds.clear();
-        this.lastClickTime = 0;
-    },
-
-    monitorAdSession() {
-        if (!this.isAdSessionActive || !this.trackedAdElement) return;
-
-        const video = this.trackedAdElement;
-
-        // Condition 1: Element detached from DOM
-        if (!document.contains(video)) {
-            this.endAdSession('Element removed from DOM');
-            return;
-        }
-
-        // Condition 2: Check for Player State disappearance
-        const player = video.closest('#movie_player, .html5-video-player, #preroll-player, [class*="jw-flag-ads"], [class*="ad-"]');
-        const skipBtn = this.findSkipButton(player || document);
-        
-        const playerStateText = player ? `${player.id || ''} ${player.className || ''}`.toLowerCase() : '';
-        const playerLooksLikeAd = /preroll|ad-showing|jw-flag-ads|ad-break|ad-/.test(playerStateText);
-
-        // Matches countdowns specifically (v2.8.13)
-        let hasAdText = false;
-        if (player) {
-            hasAdText = /((skip|bỏ qua).*\d)|(\d.*(skip|bỏ qua))|skip|bỏ qua/i.test(player.innerText);
-        }
-
-        // Decision: If all ad indicators are gone, end session
-        // Note: We ignore short duration during an active session unless UI markers are gone
-        if (skipBtn) {
-            // v2.8.21: Instant Skip Impulse (Accelerated loop)
-            this.autoSkip();
-        } else if (!playerLooksLikeAd && !hasAdText) {
-            // Safety: Give it a moment to confirm (at least 1s in session)
-            if (Date.now() - this.sessionStartTime > 1000) {
-                this.endAdSession('Ad UI markers disappeared');
-            }
-        }
-
-        // Condition 3: Video reached the end
-        if (video.ended || video.currentTime >= (video.duration - 0.2)) {
-            this.endAdSession('Ad video reached the end');
-        }
-    },
-
-    getSourceDomain(src) {
-        if (!src) return 'unknown';
+    // ─── Utility Functions (Kept in Orchestrator) ───
+    async loadPatternsAndReputation() {
         try {
-            return new URL(src, window.location.href).hostname || 'unknown';
-        } catch (e) {
-            return 'unknown';
-        }
+            const { globalAdPatterns = [], siteReputation = {} } = await chrome.storage.local.get(['globalAdPatterns', 'siteReputation']);
+            this.cachedPatterns = globalAdPatterns;
+            const rep = siteReputation[window.location.hostname];
+            if (rep) this.siteTrustScore = rep.trustScore;
+            console.log(`[AdsFriendly Video] Brain Synced. Site Trust: ${this.siteTrustScore.toFixed(2)}`);
+        } catch (e) { }
     },
 
-    async getVideoSourceStats() {
-        if (!chrome.runtime || !chrome.runtime.id) return {};
-        try {
-            return await new Promise(resolve => {
-                chrome.runtime.sendMessage({ type: 'GET_VIDEO_SOURCE_STATS' }, response => {
-                    resolve(response || {});
-                });
-            });
-        } catch (e) {
-            return {};
-        }
+    scanAndObserve() {
+        const videos = document.querySelectorAll('video');
+        videos.forEach(v => {
+            if (!v.dataset.observed) {
+                v.dataset.observed = 'true';
+                this.attachSourceObserver(v);
+                this.checkAndExecute(v);
+
+                // StrategyEngine: detect player type & attach adapter
+                if (typeof AdsFriendlyStrategyEngine !== 'undefined') {
+                    AdsFriendlyStrategyEngine.attachToVideo(v);
+                }
+            }
+        });
     },
 
-    findSkipButton(root) {
-        const selectors = [
-            '#preroll-player-skip',
-            '.jw-skip',
-            '.jw-skip-button',
-            '.ytp-skip-ad-button',
-            '.ytp-ad-skip-button',
-            '.ytp-ad-skip-button-modern',
-            '.videoAdUiSkipButton'
-        ];
+    attachSourceObserver(video) {
+        // Watch for src changes (Zero-latency detection)
+        const observer = new MutationObserver(() => this.checkAndExecute(video));
+        observer.observe(video, { attributes: true, attributeFilter: ['src'] });
 
-        for (const sel of selectors) {
-            const btn = this.pierceShadow(root || document, sel) || (root !== document ? this.pierceShadow(document, sel) : null);
-            if (!btn) continue;
-            const style = getComputedStyle(btn);
-            if (style.display === 'none' || style.visibility === 'hidden' || btn.getClientRects().length === 0) continue;
-            return btn;
-        }
-
-        return null;
-    },
-
-    rely(video) {
-        // High-Precision Skipsequence: Unified scanning for ad-removal
-        this.autoSkip();
-    },
-
-    calculateAdScore(video) {
-        let score = 0;
-        const src = video.currentSrc || video.src || '';
-        if (!src) return 0;
-
-        // 1. URL Pattern Intelligence (v2.8.6)
-        if (src.includes('raw.githubusercontent') || src.includes('.xml') || src.includes('vast')) {
-            if (video.duration > 0 && video.duration < 65) return 1.0;
-            score += 0.5;
-        }
-
-        // 2. Learned Patterns
-        if (this.cachedPatterns) {
-            this.cachedPatterns.forEach(p => {
-                if (p.type === 'video_source_marker' && src.includes(p.value)) score += 0.8;
-                if (p.type === 'video_marker' && video.closest(p.value)) score += 0.6;
-            });
-        }
-
-        // 2. Location Reputation (Crucial)
-        // If site trust is low, we are more suspicious
-        if (this.siteTrustScore < 0.3) score += 0.3;
-        if (this.siteTrustScore > 0.8) score -= 0.6;
-
-        // 3. Ad Density (Current page environment)
-        if (this.currentAdDensity > 5) score += 0.2;
-        if (this.currentAdDensity > 15) score += 0.4;
-
-        // 4. Technical Heuristics
-        const isExternal = !src.startsWith('blob:') && !src.includes(window.location.hostname);
-        if (isExternal) {
-            score += 0.3;
-            if (src.includes('githubusercontent.com') || src.includes('github.io')) score += 0.2;
-            if (src.toLowerCase().endsWith('.mp4')) score += 0.2;
-        }
-
-        // 5. Short Duration
-        if (video.duration > 0 && video.duration < 65) score += 0.2;
-        if (video.duration > 300) score -= 1.0; // Long videos are likely content
-
-        return Math.min(1.0, score);
+        // Also listen for play events
+        video.addEventListener('play', () => this.checkAndExecute(video));
+        video.addEventListener('playing', () => this.checkAndExecute(video));
     },
 
     onAdDetected() {
@@ -434,242 +257,25 @@ const VideoSurgeon = {
         return this.calculateAdScore(video) >= 0.8;
     },
 
-    accelerate(video) {
-        if (video.playbackRate >= 16) return;
-
-        console.log('[AdsFriendly Video] Neutralizing Ad:', video.src || 'Dynamic Stream');
-        video.dataset.adsfriendlyAdActive = '1';
-        video.dataset.adsfriendlyPrevMuted = video.muted ? '1' : '0';
-        video.playbackRate = 16;
-        video.muted = true;
-        this.activeAds.add(video);
-        this.notifyBrainOfAdState(video);
-
-        // Show Ninja Overlay over the player
-        if (false && this.overlay) {
-            const player = document.getElementById('movie_player') || video.parentElement;
-            if (player && !player.contains(this.overlay)) {
-                player.appendChild(this.overlay);
-            }
-            this.overlay.style.display = 'flex';
-        }
-    },
-
-    restore(video) {
-        if (this.activeAds.has(video)) {
-            console.log('[AdsFriendly Video] Ad finished. Executing High-Precision Stealth Handover.');
-
-            // Hide Overlay
-            if (this.overlay) this.overlay.style.display = 'none';
-
-            // 1. Reset speed and audio locally (Content Script context)
-            video.playbackRate = 1.0;
-            video.muted = video.dataset.adsfriendlyPrevMuted === '1';
-            delete video.dataset.adsfriendlyAdActive;
-            delete video.dataset.adsfriendlyPrevMuted;
-
-            // 2. STOP Ad Mode in Spy (Main World context) - This restores Volume and Speed Hammer
-            this.activeAds.delete(video);
-            this.notifySpy(false);
-            this.lastClickTime = 0; // REFRESH: Ready for back-to-back ads
-
-            // 3. Force playback resume
-            if (video.paused) {
-                video.play().catch(() => { });
-            }
-        }
-    },
-
-    autoSkip() {
-        const skipSelectors = [
-            ...this.learnedSelectors,      // Prioritize locally learned patterns
-            '.jw-skip',
-            '.jw-skip-button',
-            '.ytp-skip-ad-button',         // Modern YouTube
-            '[id^="skip-button:"]',        // Dynamic colon-IDs (e.g., skip-button:q)
-            '.ytp-ad-skip-button',         // Legacy YouTube
-            '.ytp-ad-skip-button-modern',
-            '.videoAdUiSkipButton',
-            'button[class*="skip"]'
-        ];
-
-        const hasKnownSkipButton = () => skipSelectors.some(sel => this.pierceShadow(document, sel));
-        const isAdShowingNow = () => Boolean(
-            document.querySelector('#movie_player.ad-showing, .html5-video-player.ad-showing, .ad-showing, .ad-interrupting, .ytp-ad-player-overlay')
-        );
-
-        // SANITY GUARD: If we are in 16x speed but no skip button found
-        const video = document.querySelector('video');
-        if (video && video.playbackRate > 1 && !hasKnownSkipButton()) {
-            // Second check: Is the ad overlay actually gone?
-            if (!isAdShowingNow()) {
-                console.log('[AdsFriendly AI] Sanity Guard: No ad detected but speed is high. Restoring...');
-                this.restore(video);
-                return;
-            }
-        }
-
-    const tryUltimateClick = (btn, method, isDiscovery = false) => {
-        const style = getComputedStyle(btn);
-        const isVisible = style.display !== 'none' && style.visibility !== 'hidden' && btn.getClientRects().length > 0;
-        const isDisabled = btn.disabled || btn.getAttribute('aria-disabled') === 'true' || btn.classList.contains('disabled');
-
-        if (isVisible && !isDisabled) {
-            // Click Throttling (v2.8.22): Optimized to 400ms for high-frequency environments
-            const now = Date.now();
-            if (now - this.lastClickTime < 400) return true; // Already handled recently
-            
-            this.lastClickTime = now; // Set ONLY when we are actually proceeding to dispatch
-
-            if (isDiscovery && typeof this.verifyAndLearn === 'function') {
-                this.verifyAndLearn(btn);
-            }
-
-            this.dispatchHighFidelityClick(btn, method);
-            return true;
-        }
-        return false;
-    };
-
-        // 1. Selector search (Ordered by Trust + Shadow Piercing)
-        for (const sel of skipSelectors) {
-            const btn = this.pierceShadow(document, sel);
-            if (btn && tryUltimateClick(btn, `selector (${sel})`)) return;
-        }
-
-        // 2. Text search fallback (The Discovery Phase - Optimized for modern minimalist UI)
-        // Optimization: Only scan within the player context or the body/document if player not found
-        const searchRoot = document.querySelector('#movie_player, .html5-video-player') || document.body || document;
-        if (!searchRoot) return; // Ultra-defensive
-
-        const allElements = searchRoot.querySelectorAll('button, div[role="button"], span[role="button"], a[role="button"]');
-        for (const el of allElements) {
-            const txt = (el.textContent || "").toLowerCase().trim();
-            const identity = (el.className + ' ' + el.id).toLowerCase();
-
-            // If it says "Skip" and has ad-related metadata in classes/id
-            if ((txt.includes('skip') || txt.includes('bỏ qua')) &&
-                (txt.length < 15) && // Minimalist skip buttons are short
-                (identity.includes('ad') || identity.includes('skip') || identity.includes('suggest'))) {
-
-                if (tryUltimateClick(el, 'discovery (text-match)', true)) return;
-            }
-        }
-    },
-
-    dispatchHighFidelityClick(el, method) {
-        const rect = el.getBoundingClientRect();
-
-        // Humanized Jitter: Click within the inner 40% of the button, randomized
-        const x = rect.left + (rect.width * (0.3 + Math.random() * 0.4));
-        const y = rect.top + (rect.height * (0.3 + Math.random() * 0.4));
-
-        console.log(`[AdsFriendly AI] Humanized High-Fidelity Click for ${method} at (${Math.round(x)}, ${Math.round(y)})`);
-
-        const opts = {
-            bubbles: true,
-            cancelable: true,
-            view: window,
-            clientX: x,
-            clientY: y,
-            screenX: x,
-            screenY: y,
-            buttons: 1
-        };
-
-        // 1. WAKE-UP Protocol (Hover)
-        el.dispatchEvent(new MouseEvent('mouseenter', opts));
-        el.dispatchEvent(new MouseEvent('mouseover', opts));
-
-        // 2. Instant Execution (No more human delay for Full AI mode)
-        if (!chrome.runtime || !chrome.runtime.id) return;
-
-        // 3. POINTER Chain
-        el.dispatchEvent(new PointerEvent('pointerdown', opts));
-        el.dispatchEvent(new MouseEvent('mousedown', opts));
-        el.dispatchEvent(new PointerEvent('pointerup', opts));
-        el.dispatchEvent(new MouseEvent('mouseup', opts));
-
-        // 4. FINAL CLICK
-        el.dispatchEvent(new MouseEvent('click', opts));
-        if (typeof el.click === 'function') el.click();
-
-        // 5. KEYBOARD Fallback
-        el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
-
-        // 6. NUCLEAR API BYPASS
-        window.dispatchEvent(new CustomEvent('ADSFRIENDLY_ACTIVATE_SKIP'));
-
-        console.log('%c[AdsFriendly AI v2.8.5] Zero-Latency Skip & API Bypass dispatched!', 'color: #22c55e; font-weight: bold;');
-    },
-
-    pierceShadow(root, selector) {
-        const element = root.querySelector(selector);
-        if (element) return element;
-
-        const shadows = root.querySelectorAll('*');
-        for (const el of shadows) {
-            if (el.shadowRoot) {
-                const found = this.pierceShadow(el.shadowRoot, selector);
-                if (found) return found;
-            }
-        }
-        return null;
-    },
-
-    async verifyAndLearn(btn) {
-        if (!chrome.runtime || !chrome.runtime.id) return;
-
-        const selector = this.generateSelector(btn);
-        if (!selector) return;
-
-        console.log(`[AdsFriendly AI] Discovery Phase: Verifying potential marker: ${selector}`);
-
-        // Wait for YouTube state transition (Watchdog)
-        setTimeout(async () => {
-            const stillShowingAd = document.querySelector('#movie_player.ad-showing, .ad-interrupting');
-            if (!stillShowingAd) {
-                console.log('%c[AdsFriendly AI] Verification SUCCESS: New pattern confirmed.', 'color: #22c55e; font-weight: bold;');
-                await BrainBridge.confirmLearnedMarker(selector, window.location.hostname);
-            } else {
-                console.warn('[AdsFriendly AI] Verification FAILED: Potential Honeypot or Invalid Marker.');
-                await BrainBridge.penalizeMarker(selector);
-            }
-        }, 1000); // 1s buffer for YouTube player state refresh
-    },
-
-    generateSelector(el) {
-        if (el.id && !/\d{4,}/.test(el.id)) return `#${el.id}`;
-
-        const classes = Array.from(el.classList)
-            .filter(c => !/\d{4,}/.test(c)) // Filter out dynamic hashes
-            .filter(c => !c.includes('hover') && !c.includes('focus'))
-            .join('.');
-
-        return classes ? `.${classes}` : null;
-    },
-
     notifySpy(adMode) {
         window.postMessage({ source: 'adsfriendly-content', type: 'SET_AD_MODE', value: adMode }, '*');
-    },
-
-    async notifyBrainOfAdState(video) {
-        if (!chrome.runtime || !chrome.runtime.id) return; // Context Guard
-        const playerContainer = video.closest('[class*="player"]');
-        if (playerContainer) {
-            try {
-                chrome.runtime.sendMessage({
-                    type: 'SYNC_VIDEO_LEARNING',
-                    hostname: window.location.hostname,
-                    classes: playerContainer.className,
-                    duration: video.duration
-                });
-            } catch (e) { }
-        }
     }
 };
 
-// Auto-init for content script injection
+// ─── Module Assembly (Mixin Injection) ───
 if (typeof window !== 'undefined') {
+    // Phase 1: DOM & Heuristics
+    Object.assign(VideoSurgeon, window.AdsFriendlyDomVision || {});
+    Object.assign(VideoSurgeon, window.AdsFriendlyHeuristics || {});
+    // Phase 2: DangerZone & Playback
+    Object.assign(VideoSurgeon, window.AdsFriendlyDangerZone || {});
+    Object.assign(VideoSurgeon, window.AdsFriendlyPlaybackControl || {});
+    // Phase 3: Skip & Click
+    Object.assign(VideoSurgeon, window.AdsFriendlySkipEngine || {});
+    Object.assign(VideoSurgeon, window.AdsFriendlyTrustedClicker || {});
+    // Phase 4: Session & Telemetry
+    Object.assign(VideoSurgeon, window.AdsFriendlySessionManager || {});
+    Object.assign(VideoSurgeon, window.AdsFriendlyTelemetrySentinel || {});
+
     VideoSurgeon.init();
 }
