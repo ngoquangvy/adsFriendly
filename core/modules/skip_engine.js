@@ -3,9 +3,10 @@
  * Handles autoSkip logic, text-based button discovery, and selector learning.
  */
 window.AdsFriendlySkipEngine = {
-    autoSkip() {
+    lastClickTime: 0,
+    autoSkip(learnedSelectors = []) {
         const skipSelectors = [
-            ...this.learnedSelectors,      // Prioritize locally learned patterns
+            ...learnedSelectors,      // Prioritize locally learned patterns
             '.jw-skip',
             '.jw-skip-button',
             '.ytp-skip-ad-button',         // Modern YouTube
@@ -16,7 +17,7 @@ window.AdsFriendlySkipEngine = {
             'button[class*="skip"]'
         ];
 
-        const hasKnownSkipButton = () => skipSelectors.some(sel => this.pierceShadow(document, sel));
+        const hasKnownSkipButton = () => skipSelectors.some(sel => typeof AdsFriendlyDomVision !== 'undefined' && AdsFriendlyDomVision.pierceShadow(document, sel));
         const isAdShowingNow = () => Boolean(
             document.querySelector('#movie_player.ad-showing, .html5-video-player.ad-showing, .ad-showing, .ad-interrupting, .ytp-ad-player-overlay')
         );
@@ -25,19 +26,21 @@ window.AdsFriendlySkipEngine = {
         const video = document.querySelector('video[data-adsfriendly-ad-active="1"]') || document.querySelector('video');
         if (video && video.playbackRate > 1 && !hasKnownSkipButton()) {
             // v3.6: SSAI Defense - If we are in a Genome-detected DangerZone, STAY in ad mode
-            if (this.isInDangerZone(video)) {
+            if (typeof AdsFriendlyDangerZone !== 'undefined' && AdsFriendlyDangerZone.isInDangerZone(video)) {
                 return; // Guard active: The AI says this is still DNA-level ad content
             }
             
             // v4.5: Heuristic Shield - If AI score is high, it's a heuristically identified ad
-            if (this.calculateAdScore(video) >= 0.8) {
+            if (typeof AdsFriendlyHeuristics !== 'undefined' && AdsFriendlyHeuristics.calculateAdScore(video) >= 0.8) {
                 return; // Guard active: AI confidently identified this without DOM markers
             }
 
             // Second check: Is the ad overlay actually gone?
-            if (!isAdShowingNow() && !this.isAdSessionActive) {
+            if (!isAdShowingNow()) {
                 console.log('[AdsFriendly AI] Sanity Guard: No ad detected but speed is high. Restoring...');
-                this.restore(video);
+                if (typeof AdsFriendlyPlaybackControl !== 'undefined') {
+                    AdsFriendlyPlaybackControl.restore(video);
+                }
                 return;
             }
         }
@@ -50,15 +53,17 @@ window.AdsFriendlySkipEngine = {
             if (isVisible && !isDisabled) {
                 // Click Throttling (v2.8.22): Optimized to 400ms for high-frequency environments
                 const now = Date.now();
-                if (now - this.lastClickTime < 400) return true; // Already handled recently
+                if (now - AdsFriendlySkipEngine.lastClickTime < 400) return true; // Already handled recently
 
-                this.lastClickTime = now; // Set ONLY when we are actually proceeding to dispatch
+                AdsFriendlySkipEngine.lastClickTime = now; // Set ONLY when we are actually proceeding to dispatch
 
-                if (isDiscovery && typeof this.verifyAndLearn === 'function') {
-                    this.verifyAndLearn(btn, video);
+                if (isDiscovery) {
+                    AdsFriendlySkipEngine.verifyAndLearn(btn, video);
                 }
 
-                this.dispatchHighFidelityClick(btn, method);
+                if (typeof AdsFriendlyTrustedClicker !== 'undefined') {
+                    AdsFriendlyTrustedClicker.dispatchHighFidelityClick(btn, method);
+                }
                 return true;
             }
             return false;
@@ -66,7 +71,7 @@ window.AdsFriendlySkipEngine = {
 
         // 1. Selector search (Ordered by Trust + Shadow Piercing)
         for (const sel of skipSelectors) {
-            const btn = this.pierceShadow(document, sel);
+            const btn = typeof AdsFriendlyDomVision !== 'undefined' ? AdsFriendlyDomVision.pierceShadow(document, sel) : null;
             if (btn && tryUltimateClick(btn, `selector (${sel})`)) return;
         }
 
@@ -98,7 +103,7 @@ window.AdsFriendlySkipEngine = {
     async verifyAndLearn(btn, video) {
         if (!chrome.runtime || !chrome.runtime.id) return;
 
-        const selector = this.generateSelector(btn);
+        const selector = typeof AdsFriendlyDomVision !== 'undefined' ? AdsFriendlyDomVision.generateSelector(btn) : null;
         if (!selector) return;
 
         // console.log(`[AdsFriendly AI] Discovery Phase: Verifying potential marker: ${selector}`);
@@ -126,16 +131,27 @@ window.AdsFriendlySkipEngine = {
 
             if (isVideoGone || isSourceChanged || isDurationChanged || isNearEnd) {
                 console.log('%c[AdsFriendly AI] Verification SUCCESS: Ad skipped/ended.', 'color: #22c55e; font-weight: bold;');
-                await BrainBridge.confirmLearnedMarker(selector, window.location.hostname);
+                AdsFriendlySkipEngine.notifyContentScript({ 
+                    type: 'LEARN_MARKER_CONFIRM', 
+                    selector, 
+                    site: window.location.hostname 
+                });
             } else {
                 const stillShowingAd = document.querySelector('#movie_player.ad-showing, .ad-interrupting, [class*="ad-showing"]');
                 if (stillShowingAd) {
                     console.warn('[AdsFriendly AI] Verification FAILED: Ad still showing.');
-                    await BrainBridge.penalizeMarker(selector);
+                    AdsFriendlySkipEngine.notifyContentScript({ 
+                        type: 'LEARN_MARKER_PENALIZE', 
+                        selector 
+                    });
                 } else {
                     console.log('[AdsFriendly AI] Verification INCONCLUSIVE: No clear outcome.');
                 }
             }
         }, 1500);
+    },
+
+    notifyContentScript(data) {
+        window.postMessage({ source: 'adsfriendly-engine', ...data }, '*');
     }
 };

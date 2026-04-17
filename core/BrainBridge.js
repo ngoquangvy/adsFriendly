@@ -7,18 +7,18 @@
 // Cấp quyền gọi qua API Gateway nếu được inject chung môi trường
 const gateway = typeof APIGateway !== 'undefined' ? APIGateway : null;
 
-const BrainBridge = {
+window.BrainBridge = {
     mode: 'HYBRID',
     userId: 'anonymous', // Sẽ được gán sau khi có hệ thống Login
-    
+
     // --- LỚP 1: LƯU TRỮ TRẠNG THÁI (State Memory) ---
     personalRules: {},     // Rule tự cấu hình/học của User (Offline)
     globalPatterns: [],    // Rule tải từ Server (Online)
     learnedBuffer: [],     // Hàng đợi phân tích
 
     async init() {
-        console.log('[AdsFriendly BrainBridge] Khởi tạo mô hình Client-Server (Hybrid) v5.0...');
-        
+        //console.log('[AdsFriendly BrainBridge] Khởi tạo mô hình Client-Server (Hybrid) v5.0...');
+
         // 1. Phục hồi trạng thái Local
         const localData = await chrome.storage.local.get(['userCustomRules', 'globalAdPatterns', 'personalOverrides']);
         this.personalRules = localData.personalOverrides || {};
@@ -31,10 +31,10 @@ const BrainBridge = {
     // --- LỚP 2: BỘ ĐIỀU PHỐI ĐỒNG BỘ (Gateway Adapter) ---
     async syncWithCloud() {
         if (!gateway) return;
-        
-        console.log('[BrainBridge] Yêu cầu lấy Global Rules từ Server...');
+
+        //console.log('[BrainBridge] Yêu cầu lấy Global Rules từ Server...');
         const cloudData = await gateway.fetchCloudRules(this.userId);
-        
+
         if (cloudData && cloudData.globalPatterns) {
             this.globalPatterns = cloudData.globalPatterns;
             // Chỉ lưu lại Cache Cloud xuống HDD nếu data hợp lệ (Đề phòng server trả lỗi)
@@ -70,7 +70,7 @@ const BrainBridge = {
         neuroLogs.unshift(logEntry);
         if (neuroLogs.length > 50) neuroLogs.length = 50;
         await chrome.storage.local.set({ neuroLogs });
-        
+
         if (entry.final_confidence > 0.9) {
             this.promoteToBuffer(entry);
         }
@@ -115,7 +115,7 @@ const BrainBridge = {
 
     async confirmLearnedMarker(selector, site) {
         if (!chrome.runtime || !chrome.runtime.id) return;
-        
+
         const { discoveredMarkers = [] } = await chrome.storage.local.get(['discoveredMarkers']);
         const { pendingRules = [] } = await chrome.storage.local.get(['pendingRules']);
 
@@ -123,7 +123,7 @@ const BrainBridge = {
         if (!existing) {
             discoveredMarkers.push(selector);
             await chrome.storage.local.set({ discoveredMarkers });
-            
+
             const ruleExists = pendingRules.find(r => r.selector === selector);
             if (!ruleExists) {
                 pendingRules.push({ selector, site, count: 1, type: 'learned_skip', lastSeen: Date.now() });
@@ -134,7 +134,7 @@ const BrainBridge = {
 
     async penalizeMarker(selector) {
         if (!chrome.runtime || !chrome.runtime.id) return;
-        
+
         const { suspiciousMarkers = [] } = await chrome.storage.local.get(['suspiciousMarkers']);
         if (!suspiciousMarkers.includes(selector)) {
             suspiciousMarkers.push(selector);
@@ -145,7 +145,7 @@ const BrainBridge = {
     async getDiscoveredMarkers() {
         const { discoveredMarkers = [] } = await chrome.storage.local.get(['discoveredMarkers']);
         const { suspiciousMarkers = [] } = await chrome.storage.local.get(['suspiciousMarkers']);
-        
+
         // Loại bỏ các marker đã bị dán nhãn phạt
         return discoveredMarkers.filter(m => !suspiciousMarkers.includes(m));
     }

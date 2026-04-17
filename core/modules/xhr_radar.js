@@ -176,6 +176,20 @@ function syncToLocalRadar(type, url, content) {
 }
 
 function logRadar(type, url, body) {
+    if (url.includes("/ads-client/api/v1/advertisement")) {
+        try {
+            const data = typeof body === 'string' ? JSON.parse(body) : body;
+            window.postMessage({
+                type: "VANGUARD_AD_SIGNAL",
+                payload: {
+                    adType: "client",
+                    skipTime: data?.data?.skipTime || 5,
+                    confidence: 1.0
+                }
+            }, "*");
+        } catch (e) {}
+    }
+
     const analysis = analyzeContent(url, body);
     
     window.adsFriendlySniffer = window.adsFriendlySniffer || [];

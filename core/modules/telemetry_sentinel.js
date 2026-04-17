@@ -4,12 +4,13 @@ window.AdsFriendlyTelemetrySentinel = {
         this.diagnosticCounter = (this.diagnosticCounter || 0) + 1;
         if (this.diagnosticCounter % 5 !== 0) return;
 
-        const dangerZone = this.getDangerZoneInfo(video);
+        const dangerZone = typeof AdsFriendlyDangerZone !== 'undefined' ? AdsFriendlyDangerZone.getDangerZoneInfo(video) : null;
         const player = video.closest('#movie_player, .html5-video-player, #preroll-player, [class*="jw-flag-ads"], [class*="ad-"]');
-        const skipBtn = this.findSkipButton(player || document);
-        const adScore = this.calculateAdScore(video);
+        const skipBtn = typeof AdsFriendlyDomVision !== 'undefined' ? AdsFriendlyDomVision.findSkipButton(player || document) : null;
+        const adScore = typeof AdsFriendlyHeuristics !== 'undefined' ? AdsFriendlyHeuristics.calculateAdScore(video) : 0;
+        const trustScore = typeof AdsFriendlyHeuristics !== 'undefined' ? (AdsFriendlyHeuristics.siteTrustScore || 0.5) : 0.5;
 
-        console.groupCollapsed(`%c[AdsFriendly Diagnostic] ${new Date().toLocaleTimeString()} - Trust: ${this.siteTrustScore.toFixed(2)}`, 'color: #8b5cf6;');
+        console.groupCollapsed(`%c[AdsFriendly Diagnostic] ${new Date().toLocaleTimeString()} - Trust: ${trustScore.toFixed(2)}`, 'color: #8b5cf6;');
         console.log('--- NETWORK (Genome Map) ---');
         console.log('In Danger Zone:', dangerZone ? 'YES' : 'NO');
         if (dangerZone) console.log('Zone Info:', dangerZone);

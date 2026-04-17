@@ -3,9 +3,9 @@
  * Mục đích: Tháo gỡ các lệnh truy cập trực tiếp (chrome.storage) rải rác trên giao diện.
  * Biến Client thành một trạm Radar chỉ thu - phát sóng lên máy chủ.
  */
-const APIGateway = {
+window.APIGateway = {
     // Địa chỉ Server AI tương lai của bạn (VD: Node.js hoặc Python FastAPI)
-    serverUrl: 'http://localhost:3000', 
+    serverUrl: 'http://localhost:3000',
 
     async _simulateLatency(ms = 300) {
         return new Promise(resolve => setTimeout(resolve, ms));
@@ -19,7 +19,7 @@ const APIGateway = {
         try {
             // Sau này dùng fetch(`${this.serverUrl}/rules`)
             await this._simulateLatency(500); // Simulate API call
-            
+
             // Giả lập Server trả JSON về (Sau này sẽ lấy từ Nodejs + MongoDB)
             const mockResponse = {
                 globalPatterns: [
@@ -55,11 +55,11 @@ const APIGateway = {
                 provider_type: payload.provider_type || 'UNKNOWN'
             };
 
-            const fullPayload = { 
-                identity, 
-                type: payload.type, 
+            const fullPayload = {
+                identity,
+                type: payload.type,
                 data: payload.data,
-                timestamp: Date.now() 
+                timestamp: Date.now()
             };
 
             // Gửi dữ liệu thực tế về Mock Server

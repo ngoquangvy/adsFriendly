@@ -14,20 +14,25 @@
  */
 const VideoSurgeon = {
     // ─── State Properties ───
-    activeAds: new Set(),
-    lastClickTime: 0,
     isInitialized: false,
-
-    // v2.8.20: Session Logic Properties
-    isAdSessionActive: false,
-    trackedAdElement: null,
-    adMonitorInterval: null,
-    sessionStartTime: 0,
-    activeSessionZone: null, // Capture zone info for telemetry
 
     // ─── Orchestrator Init ───
     async init() {
         if (this.isInitialized) return;
+
+        // 🛡️ ENVIRONMENT GUARD: Sandbox & Cross-Origin Check
+        try {
+            if (window.top !== window.self) {
+                // Check for sandboxing (may throw if cross-origin)
+                if (window.frameElement && window.frameElement.hasAttribute("sandbox")) return;
+                
+                // Check origin parity
+                if (window.location.origin !== window.top.location.origin) return;
+            }
+        } catch (e) {
+            // If we caught an error accessing window.top, it's definitely cross-origin
+            return;
+        }
 
         // GLOBAL GOVERNANCE: Check if AI Mode is ACTIVE (Full AI = false, Friendly = true)
         const { isEnabled, friendlyMode } = await chrome.storage.local.get(['isEnabled', 'friendlyMode']);
@@ -42,19 +47,21 @@ const VideoSurgeon = {
         if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.id) return;
 
         this.isInitialized = true;
-        this.createNeutralizeOverlay();
-        console.log('[AdsFriendly Video] Fusion Surgeon v3.0 (Federated Brain) initialized.');
+
+        if (typeof AdsFriendlyDomVision !== 'undefined') {
+            AdsFriendlyDomVision.createNeutralizeOverlay();
+        }
+
+        //console.log('[AdsFriendly Video] Fusion Surgeon v3.0 (Federated Brain) initialized.');
 
         await BrainBridge.init();
         this.currentAdDensity = 0;
 
         // Load discovered markers into the skip list
         const learned = await BrainBridge.getDiscoveredMarkers();
-        if (learned && learned.length > 0) {
-            console.log('[AdsFriendly Video] Evolving skip list with', learned.length, 'learned patterns.');
-            this.learnedSelectors = learned;
-        } else {
-            this.learnedSelectors = [];
+        this.learnedSelectors = learned || [];
+        if (this.learnedSelectors.length > 0) {
+            console.log('[AdsFriendly Video] Evolving skip list with', this.learnedSelectors.length, 'learned patterns.');
         }
 
         this.siteTrustScore = 0.5;
@@ -74,8 +81,12 @@ const VideoSurgeon = {
         };
         startObserving();
 
-        // 3. Loops
-        setInterval(() => this.autoSkip(), 500);
+        // StrategyEngine: Neural loop
+        setInterval(() => {
+            if (typeof AdsFriendlySkipEngine !== 'undefined') {
+                AdsFriendlySkipEngine.autoSkip(this.learnedSelectors);
+            }
+        }, 1000);
 
         // 4. Message Bus
         this._initMessageBus();
@@ -96,7 +107,7 @@ const VideoSurgeon = {
                 // v4.7: Diagnostic Relay (Log Exhaust Pipe)
                 if (event.data.type === 'DEBUG_LOG') {
                     if (chrome.runtime && chrome.runtime.id) {
-                        chrome.runtime.sendMessage(event.data).catch(() => {});
+                        chrome.runtime.sendMessage(event.data).catch(() => { });
                     }
                 }
 
@@ -132,25 +143,29 @@ const VideoSurgeon = {
 
     // ─── Core Decision Engine (checkAndExecute) ───
     async checkAndExecute(video) {
+        if (!video || !video.dataset) return;
         try {
             const hostname = window.location.hostname;
             const src = video.currentSrc || video.src || '';
 
             // EMERGENCY SHIELD (v2.8.13): Long content protection
             if (video.duration > 300) {
-                this.restore(video);
+                if (typeof AdsFriendlyPlaybackControl !== 'undefined') {
+                    AdsFriendlyPlaybackControl.restore(video);
+                }
                 delete video.dataset.accelerated;
                 return;
             }
 
             const player = video.closest('#movie_player, .html5-video-player, #preroll-player, [class*="jw-flag-ads"], [class*="ad-"]');
-            const sourceDomain = this.getSourceDomain(src);
-            const sourceStats = await this.getVideoSourceStats();
-            const skipBtn = this.findSkipButton(player || document);
-
+            
             // 1. First Principle: Source Disparity (Domain check)
             const isExternal = src && !src.startsWith('blob:') && !src.includes(hostname);
             const isShort = video.duration > 0 && video.duration < 65;
+            
+            const sourceDomain = isExternal ? new URL(src).hostname : hostname;
+            const sourceStats = typeof AdsFriendlyHeuristics !== 'undefined' ? await AdsFriendlyHeuristics.getVideoSourceStats() : null;
+            const skipBtn = typeof AdsFriendlyDomVision !== 'undefined' ? AdsFriendlyDomVision.findSkipButton(player || document) : null;
 
             let isConfirmedCountdown = false;
             if (player) {
@@ -163,14 +178,15 @@ const VideoSurgeon = {
             const playerLooksLikeAd = /preroll|ad-showing|jw-flag-ads|ad-break|ad-/.test(playerStateText);
             const isNearEnd = video.duration > 0 && Number.isFinite(video.duration) && video.currentTime >= (video.duration - 0.5);
             if (video.dataset.accelerated && isNearEnd && !skipBtn && !playerLooksLikeAd && !isConfirmedCountdown) {
-                this.restore(video);
+                if (typeof AdsFriendlyPlaybackControl !== 'undefined') {
+                    AdsFriendlyPlaybackControl.restore(video);
+                }
                 delete video.dataset.accelerated;
                 return;
             }
 
-            // 3. Absolute Justice Logic: Behavior Supremacy
             const adHeuristic = (isConfirmedCountdown && isExternal) || (isExternal && isShort);
-            const heuristicScore = this.calculateAdScore(video);
+            const heuristicScore = typeof AdsFriendlyHeuristics !== 'undefined' ? AdsFriendlyHeuristics.calculateAdScore(video) : 0;
             let historyBias = 0;
             if (sourceStats && sourceStats[sourceDomain]) {
                 const stats = sourceStats[sourceDomain];
@@ -183,20 +199,23 @@ const VideoSurgeon = {
                 skipBtn ||
                 isConfirmedCountdown ||
                 adHeuristic ||
-                this.isInDangerZone(video) || // v3.2: Predictive Timing Supremacy
+                (typeof AdsFriendlyDangerZone !== 'undefined' && AdsFriendlyDangerZone.isInDangerZone(video)) || // v3.2: Predictive Timing Supremacy
                 (player && player.id.includes('preroll')) ||
                 finalHeuristicScore >= 0.8
             );
 
+            const isSessionActive = typeof AdsFriendlySessionManager !== 'undefined' ? AdsFriendlySessionManager.isAdSessionActive : false;
+            const trackedAd = typeof AdsFriendlySessionManager !== 'undefined' ? AdsFriendlySessionManager.trackedAdElement : null;
+
             if (isDefinitelyAd) {
                 // v2.8.20: Optimized Ad Session Entry
-                if (!this.isAdSessionActive || (this.trackedAdElement !== video && video.duration < 65)) {
-                    this.startAdSession(video);
+                if (!isSessionActive || (trackedAd !== video && video.duration < 65)) {
+                    if (typeof AdsFriendlySessionManager !== 'undefined') AdsFriendlySessionManager.startAdSession(video);
                 }
-            } else if (this.isAdSessionActive && this.trackedAdElement === video) {
-                this.endAdSession('Heuristic: No longer identified as ad');
-            } else if (!this.isAdSessionActive) {
-                this.restore(video);
+            } else if (isSessionActive && trackedAd === video) {
+                if (typeof AdsFriendlySessionManager !== 'undefined') AdsFriendlySessionManager.endAdSession('Heuristic: No longer identified as ad');
+            } else if (!isSessionActive) {
+                if (typeof AdsFriendlyPlaybackControl !== 'undefined') AdsFriendlyPlaybackControl.restore(video);
 
                 // If it played for a while and wasn't flagged, it's content
                 if (video.currentTime > 300 && !video.dataset.reportedContent) {
@@ -206,7 +225,7 @@ const VideoSurgeon = {
             }
         } catch (err) {
             console.error('[AdsFriendly AI] Critical Surgeon Error - Recovering Speed:', err);
-            this.endAdSession('Critical execution error');
+            if (typeof AdsFriendlySessionManager !== 'undefined') AdsFriendlySessionManager.endAdSession('Critical execution error');
         }
     },
 
@@ -217,6 +236,14 @@ const VideoSurgeon = {
             this.cachedPatterns = globalAdPatterns;
             const rep = siteReputation[window.location.hostname];
             if (rep) this.siteTrustScore = rep.trustScore;
+
+            // v13.5: Sync state to Heuristics module
+            if (typeof AdsFriendlyHeuristics !== 'undefined') {
+                AdsFriendlyHeuristics.cachedPatterns = this.cachedPatterns;
+                AdsFriendlyHeuristics.siteTrustScore = this.siteTrustScore;
+                AdsFriendlyHeuristics.currentAdDensity = this.currentAdDensity || 0;
+            }
+
             console.log(`[AdsFriendly Video] Brain Synced. Site Trust: ${this.siteTrustScore.toFixed(2)}`);
         } catch (e) { }
     },
@@ -254,7 +281,7 @@ const VideoSurgeon = {
     },
 
     isAdVideo(video) {
-        return this.calculateAdScore(video) >= 0.8;
+        return typeof AdsFriendlyHeuristics !== 'undefined' ? AdsFriendlyHeuristics.calculateAdScore(video) >= 0.8 : false;
     },
 
     notifySpy(adMode) {
@@ -262,20 +289,7 @@ const VideoSurgeon = {
     }
 };
 
-// ─── Module Assembly (Mixin Injection) ───
+// ─── Module Assembly (Direct Injection) ───
 if (typeof window !== 'undefined') {
-    // Phase 1: DOM & Heuristics
-    Object.assign(VideoSurgeon, window.AdsFriendlyDomVision || {});
-    Object.assign(VideoSurgeon, window.AdsFriendlyHeuristics || {});
-    // Phase 2: DangerZone & Playback
-    Object.assign(VideoSurgeon, window.AdsFriendlyDangerZone || {});
-    Object.assign(VideoSurgeon, window.AdsFriendlyPlaybackControl || {});
-    // Phase 3: Skip & Click
-    Object.assign(VideoSurgeon, window.AdsFriendlySkipEngine || {});
-    Object.assign(VideoSurgeon, window.AdsFriendlyTrustedClicker || {});
-    // Phase 4: Session & Telemetry
-    Object.assign(VideoSurgeon, window.AdsFriendlySessionManager || {});
-    Object.assign(VideoSurgeon, window.AdsFriendlyTelemetrySentinel || {});
-
     VideoSurgeon.init();
 }

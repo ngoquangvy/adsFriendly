@@ -1,14 +1,10 @@
 (function () {
     // 1. Instant Injection (Zero-latency Radar) - Builder Mode
-    async function injectSpy() {
+    function injectSpy() {
         try {
-            // Phân khu 4 Component Build: Nối chuỗi các module
-            const proxyCode = await fetch(chrome.runtime.getURL('core/modules/proxy_shield.js')).then(r => r.text());
-            const radarCode = await fetch(chrome.runtime.getURL('core/modules/xhr_radar.js')).then(r => r.text());
-            
             const script = document.createElement('script');
-            script.textContent = `(function() {\n${proxyCode}\n${radarCode}\n})();`;
-            (document.head || document.documentElement).appendChild(script);
+            script.src = chrome.runtime.getURL('core/vanguard_main_world.js');
+            document.documentElement.appendChild(script);
             script.onload = () => script.remove();
         } catch (e) {
             console.error('[AdsFriendly] Injection failed:', e);

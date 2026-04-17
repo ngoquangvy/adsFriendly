@@ -1,5 +1,9 @@
 // core/modules/heuristics.js
 window.AdsFriendlyHeuristics = {
+    cachedPatterns: [],
+    siteTrustScore: 0.5,
+    currentAdDensity: 0,
+
     calculateAdScore(video) {
         let score = 0;
         const src = video.currentSrc || video.src || '';
@@ -12,8 +16,8 @@ window.AdsFriendlyHeuristics = {
         }
 
         // 2. Learned Patterns
-        if (this.cachedPatterns) {
-            this.cachedPatterns.forEach(p => {
+        if (AdsFriendlyHeuristics.cachedPatterns) {
+            AdsFriendlyHeuristics.cachedPatterns.forEach(p => {
                 if (p.type === 'video_source_marker' && src.includes(p.value)) score += 0.8;
                 if (p.type === 'video_marker' && video.closest(p.value)) score += 0.6;
             });
@@ -21,12 +25,12 @@ window.AdsFriendlyHeuristics = {
 
         // 2. Location Reputation (Crucial)
         // If site trust is low, we are more suspicious
-        if (this.siteTrustScore < 0.3) score += 0.3;
-        if (this.siteTrustScore > 0.8) score -= 0.6;
+        if (AdsFriendlyHeuristics.siteTrustScore < 0.3) score += 0.3;
+        if (AdsFriendlyHeuristics.siteTrustScore > 0.8) score -= 0.6;
 
         // 3. Ad Density (Current page environment)
-        if (this.currentAdDensity > 5) score += 0.2;
-        if (this.currentAdDensity > 15) score += 0.4;
+        if (AdsFriendlyHeuristics.currentAdDensity > 5) score += 0.2;
+        if (AdsFriendlyHeuristics.currentAdDensity > 15) score += 0.4;
 
         // 4. Technical Heuristics
         const isExternal = !src.startsWith('blob:') && !src.includes(window.location.hostname);

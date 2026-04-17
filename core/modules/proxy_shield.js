@@ -25,8 +25,8 @@
 
     Object.defineProperty(Function.prototype, 'toString', {
         value: proxyToString,
-        writable: false,
-        configurable: true // Giữ true để tránh xung đột với Polyfill/thư viện bên ngoài
+        writable: true, // Cho phép các thư viện khác shim/wrap mà không gây crash
+        configurable: true
     });
 
     // Đăng ký chính Proxy bằng biến (không phải bằng Function.prototype.toString)
@@ -38,28 +38,43 @@
 const _realGetDescriptor = Object.getOwnPropertyDescriptor.bind(Object);
 
 function patchNative(obj, prop, spoofedFn, nativeLabel) {
-    const origDesc = _realGetDescriptor(obj, prop);
-    if (!origDesc) return;
-    
-    // Nếu là accessor descriptor — dùng getter
-    if ('get' in origDesc) {
-        Object.defineProperty(obj, prop, {
-            get: spoofedFn,
-            set: origDesc.set,
-            enumerable: origDesc.enumerable,
-            configurable: origDesc.configurable
-        });
-    } else {
-        // Value descriptor — clone từ native
-        const newDesc = Object.assign({}, origDesc);
-        newDesc.value = spoofedFn;
-        Object.defineProperty(obj, prop, newDesc);
-    }
-    
-    window.__adsfriendly_registerSpoof?.(spoofedFn, nativeLabel || `function ${prop}() { [native code] }`);
-}
+    if (window.__adsfriendly_patched?.has(obj[prop])) return;
 
-console.log('[AdsFriendly Spy] Proxy Shield Active.');
+    try {
+        const origDesc = _realGetDescriptor(obj, prop);
+        if (!origDesc) return;
+
+        // Ensure spoofedFn is registered for toString concealment
+        if (typeof spoofedFn === 'function' && window.__adsfriendly_registerSpoof) {
+            window.__adsfriendly_registerSpoof(spoofedFn, nativeLabel || `function ${prop}() { [native code] }`);
+        }
+
+        // Handle case where property is non-configurable but writable
+        if (origDesc.configurable === false && origDesc.writable === true) {
+            obj[prop] = spoofedFn;
+            return;
+        }
+
+        if (origDesc.configurable === false && origDesc.writable === false) {
+            return;
+        }
+
+        // Standard patch via Descriptor
+        const newDesc = { ...origDesc };
+        if ('get' in origDesc) {
+            newDesc.get = spoofedFn;
+        } else {
+            newDesc.value = spoofedFn;
+        }
+
+        Object.defineProperty(obj, prop, newDesc);
+
+        window.__adsfriendly_patched = window.__adsfriendly_patched || new Set();
+        window.__adsfriendly_patched.add(spoofedFn);
+    } catch (e) {
+        console.warn(`[AdsFriendly Spy] Failed to patch ${prop}:`, e.message);
+    }
+}
 const originalTimeout = window.setTimeout.bind(window);
 const originalInterval = window.setInterval.bind(window);
 
@@ -85,28 +100,23 @@ function advanceVirtualTime() {
     return virtualDate;
 }
 
-// Constructor override (survives 'new Date()')
-function SpoofedDate(...args) {
-    if (!(this instanceof SpoofedDate)) {
-         return new originalDate(advanceVirtualTime()).toString();
-    }
-    if (args.length === 0) {
-         return new originalDate(advanceVirtualTime());
-    }
-    return new originalDate(...args);
-}
+// Date.now — dùng wrapper function an toàn từ User
+const _spoofedDateNow = (function fixDateNow() {
+    const RealDate = window.Date;
+    if (typeof RealDate !== "function") return null;
 
-// Date.now — dùng getter vì thay đổi theo isAdMode
-let _spoofedDateNow = () => advanceVirtualTime();
-patchNative(Date, 'now', () => _spoofedDateNow(), 'function now() { [native code] }');
+    const wrapper = function now() {
+        return advanceVirtualTime();
+    };
 
-SpoofedDate.parse = originalDate.parse;
-SpoofedDate.UTC = originalDate.UTC;
-SpoofedDate.prototype = originalDate.prototype;
-SpoofedDate.toString = () => "function Date() { [native code] }";
-window.__adsfriendly_registerSpoof?.(SpoofedDate, 'function Date() { [native code] }');
+    // Patch
+    RealDate.now = wrapper;
 
-window.Date = SpoofedDate;
+    // Register for stealth
+    window.__adsfriendly_registerSpoof?.(wrapper, 'function now() { [native code] }');
+
+    return wrapper;
+})();
 
 // performance.now — dùng getter vì thay đổi theo isAdMode
 const originalPerfNow = performance.now.bind(performance);
@@ -133,7 +143,7 @@ document.addEventListener('ratechange', (e) => {
     if (isAdMode && e.target.tagName === 'VIDEO') {
         const v = e.target;
         lastKnownState.playbackRate = v.playbackRate;
-        
+
         if (v.playbackRate !== 16.0 && v.playbackRate !== 1.0) {
             console.warn(`%c[AdsFriendly Spy] Tamper Alert: Site set rate to ${v.playbackRate}. (Internal is 16.0)`, "color: #f59e0b;");
         }
@@ -141,7 +151,7 @@ document.addEventListener('ratechange', (e) => {
 }, true);
 
 // v5.2: Anti-Anti-Debug (Blind Console Strategy)
-const _spoofedClear = function clear() {};
+const _spoofedClear = function clear() { };
 patchNative(console, 'clear', _spoofedClear, 'function clear() { [native code] }');
 
 function getTrackedAdVideos() {
@@ -193,7 +203,7 @@ window.addEventListener('message', (event) => {
                             v.muted = true;
                             v.dataset.adsfriendlySpyTouched = '1';
                         });
-                    } catch (e) {}
+                    } catch (e) { }
                 };
                 executeStrike();
                 if (hammerInterval) clearInterval(hammerInterval);
@@ -209,12 +219,12 @@ window.addEventListener('message', (event) => {
                         delete v.dataset.adsfriendlyPrevMuted;
                     });
                 };
-                
+
                 if (hammerInterval) {
                     clearInterval(hammerInterval);
                     hammerInterval = null;
                 }
-                
+
                 [0, 100, 300, 600, 1000].forEach(delay => originalTimeout(pulseRestore, delay));
             }
         }

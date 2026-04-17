@@ -46,7 +46,7 @@ window.AdsFriendlyAdDetection = {
     _collectSignals(adapter, video, caps) {
         const src = video?.currentSrc || video?.src || '';
         return {
-            hasDangerZone:     VideoSurgeon?.isInDangerZone?.(video) ?? false,
+            hasDangerZone:     (typeof AdsFriendlyDangerZone !== 'undefined' && AdsFriendlyDangerZone.isInDangerZone(video)) ?? false,
             hasDiscontinuity:  !!(window._adsfriendlyLastM3U8?.includes('#EXT-X-DISCONTINUITY')),
             hasVastUrl:        /vast|vmap|\/ads\/|ad\./i.test(src),
             hasAdMarkerInUrl:  /\b(ads?|advert|preroll|midroll|postroll|sponsored)\b/i.test(src),

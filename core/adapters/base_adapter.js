@@ -78,7 +78,7 @@ class BaseAdapter {
             supportsClickSim: true,      // Can simulate click events
             requiresTrusted:  false      // Site requires isTrusted = true
         };
-    },
+    }
 
     // ─── Lifecycle Hooks ───
     attach() {

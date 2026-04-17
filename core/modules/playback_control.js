@@ -12,14 +12,17 @@ window.AdsFriendlyPlaybackControl = {
         video.dataset.adsfriendlyPrevMuted = video.muted ? '1' : '0';
         video.playbackRate = 16;
         video.muted = true;
-        this.activeAds.add(video);
-        this.notifyBrainOfAdState(video);
+
+        if (typeof AdsFriendlySessionManager !== 'undefined' && AdsFriendlySessionManager.activeAds instanceof Set) {
+            AdsFriendlySessionManager.activeAds.add(video);
+        }
+
+        if (typeof AdsFriendlyTelemetrySentinel !== 'undefined') {
+            AdsFriendlyTelemetrySentinel.notifyBrainOfAdState(video);
+        }
 
         // Notify spy to activate the Relativity Engine and hide DOM events
-        this.notifySpy(true);
-
-        // TODO: Vanguard - Show Ninja Overlay when Safe Harbor UI is ready
-        // if (this.overlay) { ... }
+        if (typeof VideoSurgeon !== 'undefined') VideoSurgeon.notifySpy(true);
     },
 
     restore(video) {
@@ -34,12 +37,20 @@ window.AdsFriendlyPlaybackControl = {
         }
 
         // 2. Hide Overlay
-        if (this.overlay) this.overlay.style.display = 'none';
+        if (typeof AdsFriendlyDomVision !== 'undefined' && AdsFriendlyDomVision.overlay) {
+            AdsFriendlyDomVision.overlay.style.display = 'none';
+        }
 
         // 3. STOP Ad Mode in Spy (Main World context)
-        this.activeAds.delete(video);
-        this.notifySpy(false);
-        this.lastClickTime = 0; // REFRESH: Ready for back-to-back ads
+        if (typeof AdsFriendlySessionManager !== 'undefined' && AdsFriendlySessionManager.activeAds instanceof Set) {
+            AdsFriendlySessionManager.activeAds.delete(video);
+        }
+
+        if (typeof VideoSurgeon !== 'undefined') VideoSurgeon.notifySpy(false);
+        
+        if (typeof AdsFriendlySkipEngine !== 'undefined') {
+            AdsFriendlySkipEngine.lastClickTime = 0; // REFRESH: Ready for back-to-back ads
+        }
 
         // 4. Force playback resume (Double-tap for reliability)
         if (video.paused) {

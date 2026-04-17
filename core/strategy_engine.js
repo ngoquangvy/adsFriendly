@@ -35,11 +35,24 @@ window.AdsFriendlyStrategyEngine = {
     _runtimeValidation: new WeakMap(), // { strategy, appliedAt, softWarns, lastLearnAt }
     _visibilityState: new WeakMap(),
     _lastKnownFingerprints: {},
+    _currentAdSignal: null,
+
+    _setupNeuralBridge() {
+        if (this._neuralBridgeInited) return;
+        this._neuralBridgeInited = true;
+        window.addEventListener("message", (e) => {
+            if (e.data?.type === "VANGUARD_AD_SIGNAL") {
+                this._currentAdSignal = e.data.payload;
+                console.log("%c🔥 Ad detected (Network Signal):", "color: #ef4444; font-weight: bold;", this._currentAdSignal);
+            }
+        });
+    },
 
     // ─────────────────────────────────────────────────────────────────
     // 8. Toàn bộ loop - TICK
     // ─────────────────────────────────────────────────────────────────
     attachToVideo(video) {
+        this._setupNeuralBridge();
         if (this._activeAdapters.has(video)) return;
         const playerType = this._detectPlayerType(video);
         const adapter = this._createAdapter(playerType, video);
@@ -67,6 +80,19 @@ window.AdsFriendlyStrategyEngine = {
      * The Master Cycle: Sense → Decide → Act → Learn
      */
     _engineCycle(video, entry) {
+        // --- 0. FAST PASS (Network Signal Supremacy) ---
+        if (this._currentAdSignal) {
+            // Signal Expiry: If sensors are 100% sure it's unknown content, clear signal
+            const sensor = AdsFriendlyAdDetection.analyze(entry.adapter);
+            if (sensor.adType === 'unknown' && sensor.confidence > 0.9) {
+                console.log("%c[AdsFriendly Engine] Signal cleared by Sensor.", "color: #10b981;");
+                this._currentAdSignal = null;
+            } else {
+                this._executeFastPass(video, this._currentAdSignal);
+                return;
+            }
+        }
+
         // --- 1. SENSE (Ad Detection + Context) ---
         const detection = AdsFriendlyAdDetection.analyze(entry.adapter);
         const cb = detection.costBenefit;
@@ -95,6 +121,16 @@ window.AdsFriendlyStrategyEngine = {
         
         // --- 3. ACT & 6. RUNTIME VALIDATION (Execute + Watch) ---
         this._act(video, strategy, entry.adapter, detection);
+
+        // Notify content script of decision (Neural Bridge)
+        this.notifyBrain({
+            type: 'STRATEGY_DECISION',
+            site: hostname,
+            strategy,
+            adType: detection.adType,
+            confidence: detection.confidence,
+            riskScore: detection.costBenefit.riskScore
+        });
     },
 
     // ─────────────────────────────────────────────────────────────────
@@ -262,11 +298,44 @@ window.AdsFriendlyStrategyEngine = {
             this._adjustConfidence(memKey, rv.strategy, -0.3 * severity);
             this._banStrategy(this._banKey(window.location.hostname), rv.strategy);
             AdsFriendlyAdDetection.recordFailure(window.location.hostname);
+            this.notifyBrain({ type: 'STRATEGY_FAILURE', site: window.location.hostname, severity, strategy: rv.strategy });
         } else {
             // Success event (like JWP_AD_SKIPPED)
             this._adjustConfidence(memKey, rv.strategy, 0.1);
             AdsFriendlyAdDetection.recordSuccess(window.location.hostname);
+            this.notifyBrain({ type: 'STRATEGY_SUCCESS', site: window.location.hostname, strategy: rv.strategy });
         }
+    },
+
+    _executeFastPass(video, ad) {
+        if (!video) return;
+        
+        // v13: Simplified Test Action (Direct Strike)
+        if (video.playbackRate !== 16.0) {
+            console.log("%c🔥 Strategy executed: fastPass (16x)", "color: #ef4444; font-weight: bold;");
+            video.playbackRate = 16.0;
+            video.muted = true;
+        }
+
+        // Check for manual "Bỏ qua" button (Neural Clicker)
+        this._trySkip();
+        
+        // Auto-clear signal after some time or if duration is safe
+        // (For now, keep it until sensors take over or ad ends)
+    },
+
+    _trySkip() {
+        const buttons = document.querySelectorAll('button, div[role="button"], span');
+        for (const btn of buttons) {
+            const text = btn.innerText.toLowerCase();
+            if (text.includes("bỏ qua") || text.includes("skip ad")) {
+                btn.click();
+            }
+        }
+    },
+
+    notifyBrain(data) {
+        window.postMessage({ source: 'adsfriendly-engine', ...data }, '*');
     },
 
     // ─────────────────────────────────────────────────────────────────

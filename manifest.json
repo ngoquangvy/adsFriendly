@@ -33,24 +33,15 @@
         "core/BrainBridge.js",
         "core/modules/dom_vision.js",
         "core/modules/heuristics.js",
-        "core/modules/trusted_clicker.js",
         "core/modules/danger_zone.js",
         "core/modules/playback_control.js",
         "core/modules/skip_engine.js",
+        "core/modules/trusted_clicker.js",
         "core/modules/session_manager.js",
         "core/modules/telemetry_sentinel.js",
-        "core/adapters/base_adapter.js",
-        "core/adapters/hls_adapter.js",
-        "core/adapters/jw_adapter.js",
-        "core/adapters/youtube_adapter.js",
-        "core/adapters/dash_adapter.js",
-        "core/adapters/custom_adapter.js",
-        "core/ad_detection.js",
-        "core/strategy_engine.js",
         "telemetry/evaluator.js",
-        "content.js",
-        "picker.js",
-        "video_surgeon.js"
+        "video_surgeon.js",
+        "loader.js"
       ],
       "run_at": "document_start"
     }
@@ -76,8 +67,7 @@
     {
       "resources": [
         "ui/blocked.html",
-        "core/modules/proxy_shield.js",
-        "core/modules/xhr_radar.js"
+        "dist/vanguard_main_world.js"
       ],
       "matches": [
         "<all_urls>"
