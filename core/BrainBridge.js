@@ -53,9 +53,7 @@ const BrainBridge = {
 
     // --- LỚP 4: CẢM BIẾN ĐẦU VÀO TỪ DOM & MẠNG (Sensor Intake) ---
     async recordDecision(entry) {
-        if (!chrome.runtime || !chrome.runtime.id) return;
-        
-        // A. Cố gắng đẩy Telemetry Decision lên Lò Server AI
+        // A. Telemetry Tunnel (postMessage) — hoạt động trong MỌI context (Main World + Extension)
         if (gateway) {
             gateway.submitTelemetry({
                 type: 'DECISION_LOG',
@@ -64,17 +62,21 @@ const BrainBridge = {
             });
         }
 
-        // B. Lưu Offline Fallback như cũ (v2.0 behavior)
+        // B. Lưu Offline Fallback — chỉ khả dụng trong Extension context
         try {
-            const { neuroLogs = [] } = await chrome.storage.local.get(['neuroLogs']);
-            neuroLogs.unshift(entry);
-            if (neuroLogs.length > 50) neuroLogs.length = 50;
-            await chrome.storage.local.set({ neuroLogs });
+            if (chrome.runtime && chrome.runtime.id) {
+                const { neuroLogs = [] } = await chrome.storage.local.get(['neuroLogs']);
+                neuroLogs.unshift(entry);
+                if (neuroLogs.length > 50) neuroLogs.length = 50;
+                await chrome.storage.local.set({ neuroLogs });
+            }
         } catch (e) {
-            // Thất bại thầm lặng trong extension context
+            // Thất bại thầm lặng trong Main World context
         }
 
-        if (entry.final_confidence > 0.9) {
+        // C. Promote high-confidence entries
+        const confidence = entry.decision?.confidence || entry.final_confidence || 0;
+        if (confidence > 0.9) {
             this.promoteToBuffer(entry);
         }
     },

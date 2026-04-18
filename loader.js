@@ -1,6 +1,7 @@
 /**
  * Vanguard Loader (Content Script Context)
  * Injects the bundled engine into the Main World.
+ * Role: Inject script into Main World + bootstrap engine
  */
 
 (function () {
@@ -9,7 +10,7 @@
         BrainBridge.init().catch(console.error);
     }
 
-    // 2. Injected Main World Bridge
+    // 2. Injected Main World Bridge (for Extension ↔ Main World communication)
     window.addEventListener("message", (e) => {
         const data = e.data;
         if (!data || data.source !== 'adsfriendly-engine') return;
@@ -36,17 +37,19 @@
                     BrainBridge.penalizeMarker(data.selector);
                 }
                 break;
+            case 'SUBMIT_TELEMETRY':
+                // 🚀 Forward telemetry from Main World → Background (Service Worker)
+                try {
+                    chrome.runtime.sendMessage({
+                        type: 'PROXY_TELEMETRY',
+                        payload: data.payload
+                    });
+                } catch (e) {
+                    console.warn('[Loader] Telemetry tunnel failed:', e.message);
+                }
+                break;
             case 'VANGUARD_READY':
                 console.log("%c[Vanguard Loader] Engine handshake received. Main World is active.", "color: #3b82f6;");
-                break;
-            case 'SUBMIT_TELEMETRY':
-                console.log('[Tunnel] 📥 Received from Main World:', data.payload);
-                fetch('http://localhost:3000/telemetry', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(data.payload)
-                }).then(() => console.log('[Tunnel] 🚀 Forwarded to server'))
-                  .catch(err => console.error('[Tunnel] ❌ Forward failed:', err));
                 break;
         }
     });

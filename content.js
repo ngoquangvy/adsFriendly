@@ -1,18 +1,31 @@
 (function () {
-    // 1. Instant Injection (Zero-latency Radar) - Builder Mode
-    function injectSpy() {
-        try {
-            const script = document.createElement('script');
-            script.src = chrome.runtime.getURL('dist/vanguard_main_world.js');
-            document.documentElement.appendChild(script);
-            script.onload = () => script.remove();
-        } catch (e) {
-            console.error('[AdsFriendly] Injection failed:', e);
+    // Note: Engine injection moved to loader.js
+    // content.js role: Bridge telemetry + Ad blocking
+
+    // === GATEKEEPER: Bridge Main World ↔ Extension ↔ Server ===
+    window.addEventListener('message', async (event) => {
+        if (event.source !== window) return;
+
+        const data = event.data;
+
+        if (data?.source === 'adsfriendly-engine' && data?.type === 'SUBMIT_TELEMETRY') {
+            console.log('[ContentScript] 📥 Received telemetry');
+
+            try {
+                const res = await fetch('http://localhost:3000/telemetry', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(data.payload)
+                });
+
+                const json = await res.json();
+                console.log('[ContentScript] ✅ Sent:', json);
+
+            } catch (err) {
+                console.error('[ContentScript] ❌ Failed:', err);
+            }
         }
-    }
-    
-    // Inject immediately before any async storage checks
-    injectSpy();
+    });
 
     // 2. Main Blocking Logic (Asynchronous)
     (async function () {

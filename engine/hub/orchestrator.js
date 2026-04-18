@@ -114,17 +114,48 @@ const Orchestrator = {
             domainState.set(domain, state);
             this.purgeMemory(now, state.frequency > 5);
 
+            // Calculate patternScore
+            const patternScore = pattern ? (pattern.lastSeen - pattern.firstSeen) / 1000 : 0;
+
+            // 3-Layer Telemetry Structure
             const finalRes = {
-                url,
-                domain,
+                timestamp: now,
+
+                // 🔍 RAW (debuggable)
+                raw: {
+                    url: event.url,
+                    method: event.method || 'GET',
+                    type: event.type || 'unknown',
+                    isError: event.isError || false
+                },
+
+                // 🧠 FEATURES (ML input)
                 features: features.v2,
-                score: parseFloat(smoothedScore.toFixed(2)),
-                reputation: parseFloat(state.reputation.toFixed(3)),
-                confidence: parseFloat(decision.confidence.toFixed(2)),
-                label: state.confirmedLabel,
-                action: decision.action,
-                isHighFrequency,
-                timestamp: now
+
+                // 🌐 CONTEXT (behavioral understanding)
+                context: {
+                    domain,
+                    domainClass: features.domainClass,
+                    session: features.session,
+                    patternCount: pattern?.count || 0,
+                    patternScore: parseFloat(patternScore.toFixed(2)),
+                    frequency: parseFloat(state.frequency.toFixed(3)),
+                    reputation: parseFloat(state.reputation.toFixed(3))
+                },
+
+                // 🎯 DECISION (output)
+                decision: {
+                    score: parseFloat(smoothedScore.toFixed(2)),
+                    confidence: parseFloat((decision.confidence || 0).toFixed(2)),
+                    label: state.confirmedLabel,
+                    action: decision.action,
+                    flags: decision.flags || []
+                },
+
+                // ⚡ META
+                meta: {
+                    isHighFrequency: state.frequency > 5
+                }
             };
 
             if (window.Engine?.brainBridge) window.Engine.brainBridge.recordDecision(finalRes);

@@ -79,6 +79,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .then(() => sendResponse({ status: 'ok' }))
       .catch(() => sendResponse({ status: 'error' }));
     return true;
+  } else if (message.type === 'PROXY_TELEMETRY') {
+    proxyTelemetry(message.payload)
+      .then(() => sendResponse({ status: 'ok' }))
+      .catch(() => sendResponse({ status: 'error' }));
+    return true;
   }
 });
 

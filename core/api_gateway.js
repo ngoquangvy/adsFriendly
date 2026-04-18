@@ -70,6 +70,8 @@ window.APIGateway = {
             window.postMessage({
                 source: 'adsfriendly-engine',
                 type: 'SUBMIT_TELEMETRY',
+                version: '2.0',
+                timestamp: Date.now(),
                 payload: fullPayload
             }, "*");
 
