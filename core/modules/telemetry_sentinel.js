@@ -14,26 +14,26 @@ window.AdsFriendlyTelemetrySentinel = {
         console.log('--- NETWORK (Genome Map) ---');
         console.log('In Danger Zone:', dangerZone ? 'YES' : 'NO');
         if (dangerZone) console.log('Zone Info:', dangerZone);
-        
+
         console.log('--- DOM (Computer Vision) ---');
         console.log('Skip Button Found:', skipBtn ? 'YES' : 'NO');
         console.log('Player Ad-Class detected:', !!player);
-        
+
         console.log('--- LOGIC (Decision Matrix) ---');
         console.log('Heuristic Ad Score:', adScore.toFixed(2));
         console.log('Playback Rate:', video.playbackRate);
         console.log('Current Time:', video.currentTime.toFixed(2));
         console.log('Is definitely ad (Score >= 0.8):', adScore >= 0.8);
         console.groupEnd();
-        
+
         try {
             navigator.sendBeacon('http://localhost:3000/telemetry', JSON.stringify({
                 identity: { site_domain: window.location.hostname },
                 type: 'DEBUG_LOG',
-                data: { 
-                    url: window.location.href, 
-                    state: { 
-                        msg: 'VideoSurgeon Diagnostic Matrix', 
+                data: {
+                    url: window.location.href,
+                    state: {
+                        msg: 'VideoSurgeon Diagnostic Matrix',
                         payload: {
                             dangerZone: dangerZone,
                             skipBtn: !!skipBtn,
@@ -41,11 +41,11 @@ window.AdsFriendlyTelemetrySentinel = {
                             adScore: adScore.toFixed(2),
                             playRate: video.playbackRate,
                             time: video.currentTime.toFixed(2)
-                        } 
-                    } 
+                        }
+                    }
                 }
             }));
-        } catch (e) {}
+        } catch (e) { }
     },
 
     async notifyBrainOfAdState(video) {
@@ -86,7 +86,7 @@ window.AdsFriendlyTelemetrySentinel = {
 
         const telemetryPayload = {
             type: 'AD_SESSION_RESULT',
-            provider_type: 'JSON_DEEP_SCAN', 
+            provider_type: 'JSON_DEEP_SCAN',
             data: {
                 features: {
                     dna_keys: zone.metadata?.dna_keys || [],
@@ -95,7 +95,7 @@ window.AdsFriendlyTelemetrySentinel = {
                     initial_confidence: zone.confidence || 0
                 },
                 labels: {
-                    is_success: isSuccess, 
+                    is_success: isSuccess,
                     exit_trigger: trigger,
                     clock_drift: parseFloat(clockDrift.toFixed(3))
                 }

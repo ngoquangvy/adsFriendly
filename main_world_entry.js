@@ -5,6 +5,13 @@
 
 // 1. Core Modules (Main World context dependencies)
 import './core/modules/proxy_shield.js';
+import './core/config/weights.js';
+import './core/modules/raw_logger.js';
+import './core/modules/signal_extractor.js';
+import './core/modules/score_engine.js';
+import './core/modules/decision_engine.js';
+import './core/modules/action_engine.js';
+import './core/modules/policy_engine.js';
 import './core/modules/xhr_radar.js';
 import './core/modules/dom_vision.js';
 import './core/modules/heuristics.js';
