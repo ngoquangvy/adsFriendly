@@ -43,7 +43,7 @@ setInterval(() => {
 const server = http.createServer((req, res) => {
     // 1. CORS Headers
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
     if (req.method === 'OPTIONS') {
@@ -76,6 +76,32 @@ const server = http.createServer((req, res) => {
                 res.statusCode = 400;
                 res.end(JSON.stringify({ error: 'Invalid JSON' }));
             }
+        });
+    } else if (req.method === 'GET' && req.url === '/dataset') {
+        if (!fs.existsSync(STORAGE_PATH)) {
+            res.statusCode = 200;
+            res.end(JSON.stringify([]));
+            return;
+        }
+
+        fs.readFile(STORAGE_PATH, 'utf-8', (err, data) => {
+            if (err) {
+                res.statusCode = 500;
+                res.end(JSON.stringify({ error: 'Read failure' }));
+                return;
+            }
+
+            const events = data.split('\n')
+                .filter(Boolean)
+                .map(line => {
+                    try { return JSON.parse(line); } 
+                    catch(e) { return null; }
+                })
+                .filter(Boolean);
+
+            res.statusCode = 200;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify(events));
         });
     } else {
         res.statusCode = 404;
