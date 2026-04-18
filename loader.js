@@ -39,6 +39,15 @@
             case 'VANGUARD_READY':
                 console.log("%c[Vanguard Loader] Engine handshake received. Main World is active.", "color: #3b82f6;");
                 break;
+            case 'SUBMIT_TELEMETRY':
+                console.log('[Tunnel] 📥 Received from Main World:', data.payload);
+                fetch('http://localhost:3000/telemetry', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data.payload)
+                }).then(() => console.log('[Tunnel] 🚀 Forwarded to server'))
+                  .catch(err => console.error('[Tunnel] ❌ Forward failed:', err));
+                break;
         }
     });
 
