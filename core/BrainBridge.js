@@ -7,7 +7,7 @@
 // Cấp quyền gọi qua API Gateway nếu được inject chung môi trường
 const gateway = typeof APIGateway !== 'undefined' ? APIGateway : null;
 
-window.BrainBridge = {
+const BrainBridge = {
     mode: 'HYBRID',
     userId: 'anonymous', // Sẽ được gán sau khi có hệ thống Login
 
@@ -54,22 +54,25 @@ window.BrainBridge = {
     // --- LỚP 4: CẢM BIẾN ĐẦU VÀO TỪ DOM & MẠNG (Sensor Intake) ---
     async recordDecision(entry) {
         if (!chrome.runtime || !chrome.runtime.id) return;
-        const logEntry = { ...entry, timestamp: Date.now(), userId: this.userId };
-
+        
         // A. Cố gắng đẩy Telemetry Decision lên Lò Server AI
         if (gateway) {
             gateway.submitTelemetry({
                 type: 'DECISION_LOG',
-                provider_type: 'UI_HEURISTIC', // DOM-based heuristic detection
-                data: logEntry
+                provider_type: 'VANGUARD_V2', 
+                data: entry // Entry is now the Clean Telemetry Object from Orchestrator
             });
         }
 
         // B. Lưu Offline Fallback như cũ (v2.0 behavior)
-        const { neuroLogs = [] } = await chrome.storage.local.get(['neuroLogs']);
-        neuroLogs.unshift(logEntry);
-        if (neuroLogs.length > 50) neuroLogs.length = 50;
-        await chrome.storage.local.set({ neuroLogs });
+        try {
+            const { neuroLogs = [] } = await chrome.storage.local.get(['neuroLogs']);
+            neuroLogs.unshift(entry);
+            if (neuroLogs.length > 50) neuroLogs.length = 50;
+            await chrome.storage.local.set({ neuroLogs });
+        } catch (e) {
+            // Thất bại thầm lặng trong extension context
+        }
 
         if (entry.final_confidence > 0.9) {
             this.promoteToBuffer(entry);
@@ -150,6 +153,13 @@ window.BrainBridge = {
         return discoveredMarkers.filter(m => !suspiciousMarkers.includes(m));
     }
 };
+
+// Global Exposure for Vanguard Engine
+if (typeof window !== 'undefined') {
+    window.Engine = window.Engine || {};
+    window.Engine.brainBridge = BrainBridge;
+    window.BrainBridge = BrainBridge; // Backward compatibility
+}
 
 if (typeof window === 'undefined') {
     module.exports = BrainBridge;

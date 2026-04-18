@@ -1,65 +1,53 @@
 /**
- * Vanguard v9 - Main World Entry Point
- * Bundles all core modules into a single IIFE.
+ * Vanguard v2.13.0 - Pure Engine Entry Point
+ * Consolidates all modern modules into a single unified bundle.
+ * NO LEGACY DEPENDENCIES.
  */
 
-// 1. Core Modules (Main World context dependencies)
-import './core/modules/proxy_shield.js';
-import './core/config/weights.js';
-import './core/modules/raw_logger.js';
-import './core/modules/signal_extractor.js';
-import './core/modules/score_engine.js';
-import './core/modules/decision_engine.js';
-import './core/modules/action_engine.js';
-import './core/modules/policy_engine.js';
+// 1. Foundation Layer (Messaging Tunnel)
+import './core/api_gateway.js';
+import './core/BrainBridge.js';
+
+// 2. Intelligence Layer (Brain)
+import './engine/brain/classifier.js';
+import './engine/brain/weights.js';
+import './engine/brain/extractor.js';
+import './engine/brain/scoring.js';
+
+// 3. Authority Layer (Policy)
+import './engine/policy/runner.js';
+
+// 4. Orchestration Layer (Hub)
+import './engine/hub/orchestrator.js';
+
+// 5. Sensor Layer (Radar Hook)
 import './core/modules/xhr_radar.js';
-import './core/modules/dom_vision.js';
-import './core/modules/heuristics.js';
-import './core/modules/danger_zone.js';
-import './core/modules/playback_control.js';
-import './core/modules/skip_engine.js';
 
-// 2. Adapters Layer
-import './core/adapters/base_adapter.js';
-import './core/adapters/hls_adapter.js';
-import './core/adapters/jw_adapter.js';
-import './core/adapters/youtube_adapter.js';
-import './core/adapters/dash_adapter.js';
-import './core/adapters/custom_adapter.js';
-
-// 3. Engine Layer
-import './core/ad_detection.js';
-import './core/strategy_engine.js';
-
-// 4. Injection Guard & Bridge
-(function() {
-    // 🛡️ ENVIRONMENT GUARD: Sandbox & Cross-Origin Check
+// 🚀 INITIALIZATION GUARD
+(function () {
     try {
+        if (window.__VANGUARD_CORE_ACTIVE__) return;
+        
+        // Environment Check (Security)
         if (window.top !== window.self) {
-            // Check for sandboxing (may throw if cross-origin)
             if (window.frameElement && window.frameElement.hasAttribute("sandbox")) return;
-            
-            // Check origin parity
-            if (window.location.origin !== window.top.location.origin) return;
         }
-    } catch (e) { return; }
 
-    if (window.__vanguard_injected) return;
-    window.__vanguard_injected = true;
+        window.__VANGUARD_CORE_ACTIVE__ = true;
+        
+        console.log("%c[Vanguard v2.13.0] Pure Engine Initialized successfully.", "color: #3b82f6; font-weight: bold;");
 
-    console.log("%c[Vanguard v9] Engine Core Injected successfully.", "color: #10b981; font-weight: bold;");
+        // Notify session
+        window.VanguardSessionId = Math.random().toString(36).substring(2, 15);
 
-    // Lifecycle: Notify loader.js
-    window.postMessage({
-        type: "VANGUARD_READY",
-        timestamp: Date.now(),
-        version: "9.0.0"
-    }, "*");
+        // Lifecycle: Notify loader.js
+        window.postMessage({
+            type: "VANGUARD_READY",
+            version: "2.13.0",
+            timestamp: Date.now()
+        }, "*");
 
-    // Auto-attach to existing videos if any
-    document.querySelectorAll('video').forEach(v => {
-        if (window.AdsFriendlyStrategyEngine) {
-            window.AdsFriendlyStrategyEngine.attachToVideo(v);
-        }
-    });
+    } catch (e) {
+        console.error('[Vanguard] Startup Failure:', e);
+    }
 })();

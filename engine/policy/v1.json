@@ -1,0 +1,14 @@
+{
+    "version": "1.0.0",
+    "name": "Relaxed Policy",
+    "rules": [
+        {
+            "condition": "score > 0.8",
+            "action": "BLOCK"
+        },
+        {
+            "condition": "score > 0.5",
+            "action": "ACCELERATE"
+        }
+    ]
+}

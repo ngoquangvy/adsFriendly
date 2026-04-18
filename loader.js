@@ -3,7 +3,7 @@
  * Injects the bundled engine into the Main World.
  */
 
-(function() {
+(function () {
     // 1. Initialise Brain in Content Script context (Access to chrome.storage)
     if (typeof BrainBridge !== 'undefined' && BrainBridge.init) {
         BrainBridge.init().catch(console.error);
@@ -15,7 +15,7 @@
         if (!data || data.source !== 'adsfriendly-engine') return;
 
         // Route to BrainBridge or APIGateway
-        switch(data.type) {
+        switch (data.type) {
             case 'STRATEGY_DECISION':
                 if (typeof BrainBridge !== 'undefined') {
                     BrainBridge.recordDecision({
@@ -49,12 +49,12 @@
         const script = document.createElement('script');
         script.src = chrome.runtime.getURL('dist/vanguard_main_world.js');
         script.dataset.vanguardEngine = "active";
-        
+
         // Inject as early as possible
         (document.documentElement || document.head).appendChild(script);
-        
+
         script.onload = () => {
-             script.remove(); // Cleanup DOM footprint while keeping script running in main world
+            script.remove(); // Cleanup DOM footprint while keeping script running in main world
         };
     }
 

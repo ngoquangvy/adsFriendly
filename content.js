@@ -3,7 +3,7 @@
     function injectSpy() {
         try {
             const script = document.createElement('script');
-            script.src = chrome.runtime.getURL('core/vanguard_main_world.js');
+            script.src = chrome.runtime.getURL('dist/vanguard_main_world.js');
             document.documentElement.appendChild(script);
             script.onload = () => script.remove();
         } catch (e) {

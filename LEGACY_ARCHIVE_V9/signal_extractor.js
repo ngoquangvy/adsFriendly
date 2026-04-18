@@ -54,4 +54,4 @@ if (typeof window !== 'undefined') {
     window.AdsFriendlySignalExtractor = AdsFriendlySignalExtractor;
 }
 
-export default AdsFriendlySignalExtractor;
+// End of file

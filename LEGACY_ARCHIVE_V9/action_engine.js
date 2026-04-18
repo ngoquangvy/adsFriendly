@@ -36,4 +36,4 @@ if (typeof window !== 'undefined') {
     window.AdsFriendlyActionEngine = AdsFriendlyActionEngine;
 }
 
-export default AdsFriendlyActionEngine;
+// End of file

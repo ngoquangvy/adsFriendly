@@ -5,9 +5,9 @@ let lastTrustedClick = { timestamp: 0, intentUrl: null };
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'TRUSTED_CLICK') {
-    lastTrustedClick = { 
-        timestamp: Date.now(), 
-        intentUrl: message.intentUrl 
+    lastTrustedClick = {
+      timestamp: Date.now(),
+      intentUrl: message.intentUrl
     };
   } else if (message.type === 'TOGGLE_STATUS') {
     console.log("Protection status:", message.isEnabled);
@@ -69,7 +69,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const stats = {};
       const patterns = data.globalAdPatterns || [];
       patterns.forEach(p => {
-          if (p.type === 'reputation') stats[p.value] = p;
+        if (p.type === 'reputation') stats[p.value] = p;
       });
       sendResponse(stats);
     });
@@ -83,72 +83,72 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 async function handleDiagnosticLogging(payload) {
-    const { crash_log_phimmoichill = [] } = await chrome.storage.local.get(['crash_log_phimmoichill']);
-    
-    const entry = {
-        type: payload.logType,
-        domain: payload.identity?.site_domain || 'unknown',
-        url: payload.data?.url || 'unknown',
-        details: payload.data?.content || {},
-        timestamp: payload.timestamp || Date.now()
-    };
+  const { crash_log_phimmoichill = [] } = await chrome.storage.local.get(['crash_log_phimmoichill']);
 
-    // FIFO: Newest first, limit to 10
-    crash_log_phimmoichill.unshift(entry);
-    if (crash_log_phimmoichill.length > 10) crash_log_phimmoichill.length = 10;
+  const entry = {
+    type: payload.logType,
+    domain: payload.identity?.site_domain || 'unknown',
+    url: payload.data?.url || 'unknown',
+    details: payload.data?.content || {},
+    timestamp: payload.timestamp || Date.now()
+  };
 
-    await chrome.storage.local.set({ crash_log_phimmoichill });
-    console.log(`[AdsFriendly Background] 📝 Diagnostic Logged: ${entry.type} on ${entry.domain}`);
+  // FIFO: Newest first, limit to 10
+  crash_log_phimmoichill.unshift(entry);
+  if (crash_log_phimmoichill.length > 10) crash_log_phimmoichill.length = 10;
+
+  await chrome.storage.local.set({ crash_log_phimmoichill });
+  console.log(`[AdsFriendly Background] 📝 Diagnostic Logged: ${entry.type} on ${entry.domain}`);
 }
 
 async function handleNeuralLogging(entry) {
-    const { neuroLogs = [] } = await chrome.storage.local.get(['neuroLogs']);
-    neuroLogs.unshift({
-        ...entry,
-        timestamp: Date.now()
-    });
-    
-    // Prune to 50 logs
-    if (neuroLogs.length > 50) neuroLogs.length = 50;
-    await chrome.storage.local.set({ neuroLogs });
+  const { neuroLogs = [] } = await chrome.storage.local.get(['neuroLogs']);
+  neuroLogs.unshift({
+    ...entry,
+    timestamp: Date.now()
+  });
+
+  // Prune to 50 logs
+  if (neuroLogs.length > 50) neuroLogs.length = 50;
+  await chrome.storage.local.set({ neuroLogs });
 }
 
 async function updateSiteReputation(hostname, blockedCount) {
-    const { siteReputation = {} } = await chrome.storage.local.get('siteReputation');
-    if (!siteReputation[hostname]) {
-        siteReputation[hostname] = { trustScore: 0.5, blockActivity: 0 };
-    }
+  const { siteReputation = {} } = await chrome.storage.local.get('siteReputation');
+  if (!siteReputation[hostname]) {
+    siteReputation[hostname] = { trustScore: 0.5, blockActivity: 0 };
+  }
 
-    const data = siteReputation[hostname];
-    data.blockActivity = Math.max(data.blockActivity, blockedCount);
-    
-    // If a site has more than 10 blocks, it starts losing trust
-    if (blockedCount > 10) {
-        data.trustScore = Math.max(0, data.trustScore - 0.05);
-    } else if (blockedCount <= 1) {
-        data.trustScore = Math.min(1, data.trustScore + 0.01);
-    }
+  const data = siteReputation[hostname];
+  data.blockActivity = Math.max(data.blockActivity, blockedCount);
 
-    await chrome.storage.local.set({ siteReputation });
+  // If a site has more than 10 blocks, it starts losing trust
+  if (blockedCount > 10) {
+    data.trustScore = Math.max(0, data.trustScore - 0.05);
+  } else if (blockedCount <= 1) {
+    data.trustScore = Math.min(1, data.trustScore + 0.01);
+  }
+
+  await chrome.storage.local.set({ siteReputation });
 }
 
 async function cleanupStaleMemory() {
-    const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
-    const now = Date.now();
-    const { siteResetHistory = {} } = await chrome.storage.local.get('siteResetHistory');
-    
-    let changed = false;
-    for (const hostname in siteResetHistory) {
-        if (now - siteResetHistory[hostname].timestamp > THIRTY_DAYS) {
-            delete siteResetHistory[hostname];
-            changed = true;
-        }
-    }
+  const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const { siteResetHistory = {} } = await chrome.storage.local.get('siteResetHistory');
 
-    if (changed) {
-        await chrome.storage.local.set({ siteResetHistory });
-        console.log('[AdsFriendly Background] Stale behavioral memory cleaned up.');
+  let changed = false;
+  for (const hostname in siteResetHistory) {
+    if (now - siteResetHistory[hostname].timestamp > THIRTY_DAYS) {
+      delete siteResetHistory[hostname];
+      changed = true;
     }
+  }
+
+  if (changed) {
+    await chrome.storage.local.set({ siteResetHistory });
+    console.log('[AdsFriendly Background] Stale behavioral memory cleaned up.');
+  }
 }
 
 // Trigger cleanup on Startup
@@ -157,229 +157,229 @@ chrome.runtime.onStartup.addListener(cleanupStaleMemory);
 cleanupStaleMemory();
 
 async function handleLearnVideoAd(data) {
-    const { src, hostname } = data;
-    if (!src) return;
+  const { src, hostname } = data;
+  if (!src) return;
 
-    let patternValue = src;
-    try {
-        const url = new URL(src);
-        // If it's a known cloud host, learn the domain. If it's a specific path, find the pattern.
-        if (url.hostname.includes('github') || url.hostname.includes('s3') || url.hostname.includes('cdn')) {
-            patternValue = url.hostname;
-        } else {
-            // Take the domain + first part of path
-            const pathParts = url.pathname.split('/');
-            patternValue = url.hostname + (pathParts[1] ? '/' + pathParts[1] : '');
-        }
-    } catch (e) {
-        // Fallback to substring if not a valid URL
-        patternValue = src.split('?')[0].substring(0, 50);
-    }
-
-    const { globalAdPatterns = [] } = await chrome.storage.local.get(['globalAdPatterns']);
-    
-    const existing = globalAdPatterns.find(p => p.type === 'video_source_marker' && p.value === patternValue);
-    
-    if (existing) {
-        existing.confidence = 1.0; // User manual mark is definitive
+  let patternValue = src;
+  try {
+    const url = new URL(src);
+    // If it's a known cloud host, learn the domain. If it's a specific path, find the pattern.
+    if (url.hostname.includes('github') || url.hostname.includes('s3') || url.hostname.includes('cdn')) {
+      patternValue = url.hostname;
     } else {
-        globalAdPatterns.push({
-            type: 'video_source_marker',
-            value: patternValue,
-            confidence: 1.0,
-            source: hostname
-        });
+      // Take the domain + first part of path
+      const pathParts = url.pathname.split('/');
+      patternValue = url.hostname + (pathParts[1] ? '/' + pathParts[1] : '');
     }
+  } catch (e) {
+    // Fallback to substring if not a valid URL
+    patternValue = src.split('?')[0].substring(0, 50);
+  }
 
-    await chrome.storage.local.set({ globalAdPatterns });
+  const { globalAdPatterns = [] } = await chrome.storage.local.get(['globalAdPatterns']);
+
+  const existing = globalAdPatterns.find(p => p.type === 'video_source_marker' && p.value === patternValue);
+
+  if (existing) {
+    existing.confidence = 1.0; // User manual mark is definitive
+  } else {
+    globalAdPatterns.push({
+      type: 'video_source_marker',
+      value: patternValue,
+      confidence: 1.0,
+      source: hostname
+    });
+  }
+
+  await chrome.storage.local.set({ globalAdPatterns });
 }
 
 async function handleLearnDomains(domains) {
-    if (!domains || !Array.isArray(domains)) return;
+  if (!domains || !Array.isArray(domains)) return;
 
-    const { globalAdPatterns = [] } = await chrome.storage.local.get(['globalAdPatterns']);
-    let changed = false;
+  const { globalAdPatterns = [] } = await chrome.storage.local.get(['globalAdPatterns']);
+  let changed = false;
 
-    domains.forEach(domain => {
-        // Sanitize: Ignore very common domains or invalid ones
-        if (domain.length < 4 || domain.includes('google.com') || domain.includes('facebook.com')) return;
+  domains.forEach(domain => {
+    // Sanitize: Ignore very common domains or invalid ones
+    if (domain.length < 4 || domain.includes('google.com') || domain.includes('facebook.com')) return;
 
-        const existing = globalAdPatterns.find(p => p.type === 'domain' && p.value === domain);
-        if (!existing) {
-            console.log(`%c[AdsFriendly AI] Neural Learning: Blacklisting ad-domain from user zap: ${domain}`, "color: #10b981; font-weight: bold;");
-            globalAdPatterns.push({
-                type: 'domain',
-                value: domain,
-                confidence: 1.0, // Definitive user signal
-                timestamp: Date.now()
-            });
-            changed = true;
-        }
-    });
-
-    if (changed) {
-        await chrome.storage.local.set({ globalAdPatterns });
+    const existing = globalAdPatterns.find(p => p.type === 'domain' && p.value === domain);
+    if (!existing) {
+      console.log(`%c[AdsFriendly AI] Neural Learning: Blacklisting ad-domain from user zap: ${domain}`, "color: #10b981; font-weight: bold;");
+      globalAdPatterns.push({
+        type: 'domain',
+        value: domain,
+        confidence: 1.0, // Definitive user signal
+        timestamp: Date.now()
+      });
+      changed = true;
     }
+  });
+
+  if (changed) {
+    await chrome.storage.local.set({ globalAdPatterns });
+  }
 }
 
 async function handleVideoLearning(data) {
-    const { classes, hostname } = data;
-    if (!classes) return;
+  const { classes, hostname } = data;
+  if (!classes) return;
 
-    // Filter relevant architectural classes
-    const classList = classes.split(' ').filter(c => 
-        (c.includes('ad') || c.includes('player') || c.includes('video')) && !c.includes('content')
-    );
+  // Filter relevant architectural classes
+  const classList = classes.split(' ').filter(c =>
+    (c.includes('ad') || c.includes('player') || c.includes('video')) && !c.includes('content')
+  );
 
-    if (classList.length === 0) return;
+  if (classList.length === 0) return;
 
-    const { globalAdPatterns = [] } = await chrome.storage.local.get(['globalAdPatterns']);
-    
-    classList.forEach(cls => {
-        const normalizedCls = cls.replace(/-\d+$/, '-*').replace(/:\d+$/, ':*');
-        const patternValue = `.${normalizedCls}`;
-        
-        const existing = globalAdPatterns.find(p => p.type === 'video_marker' && p.value === patternValue);
-        
-        if (existing) {
-            existing.confidence = Math.min(1.0, existing.confidence + 0.1);
-            existing.lastSeen = Date.now();
-        } else {
-            globalAdPatterns.push({
-                type: 'video_marker',
-                value: patternValue,
-                confidence: 0.5,
-                source: hostname,
-                lastSeen: Date.now()
-            });
-        }
-    });
+  const { globalAdPatterns = [] } = await chrome.storage.local.get(['globalAdPatterns']);
 
-    await chrome.storage.local.set({ globalAdPatterns: globalAdPatterns.slice(-200) });
+  classList.forEach(cls => {
+    const normalizedCls = cls.replace(/-\d+$/, '-*').replace(/:\d+$/, ':*');
+    const patternValue = `.${normalizedCls}`;
+
+    const existing = globalAdPatterns.find(p => p.type === 'video_marker' && p.value === patternValue);
+
+    if (existing) {
+      existing.confidence = Math.min(1.0, existing.confidence + 0.1);
+      existing.lastSeen = Date.now();
+    } else {
+      globalAdPatterns.push({
+        type: 'video_marker',
+        value: patternValue,
+        confidence: 0.5,
+        source: hostname,
+        lastSeen: Date.now()
+      });
+    }
+  });
+
+  await chrome.storage.local.set({ globalAdPatterns: globalAdPatterns.slice(-200) });
 }
 
 // v2.8.12: Neural Fusion (Unified Brain)
 async function handleReportVideoDecision(data) {
-    const { domain, type } = data; // type: 'AD' or 'CONTENT'
-    if (!domain || domain === 'unknown') return;
+  const { domain, type } = data; // type: 'AD' or 'CONTENT'
+  if (!domain || domain === 'unknown') return;
 
-    const { globalAdPatterns = [] } = await chrome.storage.local.get(['globalAdPatterns']);
-    
-    let existing = globalAdPatterns.find(p => p.type === 'reputation' && p.value === domain);
-    
-    if (!existing) {
-        existing = {
-            type: 'reputation',
-            value: domain,
-            adCount: 0,
-            contentCount: 0,
-            lastSeen: Date.now()
-        };
-        globalAdPatterns.push(existing);
-    }
+  const { globalAdPatterns = [] } = await chrome.storage.local.get(['globalAdPatterns']);
 
-    if (type === 'AD') existing.adCount++;
-    else if (type === 'CONTENT') existing.contentCount++;
-    
-    existing.lastSeen = Date.now();
+  let existing = globalAdPatterns.find(p => p.type === 'reputation' && p.value === domain);
 
-    // Cap at reasonable limits to prevent overflow
-    if (existing.adCount > 100) existing.adCount = 100;
-    if (existing.contentCount > 100) existing.contentCount = 100;
+  if (!existing) {
+    existing = {
+      type: 'reputation',
+      value: domain,
+      adCount: 0,
+      contentCount: 0,
+      lastSeen: Date.now()
+    };
+    globalAdPatterns.push(existing);
+  }
 
-    await chrome.storage.local.set({ globalAdPatterns: globalAdPatterns.slice(-300) });
+  if (type === 'AD') existing.adCount++;
+  else if (type === 'CONTENT') existing.contentCount++;
+
+  existing.lastSeen = Date.now();
+
+  // Cap at reasonable limits to prevent overflow
+  if (existing.adCount > 100) existing.adCount = 100;
+  if (existing.contentCount > 100) existing.contentCount = 100;
+
+  await chrome.storage.local.set({ globalAdPatterns: globalAdPatterns.slice(-300) });
 }
 
 const PROTECTED_KEYWORDS = [
-    'messenger', 'chat', 'inbox', 'cart', 'checkout', 'search', 'account', 'login', 'social', 'notification',
-    'swiper', 'carousel', 'slick', 'owl-', 'slide'
+  'messenger', 'chat', 'inbox', 'cart', 'checkout', 'search', 'account', 'login', 'social', 'notification',
+  'swiper', 'carousel', 'slick', 'owl-', 'slide'
 ];
 
 async function handleNegativeLearning(fingerprint) {
-    if (!fingerprint) return;
-    const { safePatterns = [], infrastructurePatterns = [] } = await chrome.storage.local.get(['safePatterns', 'infrastructurePatterns']);
-    
-    const entry = { value: fingerprint.alt || fingerprint.title, type: fingerprint.alt ? 'alt' : 'title' };
-    if (!entry.value) return;
+  if (!fingerprint) return;
+  const { safePatterns = [], infrastructurePatterns = [] } = await chrome.storage.local.get(['safePatterns', 'infrastructurePatterns']);
 
-    // Add to safe patterns (Potential Infrastructure)
-    if (!safePatterns.some(p => p.value === entry.value)) {
-        safePatterns.push(entry);
-    }
-    
-    // Explicitly track recently undone parents for refinement
-    if (!infrastructurePatterns.some(p => p.value === entry.value)) {
-        infrastructurePatterns.push({ ...entry, timestamp: Date.now() });
-    }
+  const entry = { value: fingerprint.alt || fingerprint.title, type: fingerprint.alt ? 'alt' : 'title' };
+  if (!entry.value) return;
 
-    await chrome.storage.local.set({ safePatterns, infrastructurePatterns });
+  // Add to safe patterns (Potential Infrastructure)
+  if (!safePatterns.some(p => p.value === entry.value)) {
+    safePatterns.push(entry);
+  }
 
-    // Clean up global patterns
-    const { globalAdPatterns = [] } = await chrome.storage.local.get('globalAdPatterns');
-    const filtered = globalAdPatterns.filter(p => p.value !== entry.value);
-    await chrome.storage.local.set({ globalAdPatterns: filtered });
+  // Explicitly track recently undone parents for refinement
+  if (!infrastructurePatterns.some(p => p.value === entry.value)) {
+    infrastructurePatterns.push({ ...entry, timestamp: Date.now() });
+  }
 
-    console.log("Deep Reflex: Root element marked as Infrastructure candidate.", entry.value);
+  await chrome.storage.local.set({ safePatterns, infrastructurePatterns });
+
+  // Clean up global patterns
+  const { globalAdPatterns = [] } = await chrome.storage.local.get('globalAdPatterns');
+  const filtered = globalAdPatterns.filter(p => p.value !== entry.value);
+  await chrome.storage.local.set({ globalAdPatterns: filtered });
+
+  console.log("Deep Reflex: Root element marked as Infrastructure candidate.", entry.value);
 }
 
 /**
  * The 'Brain': Aggregates local custom rules into global patterns
  */
 async function synthesizeGlobalPatterns() {
-    const { userCustomRules = {} } = await chrome.storage.local.get('userCustomRules');
-    const { safePatterns = [] } = await chrome.storage.local.get('safePatterns');
-    const attrFrequency = {}; 
-    const domainSpread = {}; // How many domains use this pattern
-    
-    // Scan all rules across all domains
-    Object.entries(userCustomRules).forEach(([domain, rules]) => {
-        rules.forEach(rule => {
-            if (rule && rule.fingerprint) {
-                const { alt, title, linkDomain } = rule.fingerprint;
-                const process = (type, val) => {
-                    if (!val || val.length < 3) return;
-                    const key = `${type}:${val}`;
-                    attrFrequency[key] = (attrFrequency[key] || 0) + 1;
-                    if (!domainSpread[key]) domainSpread[key] = new Set();
-                    domainSpread[key].add(domain);
-                };
-                process('alt', alt);
-                process('title', title);
-                process('domain', linkDomain);
-            }
-        });
+  const { userCustomRules = {} } = await chrome.storage.local.get('userCustomRules');
+  const { safePatterns = [] } = await chrome.storage.local.get('safePatterns');
+  const attrFrequency = {};
+  const domainSpread = {}; // How many domains use this pattern
+
+  // Scan all rules across all domains
+  Object.entries(userCustomRules).forEach(([domain, rules]) => {
+    rules.forEach(rule => {
+      if (rule && rule.fingerprint) {
+        const { alt, title, linkDomain } = rule.fingerprint;
+        const process = (type, val) => {
+          if (!val || val.length < 3) return;
+          const key = `${type}:${val}`;
+          attrFrequency[key] = (attrFrequency[key] || 0) + 1;
+          if (!domainSpread[key]) domainSpread[key] = new Set();
+          domainSpread[key].add(domain);
+        };
+        process('alt', alt);
+        process('title', title);
+        process('domain', linkDomain);
+      }
+    });
+  });
+
+  const isSafe = (type, val) => safePatterns.some(p => p.type === type && p.value === val);
+  const isProtected = (val) => PROTECTED_KEYWORDS.some(kw => val.toLowerCase().includes(kw));
+
+  // Synthesize: Ad Patterns = (High Frequency + Low Undo Rate)
+  const globalPatterns = Object.entries(attrFrequency)
+    .filter(([key, count]) => {
+      const [type, value] = key.split(':');
+      const spread = domainSpread[key].size;
+
+      // Deep Reflex: Even if it's 'Safe' (Undone before), 
+      // if it's being specifically zapped AGAIN as a child, 
+      // it overrides the safety for that specific pattern.
+      // (Handled by verifying current userCustomRules state)
+      return !isProtected(value) && spread >= 1;
+    })
+    .map(([key, count]) => {
+      const [type, value] = key.split(':');
+      const spread = domainSpread[key].size;
+
+      // Boost confidence if it's frequently zapped despite common safe ancestors
+      let confidence = Math.min((count + (spread * 2)) / 10, 1.0);
+
+      // Penalty if it was explicitly marked safe
+      if (isSafe(type, value)) confidence *= 0.3;
+
+      return { type, value, confidence };
     });
 
-    const isSafe = (type, val) => safePatterns.some(p => p.type === type && p.value === val);
-    const isProtected = (val) => PROTECTED_KEYWORDS.some(kw => val.toLowerCase().includes(kw));
-
-    // Synthesize: Ad Patterns = (High Frequency + Low Undo Rate)
-    const globalPatterns = Object.entries(attrFrequency)
-        .filter(([key, count]) => {
-            const [type, value] = key.split(':');
-            const spread = domainSpread[key].size;
-            
-            // Deep Reflex: Even if it's 'Safe' (Undone before), 
-            // if it's being specifically zapped AGAIN as a child, 
-            // it overrides the safety for that specific pattern.
-            // (Handled by verifying current userCustomRules state)
-            return !isProtected(value) && spread >= 1;
-        })
-        .map(([key, count]) => {
-            const [type, value] = key.split(':');
-            const spread = domainSpread[key].size;
-            
-            // Boost confidence if it's frequently zapped despite common safe ancestors
-            let confidence = Math.min((count + (spread * 2)) / 10, 1.0);
-            
-            // Penalty if it was explicitly marked safe
-            if (isSafe(type, value)) confidence *= 0.3;
-
-            return { type, value, confidence };
-        });
-
-    await chrome.storage.local.set({ globalAdPatterns: globalPatterns });
-    console.log("Deep Reflex: Brain synthesize complete. Active patterns:", globalPatterns.length);
+  await chrome.storage.local.set({ globalAdPatterns: globalPatterns });
+  console.log("Deep Reflex: Brain synthesize complete. Active patterns:", globalPatterns.length);
 }
 
 // Layer 2: In-page Blocking (DNR Ruleset)
@@ -404,7 +404,7 @@ async function toggleInPageBlocking(enabled) {
 // Reset ONLY on first installation if not set
 chrome.runtime.onInstalled.addListener(async () => {
   const result = await chrome.storage.local.get(['friendlyMode', 'isEnabled', 'globalAdPatterns']);
-  
+
   // Seed the "Basic Brain" (Global Ad Patterns) for Public Baseline v1.0
   if (!result.globalAdPatterns || result.globalAdPatterns.length === 0) {
     const baselineSeeds = [
@@ -424,9 +424,9 @@ chrome.runtime.onInstalled.addListener(async () => {
 
   if (result.friendlyMode === undefined) {
     await chrome.storage.local.set({ friendlyMode: true });
-    toggleInPageBlocking(false); 
+    toggleInPageBlocking(false);
   }
-  
+
   if (result.isEnabled === undefined) {
     await chrome.storage.local.set({ isEnabled: true });
   }
@@ -435,7 +435,7 @@ chrome.runtime.onInstalled.addListener(async () => {
 // Separate handler for cleaner async/await
 async function handleUserDecision(message) {
   const { action, domain } = message;
-  
+
   if (action === 'WHITELIST') {
     const { whitelist = [] } = await chrome.storage.local.get(['whitelist']);
     if (!whitelist.includes(domain)) {
@@ -456,30 +456,30 @@ async function handleUserDecision(message) {
  * Deep Pulse: Workflow Learning Engine
  */
 async function syncTrustedPath(source, target, isManual = false) {
-    if (!source || !target || source === target) return;
-    const shardKey = `p:${source}>${target}`;
-    
-    const result = await chrome.storage.local.get([shardKey]);
-    const entry = result[shardKey] || { source, target, visits: 0, isManual: false, lastUpdated: Date.now() };
-    
-    entry.visits++;
-    if (isManual) {
-        entry.isManual = true;
-        entry.visits = Math.max(entry.visits, 99); // Immediate trust threshold
-    }
-    entry.lastUpdated = Date.now();
-    
-    await chrome.storage.local.set({ [shardKey]: entry });
-    console.log(`[AdsFriendly Pulse] Path learned: ${source} -> ${target} (Visits: ${entry.visits}, Manual: ${entry.isManual})`);
+  if (!source || !target || source === target) return;
+  const shardKey = `p:${source}>${target}`;
+
+  const result = await chrome.storage.local.get([shardKey]);
+  const entry = result[shardKey] || { source, target, visits: 0, isManual: false, lastUpdated: Date.now() };
+
+  entry.visits++;
+  if (isManual) {
+    entry.isManual = true;
+    entry.visits = Math.max(entry.visits, 99); // Immediate trust threshold
+  }
+  entry.lastUpdated = Date.now();
+
+  await chrome.storage.local.set({ [shardKey]: entry });
+  console.log(`[AdsFriendly Pulse] Path learned: ${source} -> ${target} (Visits: ${entry.visits}, Manual: ${entry.isManual})`);
 }
 
 async function logBlockedNavigation(url, source) {
-    const { blockedLogs = [] } = await chrome.storage.local.get(['blockedLogs']);
-    const entry = { url, source, timestamp: Date.now() };
-    
-    // Keep only last 20 events
-    const updated = [entry, ...blockedLogs].slice(0, 20);
-    await chrome.storage.local.set({ blockedLogs: updated });
+  const { blockedLogs = [] } = await chrome.storage.local.get(['blockedLogs']);
+  const entry = { url, source, timestamp: Date.now() };
+
+  // Keep only last 20 events
+  const updated = [entry, ...blockedLogs].slice(0, 20);
+  await chrome.storage.local.set({ blockedLogs: updated });
 }
 
 // Helper to update badge
@@ -494,6 +494,23 @@ async function updateBadge() {
 }
 
 // Helper to increment blocked count
+async function proxyTelemetry(payload) {
+    // 🚩 EGRESS LOG: Cửa ra cuối cùng trước khi về Server
+    console.log("%c[Vanguard Egress] 🚀 Sending data to Servermock...", "color: #f59e0b; font-weight: bold;");
+    console.log("Payload Payload:", payload);
+
+    try {
+        const response = await fetch('http://localhost:3000/telemetry', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        return await response.json();
+    } catch (err) {
+        console.error("Telemetry failed:", err);
+    }
+}
+
 async function incrementBlockedCount() {
   const result = await chrome.storage.local.get(['blockedCount']);
   const count = (result.blockedCount || 0) + 1;
@@ -509,26 +526,26 @@ function isCoreSystem(hostname) {
 
 // Helper to analyze if an URL is a stealth ad/pop-under
 function isSuspiciousURL(url, globalPatterns = []) {
-    try {
-        const u = new URL(url);
-        // 1. Parameter patterns
-        const suspiciousParams = ['utm_', 'aff_', 'clickid', 'pop_', 'bannerid', 'zoneid'];
-        if (suspiciousParams.some(p => u.search.includes(p))) return true;
+  try {
+    const u = new URL(url);
+    // 1. Parameter patterns
+    const suspiciousParams = ['utm_', 'aff_', 'clickid', 'pop_', 'bannerid', 'zoneid'];
+    if (suspiciousParams.some(p => u.search.includes(p))) return true;
 
-        // 2. Domain Match with AI Brain
-        const domainMatch = globalPatterns.some(p => p.type === 'domain' && u.hostname.includes(p.value));
-        if (domainMatch) return true;
+    // 2. Domain Match with AI Brain
+    const domainMatch = globalPatterns.some(p => p.type === 'domain' && u.hostname.includes(p.value));
+    if (domainMatch) return true;
 
-        return false;
-    } catch (e) { return false; }
+    return false;
+  } catch (e) { return false; }
 }
 
 // Get Dynamic Trust Window based on site reputation
 async function getDynamicTrustWindow(hostname) {
-    const { siteReputation = {} } = await chrome.storage.local.get('siteReputation');
-    const rep = siteReputation[hostname];
-    if (rep && rep.blockedAdCount > 10) return 500; // Strict for ad-heavy sites
-    return 2000; // Default
+  const { siteReputation = {} } = await chrome.storage.local.get('siteReputation');
+  const rep = siteReputation[hostname];
+  if (rep && rep.blockedAdCount > 10) return 500; // Strict for ad-heavy sites
+  return 2000; // Default
 }
 
 // Listen for new tab creation (v2.6 Intent Lock Core)
@@ -548,39 +565,39 @@ chrome.webNavigation.onCreatedNavigationTarget.addListener(async (details) => {
     // v4.4 SILENT BLACKLIST KILLER
     // If domain is already blacklisted (or ends with blacklisted pattern), kill silently
     const isBlacklisted = blacklist.some(entry => {
-        const pattern = entry.replace(/^\|\|/, '').replace(/\^$/, '');
-        return targetDomain === pattern || targetDomain.endsWith('.' + pattern);
+      const pattern = entry.replace(/^\|\|/, '').replace(/\^$/, '');
+      return targetDomain === pattern || targetDomain.endsWith('.' + pattern);
     });
 
     if (isBlacklisted) {
-        console.log(`%c[AdsFriendly AI] Silent Kill: Blacklisted domain ${targetDomain} neutralized.`, "color: #ef4444; font-weight: bold;");
-        await incrementBlockedCount();
-        await logBlockedNavigation(url, sourceUrl.hostname);
-        chrome.tabs.remove(tabId); // Direct closure for blacklist
-        return;
+      console.log(`%c[AdsFriendly AI] Silent Kill: Blacklisted domain ${targetDomain} neutralized.`, "color: #ef4444; font-weight: bold;");
+      await incrementBlockedCount();
+      await logBlockedNavigation(url, sourceUrl.hostname);
+      chrome.tabs.remove(tabId); // Direct closure for blacklist
+      return;
     }
 
     if (sourceUrl.hostname === targetDomain) return;
 
     // v2.5 MUST-KILL Check: If the URL is suspicious, kill it
     if (isSuspiciousURL(url, globalAdPatterns)) {
-        console.log(`%c[AdsFriendly AI] Stealth Pop-under neutralized: ${targetDomain}`, "color: #ef4444; font-weight: bold;");
-        await logBlockedNavigation(url, sourceUrl.hostname);
-        const blockedUrl = chrome.runtime.getURL(`ui/blocked.html?url=${encodeURIComponent(url)}&source=${encodeURIComponent(sourceUrl.hostname)}`);
-        chrome.tabs.update(tabId, { url: blockedUrl });
-        return;
+      console.log(`%c[AdsFriendly AI] Stealth Pop-under neutralized: ${targetDomain}`, "color: #ef4444; font-weight: bold;");
+      await logBlockedNavigation(url, sourceUrl.hostname);
+      const blockedUrl = chrome.runtime.getURL(`ui/blocked.html?url=${encodeURIComponent(url)}&source=${encodeURIComponent(sourceUrl.hostname)}`);
+      chrome.tabs.update(tabId, { url: blockedUrl });
+      return;
     }
 
     // v2.6 Intent Lock Core: Is this tab what the user actually clicked?
     let isIntentMatched = false;
     if (lastTrustedClick.intentUrl) {
-        try {
-            const intentUrl = new URL(lastTrustedClick.intentUrl);
-            // Match if same domain or subdomain
-            if (targetDomain === intentUrl.hostname || targetDomain.endsWith('.' + intentUrl.hostname)) {
-                isIntentMatched = true;
-            }
-        } catch (e) {}
+      try {
+        const intentUrl = new URL(lastTrustedClick.intentUrl);
+        // Match if same domain or subdomain
+        if (targetDomain === intentUrl.hostname || targetDomain.endsWith('.' + intentUrl.hostname)) {
+          isIntentMatched = true;
+        }
+      } catch (e) { }
     }
 
     // 1. Deep Pulse: Check Sharded Trusted Path
@@ -588,7 +605,7 @@ chrome.webNavigation.onCreatedNavigationTarget.addListener(async (details) => {
     const pulseResult = await chrome.storage.local.get([shardKey]);
     const path = pulseResult[shardKey];
 
-    if (path && (path.isManual || path.visits >= 3)) return; 
+    if (path && (path.isManual || path.visits >= 3)) return;
 
     // 2. Check Whitelist
     const { whitelist = [] } = await chrome.storage.local.get(['whitelist']);
@@ -600,11 +617,11 @@ chrome.webNavigation.onCreatedNavigationTarget.addListener(async (details) => {
 
     // If intent doesn't match AND it's a cross-domain navigation, it's a Click-jack
     if (!isIntentMatched && timeSinceClick < trustWindow) {
-        console.log(`%c[AdsFriendly AI] Click-jack detected! Destination ${targetDomain} does not match intent.`, "color: #f59e0b; font-weight: bold;");
-        await logBlockedNavigation(url, sourceUrl.hostname);
-        const blockedUrl = chrome.runtime.getURL(`ui/blocked.html?url=${encodeURIComponent(url)}&source=${encodeURIComponent(sourceUrl.hostname)}`);
-        chrome.tabs.update(tabId, { url: blockedUrl });
-        return;
+      console.log(`%c[AdsFriendly AI] Click-jack detected! Destination ${targetDomain} does not match intent.`, "color: #f59e0b; font-weight: bold;");
+      await logBlockedNavigation(url, sourceUrl.hostname);
+      const blockedUrl = chrome.runtime.getURL(`ui/blocked.html?url=${encodeURIComponent(url)}&source=${encodeURIComponent(sourceUrl.hostname)}`);
+      chrome.tabs.update(tabId, { url: blockedUrl });
+      return;
     }
 
     if (timeSinceClick > trustWindow) {

@@ -20,4 +20,4 @@ if (typeof window !== 'undefined') {
     window.AdsFriendlyDecisionEngine = AdsFriendlyDecisionEngine;
 }
 
-export default AdsFriendlyDecisionEngine;
+// End of file

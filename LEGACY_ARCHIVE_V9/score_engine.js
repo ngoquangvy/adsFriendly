@@ -25,4 +25,4 @@ if (typeof window !== 'undefined') {
     window.AdsFriendlyScoreEngine = AdsFriendlyScoreEngine;
 }
 
-export default AdsFriendlyScoreEngine;
+// End of file

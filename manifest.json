@@ -29,18 +29,6 @@
       "all_frames": true,
       "match_about_blank": true,
       "js": [
-        "core/api_gateway.js",
-        "core/BrainBridge.js",
-        "core/modules/dom_vision.js",
-        "core/modules/heuristics.js",
-        "core/modules/danger_zone.js",
-        "core/modules/playback_control.js",
-        "core/modules/skip_engine.js",
-        "core/modules/trusted_clicker.js",
-        "core/modules/session_manager.js",
-        "core/modules/telemetry_sentinel.js",
-        "telemetry/evaluator.js",
-        "video_surgeon.js",
         "loader.js"
       ],
       "run_at": "document_start"

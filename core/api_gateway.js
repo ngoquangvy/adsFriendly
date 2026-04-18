@@ -31,7 +31,7 @@ window.APIGateway = {
                     "phimmoi.net": 0.1
                 }
             };
-            console.log('[API Gateway] 🌐 Cập nhật Data Cloud v2.0 thành công!');
+            //console.log('[API Gateway] 🌐 Cập nhật Data Cloud v2.0 thành công!');
             return mockResponse;
         } catch (err) {
             console.error('[API Gateway] Mạng lõm, gọi Server thất bại:', err);
@@ -43,12 +43,12 @@ window.APIGateway = {
     sessionId: Math.random().toString(36).substring(2, 15),
 
     /**
-     * Phương thức POST: Nạp các bằng chứng (Genome) do màn hình DOM bắt được lên lò luyện AI.
-     * v3.9: Hỗ trợ Payload chuẩn hóa (Identity + Content)
+     * Phương thức POST: Gửi bằng chứng thông qua Cầu nối Messaging (Vượt rào CSP)
+     * v3.9: Hỗ trợ Payload chuẩn hóa
      */
     async submitTelemetry(payload) {
         try {
-            // Nhóm Định danh (Identity) - Tự động bổ sung nếu thiếu
+            // Nhóm Định danh (Identity)
             const identity = {
                 site_domain: window.location.hostname,
                 session_id: this.sessionId,
@@ -62,19 +62,20 @@ window.APIGateway = {
                 timestamp: Date.now()
             };
 
-            // Gửi dữ liệu thực tế về Mock Server
-            const response = await fetch(`${this.serverUrl}/telemetry`, {
-                method: 'POST',
-                mode: 'cors',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(fullPayload)
-            });
+            // 🚀 DEEP DEBUG: Log cửa ra tại Engine
+            console.log('[TELEMETRY] sending', fullPayload);
 
-            const result = await response.json();
-            console.log(`[API Gateway] 📡 Upload Success [${identity.provider_type}] -> Session: ${identity.session_id}`);
-            return result;
+            // 🚀 MESSAGING TUNNEL: Ném tin nhắn qua cho Loader (Content Script)
+            // Cách này giúp vượt qua rào cản CSP của YouTube
+            window.postMessage({
+                source: 'adsfriendly-engine',
+                type: 'SUBMIT_TELEMETRY',
+                payload: fullPayload
+            }, "*");
+
+            return { success: true, tunneled: true };
         } catch (err) {
-            console.warn('[API Gateway] ❌ Gửi Telemetry thất bại (Có thể do Mock Server chưa chạy):', err.message);
+            console.warn('[API Gateway] ❌ Tunneling failed:', err.message);
             return { success: false, error: err.message };
         }
     }
