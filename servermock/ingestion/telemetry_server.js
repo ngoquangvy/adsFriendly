@@ -59,14 +59,12 @@ const server = http.createServer((req, res) => {
             try {
                 const payload = JSON.parse(body);
 
-                // Extract clean data (Step 4 standard)
-                if (payload.type === 'DECISION_LOG' && payload.data) {
-                    logBuffer.push(payload.data);
+                // Buffer the entire payload (Trace + Identity + Data)
+                logBuffer.push(payload);
 
-                    // Buffer high-water mark check
-                    if (logBuffer.length >= BUFFER_THRESHOLD) {
-                        flushBuffer();
-                    }
+                // Buffer high-water mark check
+                if (logBuffer.length >= BUFFER_THRESHOLD) {
+                    flushBuffer();
                 }
 
                 res.statusCode = 200;

@@ -26,14 +26,34 @@ const lines = fs.readFileSync(file, 'utf-8')
  * Unifies flat schema (Fast-path MEDIA) and nested schema (Full AI Pipeline)
  */
 function normalizeLog(l) {
+    // 🛠️ Robust Schema Fallback Logic
+    const root = l.data ?? l;
+    
+    // Possibility 1: Full-Context Trace (root.final / root.trace)
+    // Possibility 2: Direct wrap (root.decision / root.raw)
+    const final = root.final ?? root;
+    const trace = root.trace ?? {};
+    const decision = final.decision ?? root.decision ?? {};
+    const context = final.context ?? root.context ?? {};
+    const event = trace.event ?? final.raw ?? root.raw ?? {};
+
+    const label = final.label ?? decision.label ?? root.label ?? 'undefined';
+    
+    // Map internal labels to CSS-friendly names
+    let badgeClass = label.toLowerCase();
+    if (label === 'HIGH_RISK') badgeClass = 'risk';
+    if (label === 'MEDIA_PASS') badgeClass = 'media';
+
     return {
-        url: l.url ?? l.raw?.url ?? 'unknown',
-        domain: l.domain ?? l.context?.domain ?? 'unknown',
-        label: l.label ?? l.decision?.label ?? 'undefined',
-        score: l.score ?? l.decision?.score ?? 0,
-        confidence: l.confidence ?? l.decision?.confidence ?? 0,
-        reputation: l.reputation ?? l.context?.reputation ?? 0,
-        features: l.features ?? {}
+        url: final.url ?? event.url ?? root.url ?? 'unknown',
+        domain: (final.domain ?? context.domain ?? root.domain ?? 'unknown').toLowerCase().trim(),
+        label: label,
+        badgeClass: badgeClass,
+        score: final.score ?? decision.score ?? root.score ?? 0,
+        confidence: final.confidence ?? decision.confidence ?? root.confidence ?? 0,
+        reputation: context.reputation ?? root.reputation ?? 0,
+        features: trace.features ?? root.features ?? {},
+        raw: l
     };
 }
 

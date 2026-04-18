@@ -117,22 +117,15 @@ const Orchestrator = {
             // Calculate patternScore
             const patternScore = pattern ? (pattern.lastSeen - pattern.firstSeen) / 1000 : 0;
 
-            // 3-Layer Telemetry Structure
+            // 3-Layer Telemetry Structure (Summary for Return)
             const finalRes = {
                 timestamp: now,
-
-                // 🔍 RAW (debuggable)
                 raw: {
                     url: event.url,
                     method: event.method || 'GET',
-                    type: event.type || 'unknown',
-                    isError: event.isError || false
+                    type: event.type || 'unknown'
                 },
-
-                // 🧠 FEATURES (ML input)
                 features: features.v2,
-
-                // 🌐 CONTEXT (behavioral understanding)
                 context: {
                     domain,
                     domainClass: features.domainClass,
@@ -142,8 +135,6 @@ const Orchestrator = {
                     frequency: parseFloat(state.frequency.toFixed(3)),
                     reputation: parseFloat(state.reputation.toFixed(3))
                 },
-
-                // 🎯 DECISION (output)
                 decision: {
                     score: parseFloat(smoothedScore.toFixed(2)),
                     confidence: parseFloat((decision.confidence || 0).toFixed(2)),
@@ -151,14 +142,26 @@ const Orchestrator = {
                     action: decision.action,
                     flags: decision.flags || []
                 },
-
-                // ⚡ META
                 meta: {
                     isHighFrequency: state.frequency > 5
                 }
             };
 
-            if (window.Engine?.brainBridge) window.Engine.brainBridge.recordDecision(finalRes);
+            // Full-Context Telemetry Structure
+            const telemetryPayload = {
+                trace: {
+                    event: cleanRaw,
+                    features: features.v2,
+                    decision: finalRes.decision
+                },
+                final: finalRes,
+                meta: {
+                    stage: "ORCHESTRATOR",
+                    ts: now
+                }
+            };
+
+            if (window.Engine?.brainBridge) window.Engine.brainBridge.recordDecision(telemetryPayload);
             return finalRes;
         } catch (e) {
             console.error('[Orchestrator] Kernel Panic:', e);

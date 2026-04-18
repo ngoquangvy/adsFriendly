@@ -52,13 +52,13 @@ const BrainBridge = {
     },
 
     // --- LỚP 4: CẢM BIẾN ĐẦU VÀO TỪ DOM & MẠNG (Sensor Intake) ---
-    async recordDecision(entry) {
+    async recordDecision(payload) {
         // A. Telemetry Tunnel (postMessage) — hoạt động trong MỌI context (Main World + Extension)
         if (gateway) {
             gateway.submitTelemetry({
                 type: 'DECISION_LOG',
                 provider_type: 'VANGUARD_V2', 
-                data: entry // Entry is now the Clean Telemetry Object from Orchestrator
+                data: payload // Passing the full trace/final/meta payload
             });
         }
 
@@ -66,7 +66,7 @@ const BrainBridge = {
         try {
             if (chrome.runtime && chrome.runtime.id) {
                 const { neuroLogs = [] } = await chrome.storage.local.get(['neuroLogs']);
-                neuroLogs.unshift(entry);
+                neuroLogs.unshift(payload);
                 if (neuroLogs.length > 50) neuroLogs.length = 50;
                 await chrome.storage.local.set({ neuroLogs });
             }
