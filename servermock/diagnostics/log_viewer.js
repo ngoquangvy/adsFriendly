@@ -10,55 +10,120 @@ if (!fs.existsSync(file)) {
     process.exit(1);
 }
 
-const lines = fs.readFileSync(file, 'utf-8')
-    .split('\n')
-    .filter(Boolean)
-    .map(line => {
-        try {
-            return JSON.parse(line);
-        } catch (e) {
-            return null;
-        }
-    })
-    .filter(Boolean);
+const JSONL_DATA = fs.readFileSync(file, 'utf-8');
 
 /**
  * Unifies flat schema (Fast-path MEDIA) and nested schema (Full AI Pipeline)
  */
 function normalizeLog(l) {
-    // 🛠️ Robust Schema Fallback Logic
-    const root = l.data ?? l;
+    const data = l.data ?? l;
     
-    // Possibility 1: Full-Context Trace (root.final / root.trace)
-    // Possibility 2: Direct wrap (root.decision / root.raw)
-    const final = root.final ?? root;
-    const trace = root.trace ?? {};
-    const decision = final.decision ?? root.decision ?? {};
-    const context = final.context ?? root.context ?? {};
-    const event = trace.event ?? final.raw ?? root.raw ?? {};
+    // --- 1. Canonical Schema Detection (v14.0 - Training Ready) ---
+    if (data.schema_v === '14.0') {
+        const domain = (data.domain ?? '').toLowerCase().trim();
+        const label = data.label_pred ?? data.label ?? '';
+        
+        if (!domain || domain === 'undefined') return null;
+        if (!label || label === 'undefined') return null;
 
-    const label = final.label ?? decision.label ?? root.label ?? 'undefined';
-    
-    // Map internal labels to CSS-friendly names
+        let badgeClass = label.toLowerCase();
+        if (label === 'HIGH_RISK') badgeClass = 'risk';
+        if (label === 'MEDIA_PASS') badgeClass = 'media';
+
+        return {
+            url: data.url ?? 'unknown',
+            domain,
+            label,
+            label_true: data.label_true ?? 'UNKNOWN',
+            badgeClass,
+            score: data.score ?? 0,
+            confidence: data.confidence ?? 0,
+            action: data.action ?? 'ALLOW',
+            features: data.features ?? {},
+            context: data.context ?? {},
+            flags: data.flags || [],
+            raw_signal: {
+                method: data.raw?.method ?? 'GET',
+                type: data.raw?.type ?? 'unknown',
+                isError: data.raw?.isError || false
+            },
+            timestamp: data.timestamp ?? Date.now(),
+            raw: l
+        };
+    }
+
+    // --- 2. Schema v13.8 Fallback ---
+    if (data.schema_v === '13.8') {
+        const domain = (data.domain ?? '').toLowerCase().trim();
+        const label = data.label ?? '';
+        
+        if (!domain || domain === 'undefined') return null;
+        if (!label || label === 'undefined') return null;
+
+        let badgeClass = label.toLowerCase();
+        if (label === 'HIGH_RISK') badgeClass = 'risk';
+        if (label === 'MEDIA_PASS') badgeClass = 'media';
+
+        return {
+            url: data.url ?? 'unknown',
+            domain,
+            label,
+            badgeClass,
+            score: data.score ?? 0,
+            confidence: data.confidence ?? 0,
+            action: data.action ?? 'ALLOW',
+            features: data.features ?? {},
+            context: data.context ?? {},
+            timestamp: data.timestamp ?? Date.now(),
+            raw: l
+        };
+    }
+
+    // --- 2. Legacy Fallback Logic ---
+    const final = data.final ?? data;
+    const trace = data.trace ?? {};
+    const decision = final.decision ?? data.decision ?? {};
+    const context = final.context ?? data.context ?? {};
+
+    const domain = (final.domain ?? trace.event?.domain ?? data.domain ?? '').toLowerCase().trim();
+    const label = final.label ?? decision.label ?? data.label ?? '';
+
+    if (!domain || domain === 'undefined') return null;
+    if (!label || label === 'undefined') return null;
+
     let badgeClass = label.toLowerCase();
     if (label === 'HIGH_RISK') badgeClass = 'risk';
     if (label === 'MEDIA_PASS') badgeClass = 'media';
 
     return {
-        url: final.url ?? event.url ?? root.url ?? 'unknown',
-        domain: (final.domain ?? context.domain ?? root.domain ?? 'unknown').toLowerCase().trim(),
-        label: label,
-        badgeClass: badgeClass,
-        score: final.score ?? decision.score ?? root.score ?? 0,
-        confidence: final.confidence ?? decision.confidence ?? root.confidence ?? 0,
-        reputation: context.reputation ?? root.reputation ?? 0,
-        features: trace.features ?? root.features ?? {},
+        url: final.url ?? data.url ?? 'unknown',
+        domain,
+        label,
+        badgeClass,
+        score: final.score ?? decision.score ?? data.score ?? 0,
+        confidence: final.confidence ?? decision.confidence ?? data.confidence ?? 0,
+        action: final.action ?? decision.action ?? 'ALLOW',
+        features: trace.features ?? final.features ?? data.features ?? {},
+        context: context,
+        timestamp: final.timestamp ?? data.timestamp ?? Date.now(),
         raw: l
     };
 }
 
-const normalizedLines = lines.map(normalizeLog);
+const normalizedLines = JSONL_DATA.split('\n')
+    .filter(line => line.trim())
+    .map(line => {
+        try {
+            const parsed = JSON.parse(line);
+            return normalizeLog(parsed);
+        } catch (e) { return null; }
+    })
+    .filter(Boolean); // This removes the objects returned as 'null' by normalizeLog
 
+if (normalizedLines.length === 0) {
+    console.log('⚠️ Warning: All telemetry lines were dropped or invalid.');
+    process.exit(0);
+}
 console.log('====================================');
 console.log('📊 VANGUARD DATASET ANALYSIS');
 console.log('====================================');
@@ -72,7 +137,8 @@ for (const l of normalizedLines) {
 console.log('\nLabel distribution:');
 console.table(labelStats);
 
-// 🌐 Top domains
+// 🌐 Top domains with Label info
+console.log('\nTop 10 Domains and their Predictions:');
 const domainStats = {};
 for (const l of normalizedLines) {
     domainStats[l.domain] = (domainStats[l.domain] || 0) + 1;
@@ -82,8 +148,18 @@ const topDomains = Object.entries(domainStats)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 10);
 
-console.log('\nTop 10 Domains:');
-console.table(topDomains.map(([domain, count]) => ({ domain, count })));
+const domainTable = topDomains.map(([domain, count]) => {
+    const samples = normalizedLines.filter(l => l.domain === domain).slice(0, 1);
+    const sample = samples[0];
+    return {
+        Domain: domain,
+        Hits: count,
+        'Pred Label': sample.label,
+        'True Label': sample.label_true || 'UNKNOWN',
+        'Last Action': sample.action
+    };
+});
+console.table(domainTable);
 
 // 💡 High risk samples
 const highRisk = normalizedLines.filter(l => l.label === 'HIGH_RISK').slice(0, 5);
@@ -101,68 +177,52 @@ if (highRisk.length > 0) {
     console.log('\n✅ No HIGH_RISK events found yet.');
 }
 
-// 🚨 False Negative Detection
-const falseNegatives = normalizedLines.filter(l => {
-    return l.label === 'SAFE' && l.features?.network?.isAdDomain === true;
-}).slice(0, 10);
+// 🧪 CONFUSION MATRIX (ADS Detection Performance)
+let TP = 0, FN = 0, FP = 0, TN = 0;
 
-if (falseNegatives.length > 0) {
-    console.log('\n❌ FALSE NEGATIVE (SAFE nhưng là Ad):');
-    falseNegatives.forEach((l, i) => {
-        console.log(`\n[Case ${i + 1}]`);
-        console.log(`URL: ${l.url.substring(0, 100)}...`);
-        console.log(`Domain: ${l.domain}`);
-        console.log(`Score: ${l.score} | Confidence: ${l.confidence}`);
-    });
-} else {
-    console.log('\n✅ No false negatives found.');
+for (const l of normalizedLines) {
+    const isAd = l.label_true === 'ADS';
+    const predictedAd = l.label === 'HIGH_RISK';
+
+    if (predictedAd && isAd) TP++;
+    else if (!predictedAd && isAd) FN++;
+    else if (predictedAd && !isAd) FP++;
+    else if (!predictedAd && !isAd) TN++;
 }
 
-// 🚨 False Positive Detection
-const falsePositives = normalizedLines.filter(l => {
-    return l.label === 'HIGH_RISK' && l.features?.network?.isAdDomain === false;
-}).slice(0, 10);
+console.log('\n🎯 CONFUSION MATRIX (ADS Detection):');
+console.table({
+    'Actual ADS': { 'Pred HIGH_RISK (TP)': TP, 'Pred SAFE (FN)': FN },
+    'Actual SAFE': { 'Pred HIGH_RISK (FP)': FP, 'Pred SAFE (TN)': TN }
+});
 
-if (falsePositives.length > 0) {
-    console.log('\n⚠️ FALSE POSITIVE (HIGH_RISK nhưng không phải Ad):');
-    falsePositives.forEach((l, i) => {
-        console.log(`\n[Case ${i + 1}]`);
-        console.log(`URL: ${l.url.substring(0, 100)}...`);
-        console.log(`Domain: ${l.domain}`);
-    });
-}
+const precision = TP / (TP + FP) || 0;
+const recall = TP / (TP + FN) || 0;
+const f1 = (2 * precision * recall) / (precision + recall) || 0;
 
-/**
- * Known "Ground Truth" for specific domains for accuracy validation
- */
-function classifyTruth(l) {
-    const url = l.url || '';
+console.log(`\nMetrics:`);
+console.log(`- Precision: ${(precision * 100).toFixed(1)}%`);
+console.log(`- Recall:    ${(recall * 100).toFixed(1)}%`);
+console.log(`- F1-Score:  ${(f1 * 100).toFixed(1)}%`);
 
-    if (url.includes('doubleclick.net')) return 'ADS';
-    if (url.includes('/pagead/')) return 'ADS';
-    if (url.includes('/api/stats')) return 'INTERNAL';
-    if (url.includes('googlevideo.com')) return 'MEDIA';
-
-    return 'UNKNOWN';
-}
-
-const mismatches = normalizedLines.filter(l => {
-    const truth = classifyTruth(l);
-
-    if (truth === 'ADS' && l.label === 'SAFE') return true;
-    if (truth !== 'ADS' && l.label === 'HIGH_RISK' && truth !== 'UNKNOWN') return true;
-
-    return false;
-}).slice(0, 10);
-
-if (mismatches.length > 0) {
-    console.log('\n🔍 GROUND TRUTH MISMATCHES:');
-    mismatches.forEach((l, i) => {
-        const truth = classifyTruth(l);
-        console.log(`\n[Mismatch ${i + 1}]`);
-        console.log(`URL: ${l.url.substring(0, 100)}...`);
-        console.log(`Expected: ${truth} | Got: ${l.label}`);
+// 🚨 FALSE NEGATIVE SAMPLES (Missed ADS)
+const fnSamples = normalizedLines.filter(l => l.label === 'SAFE' && l.label_true === 'ADS').slice(0, 5);
+if (fnSamples.length > 0) {
+    console.log('\n❌ FALSE NEGATIVES (Missed ADS):');
+    fnSamples.forEach((l, i) => {
+        console.log(`[${i + 1}] ${l.domain} | Flags: ${l.flags.join(', ') || 'none'}`);
     });
 }
+
+// ⚠️ FALSE POSITIVE SAMPLES (Over-blocking)
+const fpSamples = normalizedLines.filter(l => l.label === 'HIGH_RISK' && l.label_true !== 'ADS').slice(0, 5);
+if (fpSamples.length > 0) {
+    console.log('\n⚠️ FALSE POSITIVES (Over-blocking):');
+    fpSamples.forEach((l, i) => {
+        console.log(`[${i + 1}] ${l.domain} | Flags: ${l.flags.join(', ') || 'none'}`);
+    });
+}
+
+console.log('\n====================================');
 
 console.log('\n====================================');

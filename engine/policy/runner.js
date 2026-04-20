@@ -24,7 +24,7 @@ const Runner = {
                 action: 'TAG',
                 flags: ['DOMAIN_AWARENESS_BOOST']
             };
-            console.log('[Runner] Boost Match:', { score, domainClass, label: 'HIGH_RISK' });
+            // console.log('[Runner] Boost Match:', { score, domainClass, label: 'HIGH_RISK' });
             return boostRes;
         }
 
@@ -58,7 +58,7 @@ const Runner = {
             flags
         };
 
-        console.log('[Runner] Evaluation:', { score, domainClass, label: finalResult.label });
+        // console.log('[Runner] Evaluation:', { score, domainClass, label: finalResult.label });
         return finalResult;
     }
 };

@@ -54,34 +54,95 @@ function initRefresh() {
 
 // --- Data Normalization (Vanguard Logic) ---
 function normalizeLog(l) {
-    // 🛠️ Robust Schema Fallback Logic
-    const root = l.data ?? l;
+    const data = l.data ?? l;
     
-    // Possibility 1: Full-Context Trace (root.final / root.trace)
-    // Possibility 2: Direct wrap (root.decision / root.raw)
-    const final = root.final ?? root;
-    const trace = root.trace ?? {};
-    const decision = final.decision ?? root.decision ?? {};
-    const context = final.context ?? root.context ?? {};
-    const event = trace.event ?? final.raw ?? root.raw ?? {};
+    // --- 1. Canonical Schema Detection (v14.0 - Training Ready) ---
+    if (data.schema_v === '14.0') {
+        const domain = (data.domain ?? '').toLowerCase().trim();
+        const label = data.label_pred ?? data.label ?? '';
+        
+        if (!domain || domain === 'undefined') return null;
+        if (!label || label === 'undefined') return null;
 
-    const label = final.label ?? decision.label ?? root.label ?? 'undefined';
-    
-    // Map internal labels to CSS-friendly classes
+        let badgeClass = label.toLowerCase();
+        if (label === 'HIGH_RISK') badgeClass = 'risk';
+        if (label === 'MEDIA_PASS') badgeClass = 'media';
+
+        return {
+            url: data.url ?? 'unknown',
+            domain,
+            label,
+            label_true: data.label_true ?? 'UNKNOWN',
+            badgeClass,
+            score: data.score ?? 0,
+            confidence: data.confidence ?? 0,
+            action: data.action ?? 'ALLOW',
+            features: data.features ?? {},
+            context: data.context ?? {},
+            raw_signal: {
+                method: data.raw?.method ?? 'GET',
+                type: data.raw?.type ?? 'unknown',
+                isError: data.raw?.isError || false
+            },
+            timestamp: data.timestamp ?? Date.now(),
+            raw: l
+        };
+    }
+
+    // --- 2. Schema v13.8 Fallback ---
+    if (data.schema_v === '13.8') {
+        const domain = (data.domain ?? '').toLowerCase().trim();
+        const label = data.label ?? '';
+        
+        if (!domain || domain === 'undefined') return null;
+        if (!label || label === 'undefined') return null;
+
+        let badgeClass = label.toLowerCase();
+        if (label === 'HIGH_RISK') badgeClass = 'risk';
+        if (label === 'MEDIA_PASS') badgeClass = 'media';
+
+        return {
+            url: data.url ?? 'unknown',
+            domain,
+            label,
+            badgeClass,
+            score: data.score ?? 0,
+            confidence: data.confidence ?? 0,
+            action: data.action ?? 'ALLOW',
+            features: data.features ?? {},
+            context: data.context ?? {},
+            timestamp: data.timestamp ?? Date.now(),
+            raw: l
+        };
+    }
+
+    // --- 2. Legacy Fallback Logic ---
+    const final = data.final ?? data;
+    const trace = data.trace ?? {};
+    const decision = final.decision ?? data.decision ?? {};
+    const context = final.context ?? data.context ?? {};
+
+    const domain = (final.domain ?? trace.event?.domain ?? data.domain ?? '').toLowerCase().trim();
+    const label = final.label ?? decision.label ?? data.label ?? '';
+
+    if (!domain || domain === 'undefined') return null;
+    if (!label || label === 'undefined') return null;
+
     let badgeClass = label.toLowerCase();
     if (label === 'HIGH_RISK') badgeClass = 'risk';
     if (label === 'MEDIA_PASS') badgeClass = 'media';
 
     return {
-        url: final.url ?? event.url ?? root.url ?? 'unknown',
-        domain: (final.domain ?? context.domain ?? root.domain ?? 'unknown').toLowerCase().trim(),
-        label: label,
-        badgeClass: badgeClass,
-        score: final.score ?? decision.score ?? root.score ?? 0,
-        confidence: final.confidence ?? decision.confidence ?? root.confidence ?? 0,
-        reputation: context.reputation ?? root.reputation ?? 0,
-        features: trace.features ?? root.features ?? {},
+        url: final.url ?? data.url ?? 'unknown',
+        domain,
+        label,
+        badgeClass,
+        score: final.score ?? decision.score ?? data.score ?? 0,
+        confidence: final.confidence ?? decision.confidence ?? data.confidence ?? 0,
+        action: final.action ?? decision.action ?? 'ALLOW',
+        features: trace.features ?? final.features ?? data.features ?? {},
         context: context,
+        timestamp: final.timestamp ?? data.timestamp ?? Date.now(),
         raw: l
     };
 }
@@ -97,10 +158,13 @@ async function fetchData() {
         if (!response.ok) throw new Error('API unreachable');
         
         const data = await response.json();
-        STATE.allEvents = data;
-        STATE.normalizedEvents = data.map(normalizeLog);
+        const initialCount = data.length;
         
-        console.log(`[Dashboard] 📡 Synced ${data.length} events.`);
+        STATE.allEvents = data;
+        STATE.normalizedEvents = data.map(normalizeLog).filter(Boolean);
+        
+        const droppedCount = initialCount - STATE.normalizedEvents.length;
+        console.log(`[Dashboard] 📡 Synced ${STATE.normalizedEvents.length} events. (Dropped ${droppedCount} invalid logs)`);
         renderView();
     } catch (e) {
         console.error('[Dashboard] API Error:', e);
@@ -166,7 +230,28 @@ function renderOverview(container) {
                 <div class="stat-value">${rate}%</div>
             </div>
         </div>
+
+        <h3 style="margin: 1.5rem 0 1rem 0; color: var(--danger)">🔥 Priority Detections (Last 5)</h3>
+        <div class="table-container" style="margin-bottom: 2rem; border-color: var(--danger)">
+            <table>
+                <thead>
+                    <tr><th>Domain</th><th>Detection</th><th>Score</th><th>Flag</th><th>Action</th></tr>
+                </thead>
+                <tbody>
+                    ${STATE.normalizedEvents.filter(e => e.label === 'HIGH_RISK').slice().reverse().slice(0, 5).map(e => `
+                        <tr style="background: rgba(255, 71, 87, 0.05)">
+                            <td><b>${e.domain}</b></td>
+                            <td><span class="badge badge-risk">${e.label}</span></td>
+                            <td>${e.score.toFixed(2)}</td>
+                            <td><small>${e.raw.data?.flags?.[0] || 'N/A'}</small></td>
+                            <td><button onclick="inspectEvent(${STATE.normalizedEvents.indexOf(e)})" style="color:var(--danger)">Inspect</button></td>
+                        </tr>
+                    `).join('') || '<tr><td colspan="5" style="text-align:center; opacity:0.5">No high-risk events in current dataset</td></tr>'}
+                </tbody>
+            </table>
+        </div>
         
+        <h3 style="margin-bottom: 1rem">All Recent Activity</h3>
         <div class="table-container">
             <table>
                 <thead>
@@ -179,12 +264,15 @@ function renderOverview(container) {
                     </tr>
                 </thead>
                 <tbody>
-                    ${STATE.normalizedEvents.slice(0, 15).map(e => `
+                    ${STATE.normalizedEvents.slice().reverse().slice(0, 50).map(e => `
                         <tr>
                             <td>${e.domain}</td>
-                            <td><span class="badge badge-${e.badgeClass}">${e.label}</span></td>
+                            <td>
+                                <span class="badge badge-${e.badgeClass}">${e.label}</span>
+                                <small style="display:block; opacity:0.6; margin-top:2px;">Truth: ${e.label_true || 'UNKNOWN'}</small>
+                            </td>
                             <td>${e.score.toFixed(2)}</td>
-                            <td>${new Date(e.raw.timestamp || Date.now()).toLocaleTimeString()}</td>
+                            <td>${new Date(e.timestamp || Date.now()).toLocaleTimeString()}</td>
                             <td><button onclick="inspectEvent(${STATE.normalizedEvents.indexOf(e)})" style="background:none; border:none; color:var(--accent); cursor:pointer;">Inspect</button></td>
                         </tr>
                     `).join('')}
@@ -240,11 +328,11 @@ function renderExplorer(container) {
 
 function renderMismatches(container) {
     const fn = STATE.normalizedEvents.filter(l => {
-        const isAd = l.features?.network?.isAdDomain === true || l.context?.domainClass === 'ads_network';
+        const isAd = l.label_true === 'ADS';
         return l.label === 'SAFE' && isAd;
     });
     const fp = STATE.normalizedEvents.filter(l => {
-        const isAd = l.features?.network?.isAdDomain === true || l.context?.domainClass === 'ads_network';
+        const isAd = l.label_true === 'ADS';
         return l.label === 'HIGH_RISK' && !isAd;
     });
 

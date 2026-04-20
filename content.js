@@ -9,20 +9,14 @@
         const data = event.data;
 
         if (data?.source === 'adsfriendly-engine' && data?.type === 'SUBMIT_TELEMETRY') {
-            console.log('[ContentScript] 📥 Received telemetry');
-
             try {
-                const res = await fetch('http://localhost:3000/telemetry', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify(data.payload)
+                // 🚀 PROXY: Relay to Background Script to bypass PNA/CORS restrictions
+                chrome.runtime.sendMessage({
+                    type: 'PROXY_TELEMETRY',
+                    payload: data.payload
                 });
-
-                const json = await res.json();
-                console.log('[ContentScript] ✅ Sent:', json);
-
             } catch (err) {
-                console.error('[ContentScript] ❌ Failed:', err);
+                // Ignore context invalidation errors silently
             }
         }
     });

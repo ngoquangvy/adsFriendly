@@ -9,6 +9,8 @@ const BUFFER_THRESHOLD = 100; // Flush after 100 events
 const FLUSH_INTERVAL = 5000;   // Flush after 5 seconds
 
 let logBuffer = [];
+let domainCount = {};  // 📊 Total events per domain
+let lastLogged = {};   // ⏱️ Last successful log timestamp per domain
 let lastFlush = Date.now();
 
 // Ensure storage directory exists
@@ -58,8 +60,27 @@ const server = http.createServer((req, res) => {
         req.on('end', () => {
             try {
                 const payload = JSON.parse(body);
+                
+                // 🧭 Domain Sampling (Prevent Spam)
+                const data = payload.data ?? payload;
+                const domain = data.domain ?? data.identity?.site_domain ?? 'unknown';
+                
+                domainCount[domain] = (domainCount[domain] || 0) + 1;
+                const now = Date.now();
 
-                // Buffer the entire payload (Trace + Identity + Data)
+                // 🚦 Throttling Logic (200 threshold, 2s gap)
+                if (domainCount[domain] > 200) {
+                    const elapsed = now - (lastLogged[domain] || 0);
+                    if (elapsed < 2000) {
+                        res.statusCode = 202; // Sampled / Throttled
+                        res.end(JSON.stringify({ success: true, throttled: true }));
+                        return;
+                    }
+                }
+                
+                lastLogged[domain] = now;
+
+                // Buffer the entire payload
                 logBuffer.push(payload);
 
                 // Buffer high-water mark check

@@ -27,9 +27,19 @@ const Orchestrator = {
             const isProtected = PROTECTED_DOMAINS.some(d => domain === d || domain.endsWith(`.${d}`));
             
             if (isProtected && domainClass !== 'ads_network') {
-                return { 
-                    url, domain, label: 'SAFE', action: 'ALLOW', score: 0, 
-                    confidence: 1.0, timestamp: now, flags: ['PLATFORM_WHITELIST'] 
+                return {
+                    schema_v: "14.0",
+                    url, domain, 
+                    label_pred: 'SAFE', 
+                    label_true: 'INTERNAL',
+                    action: 'ALLOW', 
+                    score: 0, 
+                    confidence: 1.0, 
+                    features: {},
+                    context: { domainClass: 'protected_platform' },
+                    raw: { method: event.method ?? 'GET', type: event.type ?? 'unknown', isError: false },
+                    timestamp: now, 
+                    flags: ['PLATFORM_WHITELIST']
                 };
             }
 
@@ -52,16 +62,19 @@ const Orchestrator = {
             const pattern = patternMemory.get(patternKey);
 
             // 🚫 FAST PATH: Media Bypass (Business logic handled by Classifier)
-            if (domainClass === 'media_cdn') {
+            if (domainClass === 'media_cdn' || features.context.isPlayerContext) {
                 state.frequency = (state.frequency * 0.9) + 0.1;
                 domainState.set(domain, state);
 
-                const res = { 
-                    url, domain, label: 'MEDIA_PASS', action: 'ALLOW', score: 0, 
-                    confidence: 1.0, timestamp: now, meta: { isMedia: true } 
+                const res = {
+                    schema_v: "15.0",
+                    url, domain, 
+                    label_pred: 'MEDIA_PASS', label_true: 'MEDIA',
+                    action: 'ALLOW', score: 0, confidence: 1.0, 
+                    features: {}, context: { domainClass: 'media_cdn' },
+                    raw: { method: 'GET', type: 'media', isError: false },
+                    timestamp: now
                 };
-                
-                // Telemetry fallback for fast path
                 if (window.Engine?.brainBridge) window.Engine.brainBridge.recordDecision(res);
                 return res;
             }
@@ -75,97 +88,71 @@ const Orchestrator = {
                 frameType: window.top === window.self ? 'main' : 'iframe'
             };
 
-            const features = brain.Extractor.extract(cleanRaw, state);
-            const rawScore = brain.Scoring.compute(features, brain.Weights);
+            const featuresV15 = brain.Extractor.extract(cleanRaw, state);
+            const rawScore = brain.Scoring.compute(featuresV15, brain.Weights);
 
-            // 🕒 Score Decay & Smoothing
-            state.lastScores = state.lastScores.map(s => s * 0.95);
-            state.lastScores.push(rawScore);
-            if (state.lastScores.length > 5) state.lastScores.shift();
-            const smoothedScore = state.lastScores.reduce((a, b) => a + b, 0) / state.lastScores.length;
-            
-            // Reputation (Class-Aware)
-            if (domainClass === 'ads_network') {
-                state.reputation = state.reputation * 0.8 + smoothedScore * 0.2;
-            } else {
-                state.reputation = state.reputation * 0.95 + smoothedScore * 0.05;
-            }
+            // 🕒 Reputation Smoothing (v15.0 Generalized)
+            state.reputation = (state.reputation * 0.75) + (rawScore * 0.25);
 
             // 5. Policy Decision (Source of Truth)
-            const decision = policy.Runner.evaluate(smoothedScore, { 
+            const decision = policy.Runner.evaluate(rawScore, { 
                 domainClass,
-                session: features.session,
+                session: featuresV15.session,
                 pattern,
                 burstDetected: state.frequency > 5
             });
 
             // --- 6. SMOOTHING LAYER (State Persistence) ---
-            const highRiskRatio = state.lastScores.filter(s => s > 0.7).length / state.lastScores.length;
-            
-            // Only use persistent high_risk if consensus is strong
-            let finalLabel = decision.label;
-            if (highRiskRatio >= 0.6 && state.lastScores.length >= 5) {
-                finalLabel = 'HIGH_RISK';
-            } else if (smoothedScore < 0.2) {
-                finalLabel = 'SAFE'; // Fast recovery
-            }
-
-            state.confirmedLabel = finalLabel;
+            state.confirmedLabel = decision.label;
             domainState.set(domain, state);
             this.purgeMemory(now, state.frequency > 5);
 
-            // Calculate patternScore
-            const patternScore = pattern ? (pattern.lastSeen - pattern.firstSeen) / 1000 : 0;
+            // 🧬 Ground Truth Inference (for training & evaluation)
+            const isHeuristicAd = featuresV15.v2.network.hasAdKeywords || domainClass === 'ads_network';
 
-            // 3-Layer Telemetry Structure (Summary for Return)
             const finalRes = {
-                timestamp: now,
-                raw: {
-                    url: event.url,
-                    method: event.method || 'GET',
-                    type: event.type || 'unknown'
-                },
-                features: features.v2,
+                schema_v: "15.0",
+                telemetry_schema_version: "v1.0",
+                label: state.confirmedLabel || 'unknown',
+                url: event.url || 'unknown',
+                domain: domain || 'unknown',
+                label_pred: state.confirmedLabel || 'unknown',
+                label_true: isHeuristicAd ? 'ADS' : (featuresV15.context.isPlayerContext ? 'MEDIA' : 'UNKNOWN'),
+                action: decision.action || 'ALLOW',
+                score: parseFloat(rawScore.toFixed(3)),
+                confidence: decision.confidence,
+                flags: decision.flags || [],
+                features: featuresV15.v2 || {},
                 context: {
-                    domain,
-                    domainClass: features.domainClass,
-                    session: features.session,
+                    domainClass: featuresV15.domainClass || 'unknown',
+                    session: featuresV15.session || 'default',
                     patternCount: pattern?.count || 0,
-                    patternScore: parseFloat(patternScore.toFixed(2)),
-                    frequency: parseFloat(state.frequency.toFixed(3)),
-                    reputation: parseFloat(state.reputation.toFixed(3))
+                    frequency: parseFloat(state.frequency.toFixed(3)) || 0,
+                    reputation: parseFloat(state.reputation.toFixed(3)) || 0
                 },
-                decision: {
-                    score: parseFloat(smoothedScore.toFixed(2)),
-                    confidence: parseFloat((decision.confidence || 0).toFixed(2)),
-                    label: state.confirmedLabel,
-                    action: decision.action,
-                    flags: decision.flags || []
+                raw: {
+                    method: event.method || 'GET',
+                    type: event.type || 'unknown',
+                    isError: event.isError || false
                 },
-                meta: {
-                    isHighFrequency: state.frequency > 5
-                }
+                timestamp: now
             };
 
-            // Full-Context Telemetry Structure
-            const telemetryPayload = {
-                trace: {
-                    event: cleanRaw,
-                    features: features.v2,
-                    decision: finalRes.decision
-                },
-                final: finalRes,
-                meta: {
-                    stage: "ORCHESTRATOR",
-                    ts: now
-                }
-            };
-
-            if (window.Engine?.brainBridge) window.Engine.brainBridge.recordDecision(telemetryPayload);
+            if (window.Engine?.brainBridge) window.Engine.brainBridge.recordDecision(finalRes);
             return finalRes;
         } catch (e) {
             console.error('[Orchestrator] Kernel Panic:', e);
-            return { error: e.message, score: 0, label: 'ERROR', action: 'ALLOW' };
+            return { 
+                schema_v: "14.0",
+                url: event.url || 'unknown',
+                domain: (new URL(event.url || 'http://unknown')).hostname,
+                label_pred: 'ERROR', 
+                label_true: 'UNKNOWN',
+                action: 'ALLOW', 
+                score: 0, confidence: 0, 
+                timestamp: Date.now(), 
+                error: e.message 
+            };
         }
     },
 

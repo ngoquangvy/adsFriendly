@@ -40,12 +40,15 @@
             case 'SUBMIT_TELEMETRY':
                 // 🚀 Forward telemetry from Main World → Background (Service Worker)
                 try {
-                    chrome.runtime.sendMessage({
-                        type: 'PROXY_TELEMETRY',
-                        payload: data.payload
-                    });
+                    // Safety Guard: Check if extension context is still valid
+                    if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id) {
+                        chrome.runtime.sendMessage({
+                            type: 'PROXY_TELEMETRY',
+                            payload: data.payload
+                        });
+                    }
                 } catch (e) {
-                    console.warn('[Loader] Telemetry tunnel failed:', e.message);
+                    // Fail silently to avoid console noise on zombies
                 }
                 break;
             case 'VANGUARD_READY':

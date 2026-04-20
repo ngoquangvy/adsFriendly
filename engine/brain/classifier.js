@@ -15,9 +15,10 @@ const Classifier = {
             return 'media_cdn';
         }
 
-        // 2. Ads & Tracking Networks
-        const adsPattern = /doubleclick\.net|googlesyndication\.com|googleadservices\.com|googleads\.g\.doubleclick\.net|pagead|viewthroughconversion|ad_type|adservice/;
-        if (adsPattern.test(u)) {
+        // 2. Ads & Tracking Networks (Broad Spectrum)
+        const adsPattern = /doubleclick\.net|googlesyndication\.com|googleadservices\.com|googleads\.g\.doubleclick\.net|pagead|viewthroughconversion|ad_type|adservice|taboola|outbrain|mgid|criteo|popads|propellerads|amazon-adsystem|smartadserver|adnxs|adnxs-simple|fastlane\.rubicon/;
+        
+        if (adsPattern.test(u) || domain.startsWith('ad.') || domain.startsWith('ads.')) {
             return 'ads_network';
         }
         

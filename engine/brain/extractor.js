@@ -16,12 +16,17 @@ const Extractor = {
                 isTrackingDomain: domainClass === 'tracking',
                 isMediaCDN: domainClass === 'media_cdn',
                 isCorsError: event.isError === true,
-                entropyScore: this.calculateEntropy(url)
+                entropyScore: this.calculateEntropy(url),
+                // --- NEW v15.0 SIGNALS ---
+                isThirdParty: this.isThirdParty(domain),
+                hasAdKeywords: this.checkAdKeywords(url)
             },
             context: {
                 isYoutube: domain.includes('youtube.com') || domain.includes('googlevideo.com'),
-                isIframe: event.frameType === 'iframe',
-                isPlayerContext: url.includes('videoplayback') || url.includes('/watch'),
+                isIframe: event.frameType === 'iframe' || event.type === 'iframe', // Normalized type
+                isScript: event.type === 'script',
+                isImage: event.type === 'img',
+                isPlayerContext: url.includes('videoplayback') || url.includes('/watch') || url.includes('stream') || url.endsWith('.m3u8'),
                 session: this.getSessionContext()
             }
         };
@@ -48,6 +53,23 @@ const Extractor = {
             const matches = path.match(/[0-9_\-\.\%]/g);
             return matches ? matches.length / path.length : 0;
         } catch (e) { return 0; }
+    },
+
+    isThirdParty(domain) {
+        try {
+            const host = window.location.hostname;
+            if (!domain || domain === 'unknown' || !host) return false;
+            return !host.includes(domain) && !domain.includes(host);
+        } catch (e) { return false; }
+    },
+
+    checkAdKeywords(url) {
+        const adKeywords = [
+            '/ads/', '/bid/', '/vast/', '/vpaid/', 'pixel', 'tracking', '/popunder', 
+            '/pop-under', 'deliver_ads', 'banner', 'sponsor', 'ad_type', 'adservice'
+        ];
+        const u = url.toLowerCase();
+        return adKeywords.some(kw => u.includes(kw));
     }
 };
 
