@@ -1,200 +1,386 @@
 // engine/hub/orchestrator.js
 /**
- * 🧭 Vanguard Runtime Pipeline (Stable Contract)
- * raw_event -> feature_vector -> score -> decision
+ * 🧭 Vanguard Runtime Pipeline (v16.14 - Titan Final Edition)
+ * Architecture: Deterministic Forensic Black-Box with Atomic Epochs & Scoped Identity.
  */
 
-const domainState = new Map(); // behavior memory
-const patternMemory = new Map(); // pattern memory: key -> { count, firstSeen, lastSeen }
-const noiseSuppressionMap = new Map(); // Step 3: Noise Suppression (403, Aborted)
-const MAX_PATTERNS = 500;
+// --- 🛠️ INTERNAL HELPERS ---
+function deepSort(obj) {
+    if (Array.isArray(obj)) return obj.map(deepSort);
+    if (obj !== null && typeof obj === "object") {
+        return Object.keys(obj).sort().reduce((acc, key) => {
+            acc[key] = deepSort(obj[key]);
+            return acc;
+        }, {});
+    }
+    return obj;
+}
+
+function deepFreeze(obj) {
+    Object.getOwnPropertyNames(obj).forEach((prop) => {
+        if (obj[prop] !== null && (typeof obj[prop] === "object" || typeof obj[prop] === "function") && !Object.isFrozen(obj[prop])) {
+            deepFreeze(obj[prop]);
+        }
+    });
+    return Object.freeze(obj);
+}
+
+function generateStableHash(str) {
+    let hash = 5381;
+    for (let i = 0; i < str.length; i++) hash = ((hash << 5) + hash) + str.charCodeAt(i);
+    return (hash >>> 0).toString(16);
+}
+
+// --- 🏛️ ARCHITECTURAL ANCHORS ---
+let FROZEN_SCHEMA = null;
+let SCHEMA_HASH = 'pending';
+let STABLE_HASH = 'pending';
+const ENGINE_VERSION = "v16.14";
+
+/** 🛡️ v16.14 NULL SAFETY CONTRACT: Never return null out of the engine */
+const TITAN_NULL_RESULT = (reason, domain = 'unknown', event = {}) => ({
+    eventId: event.eventId || '',
+    epoch: event.epoch || 0,
+    engine_v: ENGINE_VERSION,
+    label_pred: 'SKIPPED',
+    action: 'ALLOW',
+    score: 0,
+    confidence: 0,
+    isDeterministic: true,
+    skipReason: reason,
+    domain,
+    timestamp: event.timestamp || Date.now()
+});
 
 const Orchestrator = {
-    async process(event) {
+    _initSchema() {
+        if (FROZEN_SCHEMA) return;
+        const brain = window.Engine?.brain;
+        if (!brain || !brain.RAW_SCHEMA) return;
+
+        // 1. Immutable Forensic Anchoring
+        const raw = JSON.parse(JSON.stringify(brain.RAW_SCHEMA)); 
+        FROZEN_SCHEMA = deepFreeze(deepSort(raw));
+        
+        // 2. Deterministic Versioning
+        SCHEMA_HASH = generateStableHash(JSON.stringify(FROZEN_SCHEMA));
+        STABLE_HASH = generateStableHash(JSON.stringify(FROZEN_SCHEMA.STABLE));
+        
+        console.log(`%c[TITAN] Engine Ready | ${ENGINE_VERSION} | Hash: ${SCHEMA_HASH}`, "color: #10b981; font-weight: bold;");
+    },
+
+    async process(event, inputState = null) {
+        this._initSchema();
+        const startTimestamp = Date.now();
+        const now = Date.now();
+
         try {
             const brain = window.Engine.brain;
-            const policy = window.Engine.policy;
-            if (!brain || !brain.Classifier) throw new Error('Brain Infrastructure missing');
+            const bridge = window.Engine.brainBridge;
+            if (!brain || !brain.Classifier || !brain.Scoring || !bridge) throw new Error('Expert Infrastructure missing');
 
-            // 1. Technical Normalization (Radar logic moved here)
             const url = this._normalize(event.url);
+            if (!url) return { decision: TITAN_NULL_RESULT('MALFORMED_URL', 'unknown', event), stateUpdate: null };
+            
             const domain = brain.Classifier.extractDomain(url);
             const domainClass = brain.Classifier.classify(url);
-            const now = Date.now();
+            const nowVal = Date.now(); // Renamed to avoid shadowed now if needed, or just use 'now'
+            const newType = event.type || 'unknown';
 
-            // --- 🛡️ LAYER 0: PLATFORM PROTECTION (Hard Early Return) ---
+            // --- 🕵️ LAYER 0: CONTEXT AGGREGATION ---
+            const label_hints = {
+                isVideoPlaying: typeof document !== 'undefined' ? Array.from(document.querySelectorAll('video')).some(v => !v.paused && !v.ended) : false,
+                userInteracted: (now - (window.__V_LAST_INTERACTION || 0)) < 5000,
+                visibilityState: typeof document !== 'undefined' ? document.visibilityState : 'visible'
+            };
+
+            // --- 🛡️ LAYER 1: PLATFORM PROTECTION ---
             const PROTECTED_DOMAINS = ['youtube.com', 'google.com', 'gstatic.com', 'googleusercontent.com'];
-            const isProtected = PROTECTED_DOMAINS.some(d => domain === d || domain.endsWith(`.${d}`));
-            
-            if (isProtected && domainClass !== 'ads_network') {
+            if (PROTECTED_DOMAINS.some(d => domain === d || domain.endsWith(`.${d}`)) && domainClass !== 'ads_network') {
                 return {
-                    schema_v: "14.0",
-                    url, domain, 
-                    label_pred: 'SAFE', 
-                    label_true: 'INTERNAL',
-                    action: 'ALLOW', 
-                    score: 0, 
-                    confidence: 1.0, 
-                    features: {},
-                    context: { domainClass: 'protected_platform' },
-                    raw: { method: event.method ?? 'GET', type: event.type ?? 'unknown', isError: false },
-                    timestamp: now, 
-                    flags: ['PLATFORM_WHITELIST']
+                    decision: {
+                        eventId: event.eventId || '',
+                        epoch: event.epoch || 0,
+                        engine_v: ENGINE_VERSION,
+                        action: 'ALLOW',
+                        label_pred: 'SAFE',
+                        score: 0,
+                        confidence: 1.0,
+                        timestamp: event.timestamp || now,
+                        isDeterministic: true,
+                        url,
+                        domain,
+                        decisionPath: {
+                            triggeredRules: [],
+                            gatesPassed: [],
+                            blockedBy: [],
+                            finalDecisionReason: 'protected_domain',
+                            dominantContribution: 'none',
+                            causalChain: 'protected_domain'
+                        },
+                        contributions: {}
+                    },
+                    stateUpdate: {
+                        domain,
+                        updates: {
+                            lastSeen: now,
+                            count: (inputState?.count || 0) + 1,
+                            decisionScore: 0,
+                            confidence: 1.0,
+                            scoreWindow: [...(inputState?.scoreWindow || []), 0].slice(-5),
+                            intervalWindow: [...(inputState?.intervalWindow || []), 0].slice(-5),
+                            types: Array.from(new Set([...(inputState?.types || []), event.type || 'unknown'])),
+                            seenTypes: Array.from(new Set([...(inputState?.seenTypes || []), event.type || 'unknown'])),
+                            lastActionTime: inputState?.lastActionTime || 0,
+                            lastEventId: event.eventId || '',
+                            lastSpikeTime: inputState?.lastSpikeTime || 0,
+                            lastUrl: url
+                        }
+                    }
                 };
             }
 
-            // 2. Behavioral State Init
-            let state = domainState.get(domain) || { 
-                lastSeen: 0, 
-                frequency: 0, 
-                lastScores: [], 
-                reputation: 0,
-                confirmedLabel: 'SAFE' 
-            };
-            const timeDiff = (now - state.lastSeen) / 1000;
-            if (timeDiff > 0) state.frequency = (state.frequency * 0.8) + (1 / timeDiff) * 0.2;
-            state.lastSeen = now;
+            // --- 🔄 STATE INITIALIZATION (Stateless v16.14) ---
+            let state = inputState;
+            if (!state) {
+                state = {
+                    startTime: now,
+                    lastSeen: 0,
+                    count: 0,
+                    intervalWindow: [], 
+                    scoreWindow: [],       
+                    types: [],
+                    seenTypes: [],
+                    isTrustedCDN: true,
+                    reputation: 0,
+                    confidence: 0,
+                    decisionScore: 0, 
+                    lastActionTime: 0,
+                    isLocked: false,
+                    lastSpikeTime: 0,
+                    lastEventId: '',
+                    lastUrl: ''
+                };
+            }
+            
+            // Normalize types into Sets for logic (Internal only)
+            const internalTypes = new Set(state.types || []);
+            const internalSeenTypes = new Set(state.seenTypes || []);
 
-            // 3. Pattern Intelligence
-            const normalizedPath = this._extractPath(url);
-            const patternKey = `${domain}|${normalizedPath}|${event.type}`;
-            this.updatePattern(patternKey, now);
-            const pattern = patternMemory.get(patternKey);
+            // --- 🛡️ DUPLICATE COMMIT GUARD ---
+            const currentEventId = event.eventId;
+            if (currentEventId && state.lastEventId === currentEventId) {
+                return { decision: TITAN_NULL_RESULT('DUPLICATE_COMMIT', domain, event), stateUpdate: null };
+            }
+            
+            // Tracking Update
+            const interval = state.lastSeen > 0 ? now - state.lastSeen : 0;
+            const updatedLastSeen = now;
+            const updatedCount = (state.count || 0) + 1;
+            if (newType) internalTypes.add(newType);
 
-            // 🚫 FAST PATH: Media Bypass (Business logic handled by Classifier)
-            if (domainClass === 'media_cdn' || features.context.isPlayerContext) {
-                state.frequency = (state.frequency * 0.9) + 0.1;
-                domainState.set(domain, state);
+            // --- 🚀 PHASE 2: FORENSIC ANALYSIS ---
+            const featuresTitan = brain.Extractor.extract({ ...event, url, domain, domainClass }, { ...state, types: internalTypes });
+            const analysis = brain.Scoring.compute(featuresTitan.v2, { ...state, types: internalTypes }, label_hints, FROZEN_SCHEMA);
+            
+            const currentScore = analysis.score;
+            const currentConfidence = analysis.confidence;
+            const prevScore = state.decisionScore || 0;
+            const prevConfidence = state.confidence || 0;
+            const isKnownAdEndpoint = domainClass === 'ads_network' &&
+                /doubleclick|pagead|gampad|adview|output=xml_vast|videoplayfailed|video_ad_loaded|ad_break|preroll/i.test(url);
+            
+            // A. Decision Inertia & Spike
+            let decisionScore = (0.7 * prevScore) + (0.3 * currentScore);
+            const highRiskIdx = (state.scoreWindow || []).map((s, i) => s > 0.6 ? i : -1).filter(i => i !== -1);
+            const hasCluster = highRiskIdx.some((idx, i) => i > 0 && (idx - highRiskIdx[i-1] <= 2));
+            const isSpikeOverride = (currentScore - prevScore > 0.5) && highRiskIdx.length >= 2 && hasCluster;
+            
+            let finalDecisionReason = 'inertia';
+            if (isSpikeOverride) {
+                decisionScore = currentScore;
+                finalDecisionReason = 'spike_override';
+            }
+            if (isKnownAdEndpoint && currentScore >= 0.4) {
+                decisionScore = Math.max(decisionScore, currentScore);
+                finalDecisionReason = 'ad_fast_path';
+            }
 
-                const res = {
-                    schema_v: "15.0",
-                    url, domain, 
-                    label_pred: 'MEDIA_PASS', label_true: 'MEDIA',
-                    action: 'ALLOW', score: 0, confidence: 1.0, 
-                    features: {}, context: { domainClass: 'media_cdn' },
-                    raw: { method: 'GET', type: 'media', isError: false },
+            // B. Path Reconstruction
+            const triggeredRules = [];
+            if (isSpikeOverride) triggeredRules.push('spike');
+            if (isKnownAdEndpoint) triggeredRules.push('ad_fast_path');
+            if (!internalSeenTypes.has(newType) && (newType === 'script' || newType === 'iframe') && decisionScore > 0.4) triggeredRules.push('type_violation');
+            
+            const gatesPassed = [];
+            if (decisionScore > 0.6) gatesPassed.push('score > 0.6');
+            if (currentConfidence > 0.5) gatesPassed.push('confidence > 0.5');
+
+            // Hierarchical Decision
+            let label = 'SAFE';
+            if (decisionScore > 0.6 && currentConfidence > 0.5) label = 'HIGH_RISK';
+            else if (decisionScore > 0.3 && currentConfidence > 0.4) label = 'SUSPICIOUS';
+            else if (analysis.metrics.isTrustedMedia) label = 'MEDIA_PASS';
+
+            let action = (label === 'HIGH_RISK') ? 'TAG' : 'ALLOW';
+            if (label === 'HIGH_RISK' && analysis.metrics.isTrustedMedia) action = 'ALLOW';
+
+            // --- 🔒 PHASE 3: COOLDOWN & BYPASS ---
+            const inCooldown = (now - (state.lastActionTime || 0) < 1000);
+            const isCritical = (decisionScore > 0.85 && currentConfidence > 0.6 && !analysis.metrics.isTrustedMedia);
+            
+            const skipAction = inCooldown && !isCritical;
+            let blockedBy = [];
+            if (skipAction) {
+                blockedBy.push('cooldown');
+                if (isCritical) finalDecisionReason = 'critical_bypass';
+            }
+
+            const effectiveLabel = skipAction ? (state.lockedLabel || label) : label;
+            const effectiveAction = skipAction ? (state.lockedAction || action) : action;
+
+            let updatedLastActionTime = state.lastActionTime;
+            if (!skipAction && label !== state.lockedLabel) {
+                 updatedLastActionTime = now;
+            }
+
+            // Noise-Suppressed Normalization
+            const rawContribs = { ...analysis.contributions };
+            if (isSpikeOverride) rawContribs.spike = 0.5;
+            
+            const contribSum = Object.values(rawContribs).reduce((a, b) => a + b, 0);
+            const normalizedContributions = {};
+            const epsilon = 0.0001;
+            let isNoSignal = false;
+            let dominantContribution = 'none';
+            
+            if (contribSum >= epsilon) {
+                let maxVal = -1;
+                for (const [k, v] of Object.entries(rawContribs)) {
+                    normalizedContributions[k] = parseFloat((v / contribSum).toFixed(3));
+                    if (v > maxVal) { maxVal = v; dominantContribution = k; }
+                }
+            } else {
+                isNoSignal = true;
+                for (const k in rawContribs) normalizedContributions[k] = 0;
+            }
+
+            // Causal Chain Construction (v16.14 Storytelling)
+            const causalChain = [];
+            if (triggeredRules.length > 0) causalChain.push(triggeredRules.join(' + '));
+            if (isSpikeOverride) causalChain.push('spike_reflex');
+            if (isCritical) causalChain.push('critical_bypass');
+            causalChain.push(label.toLowerCase());
+
+            // Jitter Detection (Score Variance)
+            const scoreWindow = [...(state.scoreWindow || []), currentScore].slice(-5);
+            const intervalWindow = [...(state.intervalWindow || []), interval].slice(-5);
+            const avg = scoreWindow.reduce((a, b) => a + b, 0) / scoreWindow.length;
+            const variance = scoreWindow.reduce((a, b) => a + Math.pow(b - avg, 2), 0) / scoreWindow.length;
+
+            internalSeenTypes.add(newType);
+
+            const processingLag = Math.min(5000, Math.max(0, Date.now() - startTimestamp));
+            
+            const diff = currentConfidence - prevConfidence;
+            const confidenceTrend = Math.abs(diff) < 0.02 ? 'stable' : (diff > 0 ? 'increase' : 'decrease');
+
+            // --- 📦 PURE OUTPUT CONTRACT ---
+            return {
+                decision: {
+                    eventId: event.eventId || '',
+                    epoch: event.epoch || 0,
+                    engine_v: ENGINE_VERSION,
+                    schema_hash: SCHEMA_HASH,
+                    stable_hash: STABLE_HASH,
+                    url, domain,
+                    label_pred: effectiveLabel,
+                    action: effectiveAction,
+                    score: parseFloat(decisionScore.toFixed(3)),
+                    confidence: parseFloat(currentConfidence.toFixed(2)),
+                    confidenceTrend,
+                    isDeterministic: true,
+                    isNoSignal,
+                    processingLag,
+                    decisionVariance: parseFloat(variance.toFixed(5)),
+                    decisionPath: { 
+                        triggeredRules, gatesPassed, blockedBy, finalDecisionReason, 
+                        dominantContribution, causalChain: causalChain.join(' → ')
+                    },
+                    contributions: normalizedContributions,
+                    forensic: {
+                        triggeredRules,
+                        gatesPassed,
+                        confidenceBands: {
+                            current: parseFloat(currentConfidence.toFixed(2)),
+                            previous: parseFloat(prevConfidence.toFixed(2)),
+                            trend: confidenceTrend
+                        },
+                        featureAttribution: normalizedContributions
+                    },
                     timestamp: now
-                };
-                if (window.Engine?.brainBridge) window.Engine.brainBridge.recordDecision(res);
-                return res;
-            }
-
-            // --- 4. ENGINE CORE (Scoring & Policy) ---
-            const cleanRaw = {
-                url, domain, domainClass,
-                method: event.method || 'GET',
-                type: event.type || 'unknown',
-                stack: event.stack,
-                frameType: window.top === window.self ? 'main' : 'iframe'
+                },
+                stateUpdate: {
+                    domain,
+                    updates: {
+                        lastSeen: updatedLastSeen,
+                        count: updatedCount,
+                        decisionScore,
+                        confidence: currentConfidence,
+                        scoreWindow,
+                        intervalWindow,
+                        types: Array.from(internalTypes),
+                        seenTypes: Array.from(internalSeenTypes),
+                        lastActionTime: updatedLastActionTime,
+                        lockedLabel: effectiveLabel,
+                        lockedAction: effectiveAction,
+                        lastEventId: currentEventId,
+                        lastSpikeTime: isSpikeOverride ? now : (state.lastSpikeTime || 0),
+                        lastUrl: url
+                    }
+                }
             };
 
-            const featuresV15 = brain.Extractor.extract(cleanRaw, state);
-            const rawScore = brain.Scoring.compute(featuresV15, brain.Weights);
-
-            // 🕒 Reputation Smoothing (v15.0 Generalized)
-            state.reputation = (state.reputation * 0.75) + (rawScore * 0.25);
-
-            // 5. Policy Decision (Source of Truth)
-            const decision = policy.Runner.evaluate(rawScore, { 
-                domainClass,
-                session: featuresV15.session,
-                pattern,
-                burstDetected: state.frequency > 5
-            });
-
-            // --- 6. SMOOTHING LAYER (State Persistence) ---
-            state.confirmedLabel = decision.label;
-            domainState.set(domain, state);
-            this.purgeMemory(now, state.frequency > 5);
-
-            // 🧬 Ground Truth Inference (for training & evaluation)
-            const isHeuristicAd = featuresV15.v2.network.hasAdKeywords || domainClass === 'ads_network';
-
-            const finalRes = {
-                schema_v: "15.0",
-                telemetry_schema_version: "v1.0",
-                label: state.confirmedLabel || 'unknown',
-                url: event.url || 'unknown',
-                domain: domain || 'unknown',
-                label_pred: state.confirmedLabel || 'unknown',
-                label_true: isHeuristicAd ? 'ADS' : (featuresV15.context.isPlayerContext ? 'MEDIA' : 'UNKNOWN'),
-                action: decision.action || 'ALLOW',
-                score: parseFloat(rawScore.toFixed(3)),
-                confidence: decision.confidence,
-                flags: decision.flags || [],
-                features: featuresV15.v2 || {},
-                context: {
-                    domainClass: featuresV15.domainClass || 'unknown',
-                    session: featuresV15.session || 'default',
-                    patternCount: pattern?.count || 0,
-                    frequency: parseFloat(state.frequency.toFixed(3)) || 0,
-                    reputation: parseFloat(state.reputation.toFixed(3)) || 0
-                },
-                raw: {
-                    method: event.method || 'GET',
-                    type: event.type || 'unknown',
-                    isError: event.isError || false
-                },
-                timestamp: now
-            };
-
-            if (window.Engine?.brainBridge) window.Engine.brainBridge.recordDecision(finalRes);
-            return finalRes;
         } catch (e) {
-            console.error('[Orchestrator] Kernel Panic:', e);
-            return { 
-                schema_v: "14.0",
-                url: event.url || 'unknown',
-                domain: (new URL(event.url || 'http://unknown')).hostname,
-                label_pred: 'ERROR', 
-                label_true: 'UNKNOWN',
-                action: 'ALLOW', 
-                score: 0, confidence: 0, 
-                timestamp: Date.now(), 
-                error: e.message 
-            };
+            console.error('[Orchestrator] Titan Error:', e);
+            return { decision: TITAN_NULL_RESULT('RUNTIME_ERROR', 'unknown', event), stateUpdate: null };
         }
     },
 
-    _normalize(url) {
-        if (!url || typeof url !== 'string') return url;
-        let u = url;
-        if (u.startsWith('//')) u = window.location.protocol + u;
-        if (u.startsWith('/')) u = window.location.origin + u;
-        return u;
-    },
-
-    _extractPath(url) {
+    _safeURL(url, base = (typeof window !== 'undefined' ? window.location?.href : undefined)) {
         try {
-            return new URL(url).pathname;
+            if (!url) return null;
+            return new URL(url, base);
         } catch (e) {
-            return url.split('?')[0];
+            return null;
         }
     },
 
-    updatePattern(key, now) {
-        let p = patternMemory.get(key) || { count: 0, firstSeen: now, lastSeen: now };
-        p.count++;
-        p.lastSeen = now;
-        patternMemory.set(key, p);
-    },
+    _normalize(input) {
+        if (!input) return "";
 
-    purgeMemory(now, burstDetected) {
-        const ttl = burstDetected ? 120000 : 30000;
-        if (patternMemory.size > MAX_PATTERNS) {
-            const oldestKey = patternMemory.keys().next().value;
-            patternMemory.delete(oldestKey);
+        // 1. String-level normalization
+        if (typeof input === 'string') {
+            const parsed = this._safeURL(input);
+            return parsed ? parsed.href : input; 
         }
-        for (const [key, p] of patternMemory) {
-            if (now - p.lastSeen > ttl) patternMemory.delete(key);
+
+        // 2. URL Object
+        if (input instanceof URL) return input.href;
+
+        // 3. Request/Object extraction
+        if (typeof input === 'object') {
+            const raw = input.url || input.href || "";
+            if (!raw) return "";
+            const parsed = this._safeURL(raw);
+            return parsed ? parsed.href : String(raw);
         }
+
+        return String(input);
     }
 };
 
-// Global Exposure
 if (typeof window !== 'undefined') {
     window.Engine = window.Engine || {};
-    window.Engine.hub = window.Engine.hub || {};
-    window.Engine.hub.Orchestrator = Orchestrator;
-    window.__NEW_ENGINE__ = { enabled: true };
+    window.Engine.hub = { Orchestrator };
 }

@@ -1,25 +1,6 @@
 (function () {
-    // Note: Engine injection moved to loader.js
-    // content.js role: Bridge telemetry + Ad blocking
-
-    // === GATEKEEPER: Bridge Main World ↔ Extension ↔ Server ===
-    window.addEventListener('message', async (event) => {
-        if (event.source !== window) return;
-
-        const data = event.data;
-
-        if (data?.source === 'adsfriendly-engine' && data?.type === 'SUBMIT_TELEMETRY') {
-            try {
-                // 🚀 PROXY: Relay to Background Script to bypass PNA/CORS restrictions
-                chrome.runtime.sendMessage({
-                    type: 'PROXY_TELEMETRY',
-                    payload: data.payload
-                });
-            } catch (err) {
-                // Ignore context invalidation errors silently
-            }
-        }
-    });
+    // Note: Engine injection and page bridge live in loader.js.
+    // content.js focuses on in-page blocking and UX hooks only.
 
     // 2. Main Blocking Logic (Asynchronous)
     (async function () {
@@ -52,11 +33,11 @@
                 });
             });
 
-            // Heuristic: Hide anything with "Sponsored" or "Quảng cáo" label in video titles
+            // Heuristic: Hide anything with "Sponsored" or "quang cao" label in video titles
             const cards = document.querySelectorAll('ytd-rich-item-renderer, ytd-video-renderer');
             cards.forEach(card => {
                 const label = card.innerText.trim().toLowerCase();
-                if (label.includes('sponsored') || label.includes('được tài trợ') || label.includes('quảng cáo')) {
+                if (label.includes('sponsored') || label.includes('duoc tai tro') || label.includes('quang cao')) {
                     if (card.style.display !== 'none') {
                         card.style.setProperty('display', 'none', 'important');
                         console.log('[AdsFriendly AI] YouTube Promoted Video hidden.');

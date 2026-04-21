@@ -1,0 +1,37 @@
+X [ERROR] The symbol "now" has already been declared
+
+    engine/hub/orchestrator.js:56:18:
+      56 │             const now = Date.now();
+         ╵                   ~~~
+
+  The symbol "now" was originally declared here:
+
+    engine/hub/orchestrator.js:23:18:
+      23 │             const now = Date.now();
+         ╵                   ~~~
+
+1 error
+node:child_process:964
+    throw err;
+    ^
+
+Error: Command failed: C:\Users\Vy Ngo\AppData\Local\npm-cache\_npx\beb367dfa21eb3f5\node_modules\@esbuild\win32-x64\esbuild.exe main_world_entry.js --bundle --outfile=dist/vanguard_main_world.js
+    at genericNodeError (node:internal/errors:985:15)
+    at wrappedFn (node:internal/errors:539:14)
+    at checkExecSyncError (node:child_process:925:11)
+    at Object.execFileSync (node:child_process:961:15)
+    at Object.<anonymous> (C:\Users\Vy Ngo\AppData\Local\npm-cache\_npx\beb367dfa21eb3f5\node_modules\esbuild\bin\esbuild:222:28)
+    at Module._compile (node:internal/modules/cjs/loader:1812:14)
+    at Object..js (node:internal/modules/cjs/loader:1943:10)
+    at Module.load (node:internal/modules/cjs/loader:1533:32)
+    at Module._load (node:internal/modules/cjs/loader:1335:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19) {
+  status: 1,
+  signal: null,
+  output: [ null, null, null ],
+  pid: 16064,
+  stdout: null,
+  stderr: null
+}
+
+Node.js v24.14.0

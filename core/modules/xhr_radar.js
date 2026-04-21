@@ -1,11 +1,9 @@
 // core/modules/xhr_radar.js
 /**
- * Vanguard Citadel - Pure Technical Sensor (v2.13.0)
- * Role: Transparently intercept network events and forward to Orchestrator.
- * NO BUSINESS LOGIC. NO BYPASSES.
+ * Vanguard Citadel - Expert Sensor (v16.11 - Invulnerable Obsidian Final)
+ * Role: Transparently intercept network events with stratified sampling and timeout-safety.
  */
 
-// 🧠 NATIVE PRESERVATION
 const getNative = (obj, key, globalKey) => {
     if (!window[globalKey]) {
         window[globalKey] = obj[key];
@@ -18,83 +16,160 @@ const nativeXHROpen = getNative(XMLHttpRequest.prototype, 'open', '__V_NATIVE_XH
 const nativeXHRSend = getNative(XMLHttpRequest.prototype, 'send', '__V_NATIVE_XHR_SEND__');
 const nativeSendBeacon = getNative(navigator, 'sendBeacon', '__V_NATIVE_BEACON__');
 
-// --- 📊 RADAR AUDIT SYSTEM ---
+const localDomainStats = new Map(); // domain -> { count, lastRisk }
+
 let auditStats = { total: 0, media: 0, ads: 0, missed: 0, other: 0 };
 function updateAudit(res = {}) {
     auditStats.total++;
-    const label = res.label_pred || res.label || 'UNKNOWN';
-    
+    const label = res?.label_pred || 'UNKNOWN';
     if (label === 'MEDIA_PASS') auditStats.media++;
     else if (label === 'HIGH_RISK') auditStats.ads++;
     else auditStats.other++;
-
-    // Shadow Audit: Track ads identified heuristic-ly but not by model
-    if (res.label_true === 'ADS' && label !== 'HIGH_RISK') {
-        auditStats.missed++;
+    
+    // Feedback to local stats for stratified sampling
+    if (res.domain) {
+        const stats = localDomainStats.get(res.domain) || { count: 0, lastRisk: 0 };
+        stats.lastRisk = res.score || 0;
+        localDomainStats.set(res.domain, stats);
     }
 
     if (auditStats.total % 20 === 0) {
-        console.log(`%c📡 [Radar Audit] Scanned: ${auditStats.total} | Media: ${auditStats.media} | Ads: ${auditStats.ads} | Missed: ${auditStats.missed} | Other: ${auditStats.other}`, "color: #10b981; font-weight: bold;");
+        console.log(`%c📡 [Radar v16.11] Scanned: ${auditStats.total} | Media: ${auditStats.media} | Ads: ${auditStats.ads}`, "color: #10b981; font-weight: bold;");
     }
 }
 
-// ⚙️ TECHNICAL HELPERS
-const normalizeUrl = (url) => {
+const safeURL = (url, base = window.location?.href) => {
     try {
-        if (!url || typeof url !== 'string') return url;
-        let u = url;
-        if (u.startsWith('//')) u = window.location.protocol + u;
-        if (u.startsWith('/')) u = window.location.origin + u;
-        return u;
-    } catch (e) { return url; }
+        if (!url) return null;
+        return new URL(url, base);
+    } catch (e) { return null; }
 };
 
-if (window.__VANGUARD_RADAR_ACTIVE__) {
-    // Already active
-} else {
+const normalizeUrl = (input) => {
+    if (!input) return "";
+    
+    // 1. Request Object
+    if (typeof Request !== 'undefined' && input instanceof Request) return input.url;
+    
+    // 2. URL Object
+    if (input instanceof URL) return input.href;
+    
+    // 3. String or Generic Object
+    let raw = input;
+    if (typeof input === 'object') raw = input.url || input.href || "";
+    
+    const parsed = safeURL(raw);
+    return parsed ? parsed.href : String(raw);
+};
+
+if (window.__VANGUARD_RADAR_ACTIVE__) { } else {
     window.__VANGUARD_RADAR_ACTIVE__ = true;
+    window.__V_LAST_INTERACTION = Date.now();
+    ['click', 'scroll', 'keypress', 'touchstart'].forEach(ev => {
+        window.addEventListener(ev, () => { window.__V_LAST_INTERACTION = Date.now(); }, { passive: true });
+    });
 
-    let traceMode = false;
-    window.Vanguard = window.Vanguard || {};
-    window.Vanguard.trace = function() {
-        traceMode = !traceMode;
-        console.log(`%c[Radar Trace] ${traceMode ? 'ON - Visible Other traffic' : 'OFF - Minimal Logging'}`, "color: #fbbf24; font-weight: bold;");
-        return `Trace mode: ${traceMode}`;
-    };
-
-    function dispatchToEngine(event) {
-        // --- TRANSPARENCY PATCH v15.0: Non-blocking async dispatch ---
-        queueMicrotask(() => {
-            if (window.Engine?.hub?.Orchestrator) {
-                window.Engine.hub.Orchestrator.process(event).then(res => {
-                    updateAudit(res);
-                    const label = res.label_pred || res.label || 'UNKNOWN';
-
-                    if (label === 'HIGH_RISK') {
-                        console.log(`%c[Vanguard] 🛡️ BLOCK | ${res.domain} | Flags: ${res.flags?.join(', ')}`, `color: #ef4444; font-weight: bold;`);
-                    } else if (traceMode && label !== 'MEDIA_PASS') {
-                        console.log(`%c🔍 [Radar Trace] OTHER | ${event.type.toUpperCase()} | ${event.url.substring(0, 80)}`, "color: #94a3b8;");
-                    }
-                }).catch(err => console.error('[Radar] Dispatch Error:', err));
-            }
-        });
+    function _generateUUIDFallback() {
+        return `${Date.now()}-${performance.now()}-${Math.random().toString(36).slice(2, 11)}`;
     }
 
-    // ⚡ Hook: window.fetch
+    const persistentTabId = (() => {
+        let id = sessionStorage.getItem('__V_TAB_ID');
+        if (!id) {
+            id = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : _generateUUIDFallback();
+            sessionStorage.setItem('__V_TAB_ID', id);
+        }
+        return id;
+    })();
+
+    const tabInstanceId = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : _generateUUIDFallback();
+
+    function dispatchToEngine(event) {
+        // v16.14 Forensic Meta (Simplified Radar Path)
+        event.sensorTimestamp = Date.now();
+
+        const bridge = window.Engine?.brainBridge;
+        if (!bridge) return 'MISSING_BRIDGE';
+
+        // sampling logic (Early Guard)
+        // Note: Statistics moved to background, Radar uses local sampling or Bridge advice
+        const rate = 0.8; // Default sampling, Bridge can override
+        if (Math.random() > rate) {
+            auditStats.missed++;
+            return 'SKIPPED';
+        }
+
+        // DISPATCH VIA BRIDGE (ASYNC)
+        bridge.dispatch(event).then(res => {
+            if (res) updateAudit(res);
+        }).catch(err => console.error('[Radar] Dispatch Error:', err));
+
+        return 'SAMPLED';
+    }
+
+    // ⚡ Hook: window.fetch (Early-Guard v16.13)
     window.fetch = function(...args) {
         let rawUrl;
         try { rawUrl = (args[0] instanceof Request) ? args[0].url : String(args[0]); } catch (e) { rawUrl = 'unknown'; }
         const url = normalizeUrl(rawUrl);
         const promise = nativeFetch.apply(this, args);
-        promise.then(res => dispatchToEngine({ url, method: 'FETCH', type: 'fetch', isError: !res.ok })).catch(() => {});
+        
+        const partialEvent = { url, method: 'FETCH', type: 'fetch' };
+        const status = dispatchToEngine(partialEvent);
+
+        if (status === 'SAMPLED') {
+            promise.then(async (res) => {
+                let size = -1;
+                try {
+                    const cl = res.headers.get('content-length');
+                    if (cl) size = parseInt(cl, 10);
+                    else if (res.ok && res.status !== 206) size = await probeSizeSafe(res);
+                } catch (e) {}
+                
+                // Update specific forensic signals after body/headers available
+                dispatchToEngine({ 
+                    ...partialEvent,
+                    responseSize: size, isError: !res.ok,
+                    isCrossOrigin: (() => {
+                        const parsed = safeURL(url);
+                        return parsed ? !window.location.hostname.includes(parsed.hostname) : false;
+                    })()
+                });
+            }).catch(() => {});
+        }
         return promise;
     };
 
     // ⚡ Hook: XMLHttpRequest
-    XMLHttpRequest.prototype.open = function(m, u) { this._v_url = normalizeUrl(u); this._v_method = m; return nativeXHROpen.apply(this, arguments); };
+    XMLHttpRequest.prototype.open = function(m, u) { 
+        this._v_url = normalizeUrl(u); 
+        this._v_method = m; 
+        return nativeXHROpen.apply(this, arguments); 
+    };
     XMLHttpRequest.prototype.send = function(...args) {
-        const cb = () => dispatchToEngine({ url: this._v_url, method: this._v_method, type: 'xhr' });
-        this.addEventListener('load', cb); this.addEventListener('error', cb);
+        const partialEvent = { url: this._v_url, method: this._v_method, type: 'xhr' };
+        const status = dispatchToEngine(partialEvent);
+
+        if (status === 'SAMPLED') {
+            const cb = () => {
+                let size = -1;
+                try {
+                    const cl = this.getResponseHeader('Content-Length');
+                    if (cl) size = parseInt(cl, 10);
+                } catch (e) {}
+                
+                dispatchToEngine({ 
+                    ...partialEvent,
+                    responseSize: size,
+                    isCrossOrigin: (() => {
+                        const parsed = safeURL(this._v_url);
+                        return parsed ? !window.location.hostname.includes(parsed.hostname) : false;
+                    })()
+                });
+            };
+            this.addEventListener('load', cb); 
+            this.addEventListener('error', cb);
+        }
         return nativeXHRSend.apply(this, args);
     };
 
@@ -102,12 +177,18 @@ if (window.__VANGUARD_RADAR_ACTIVE__) {
     if (nativeSendBeacon) {
         navigator.sendBeacon = function(u, d) {
             const res = nativeSendBeacon.apply(this, arguments);
-            dispatchToEngine({ url: normalizeUrl(u), method: 'POST', type: 'beacon' });
+            dispatchToEngine({ 
+                url: normalizeUrl(u), method: 'POST', type: 'beacon',
+                isCrossOrigin: (() => {
+                    const parsed = safeURL(u);
+                    return parsed ? !window.location.hostname.includes(parsed.hostname) : false;
+                })()
+            });
             return res;
         };
     }
 
-    // ⚡ Hook: DOM Setters (Pixels, Scripts, IFrames)
+    // ⚡ Hook: DOM Setters
     const hookProperty = (proto, prop) => {
         const desc = Object.getOwnPropertyDescriptor(proto, prop);
         if (!desc) return;
@@ -115,7 +196,13 @@ if (window.__VANGUARD_RADAR_ACTIVE__) {
             set: function(v) {
                 const res = desc.set.call(this, v);
                 const u = normalizeUrl(v);
-                dispatchToEngine({ url: u, method: 'GET', type: this.tagName?.toLowerCase() || 'element' });
+                dispatchToEngine({ 
+                    url: u, method: 'GET', type: this.tagName?.toLowerCase() || 'element',
+                    isCrossOrigin: (() => {
+                        const parsed = safeURL(u);
+                        return parsed ? !window.location.hostname.includes(parsed.hostname) : false;
+                    })()
+                });
                 return res;
             },
             get: function() { return desc.get.call(this); }, configurable: true
@@ -126,8 +213,5 @@ if (window.__VANGUARD_RADAR_ACTIVE__) {
     hookProperty(HTMLScriptElement.prototype, 'src');
     hookProperty(HTMLIFrameElement.prototype, 'src');
 
-    console.log("%c[Vanguard Radar] Wide-Spectrum Monitoring Active.", "color: #3b82f6; font-weight: bold;");
-}
-
-    console.log("%c[Vanguard Radar] Wide-Spectrum Monitoring Active.", "color: #3b82f6; font-weight: bold;");
+    console.log("%c[Vanguard Radar v16.11] Invulnerable Forensic Sensing Active.", "color: #3b82f6; font-weight: bold;");
 }

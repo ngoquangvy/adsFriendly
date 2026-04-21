@@ -6,161 +6,177 @@
 
 // Cấp quyền gọi qua API Gateway nếu được inject chung môi trường
 const gateway = typeof APIGateway !== 'undefined' ? APIGateway : null;
+const EMPTY_STATE = Object.freeze({
+    startTime: 0,
+    lastSeen: 0,
+    count: 0,
+    intervalWindow: [],
+    scoreWindow: [],
+    types: [],
+    seenTypes: [],
+    isTrustedCDN: true,
+    reputation: 0,
+    confidence: 0,
+    decisionScore: 0,
+    lastActionTime: 0,
+    isLocked: false,
+    lastSpikeTime: 0,
+    lastEventId: '',
+    lastUrl: ''
+});
 
 const BrainBridge = {
-    mode: 'HYBRID',
-    userId: 'anonymous', // Sẽ được gán sau khi có hệ thống Login
-
-    // --- LỚP 1: LƯU TRỮ TRẠNG THÁI (State Memory) ---
-    personalRules: {},     // Rule tự cấu hình/học của User (Offline)
-    globalPatterns: [],    // Rule tải từ Server (Online)
-    learnedBuffer: [],     // Hàng đợi phân tích
+    mode: 'VANGUARD_FORENSIC',
+    _epoch: 0,
+    _eventSeq: 0,
+    _isSynced: false,
 
     async init() {
-        //console.log('[AdsFriendly BrainBridge] Khởi tạo mô hình Client-Server (Hybrid) v5.0...');
-
-        // 1. Phục hồi trạng thái Local
-        const localData = await chrome.storage.local.get(['userCustomRules', 'globalAdPatterns', 'personalOverrides']);
-        this.personalRules = localData.personalOverrides || {};
-        this.globalPatterns = localData.globalAdPatterns || [];
-
-        // 2. Đồng bộ hóa với Server theo chu kỳ (Cloud Sync)
-        this.syncWithCloud();
+        this.initEpochSync();
+        // Request initial state/epoch
+        window.postMessage({ source: 'adsfriendly-engine', type: 'INITIAL_HANDSHAKE' }, "*");
     },
 
-    // --- LỚP 2: BỘ ĐIỀU PHỐI ĐỒNG BỘ (Gateway Adapter) ---
-    async syncWithCloud() {
-        if (!gateway) return;
+    // --- 🛡️ v16.14 TRANSPORT ENGINE ---
+    
+    async dispatch(partialEvent) {
+        this._eventSeq++;
+        const eventId = `${this._epoch}:${this._eventSeq}`;
+        
+        // 1. Minimum Meta Attachment
+        const event = {
+            ...partialEvent,
+            eventId,
+            epoch: this._epoch,
+            timestamp: Date.now()
+        };
 
-        //console.log('[BrainBridge] Yêu cầu lấy Global Rules từ Server...');
-        const cloudData = await gateway.fetchCloudRules(this.userId);
+        // 2. Normalize and Extract Domain (Safe Path)
+        const url = this.standardizeUrl(event.url);
+        event.url = url;
+        const domain = this.extractDomain(url);
+        
+        // 3. Sync State from Background (Atomic Fetch)
+        const currentState = await this.fetchGlobalMemory(domain);
+        
+        // 4. Decision Pipeline
+        if (window.Engine?.hub?.Orchestrator) {
+            const { decision, stateUpdate } = await window.Engine.hub.Orchestrator.process(event, currentState);
+            
+            // 5. Atomic State Feedback to Background
+            if (stateUpdate) {
+                this.syncBehavior(stateUpdate);
+            }
 
-        if (cloudData && cloudData.globalPatterns) {
-            this.globalPatterns = cloudData.globalPatterns;
-            // Chỉ lưu lại Cache Cloud xuống HDD nếu data hợp lệ (Đề phòng server trả lỗi)
-            await chrome.storage.local.set({ globalAdPatterns: this.globalPatterns });
-            console.log('[BrainBridge] Đã Cache Cloud Rules thành công.');
+            if (gateway) {
+                gateway.submitTelemetry({
+                    type: 'FORENSIC_DECISION',
+                    provider_type: 'VANGUARD_V16',
+                    data: {
+                        eventId: decision.eventId,
+                        epoch: decision.epoch,
+                        timestamp: decision.timestamp,
+                        eventType: event.type,
+                        method: event.method,
+                        url: decision.url,
+                        domain: decision.domain,
+                        stateCount: currentState?.count || 0,
+                        label_pred: decision.label_pred,
+                        action: decision.action,
+                        score: decision.score,
+                        confidence: decision.confidence,
+                        decisionPath: decision.decisionPath,
+                        contributions: decision.contributions,
+                        forensic: decision.forensic || null
+                    }
+                }).catch(() => {});
+            }
+            
+            return decision;
         }
+        
+        return {
+            eventId,
+            epoch: this._epoch,
+            timestamp: event.timestamp,
+            action: 'ALLOW',
+            label_pred: 'ERROR_NO_ORCHESTRATOR',
+            score: 0,
+            confidence: 0,
+            domain
+        };
     },
 
-    // --- LỚP 3: BỘ PHÂN TÍCH (Standardizer & Engine) ---
-    standardize(selector) {
-        if (!selector) return null;
-        let clean = selector.replace(/-\d+$/, '-*');
-        clean = clean.replace(/:\d+$/, ':*');
-        return clean;
-    },
-
-    // --- LỚP 4: CẢM BIẾN ĐẦU VÀO TỪ DOM & MẠNG (Sensor Intake) ---
-    async recordDecision(payload) {
-        // A. Telemetry Tunnel (postMessage) — hoạt động trong MỌI context (Main World + Extension)
-        if (gateway) {
-            gateway.submitTelemetry({
-                type: 'DECISION_LOG',
-                provider_type: 'VANGUARD_V2', 
-                data: payload // Passing the full trace/final/meta payload
-            });
-        }
-
-        // B. Lưu Offline Fallback — chỉ khả dụng trong Extension context
+    standardizeUrl(input) {
+        if (!input) return "";
         try {
-            if (chrome.runtime && chrome.runtime.id) {
-                const { neuroLogs = [] } = await chrome.storage.local.get(['neuroLogs']);
-                neuroLogs.unshift(payload);
-                if (neuroLogs.length > 50) neuroLogs.length = 50;
-                await chrome.storage.local.set({ neuroLogs });
+            if (typeof input === 'string') return new URL(input, window.location.href).href;
+            if (input instanceof URL) return input.href;
+            return String(input);
+        } catch (e) { return String(input); }
+    },
+
+    extractDomain(url) {
+        try {
+            return new URL(url).hostname;
+        } catch (e) { return 'unknown'; }
+    },
+
+    async fetchGlobalMemory(domain) {
+        return new Promise((resolve) => {
+            const requestId = Math.random().toString(36).substring(2, 9);
+            const handler = (e) => {
+                if (e.data?.type === 'FORENSIC_MEMORY_RESPONSE' && e.data?.requestId === requestId) {
+                    window.removeEventListener('message', handler);
+                    resolve(e.data.state || { ...EMPTY_STATE, startTime: Date.now() });
+                }
+            };
+            window.addEventListener('message', handler);
+            window.postMessage({ source: 'adsfriendly-engine', type: 'FORENSIC_MEMORY_FETCH', domain, requestId }, "*");
+            setTimeout(() => {
+                window.removeEventListener('message', handler);
+                resolve({ ...EMPTY_STATE, startTime: Date.now() });
+            }, 500);
+        });
+    },
+
+    initEpochSync() {
+        window.addEventListener('message', (e) => {
+            if (e.data?.source !== 'adsfriendly-background') return;
+
+            if (e.data.type === 'EPOCH_UPDATE') {
+                const { epoch } = e.data;
+                this._epoch = epoch;
+                this._isSynced = true;
+                this._eventSeq = 0; // Reset sequence on new epoch
+                
+                // Handshake ACK
+                window.postMessage({
+                    source: 'adsfriendly-engine',
+                    type: 'ACK_EPOCH_SYNC',
+                    epoch,
+                    tabId: sessionStorage.getItem('__V_TAB_ID')
+                }, "*");
             }
-        } catch (e) {
-            // Thất bại thầm lặng trong Main World context
-        }
-
-        // C. Promote high-confidence entries
-        const confidence = entry.decision?.confidence || entry.final_confidence || 0;
-        if (confidence > 0.9) {
-            this.promoteToBuffer(entry);
-        }
+        });
     },
 
-    async recordIntelligence(data) {
-        if (!chrome.runtime || !chrome.runtime.id) return;
-
-        // Bắn Network Genomes (m3u8, vast) ra tầng mây AI
-        if (gateway) {
-            gateway.submitTelemetry({
-                type: 'AD_GENOME_HARVEST',
-                provider_type: data.provider || 'JSON_DEEP_SCAN', // Map to HLS or JSON
-                data: { ...data, timestamp: Date.now(), userId: this.userId }
-            });
-        }
-
-        // Tạm sao lưu dạng Local nếu Server sập
-        if (data.type === 'AD_GENOME_HARVEST') {
-            const { adGenomes = [] } = await chrome.storage.local.get(['adGenomes']);
-            adGenomes.unshift(data.genome);
-            if (adGenomes.length > 100) adGenomes.length = 100;
-            await chrome.storage.local.set({ adGenomes });
-        }
-    },
-
-    async promoteToBuffer(entry) {
-        const cleanSelector = this.standardize(entry.reasoning.primarySelector);
-        if (!cleanSelector) return;
-
-        const { pendingRules = [] } = await chrome.storage.local.get(['pendingRules']);
-        if (!pendingRules.find(r => r.selector === cleanSelector)) {
-            pendingRules.push({
-                selector: cleanSelector,
-                site: entry.site,
-                count: 1,
-                lastSeen: Date.now()
-            });
-            await chrome.storage.local.set({ pendingRules });
-        }
-    },
-
-    async confirmLearnedMarker(selector, site) {
-        if (!chrome.runtime || !chrome.runtime.id) return;
-
-        const { discoveredMarkers = [] } = await chrome.storage.local.get(['discoveredMarkers']);
-        const { pendingRules = [] } = await chrome.storage.local.get(['pendingRules']);
-
-        const existing = discoveredMarkers.includes(selector);
-        if (!existing) {
-            discoveredMarkers.push(selector);
-            await chrome.storage.local.set({ discoveredMarkers });
-
-            const ruleExists = pendingRules.find(r => r.selector === selector);
-            if (!ruleExists) {
-                pendingRules.push({ selector, site, count: 1, type: 'learned_skip', lastSeen: Date.now() });
-                await chrome.storage.local.set({ pendingRules });
-            }
-        }
-    },
-
-    async penalizeMarker(selector) {
-        if (!chrome.runtime || !chrome.runtime.id) return;
-
-        const { suspiciousMarkers = [] } = await chrome.storage.local.get(['suspiciousMarkers']);
-        if (!suspiciousMarkers.includes(selector)) {
-            suspiciousMarkers.push(selector);
-            await chrome.storage.local.set({ suspiciousMarkers });
-        }
-    },
-
-    async getDiscoveredMarkers() {
-        const { discoveredMarkers = [] } = await chrome.storage.local.get(['discoveredMarkers']);
-        const { suspiciousMarkers = [] } = await chrome.storage.local.get(['suspiciousMarkers']);
-
-        // Loại bỏ các marker đã bị dán nhãn phạt
-        return discoveredMarkers.filter(m => !suspiciousMarkers.includes(m));
+    syncBehavior(stateUpdate) {
+        // Debounced or direct batching is handled in background, bridge just pushes
+        window.postMessage({ 
+            source: 'adsfriendly-engine', 
+            type: 'FORENSIC_MEMORY_COMMIT', 
+            update: stateUpdate,
+            epoch: this._epoch 
+        }, "*");
     }
 };
-
-// Global Exposure for Vanguard Engine
+// Global Exposure
 if (typeof window !== 'undefined') {
+    BrainBridge.init();
     window.Engine = window.Engine || {};
     window.Engine.brainBridge = BrainBridge;
-    window.BrainBridge = BrainBridge; // Backward compatibility
+    window.BrainBridge = BrainBridge; 
 }
 
 if (typeof window === 'undefined') {

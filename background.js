@@ -1,90 +1,387 @@
-// importScripts('core/BrainBridge.js'); // Standardized logic shared with background
-
-// Store the metadata of the last trusted click (v2.6 Intent Lock)
+// Vanguard v16.13 - Reality Anchor (Titanium Production Edition)
+// Centralized Behavioral Memory Hub (Background)
+const domainBehaviorCache = new Map();
+const entityBehaviorCache = new Map(); // Entity-level aggregation
+const lockRegistry = new Map(); 
+const lockQueueDepth = new Map();
+const LRU_MAX_DOMAINS = 500;
+const MEMORY_TTL = 15 * 60 * 1000; 
 let lastTrustedClick = { timestamp: 0, intentUrl: null };
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === 'TRUSTED_CLICK') {
-    lastTrustedClick = {
-      timestamp: Date.now(),
-      intentUrl: message.intentUrl
+function createEmptyDomainState(now = Date.now()) {
+    return {
+        startTime: now,
+        firstSeenGlobal: now,
+        lastActive: now,
+        lastAccess: now,
+        lastSeen: 0,
+        count: 0,
+        scoreWindow: [],
+        intervalWindow: [],
+        types: [],
+        seenTypes: [],
+        scriptIframeCounter: 0,
+        nextForgivenessAllowed: 0,
+        slotReservedAt: 0,
+        isTrustedCDN: true,
+        reputation: 0,
+        confidence: 0,
+        decisionScore: 0,
+        lastActionTime: 0,
+        isLocked: false,
+        lastSpikeTime: 0,
+        lastEventId: '',
+        lastUrl: '',
+        lastRisk: 0,
+        lastConfidence: 0
     };
-  } else if (message.type === 'TOGGLE_STATUS') {
-    console.log("Protection status:", message.isEnabled);
-  } else if (message.type === 'SYNC_LEARNING') {
-    synthesizeGlobalPatterns()
-      .then(() => sendResponse({ status: 'ok' }))
-      .catch(err => {
-        console.error("Learning error:", err);
-        sendResponse({ status: 'error' });
-      });
-    return true;
-  } else if (message.type === 'NEGATIVE_LEARNING') {
-    handleNegativeLearning(message.fingerprint)
-      .then(() => sendResponse({ status: 'ok' }))
-      .catch(err => console.error("Negative learning error:", err));
-    return true;
-  } else if (message.type === 'USER_DECISION') {
-    handleUserDecision(message)
-      .then(() => sendResponse({ status: 'ok' }))
-      .catch(err => sendResponse({ status: 'error', error: err.message }));
-    return true;
-  } else if (message.type === 'PATH_RESTORED') {
-    syncTrustedPath(message.source, message.target, true)
-      .then(() => sendResponse({ status: 'ok' }))
-      .catch(err => sendResponse({ status: 'error' }));
-    return true;
-  } else if (message.type === 'LEARN_VIDEO_AD') {
-    handleLearnVideoAd(message)
-      .then(() => sendResponse({ status: 'ok' }))
-      .catch(() => sendResponse({ status: 'error' }));
-    return true;
-  } else if (message.type === 'SYNC_VIDEO_LEARNING') {
-    handleVideoLearning(message)
-      .then(() => sendResponse({ status: 'ok' }))
-      .catch(() => sendResponse({ status: 'error' }));
-    return true;
-  } else if (message.type === 'REPORT_AD_DENSITY') {
-    updateSiteReputation(message.hostname, message.count)
-      .then(() => sendResponse({ status: 'ok' }))
-      .catch(() => sendResponse({ status: 'error' }));
-    return true;
-  } else if (message.type === 'LEARN_DOMAINS') {
-    handleLearnDomains(message.domains)
-      .then(() => sendResponse({ status: 'ok' }))
-      .catch(() => sendResponse({ status: 'error' }));
-    return true;
-  } else if (message.type === 'LOG_NEURAL_DECISION') {
-    handleNeuralLogging(message.entry)
-      .then(() => sendResponse({ status: 'ok' }))
-      .catch(() => sendResponse({ status: 'error' }));
-    return true;
-  } else if (message.type === 'REPORT_VIDEO_DECISION') {
-    handleReportVideoDecision(message.data)
-      .then(() => sendResponse({ status: 'ok' }))
-      .catch(() => sendResponse({ status: 'error' }));
-    return true;
-  } else if (message.type === 'GET_VIDEO_SOURCE_STATS') {
-    chrome.storage.local.get(['globalAdPatterns']).then(data => {
-      const stats = {};
-      const patterns = data.globalAdPatterns || [];
-      patterns.forEach(p => {
-        if (p.type === 'reputation') stats[p.value] = p;
-      });
-      sendResponse(stats);
+}
+
+function normalizeDomain(domain, types = []) {
+    if (!domain) return { domain: '', entity: '' };
+    
+    // Entity Extraction (Paranoid Production v16.13)
+    const parts = domain.split('.');
+    const entity = parts.slice(-2).join('.'); // e.g. "xhcdn.com"
+    
+    // Whitelisted CDN Normalization
+    const looksLikeCDN = /\d+|cdn|edge|cache/.test(domain);
+    const hasAdKeyword = /ads|track|bid|click/.test(domain);
+    const isMediaPattern = /\.(mp4|m3u8|ts|chunk|frag)/.test(domain); 
+    
+    const hasScriptIframe = types.some(t => t === 'script' || t === 'iframe');
+
+    let normalized = domain;
+    if (looksLikeCDN && !hasAdKeyword && isMediaPattern && !hasScriptIframe) {
+        if (domain.includes('googlevideo.com')) normalized = 'googlevideo.com';
+        else if (domain.includes('cloudfront.net')) normalized = 'cloudfront.net';
+        else if (domain.includes('akamai')) normalized = 'akamai.net';
+        else normalized = entity;
+    }
+    return { domain: normalized, entity };
+}
+
+async function withLock(domain, fn) {
+    const { domain: norm } = normalizeDomain(domain);
+    const depth = lockQueueDepth.get(norm) || 0;
+    if (depth > 50) return await fn(true); 
+
+    lockQueueDepth.set(norm, depth + 1);
+    const prev = lockRegistry.get(norm) || Promise.resolve();
+    let release;
+    const next = new Promise(r => (release = r));
+    lockRegistry.set(norm, prev.then(() => next));
+
+    try {
+        await prev;
+        return await fn(false);
+    } finally {
+        release();
+        lockQueueDepth.set(norm, Math.max(0, (lockQueueDepth.get(norm) || 1) - 1));
+        if (lockRegistry.get(norm) === next) {
+            lockRegistry.delete(norm);
+            lockQueueDepth.delete(norm);
+        }
+    }
+}
+
+function updateAtomicState(domainName, updates = {}, isOverflow = false) {
+    const { domain: norm, entity } = normalizeDomain(domainName, updates.allTypes);
+    const now = Date.now();
+    
+    // 1. Domain State Substitution
+    const oldState = domainBehaviorCache.get(norm) || createEmptyDomainState(now);
+
+    const state = { ...oldState, lastAccess: now, lastActive: now };
+    state.count++;
+
+    // Type Guard & Forgiveness (Aligned)
+    const currentTypes = updates.type ? [updates.type] : [];
+    const hasTypeViolation = currentTypes.some(t => t === 'script' || t === 'iframe');
+    
+    if (hasTypeViolation) {
+        state.isTrustedCDN = false;
+        state.scriptIframeCounter = 0;
+        state.nextForgivenessAllowed = now + 60000;
+    } else {
+        state.scriptIframeCounter++;
+        if (state.scriptIframeCounter >= 20 && !state.isTrustedCDN && now > state.nextForgivenessAllowed) {
+            state.isTrustedCDN = true; 
+        }
+    }
+
+    // Temporal Update (Negative Guard)
+    const interval = Math.max(0, updates.interval !== undefined ? updates.interval : (state.lastSeen ? now - state.lastSeen : 0));
+
+    // Forensic Windows (v16.13 Aligned Sync)
+    if (updates.score !== undefined) {
+        state.lastRisk = updates.score;
+        state.lastConfidence = updates.confidence || 0;
+        state.scoreWindow.push(updates.score);
+        state.intervalWindow.push(interval);
+        if (state.scoreWindow.length > 5) {
+            state.scoreWindow.shift();
+            state.intervalWindow.shift();
+        }
+    }
+    state.lastSeen = now;
+    if (updates.type && !state.types.includes(updates.type)) state.types.push(updates.type);
+
+    // 2. Conservative Entity Propagation (v16.13 Titanium)
+    if (entity && entity !== norm) {
+        const oldEntityState = entityBehaviorCache.get(entity) || { risk: 0, confidence: 0, count: 0 };
+        const entityUpdates = { ...oldEntityState };
+        
+        // Paranoid Check: Only propagate if child is credible
+        const isCredible = state.lastConfidence > 0.5 && state.count >= 3;
+        const isFastPath = hasTypeViolation && state.count >= 3;
+
+        if (isCredible || isFastPath) {
+            entityUpdates.risk = Math.max(entityUpdates.risk, state.lastRisk);
+            entityUpdates.confidence = Math.min(entityUpdates.confidence || 1.0, state.lastConfidence);
+            entityUpdates.count++;
+            entityBehaviorCache.set(entity, entityUpdates);
+            state.entityRisk = entityUpdates.risk; // Mirror sync
+        }
+    }
+
+    // LRU Eviction
+    if (domainBehaviorCache.size > LRU_MAX_DOMAINS) {
+        const oldestEntry = [...domainBehaviorCache.entries()].sort((a, b) => a[1].lastAccess - b[1].lastAccess)[0];
+        if (oldestEntry) domainBehaviorCache.delete(oldestEntry[0]);
+    }
+
+    domainBehaviorCache.set(norm, state);
+    return state;
+}
+
+// TTL Cleanup
+setInterval(() => {
+    const now = Date.now();
+    for (const [domain, state] of domainBehaviorCache) {
+        if (now - state.lastActive > MEMORY_TTL) {
+            domainBehaviorCache.delete(domain);
+        }
+    }
+}, 60000);
+
+// v16.14 Titan Final - Global Epoch Manager
+let globalEpoch = 1;
+const tabRegistry = new Map(); // tabId -> { lastSeen, instanceId, status }
+const ACK_TIMEOUT = 500;
+const MIN_ACK_RATIO = 0.6;
+let epochAckTracker = null;
+
+function expectedAckCount(tracker) {
+    return Math.max(1, (tracker?.acks || 0) + (tracker?.pending?.size || 0));
+}
+
+function canMessageTab(tab) {
+    if (!tab?.id) return false;
+    if (!tab.url) return false;
+    return /^https?:/i.test(tab.url);
+}
+
+function safeSendTabMessage(tabId, message) {
+    return new Promise((resolve) => {
+        chrome.tabs.sendMessage(tabId, message, () => {
+            if (chrome.runtime.lastError) {
+                const errorMessage = chrome.runtime.lastError.message || '';
+                const isMissingReceiver = errorMessage.includes('Receiving end does not exist');
+                const isBlockedContext = errorMessage.includes('The tab was closed') || errorMessage.includes('No tab with id');
+
+                if (!isMissingReceiver && !isBlockedContext) {
+                    console.warn(`[Vanguard] Tab message failed for tab ${tabId}:`, errorMessage);
+                }
+                resolve(false);
+                return;
+            }
+            resolve(true);
+        });
     });
-    return true;
-  } else if (message.type === 'DEBUG_LOG') {
-    handleDiagnosticLogging(message)
-      .then(() => sendResponse({ status: 'ok' }))
-      .catch(() => sendResponse({ status: 'error' }));
-    return true;
-  } else if (message.type === 'PROXY_TELEMETRY') {
-    proxyTelemetry(message.payload)
-      .then(() => sendResponse({ status: 'ok' }))
-      .catch(() => sendResponse({ status: 'error' }));
-    return true;
-  }
+}
+
+async function broadcastEpoch() {
+    const now = Date.now();
+    const activeTabs = Array.from(tabRegistry.entries())
+        .filter(([_, t]) => now - t.lastSeen < 5000);
+    
+    globalEpoch++;
+    const targetTabIds = new Set(activeTabs.map(([tabId]) => tabId));
+    const expectedCount = Math.max(1, targetTabIds.size);
+    
+    console.log(`%c[EPOCH] Broadcasting v${globalEpoch} | Expected: ${expectedCount}`, "color: #3b82f6;");
+
+    const message = {
+        source: 'adsfriendly-background',
+        type: 'EPOCH_UPDATE',
+        epoch: globalEpoch,
+        engine_v: "v16.14" // Hardcoded for now, should be from constant
+    };
+
+    // Parallel Dispatch
+    const ackPromise = new Promise((resolve) => {
+        const timeout = setTimeout(() => {
+            const ackCount = epochAckTracker?.acks || 0;
+            console.warn(`%c[QUORUM] Timeout reached. Proceeding with ${ackCount}/${expectedCount} ACKs`, "color: #f59e0b;");
+            epochAckTracker = null;
+            resolve();
+        }, ACK_TIMEOUT);
+
+        epochAckTracker = {
+            epoch: globalEpoch,
+            acks: 0,
+            pending: targetTabIds,
+            resolve: () => {
+                clearTimeout(timeout);
+                const ackCount = epochAckTracker?.acks || 0;
+                console.log(`%c[QUORUM] Reached with ${ackCount}/${expectedCount} ACKs`, "color: #10b981;");
+                epochAckTracker = null;
+                resolve();
+            }
+        };
+
+        chrome.tabs.query({}, (tabs) => {
+            tabs.filter(canMessageTab).forEach(tab => {
+                safeSendTabMessage(tab.id, message);
+            });
+        });
+    });
+
+    return ackPromise;
+}
+
+ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    // 🛡️ v16.14 LISTENER GUARD: Reject invalid contexts
+    if (!message || !sender?.tab) return false;
+
+    const now = Date.now();
+    const tabId = sender.tab.id;
+
+    if (message.type === 'FORENSIC_MEMORY_COMMIT') {
+        const { update, epoch } = message;
+        if (epoch && epoch !== globalEpoch) {
+            sendResponse({ status: 'dropped', reason: 'STALE_EPOCH' });
+            return false;
+        }
+
+        if (update && update.domain) {
+            withLock(update.domain, (isOverflow) => {
+                const norm = normalizeDomain(update.domain, update.updates?.types || []).domain;
+                const oldState = domainBehaviorCache.get(norm) || createEmptyDomainState();
+                const newState = { ...oldState, ...update.updates, lastAccess: Date.now(), lastActive: Date.now() };
+                domainBehaviorCache.set(norm, newState);
+            });
+        }
+        sendResponse({ status: 'ok' });
+        return false;
+    }
+
+    if (message.type === 'FORENSIC_MEMORY_FETCH') {
+        const norm = normalizeDomain(message.domain).domain;
+        const state = domainBehaviorCache.get(norm) || createEmptyDomainState();
+        sendResponse({ state, requestId: message.requestId });
+        return false;
+    }
+
+    if (message.type === 'ACK_EPOCH_SYNC') {
+        if (message.epoch === globalEpoch) {
+            const tab = tabRegistry.get(tabId);
+            if (tab) tab.status = 'SYNCED';
+        }
+        return false;
+    }
+
+    if (message.type === 'INITIAL_HANDSHAKE') {
+        tabRegistry.set(tabId, { lastSeen: now, status: 'HANDSHAKE' });
+        safeSendTabMessage(tabId, {
+            source: 'adsfriendly-background',
+            type: 'EPOCH_UPDATE',
+            epoch: globalEpoch,
+            engine_v: "v16.14"
+        });
+        return false;
+    }
+    
+    // --- Legacy / Other Handlers ---
+    if (message.type === 'TRUSTED_CLICK') {
+        lastTrustedClick = { timestamp: Date.now(), intentUrl: message.intentUrl };
+    } else if (message.type === 'TOGGLE_STATUS') {
+        console.log("Protection status:", message.isEnabled);
+    } else if (message.type === 'SYNC_LEARNING') {
+        synthesizeGlobalPatterns()
+            .then(() => sendResponse({ status: 'ok' }))
+            .catch(err => {
+                console.error("Learning error:", err);
+                sendResponse({ status: 'error' });
+            });
+        return true;
+    } else if (message.type === 'NEGATIVE_LEARNING') {
+        handleNegativeLearning(message.fingerprint)
+            .then(() => sendResponse({ status: 'ok' }))
+            .catch(err => console.error("Negative learning error:", err));
+        return true;
+    } else if (message.type === 'USER_DECISION') {
+        handleUserDecision(message)
+            .then(() => sendResponse({ status: 'ok' }))
+            .catch(err => sendResponse({ status: 'error', error: err.message }));
+        return true;
+    } else if (message.type === 'PATH_RESTORED') {
+        syncTrustedPath(message.source, message.target, true)
+            .then(() => sendResponse({ status: 'ok' }))
+            .catch(err => sendResponse({ status: 'error' }));
+        return true;
+    } else if (message.type === 'LEARN_VIDEO_AD') {
+        handleLearnVideoAd(message)
+            .then(() => sendResponse({ status: 'ok' }))
+            .catch(() => sendResponse({ status: 'error' }));
+        return true;
+    } else if (message.type === 'SYNC_VIDEO_LEARNING') {
+        handleVideoLearning(message)
+            .then(() => sendResponse({ status: 'ok' }))
+            .catch(() => sendResponse({ status: 'error' }));
+        return true;
+    } else if (message.type === 'REPORT_AD_DENSITY') {
+        updateSiteReputation(message.hostname, message.count)
+            .then(() => sendResponse({ status: 'ok' }))
+            .catch(() => sendResponse({ status: 'error' }));
+        return true;
+    } else if (message.type === 'LEARN_DOMAINS') {
+        handleLearnDomains(message.domains)
+            .then(() => sendResponse({ status: 'ok' }))
+            .catch(() => sendResponse({ status: 'error' }));
+        return true;
+    } else if (message.type === 'LOG_NEURAL_DECISION') {
+        handleNeuralLogging(message.entry)
+            .then(() => sendResponse({ status: 'ok' }))
+            .catch(() => sendResponse({ status: 'error' }));
+        return true;
+    } else if (message.type === 'REPORT_VIDEO_DECISION') {
+        handleReportVideoDecision(message.data)
+            .then(() => sendResponse({ status: 'ok' }))
+            .catch(() => sendResponse({ status: 'error' }));
+        return true;
+    } else if (message.type === 'GET_VIDEO_SOURCE_STATS') {
+        chrome.storage.local.get(['globalAdPatterns']).then(data => {
+            const stats = {};
+            const patterns = data.globalAdPatterns || [];
+            patterns.forEach(p => {
+                if (p.type === 'reputation') stats[p.value] = p;
+            });
+            sendResponse(stats);
+        });
+        return true;
+    } else if (message.type === 'DEBUG_LOG') {
+        handleDiagnosticLogging(message)
+            .then(() => sendResponse({ status: 'ok' }))
+            .catch(() => sendResponse({ status: 'error' }));
+        return true;
+    } else if (message.type === 'PROXY_TELEMETRY') {
+        proxyTelemetry(message.payload)
+            .then(() => sendResponse({ status: 'ok' }))
+            .catch(() => sendResponse({ status: 'error' }));
+        return true;
+    }
 });
 
 async function handleDiagnosticLogging(payload) {
