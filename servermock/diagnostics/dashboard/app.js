@@ -54,10 +54,41 @@ function initRefresh() {
 
 // --- Data Normalization (Vanguard Logic) ---
 function normalizeLog(l) {
-    const data = l.data ?? l;
+    const identity = l.identity || {};
+    const data = l.data || l;
     
+    // --- 0. Forensic Titan Schema (v16.14 - Vanguard V16) ---
+    if (identity.provider_type === 'VANGUARD_V16') {
+        const domain = (data.domain || '').toLowerCase().trim();
+        const label = data.label_pred || '';
+        
+        if (!domain || domain === 'unknown') return null;
+
+        let badgeClass = label.toLowerCase();
+        if (label === 'HIGH_RISK') badgeClass = 'risk';
+        if (label === 'MEDIA_PASS') badgeClass = 'media';
+        if (label === 'SUSPICIOUS') badgeClass = 'warning';
+
+        return {
+            url: data.url || 'unknown',
+            domain,
+            label,
+            label_true: data.label_true || 'UNKNOWN',
+            badgeClass,
+            score: data.score || 0,
+            confidence: data.confidence || 0,
+            action: data.action || 'ALLOW',
+            features: data.features || data.forensic?.featureAttribution || {},
+            context: data.context || {},
+            decisionPath: data.decisionPath || {},
+            timestamp: data.timestamp || Date.now(),
+            raw: l
+        };
+    }
+
     // --- 1. Canonical Schema Detection (v14.0 - Training Ready) ---
     if (data.schema_v === '14.0') {
+
         const domain = (data.domain ?? '').toLowerCase().trim();
         const label = data.label_pred ?? data.label ?? '';
         

@@ -5,14 +5,15 @@
  */
 const Extractor = {
     extract(event, state) {
-        const url = event.url.toLowerCase();
+        const url = (event.url || '').toLowerCase();
         const domain = event.domain || '';
         const domainClass = event.domainClass || 'unknown';
-        
+        const pageHost = typeof window !== 'undefined' ? window.location.hostname : '';
+
         // --- 1. MEDIA & HLS FRAGMENT DETECTION (v16.0) ---
         const isMediaBase =
             url.includes('.m3u8') ||
-            url.includes('.ts') ||         // 🔥 QUAN TRỌNG (HLS segment)
+            url.includes('.ts') ||
             url.includes('.mp4') ||
             url.includes('.webm') ||
             url.includes('videoplayback') ||
@@ -31,32 +32,78 @@ const Extractor = {
             url.includes('/seg') ||
             url.match(/_\d+p/); // e.g., 160p, 720p
 
-        // --- 2. V16.4 WEAK SIGNAL SYNTHESIS VECTOR ---
+        // --- 2. FORENSIC SIGNAL SYNTHESIS (v16.24) ---
+        const stats = this.calculateStructureMetrics(url);
+        const marketingParams = ['utm_', 'clickid', 'gclid', 'fbclid', 'aff_id', 'affiliate', 'campaign'];
+        const isMarketing = marketingParams.some(p => url.includes(p) || (event.href && event.href.includes(p)));
+
+        const contextScore = event.context ? this.calculateContextScore(event.context) : 0;
+
+        // Disparity Analysis (Cross-Origin Hook)
+        const isUrlCrossOrigin = event.isCrossOrigin || (domain && pageHost && !pageHost.includes(domain));
+        const hrefDomain = event.href && event.href.startsWith('http') ? new URL(event.href, window.location.href).hostname : null;
+        const isHrefCrossOrigin = hrefDomain && pageHost && !pageHost.includes(hrefDomain);
+        const sourceDisparity = (domain && hrefDomain && domain !== hrefDomain);
+
         const unified = {
-            // STATIC / PATTERN
+            // BEHAVIORAL & CONTEXT
             url,
-            isAdPattern: domainClass === 'ads_network' || this.checkAdKeywords(url),
+            isAdPattern: domainClass === 'ads_network' || this.checkAdKeywords(url) || contextScore > 0.5,
             isMedia: isMediaBase || isHLS,
-            isUnknownDomain: domainClass === 'unknown',
-            responseSize: Number.isFinite(event.responseSize) ? event.responseSize : -1,
-            isCrossOrigin: Boolean(event.isCrossOrigin),
-            
+            isMarketing,
+            contextScore,
+
+            // DISPARITY SIGNALS
+            isCrossOrigin: isUrlCrossOrigin,
+            isHrefCrossOrigin: !!isHrefCrossOrigin,
+            sourceDisparity: !!sourceDisparity,
+
+            // STRUCTURAL FORENSICS
+            slashCount: stats.slashCount,
+            maxSegmentLength: stats.maxSegmentLength,
+            isSpecialProtocol: /^(data:|blob:|mailto:|tel:|sms:)/i.test(url) || domain === 'special-protocol',
+
             // EVENT LEVEL
             type: event.type || 'unknown',
-            
-            // FORENSIC SIGNAL SYNTHESIS (v16.4)
-            cv: this.calculateCV(state.intervalWindow), 
+
+            // DYNAMIC SIGNALS
+            cv: this.calculateCV(state.intervalWindow),
             entropy: this.calculateEntropy(url),
             interactionGap: this.calculateInteractionGap(),
-            
-            // BEHAVIORAL
+
+            // REPUTATION
             frequency: state.frequency || 0,
             sessionCount: state.count || 0,
-            reputation: state.reputation || 0,
-            typeDiversity: state.types ? state.types.size : 0
+            reputation: state.reputation || 0
         };
 
         return { v2: unified, domainClass };
+    },
+
+    calculateContextScore(context) {
+        const adKeywords = ['ad-', 'banner', 'promo', 'sponsor', 'overlay', 'popup', 'container-ad'];
+        let score = 0;
+        const raw = `${context.id} ${context.className} ${context.parentClass} ${context.parentId}`.toLowerCase();
+        adKeywords.forEach(kw => {
+            if (raw.includes(kw)) score += 0.4;
+        });
+        return Math.min(score, 1.0);
+    },
+
+    calculateStructureMetrics(url) {
+        try {
+            // Use segments from path only, avoiding query for slashCount consistency
+            const path = url.split('?')[0];
+            const segments = path.split('/');
+
+            return {
+                slashCount: segments.length - 1,
+                maxSegmentLength: segments.reduce((max, s) => Math.max(max, s.length), 0),
+                fingerprint: url.substring(0, 150) // Simple truncation for fingerprinting
+            };
+        } catch (e) {
+            return { slashCount: 0, maxSegmentLength: 0, fingerprint: 'error' };
+        }
     },
 
     getSessionContext() {
@@ -104,7 +151,7 @@ const Extractor = {
 
     checkAdKeywords(url) {
         const adKeywords = [
-            '/ads/', '/bid/', '/vast/', '/vpaid/', 'pixel', 'tracking', '/popunder', 
+            '/ads/', '/bid/', '/vast/', '/vpaid/', 'pixel', 'tracking', '/popunder',
             '/pop-under', 'deliver_ads', 'banner', 'sponsor', 'ad_type', 'adservice'
         ];
         const u = url.toLowerCase();

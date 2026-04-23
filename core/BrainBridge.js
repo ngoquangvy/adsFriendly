@@ -38,12 +38,12 @@ const BrainBridge = {
     },
 
     // --- 🛡️ v16.14 TRANSPORT ENGINE ---
-    
+
     async dispatch(partialEvent) {
         this._eventSeq++;
         const eventId = `${this._epoch}:${this._eventSeq}`;
-        
-        // 1. Minimum Meta Attachment
+
+        // 2. Minimum Meta Attachment
         const event = {
             ...partialEvent,
             eventId,
@@ -51,18 +51,29 @@ const BrainBridge = {
             timestamp: Date.now()
         };
 
-        // 2. Normalize and Extract Domain (Safe Path)
+        // 3. Normalize and Extract Domain (Safe Path)
         const url = this.standardizeUrl(event.url);
         event.url = url;
+
+        // Trace Entry (Confirming Radar -> Bridge Signal)
+        console.log("%c[TRACE EVENT]", "color:#f59e0b; font-weight:bold;", {
+            eventId,
+            epoch: this._epoch,
+            url: partialEvent.url,
+            type: partialEvent.type,
+            method: partialEvent.method,
+            timestamp: Date.now()
+        });
+
         const domain = this.extractDomain(url);
-        
-        // 3. Sync State from Background (Atomic Fetch)
+
+        // 4. Sync State from Background (Atomic Fetch)
         const currentState = await this.fetchGlobalMemory(domain);
-        
-        // 4. Decision Pipeline
+
+        // 5. Decision Pipeline
         if (window.Engine?.hub?.Orchestrator) {
             const { decision, stateUpdate } = await window.Engine.hub.Orchestrator.process(event, currentState);
-            
+
             // 5. Atomic State Feedback to Background
             if (stateUpdate) {
                 this.syncBehavior(stateUpdate);
@@ -89,12 +100,12 @@ const BrainBridge = {
                         contributions: decision.contributions,
                         forensic: decision.forensic || null
                     }
-                }).catch(() => {});
+                }).catch(() => { });
             }
-            
+
             return decision;
         }
-        
+
         return {
             eventId,
             epoch: this._epoch,
@@ -108,18 +119,52 @@ const BrainBridge = {
     },
 
     standardizeUrl(input) {
-        if (!input) return "";
         try {
-            if (typeof input === 'string') return new URL(input, window.location.href).href;
-            if (input instanceof URL) return input.href;
-            return String(input);
-        } catch (e) { return String(input); }
+            if (!input) return "";
+
+            let raw = input;
+
+            if (typeof input === 'object') {
+                raw = input.url || input.href || input.toString?.() || "";
+            }
+
+            if (typeof raw !== 'string') return "";
+
+            raw = raw.trim();
+
+            // special protocol → giữ nguyên
+            if (/^(data:|blob:|mailto:|tel:|sms:)/i.test(raw)) {
+                return raw;
+            }
+
+            // fix space
+            raw = raw.replace(/ /g, '%20');
+
+            const base = window.location?.href || "https://fallback.local/";
+
+            return new URL(raw, base).href;
+
+        } catch (e) {
+            return String(input || "");
+        }
     },
 
     extractDomain(url) {
         try {
-            return new URL(url).hostname;
-        } catch (e) { return 'unknown'; }
+            if (!url) return 'unknown';
+
+            if (/^(data:|blob:|mailto:|tel:|sms:)/i.test(url)) {
+                return 'special-protocol';
+            }
+
+            const base = window.location?.href || "https://fallback.local/";
+            const parsed = new URL(url, base);
+
+            return parsed.hostname || 'unknown';
+
+        } catch (e) {
+            return 'unknown';
+        }
     },
 
     async fetchGlobalMemory(domain) {
@@ -149,7 +194,7 @@ const BrainBridge = {
                 this._epoch = epoch;
                 this._isSynced = true;
                 this._eventSeq = 0; // Reset sequence on new epoch
-                
+
                 // Handshake ACK
                 window.postMessage({
                     source: 'adsfriendly-engine',
@@ -163,11 +208,11 @@ const BrainBridge = {
 
     syncBehavior(stateUpdate) {
         // Debounced or direct batching is handled in background, bridge just pushes
-        window.postMessage({ 
-            source: 'adsfriendly-engine', 
-            type: 'FORENSIC_MEMORY_COMMIT', 
+        window.postMessage({
+            source: 'adsfriendly-engine',
+            type: 'FORENSIC_MEMORY_COMMIT',
             update: stateUpdate,
-            epoch: this._epoch 
+            epoch: this._epoch
         }, "*");
     }
 };
@@ -176,7 +221,7 @@ if (typeof window !== 'undefined') {
     BrainBridge.init();
     window.Engine = window.Engine || {};
     window.Engine.brainBridge = BrainBridge;
-    window.BrainBridge = BrainBridge; 
+    window.BrainBridge = BrainBridge;
 }
 
 if (typeof window === 'undefined') {

@@ -6,6 +6,7 @@
 
 (function () {
     const BRIDGE_SOURCE_ENGINE = 'adsfriendly-engine';
+    console.log('[LOADER] start');
     const BRIDGE_SOURCE_BACKGROUND = 'adsfriendly-background';
 
     // 1. Initialise Brain in Content Script context (Access to chrome.storage)
@@ -49,6 +50,8 @@
     window.addEventListener('message', async (e) => {
         const data = e.data;
         if (!data || data.source !== BRIDGE_SOURCE_ENGINE) return;
+
+        console.log('[LOADER] received message', data);
 
         switch (data.type) {
             case 'INITIAL_HANDSHAKE':
@@ -127,10 +130,10 @@
         if (!chrome.runtime?.id) return;
         if (document.querySelector('script[data-vanguard-engine]')) return;
 
+        console.log('[LOADER] injecting main world');
         const script = document.createElement('script');
         script.src = chrome.runtime.getURL('dist/vanguard_main_world.js');
         script.dataset.vanguardEngine = 'active';
-
         (document.documentElement || document.head).appendChild(script);
 
         script.onload = () => {

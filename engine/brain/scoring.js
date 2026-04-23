@@ -16,8 +16,10 @@ const RAW_SCHEMA = {
             iframe: 0.6,
             script: 0.4,
             script_unknown: 0.4,
-            media_trust_multiplier: 0.1,
-            media_trust_extended_multiplier: 0.2
+            media_trust_extended_multiplier: 0.2,
+            marketing_param: 0.3,
+            source_disparity: 0.5,
+            context_ad_wrapper: 0.4
         },
         logic_ratios: {
             stability: 0.35,
@@ -116,8 +118,12 @@ const Scoring = {
         // --- 2. REPUTATION CONSISTENCY ---
         if (f.reputation > T.reputation_safe) riskScore *= W.reputation_scale;
 
-        // --- 3. STRUCTURAL SIGNALS ---
+        // --- 3. STRUCTURAL & CONTEXTUAL SIGNALS ---
         if (f.isAdPattern) riskScore += W.ad_pattern;
+        if (f.isMarketing) riskScore += W.marketing_param;
+        if (f.sourceDisparity || f.isHrefCrossOrigin) riskScore += W.source_disparity;
+        if (f.contextScore > 0.5) riskScore += W.context_ad_wrapper;
+
         if (f.type === 'iframe') riskScore += W.iframe;
         if (f.type === 'script') {
             riskScore += W.script;
