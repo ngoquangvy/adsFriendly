@@ -32,7 +32,7 @@ const Extractor = {
             url.includes('/seg') ||
             url.match(/_\d+p/); // e.g., 160p, 720p
 
-        // --- 2. FORENSIC SIGNAL SYNTHESIS (v16.24) ---
+        // --- 2. FORENSIC SIGNAL SYNTHESIS (v16.32) ---
         const stats = this.calculateStructureMetrics(url);
         const marketingParams = ['utm_', 'clickid', 'gclid', 'fbclid', 'aff_id', 'affiliate', 'campaign'];
         const isMarketing = marketingParams.some(p => url.includes(p) || (event.href && event.href.includes(p)));
@@ -45,11 +45,15 @@ const Extractor = {
         const isHrefCrossOrigin = hrefDomain && pageHost && !pageHost.includes(hrefDomain);
         const sourceDisparity = (domain && hrefDomain && domain !== hrefDomain);
 
+        // ✅ READ SEMANTIC ROLES FROM RADAR
+        const isSemanticMedia = event.context?.resourceClass === 'video_stream' || event.context?.transport?.isChunked;
+        const isSemanticAd = event.context?.subClass?.isAd || event.context?.resourceClass === 'ad_service' || event.context?.resourceClass === 'tracking_pixel';
+
         const unified = {
             // BEHAVIORAL & CONTEXT
             url,
-            isAdPattern: domainClass === 'ads_network' || this.checkAdKeywords(url) || contextScore > 0.5,
-            isMedia: isMediaBase || isHLS,
+            isAdPattern: isSemanticAd || domainClass === 'ads_network' || this.checkAdKeywords(url) || contextScore > 0.5,
+            isMedia: isSemanticMedia || isMediaBase || isHLS,
             isMarketing,
             contextScore,
 
@@ -69,7 +73,7 @@ const Extractor = {
             // DYNAMIC SIGNALS
             cv: this.calculateCV(state.intervalWindow),
             entropy: this.calculateEntropy(url),
-            interactionGap: this.calculateInteractionGap(),
+            interactionGap: this.calculateInteractionGap(event),
 
             // REPUTATION
             frequency: state.frequency || 0,
@@ -135,10 +139,17 @@ const Extractor = {
         return stdDev / mean; // Coefficient of Variation
     },
 
-    calculateInteractionGap() {
+    calculateInteractionGap(event) {
+        // Use event-specific temporal tracking if available
+        if (event && event.context && event.context.interactionAge !== undefined) {
+            if (event.context.interactionAge === -1) return 10000; // No prior interaction
+            return event.context.interactionAge / 1000; // Convert ms to seconds
+        }
+
+        // Fallback for older events or environments
         if (typeof window === 'undefined') return 10000;
         const lastAction = window.__V_LAST_INTERACTION || 0;
-        return (Date.now() - lastAction) / 1000; // in seconds
+        return (Date.now() - lastAction) / 1000;
     },
 
     isThirdParty(domain) {

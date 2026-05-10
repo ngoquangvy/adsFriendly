@@ -60,7 +60,7 @@ function normalizeLog(l) {
     // --- 0. Forensic Titan Schema (v16.14 - Vanguard V16) ---
     if (identity.provider_type === 'VANGUARD_V16') {
         const domain = (data.domain || '').toLowerCase().trim();
-        const label = data.label_pred || '';
+        const label = data.reason || data.label_pred || '';
         
         if (!domain || domain === 'unknown') return null;
 
@@ -77,7 +77,7 @@ function normalizeLog(l) {
             badgeClass,
             score: data.score || 0,
             confidence: data.confidence || 0,
-            action: data.action || 'ALLOW',
+            action: data.action || 'allow',
             features: data.features || data.forensic?.featureAttribution || {},
             context: data.context || {},
             decisionPath: data.decisionPath || {},

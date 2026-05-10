@@ -8,6 +8,7 @@
     const BRIDGE_SOURCE_ENGINE = 'adsfriendly-engine';
     console.log('[LOADER] start');
     const BRIDGE_SOURCE_BACKGROUND = 'adsfriendly-background';
+    const INTERNAL_PIPELINE_TYPES = new Set(['PIPELINE_EVENT', 'PIPELINE_RESULT']);
 
     // 1. Initialise Brain in Content Script context (Access to chrome.storage)
     if (typeof BrainBridge !== 'undefined' && BrainBridge.init) {
@@ -46,10 +47,19 @@
         window.postMessage(message, '*');
     }
 
+    function forwardLegacySignal(signalType, payload) {
+        safeSend({
+            type: 'LEGACY_ENGINE_SIGNAL',
+            signalType,
+            payload
+        }).catch((err) => console.warn('[LOADER] legacy signal forward failed:', err));
+    }
+
     // 2. Injected Main World Bridge (for Extension <-> Main World communication)
     window.addEventListener('message', async (e) => {
         const data = e.data;
         if (!data || data.source !== BRIDGE_SOURCE_ENGINE) return;
+        if (INTERNAL_PIPELINE_TYPES.has(data.type)) return;
 
         console.log('[LOADER] received message', data);
 
@@ -70,7 +80,8 @@
                 safeSend({
                     type: 'FORENSIC_MEMORY_COMMIT',
                     update: data.update,
-                    epoch: data.epoch
+                    epoch: data.epoch,
+                    verificationEnvelope: data.verificationEnvelope
                 });
                 break;
             case 'FORENSIC_MEMORY_BATCH':
@@ -86,24 +97,13 @@
                 });
                 break;
             case 'STRATEGY_DECISION':
-                if (typeof BrainBridge !== 'undefined') {
-                    BrainBridge.recordDecision({
-                        site: data.site,
-                        adType: data.adType,
-                        final_confidence: data.confidence,
-                        reasoning: { strategy: data.strategy, riskScore: data.riskScore }
-                    });
-                }
+                forwardLegacySignal('STRATEGY_DECISION', data);
                 break;
             case 'LEARN_MARKER_CONFIRM':
-                if (typeof BrainBridge !== 'undefined') {
-                    BrainBridge.confirmLearnedMarker(data.selector, data.site);
-                }
+                forwardLegacySignal('LEARN_MARKER_CONFIRM', data);
                 break;
             case 'LEARN_MARKER_PENALIZE':
-                if (typeof BrainBridge !== 'undefined') {
-                    BrainBridge.penalizeMarker(data.selector);
-                }
+                forwardLegacySignal('LEARN_MARKER_PENALIZE', data);
                 break;
             case 'SUBMIT_TELEMETRY':
                 safeSend({ type: 'PROXY_TELEMETRY', payload: data.payload });

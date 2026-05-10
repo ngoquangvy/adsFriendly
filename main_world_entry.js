@@ -6,6 +6,8 @@
 
 // 1. Foundation Layer (Messaging Tunnel)
 import './core/api_gateway.js';
+import './engine/shared/url_normalizer.js';
+import './engine/shared/record_factory.js';
 import './core/BrainBridge.js';
 
 // 2. Intelligence Layer (Brain)
@@ -19,6 +21,7 @@ import './engine/policy/runner.js';
 
 // 4. Orchestration Layer (Hub)
 import './engine/hub/orchestrator.js';
+import './engine/hub/runtime_pipeline.js';
 
 // 5. Sensor Layer (Radar Hook)
 import './core/modules/xhr_radar.js';

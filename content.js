@@ -71,12 +71,60 @@
 
         const BLOCKING_STRATEGIES = {
             STEALTH: (el) => {
-                if (el.style.opacity !== '0') {
-                    el.style.setProperty('opacity', '0', 'important');
-                    el.style.setProperty('visibility', 'hidden', 'important');
+                if (el.style.opacity !== '0.001') {
+                    el.style.setProperty('opacity', '0.001', 'important');
                     el.style.setProperty('pointer-events', 'none', 'important');
                 }
+            },
+            COLLAPSE: (el) => {
+                if (el.style.position !== 'absolute') {
+                    // Evade offsetHeight === 0 checks used by Anti-Adblock
+                    el.style.setProperty('position', 'absolute', 'important');
+                    el.style.setProperty('left', '-9999px', 'important');
+                    el.style.setProperty('width', '1px', 'important');
+                    el.style.setProperty('height', '1px', 'important');
+                    el.style.setProperty('overflow', 'hidden', 'important');
+                    el.style.setProperty('pointer-events', 'none', 'important');
+                    el.style.setProperty('opacity', '0.001', 'important');
+                }
             }
+        };
+
+        const findSemanticContainer = (el) => {
+            const STRUCTURAL_TAGS = ['html', 'body', 'header', 'footer', 'nav', 'main', 'section', 'article', 'aside', 'iframe'];
+            
+            const isMeaningful = (node) => {
+                if (node.nodeType === Node.TEXT_NODE) return node.textContent.trim().length > 8;
+                if (node.nodeType !== Node.ELEMENT_NODE) return false;
+                const tag = node.tagName.toLowerCase();
+                if (['script', 'style', 'link', 'br', 'noscript', 'template'].includes(tag)) return false;
+                
+                // If the sibling is already marked or hidden, it doesn't count as "meaningful content" that prevents collapsing
+                if (node.style.opacity === '0' || node.style.display === 'none' || (node.id && node.id.includes('adsfriendly'))) return false;
+
+                const rect = node.getBoundingClientRect();
+                return rect.width > 5 && rect.height > 5;
+            };
+
+            const promote = (curr, depth = 0) => {
+                if (!curr || !curr.parentElement || curr.parentElement === document.body || depth > 3) return curr;
+                const parent = curr.parentElement;
+
+                if (STRUCTURAL_TAGS.includes(parent.tagName.toLowerCase())) return curr;
+
+                // Check siblings: if parent has other meaningful children, we can't hide the parent.
+                const visualSiblings = Array.from(parent.childNodes).filter(node => node !== curr && isMeaningful(node));
+                if (visualSiblings.length > 0) return curr;
+
+                // Area Guard: Don't accidentally hide half the screen unless it's a known ad container
+                const rect = parent.getBoundingClientRect();
+                const viewportArea = window.innerWidth * window.innerHeight;
+                if (rect.width * rect.height > viewportArea * 0.4) return curr;
+
+                return promote(parent, depth + 1);
+            };
+
+            return promote(el);
         };
 
         const blockAds = async () => {
@@ -104,7 +152,8 @@
                 'img[src*="googleusercontent.com"][title]',
                 'img[src*="googleusercontent.com"][alt*="bet"]',
                 'img[src*="googleusercontent.com"][alt*="win"]',
-                'div[class*="popup-ad"]', 'div[id*="popup-ad"]'
+                'div[class*="popup-ad"]', 'div[id*="popup-ad"]',
+                'div[id*="ad-container"]', 'div[class*="ad-wrapper"]'
             ];
 
             const dangerousTags = ['div', 'span', 'p', 'a', 'li', 'ul', 'img', 'section'];
@@ -119,23 +168,28 @@
                 });
             };
 
+            const processElement = (el) => {
+                if (isBlacklisted(el)) return;
+                
+                // Smart Container Detection: Hide the wrapper instead of just the content
+                const container = findSemanticContainer(el);
+                BLOCKING_STRATEGIES.COLLAPSE(container);
+                
+                // Also apply stealth to the original element just in case
+                if (container !== el) BLOCKING_STRATEGIES.STEALTH(el);
+                
+                blockedCount++;
+            };
+
             customSelectors.forEach(rule => {
                 const selector = typeof rule === 'string' ? rule : rule.selector;
                 if (dangerousTags.includes(selector.toLowerCase().trim())) return;
 
-                document.querySelectorAll(selector).forEach(el => {
-                    if (isBlacklisted(el)) return;
-                    BLOCKING_STRATEGIES.STEALTH(el);
-                    blockedCount++;
-                });
+                document.querySelectorAll(selector).forEach(processElement);
             });
 
             adSelectors.forEach(selector => {
-                document.querySelectorAll(selector).forEach(el => {
-                    if (isBlacklisted(el)) return;
-                    BLOCKING_STRATEGIES.STEALTH(el);
-                    blockedCount++;
-                });
+                document.querySelectorAll(selector).forEach(processElement);
             });
 
             // Report density to background and other modules
@@ -160,7 +214,7 @@
                 if (globalAdPatterns.length > 0) {
                     const elements = document.querySelectorAll('img, div, a');
                     elements.forEach(el => {
-                        if (el.style.opacity === '0' || (el.id && el.id.includes('adsfriendly'))) return;
+                        if (el.style.opacity === '0' || el.style.display === 'none' || (el.id && el.id.includes('adsfriendly'))) return;
 
                         let score = 0;
                         let matchDetails = [];
@@ -204,7 +258,11 @@
 
                         if (score >= 0.8) {
                             console.log(`%c[AdsFriendly AI] Hiding predicted ad (%c${(score * 100).toFixed(0)}% confidence%c) Reason: ${matchDetails.join(', ')}`, "color: #10b981; font-weight: bold;", "color: #fbd38d;", "color: #10b981;", el);
-                            BLOCKING_STRATEGIES.STEALTH(el);
+                            
+                            // Apply Smart Container Hiding
+                            const container = findSemanticContainer(el);
+                            BLOCKING_STRATEGIES.COLLAPSE(container);
+                            if (container !== el) BLOCKING_STRATEGIES.STEALTH(el);
                         }
                     });
                 }

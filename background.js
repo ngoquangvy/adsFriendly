@@ -1,5 +1,11 @@
 // Vanguard v16.13 - Reality Anchor (Titanium Production Edition)
 // Centralized Behavioral Memory Hub (Background)
+try {
+    importScripts('engine/forensic/verifier.js');
+} catch (err) {
+    console.warn('[Verifier] importScripts failed:', err?.message || err);
+}
+
 const domainBehaviorCache = new Map();
 const entityBehaviorCache = new Map(); // Entity-level aggregation
 const lockRegistry = new Map(); 
@@ -7,6 +13,35 @@ const lockQueueDepth = new Map();
 const LRU_MAX_DOMAINS = 500;
 const MEMORY_TTL = 15 * 60 * 1000; 
 let lastTrustedClick = { timestamp: 0, intentUrl: null };
+
+function getVerifier() {
+    return self?.Engine?.forensic?.Verifier || self?.VanguardVerifier || {
+        verifyCommitMessage() {
+            return {
+                ok: false,
+                status: 'rejected',
+                stage: 'commit',
+                profile: 'fallback',
+                reason: 'NO_VERIFIER',
+                riskFlags: ['NO_VERIFIER'],
+                failures: ['NO_VERIFIER'],
+                event: {}
+            };
+        },
+        verifyTelemetryPayload() {
+            return {
+                ok: false,
+                status: 'rejected',
+                stage: 'telemetry',
+                profile: 'fallback',
+                reason: 'NO_VERIFIER',
+                riskFlags: ['NO_VERIFIER'],
+                failures: ['NO_VERIFIER'],
+                event: {}
+            };
+        }
+    };
+}
 
 function createEmptyDomainState(now = Date.now()) {
     return {
@@ -171,6 +206,9 @@ const tabRegistry = new Map(); // tabId -> { lastSeen, instanceId, status }
 const ACK_TIMEOUT = 500;
 const MIN_ACK_RATIO = 0.6;
 let epochAckTracker = null;
+const recentTelemetryLedger = new Map();
+const MAX_RECENT_EVENTS_PER_TAB = 120;
+const RECENT_TELEMETRY_WINDOW_MS = 15000;
 
 function expectedAckCount(tracker) {
     return Math.max(1, (tracker?.acks || 0) + (tracker?.pending?.size || 0));
@@ -251,6 +289,683 @@ async function broadcastEpoch() {
     return ackPromise;
 }
 
+function createBackgroundRecordId(prefix = 'bg') {
+    return `${prefix}:${globalEpoch}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function extractDomainFromUrl(url) {
+    try {
+        return new URL(url).hostname || '';
+    } catch (_) {
+        return '';
+    }
+}
+
+function ruleMatchesDomain(domain, entry) {
+    if (!domain || !entry) return false;
+    const pattern = String(entry).replace(/^\|\|/, '').replace(/\^$/, '');
+    return domain === pattern || domain.endsWith('.' + pattern);
+}
+
+function rememberRecentTelemetry(tabId, record) {
+    if (!tabId || !record?.identity?.timestamp) return;
+    const current = recentTelemetryLedger.get(tabId) || [];
+    const timestamp = record.identity.timestamp;
+    const summarized = {
+        event_id: record.identity.event_id || '',
+        timestamp,
+        domain: record.observation?.domain || record.identity.page_domain || '',
+        entity_type: record.observation?.entity_type || 'RESOURCE',
+        request_ids: record.correlations?.related_request_ids || []
+    };
+    const next = [...current, summarized]
+        .filter(item => (timestamp - item.timestamp) <= RECENT_TELEMETRY_WINDOW_MS)
+        .slice(-MAX_RECENT_EVENTS_PER_TAB);
+    recentTelemetryLedger.set(tabId, next.slice(-MAX_RECENT_EVENTS_PER_TAB));
+}
+
+function buildCorrelationSnapshot(tabId, timestamp) {
+    const items = recentTelemetryLedger.get(tabId) || [];
+    const nearby = items.filter(item => Math.abs(timestamp - item.timestamp) <= 8000);
+    return {
+        related_event_ids: nearby.map(item => item.event_id).filter(Boolean).slice(-12),
+        related_request_ids: nearby.flatMap(item => item.request_ids || []).filter(Boolean).slice(-12),
+        related_domains: Array.from(new Set(nearby.map(item => item.domain).filter(Boolean))).slice(-8),
+        parent_entity_id: null,
+        dom_node_ref: null,
+        dom_selector_hash: null,
+        initiator_chain: Array.from(new Set(nearby.map(item => item.entity_type).filter(Boolean))).slice(-8),
+        timing_window_ms: 8000
+    };
+}
+
+async function getKnowledgeSnapshot(pageDomain, targetDomain = pageDomain) {
+    const { whitelist = [], blacklist = [], friendlyMode = true, userCustomRules = {} } =
+        await chrome.storage.local.get(['whitelist', 'blacklist', 'friendlyMode', 'userCustomRules']);
+
+    const normalizedPage = pageDomain || '';
+    const normalizedTarget = targetDomain || normalizedPage;
+    const customRuleCount = Array.isArray(userCustomRules[normalizedPage]) ? userCustomRules[normalizedPage].length : 0;
+
+    return {
+        trusted_site: whitelist.includes(normalizedTarget) || whitelist.includes(normalizedPage),
+        blocked_site: blacklist.some(entry => ruleMatchesDomain(normalizedTarget, entry)),
+        learned_workflow: null,
+        prior_user_decision: null,
+        decision_source: null,
+        user_feedback_strength: 0,
+        custom_rule_count: customRuleCount,
+        friendly_mode: friendlyMode
+    };
+}
+
+function buildFallbackRecordFromPayload(payload, sender) {
+    const data = payload?.data || {};
+    const now = Date.now();
+    const pageUrl = sender?.tab?.url || null;
+    const pageDomain = extractDomainFromUrl(pageUrl || data.url || '');
+    return {
+        record_type: 'event',
+        schema_version: 'v1',
+        identity: {
+            event_id: data.eventId || createBackgroundRecordId('legacy'),
+            epoch: data.epoch || globalEpoch,
+            timestamp: data.timestamp || now,
+            tab_instance_id: null,
+            session_id: null,
+            page_url: pageUrl,
+            page_domain: pageDomain,
+            top_frame_domain: pageDomain
+        },
+        source: {
+            sensor: 'legacy',
+            bridge: 'loader',
+            pipeline: 'background'
+        },
+        observation: {
+            entity_type: data.eventType || 'RESOURCE',
+            raw_url: data.url || null,
+            normalized_url: data.url || null,
+            domain: data.domain || pageDomain,
+            method: data.method || null,
+            phase: null,
+            status_code: null,
+            response_size: null,
+            resource_type: data.eventType || null,
+            initiator_type: null,
+            frame_depth: null,
+            visible: null,
+            raw_attributes: {},
+            media_stub: { present: false, media_url: null, player_hint: null, duration: null, autoplay: null, muted: null }
+        },
+        context: {
+            labels: [],
+            interaction_id: null,
+            trusted_click: false,
+            visibility_state: null,
+            has_active_video: false,
+            page_mode: 'generic_page',
+            workflow_id: null
+        },
+        user_signals: {
+            trusted_site: null,
+            blocked_site: null,
+            learned_workflow: null,
+            prior_user_decision: null,
+            decision_source: null,
+            user_feedback_strength: 0
+        },
+        correlations: {
+            related_event_ids: [],
+            related_request_ids: [],
+            related_domains: [],
+            parent_entity_id: null,
+            dom_node_ref: null,
+            dom_selector_hash: null,
+            initiator_chain: [],
+            timing_window_ms: 0
+        },
+        classification: {
+            entity: [],
+            context: [],
+            behaviors: [],
+            media_roles: [],
+            risk: [],
+            confidence: data.confidence || 0,
+            label_strength: 'unknown'
+        },
+        decision: {
+            action: data.action || 'allow',
+            reason: data.reason || data.label_pred || null,
+            confidence: data.confidence || 0,
+            actor: 'system'
+        },
+        forensic: {
+            trace: { radar_ts: null, bridge_ts: null, orchestrator_ts: null, background_ts: null },
+            valid: null,
+            risk_flags: [],
+            schema_hash: null
+        },
+        extensions: {
+            legacy: payload || {}
+        }
+    };
+}
+
+async function enrichTelemetryPayload(payload, sender) {
+    const record = payload?.record ? structuredClone(payload.record) : buildFallbackRecordFromPayload(payload, sender);
+    const backgroundTimestamp = Date.now();
+    const pageDomain = record.identity?.page_domain || extractDomainFromUrl(record.identity?.page_url || sender?.tab?.url || '');
+    const targetDomain = record.observation?.domain || pageDomain;
+    const knowledgeSnapshot = await getKnowledgeSnapshot(pageDomain, targetDomain);
+    const correlationSnapshot = buildCorrelationSnapshot(sender?.tab?.id, record.identity?.timestamp || backgroundTimestamp);
+
+    record.identity = {
+        ...record.identity,
+        page_url: record.identity?.page_url || sender?.tab?.url || null,
+        page_domain: pageDomain,
+        top_frame_domain: record.identity?.top_frame_domain || pageDomain
+    };
+    record.user_signals = {
+        ...record.user_signals,
+        trusted_site: knowledgeSnapshot.trusted_site,
+        blocked_site: knowledgeSnapshot.blocked_site,
+        learned_workflow: knowledgeSnapshot.learned_workflow,
+        prior_user_decision: knowledgeSnapshot.prior_user_decision,
+        decision_source: knowledgeSnapshot.decision_source,
+        user_feedback_strength: knowledgeSnapshot.user_feedback_strength
+    };
+    record.correlations = {
+        ...correlationSnapshot,
+        ...record.correlations,
+        related_event_ids: Array.from(new Set([...(record.correlations?.related_event_ids || []), ...correlationSnapshot.related_event_ids])).slice(-12),
+        related_request_ids: Array.from(new Set([...(record.correlations?.related_request_ids || []), ...correlationSnapshot.related_request_ids])).slice(-12),
+        related_domains: Array.from(new Set([...(record.correlations?.related_domains || []), ...correlationSnapshot.related_domains])).slice(-8),
+        initiator_chain: Array.from(new Set([...(record.correlations?.initiator_chain || []), ...correlationSnapshot.initiator_chain])).slice(-8),
+        timing_window_ms: Math.max(record.correlations?.timing_window_ms || 0, correlationSnapshot.timing_window_ms || 0)
+    };
+    record.forensic = {
+        ...record.forensic,
+        trace: {
+            ...(record.forensic?.trace || {}),
+            background_ts: backgroundTimestamp
+        }
+    };
+    record.extensions = {
+        ...(record.extensions || {}),
+        background: {
+            tab_id: sender?.tab?.id || null,
+            frame_id: sender?.frameId ?? null,
+            custom_rule_count: knowledgeSnapshot.custom_rule_count,
+            friendly_mode: knowledgeSnapshot.friendly_mode
+        }
+    };
+
+    const metaLayer = {
+        source: record.source || {},
+        context: record.context || {},
+        user_signals: record.user_signals || {},
+        correlations: record.correlations || {},
+        forensic: {
+            trace: record.forensic?.trace || {},
+            valid: record.forensic?.valid ?? null,
+            risk_flags: record.forensic?.risk_flags || []
+        },
+        knowledge_snapshot: knowledgeSnapshot
+    };
+
+    const decisionLayer = {
+        classification: record.classification || {},
+        decision: record.decision || {},
+        extensions: {
+            legacy: record.extensions?.legacy || {},
+            background: record.extensions?.background || {}
+        }
+    };
+
+    const enrichedPayload = {
+        ...payload,
+        record,
+        meta_layer: metaLayer,
+        decision_layer: decisionLayer,
+        knowledge_snapshot: knowledgeSnapshot,
+        timestamp: backgroundTimestamp
+    };
+    return enrichedPayload;
+}
+
+function applyVerificationToPayload(payload, verification) {
+    const nextPayload = {
+        ...payload,
+        record: {
+            ...(payload.record || {}),
+            forensic: {
+                ...((payload.record || {}).forensic || {}),
+                valid: verification.ok,
+                risk_flags: verification.riskFlags || []
+            }
+        },
+        meta_layer: {
+            ...(payload.meta_layer || {}),
+            forensic: {
+                ...((payload.meta_layer || {}).forensic || {}),
+                valid: verification.ok,
+                risk_flags: verification.riskFlags || []
+            }
+        }
+    };
+
+    return nextPayload;
+}
+
+function rejectEvent(stage, verification, context = {}) {
+    console.warn(`[Verifier] Dropped ${stage}: ${verification.reason}`, {
+        riskFlags: verification.riskFlags || [],
+        tabId: context.tabId || null,
+        eventId: verification.event?.eventId || null,
+        profile: verification.profile || 'unknown'
+    });
+
+    // Send to Rejected Sink on Telemetry Server
+    fetch('http://localhost:3000/telemetry/rejected', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            stage,
+            reason: verification.reason,
+            riskFlags: verification.riskFlags || [],
+            event: verification.event || context.payload || {}
+        })
+    }).catch(() => {}); // Fire and forget
+
+    return {
+        status: 'dropped',
+        stage,
+        reason: verification.reason,
+        riskFlags: verification.riskFlags || [],
+        eventId: verification.event?.eventId || null
+    };
+}
+
+function verifyEvent(stage, subject, context = {}) {
+    const verifier = getVerifier();
+    if (stage === 'commit') {
+        return verifier.verifyCommitMessage(subject, context);
+    }
+    return verifier.verifyTelemetryPayload(subject, context);
+}
+
+async function acceptAndProxyTelemetry(payload, sender = null) {
+    const enrichedPayload = await enrichTelemetryPayload(payload, sender);
+    const tabId = sender?.tab?.id || null;
+    const expectedTabInstanceId = tabRegistry.get(tabId)?.instanceId || null;
+    const verification = verifyEvent('telemetry', enrichedPayload, {
+        expectedEpoch: globalEpoch,
+        expectedTabInstanceId
+    });
+
+    if (!verification.ok) {
+        return rejectEvent('telemetry', verification, { tabId });
+    }
+
+    const verifiedPayload = applyVerificationToPayload(enrichedPayload, verification);
+    rememberRecentTelemetry(tabId, verifiedPayload.record);
+    return proxyTelemetry(verifiedPayload);
+}
+
+async function applyStateIfValid(message, sender) {
+    const tabId = sender?.tab?.id || null;
+    const expectedTabInstanceId = tabRegistry.get(tabId)?.instanceId || null;
+    const verification = verifyEvent('commit', message, {
+        expectedEpoch: globalEpoch,
+        expectedTabInstanceId
+    });
+
+    if (!verification.ok) {
+        return rejectEvent('commit', verification, { tabId });
+    }
+
+    const update = message.update;
+    if (update && update.domain) {
+        await withLock(update.domain, async () => {
+            const norm = normalizeDomain(update.domain, update.updates?.types || []).domain;
+            const oldState = domainBehaviorCache.get(norm) || createEmptyDomainState();
+            const newState = { ...oldState, ...update.updates, lastAccess: Date.now(), lastActive: Date.now() };
+            domainBehaviorCache.set(norm, newState);
+        });
+    }
+
+    return {
+        status: 'ok',
+        verification
+    };
+}
+
+function buildLegacySignalPayload(message, sender) {
+    const timestamp = Date.now();
+    const signalType = message.signalType || 'LEGACY_SIGNAL';
+    const payload = message.payload || {};
+    const pageUrl = sender?.tab?.url || null;
+    const pageDomain = extractDomainFromUrl(pageUrl || payload.site || '');
+    const isKnowledgeSignal = signalType === 'LEARN_MARKER_CONFIRM' || signalType === 'LEARN_MARKER_PENALIZE';
+
+    return {
+        type: isKnowledgeSignal ? 'LEGACY_MARKER_FEEDBACK' : 'LEGACY_STRATEGY_DECISION',
+        provider_type: 'VANGUARD_LEGACY',
+        data: {
+            signalType,
+            site: payload.site || pageDomain,
+            selector: payload.selector || null,
+            adType: payload.adType || null,
+            strategy: payload.strategy || null,
+            riskScore: Number.isFinite(payload.riskScore) ? payload.riskScore : 0,
+            confidence: Number.isFinite(payload.confidence) ? payload.confidence : 0
+        },
+        record: {
+            record_type: isKnowledgeSignal ? 'knowledge' : 'event',
+            schema_version: 'v1',
+            identity: {
+                event_id: createBackgroundRecordId('legacy'),
+                epoch: globalEpoch,
+                timestamp,
+                tab_instance_id: null,
+                session_id: null,
+                page_url: pageUrl,
+                page_domain: pageDomain,
+                top_frame_domain: pageDomain
+            },
+            source: {
+                sensor: 'legacy_engine',
+                bridge: 'loader',
+                pipeline: 'background'
+            },
+            observation: {
+                entity_type: isKnowledgeSignal ? 'KNOWLEDGE' : 'RESOURCE',
+                raw_url: pageUrl,
+                normalized_url: pageUrl,
+                domain: payload.site || pageDomain,
+                method: null,
+                phase: isKnowledgeSignal ? 'knowledge_feedback' : 'legacy_decision',
+                status_code: null,
+                response_size: null,
+                resource_type: signalType,
+                initiator_type: 'legacy_engine',
+                frame_depth: null,
+                visible: null,
+                raw_attributes: {
+                    selector: payload.selector || null
+                },
+                media_stub: { present: false, media_url: null, player_hint: null, duration: null, autoplay: null, muted: null }
+            },
+            context: {
+                labels: [],
+                interaction_id: null,
+                trusted_click: false,
+                visibility_state: null,
+                has_active_video: false,
+                page_mode: 'generic_page',
+                workflow_id: null
+            },
+            user_signals: {
+                trusted_site: null,
+                blocked_site: null,
+                learned_workflow: null,
+                prior_user_decision: null,
+                decision_source: 'legacy_engine',
+                user_feedback_strength: isKnowledgeSignal ? 0.8 : 0
+            },
+            correlations: {
+                related_event_ids: [],
+                related_request_ids: [],
+                related_domains: [],
+                parent_entity_id: null,
+                dom_node_ref: payload.selector || null,
+                dom_selector_hash: payload.selector || null,
+                initiator_chain: ['legacy_engine'],
+                timing_window_ms: 0
+            },
+            classification: {
+                entity: [],
+                context: [],
+                behaviors: [],
+                media_roles: [],
+                risk: [],
+                confidence: Number.isFinite(payload.confidence) ? payload.confidence : 0,
+                label_strength: isKnowledgeSignal ? 'strong' : 'weak'
+            },
+            decision: {
+                action: isKnowledgeSignal ? 'monitor' : 'allow',
+                reason: signalType,
+                confidence: Number.isFinite(payload.confidence) ? payload.confidence : 0,
+                actor: 'legacy_engine'
+            },
+            forensic: {
+                trace: {
+                    radar_ts: null,
+                    bridge_ts: null,
+                    orchestrator_ts: timestamp,
+                    background_ts: null
+                },
+                valid: null,
+                risk_flags: ['LEGACY_SIGNAL'],
+                schema_hash: null
+            },
+            extensions: {
+                legacy: payload
+            }
+        }
+    };
+}
+
+function buildUserActionRecord(message, sender) {
+    const timestamp = message.timestamp || Date.now();
+    const pageUrl = message.pageUrl || sender?.tab?.url || null;
+    const pageDomain = message.pageDomain || extractDomainFromUrl(pageUrl || '');
+    const targetDomains = Array.from(new Set((message.targets || []).flatMap(target => target.linkedDomains || []).filter(Boolean)));
+    const correlations = buildCorrelationSnapshot(sender?.tab?.id, timestamp);
+    return {
+        type: 'USER_ACTION_RECORD',
+        provider_type: 'VANGUARD_V16',
+        data: {
+            action: message.actionKind || 'USER_ACTION',
+            pageDomain,
+            pageUrl,
+            selectedCount: Array.isArray(message.targets) ? message.targets.length : 0,
+            learnedDomains: message.learnedDomains || [],
+            isCorrectionLoop: !!message.isCorrectionLoop
+        },
+        record: {
+            record_type: 'event',
+            schema_version: 'v1',
+            identity: {
+                event_id: createBackgroundRecordId('user'),
+                epoch: globalEpoch,
+                timestamp,
+                tab_instance_id: null,
+                session_id: null,
+                page_url: pageUrl,
+                page_domain: pageDomain,
+                top_frame_domain: pageDomain
+            },
+            source: {
+                sensor: 'picker',
+                bridge: 'chrome.runtime',
+                pipeline: 'background'
+            },
+            observation: {
+                entity_type: 'DOM_NODE',
+                raw_url: pageUrl,
+                normalized_url: pageUrl,
+                domain: pageDomain,
+                method: 'USER_ACTION',
+                phase: 'manual_feedback',
+                status_code: null,
+                response_size: null,
+                resource_type: 'dom_selection',
+                initiator_type: 'picker',
+                frame_depth: null,
+                visible: true,
+                raw_attributes: {
+                    target_count: Array.isArray(message.targets) ? message.targets.length : 0,
+                    correction_loop: !!message.isCorrectionLoop
+                },
+                media_stub: { present: false, media_url: null, player_hint: null, duration: null, autoplay: null, muted: null }
+            },
+            context: {
+                labels: ['USER_CLICK_FLOW'],
+                interaction_id: null,
+                trusted_click: true,
+                visibility_state: 'visible',
+                has_active_video: false,
+                page_mode: 'generic_page',
+                workflow_id: null
+            },
+            user_signals: {
+                trusted_site: null,
+                blocked_site: null,
+                learned_workflow: null,
+                prior_user_decision: 'block',
+                decision_source: 'explicit_picker',
+                user_feedback_strength: 1
+            },
+            correlations: {
+                ...correlations,
+                related_domains: Array.from(new Set([...(correlations.related_domains || []), ...targetDomains])).slice(-12),
+                dom_selector_hash: message.targets?.[0]?.selector || null
+            },
+            classification: {
+                entity: ['DOM_NODE'],
+                context: ['USER_CLICK_FLOW'],
+                behaviors: [],
+                media_roles: [],
+                risk: [],
+                confidence: 1,
+                label_strength: 'strong'
+            },
+            decision: {
+                action: 'block',
+                reason: 'USER_DOM_BLOCK',
+                confidence: 1,
+                actor: 'user'
+            },
+            forensic: {
+                trace: { radar_ts: null, bridge_ts: null, orchestrator_ts: null, background_ts: timestamp },
+                valid: true,
+                risk_flags: [],
+                schema_hash: null
+            },
+            extensions: {
+                dom_targets: message.targets || [],
+                learned_domains: message.learnedDomains || []
+            }
+        }
+    };
+}
+
+async function emitKnowledgeRecord(params = {}) {
+    const timestamp = params.timestamp || Date.now();
+    const payload = {
+        type: 'KNOWLEDGE_RECORD',
+        provider_type: 'VANGUARD_V16',
+        data: {
+            knowledgeType: params.knowledgeType,
+            subject: params.subject || null,
+            source: params.source || 'system',
+            metadata: params.metadata || {}
+        },
+        record: {
+            record_type: 'knowledge',
+            schema_version: 'v1',
+            identity: {
+                event_id: createBackgroundRecordId('knowledge'),
+                epoch: globalEpoch,
+                timestamp,
+                tab_instance_id: null,
+                session_id: null,
+                page_url: null,
+                page_domain: params.pageDomain || null,
+                top_frame_domain: params.pageDomain || null
+            },
+            source: {
+                sensor: params.sensor || 'background',
+                bridge: 'background',
+                pipeline: 'background'
+            },
+            observation: {
+                entity_type: 'KNOWLEDGE',
+                raw_url: null,
+                normalized_url: null,
+                domain: params.targetDomain || params.pageDomain || null,
+                method: null,
+                phase: 'knowledge_mutation',
+                status_code: null,
+                response_size: null,
+                resource_type: params.knowledgeType || null,
+                initiator_type: params.source || 'system',
+                frame_depth: null,
+                visible: null,
+                raw_attributes: params.metadata || {},
+                media_stub: { present: false, media_url: null, player_hint: null, duration: null, autoplay: null, muted: null }
+            },
+            context: {
+                labels: [],
+                interaction_id: null,
+                trusted_click: false,
+                visibility_state: null,
+                has_active_video: false,
+                page_mode: 'generic_page',
+                workflow_id: null
+            },
+            user_signals: {
+                trusted_site: null,
+                blocked_site: null,
+                learned_workflow: params.knowledgeType === 'learned_workflow' ? params.subject : null,
+                prior_user_decision: params.metadata?.action || null,
+                decision_source: params.source || 'system',
+                user_feedback_strength: params.source === 'user_explicit' ? 1 : 0.6
+            },
+            correlations: {
+                related_event_ids: [],
+                related_request_ids: [],
+                related_domains: [],
+                parent_entity_id: null,
+                dom_node_ref: null,
+                dom_selector_hash: null,
+                initiator_chain: [],
+                timing_window_ms: 0
+            },
+            classification: {
+                entity: ['KNOWLEDGE'],
+                context: [],
+                behaviors: [],
+                media_roles: [],
+                risk: [],
+                confidence: params.source === 'user_explicit' ? 1 : 0.6,
+                label_strength: params.source === 'user_explicit' ? 'strong' : 'weak'
+            },
+            decision: {
+                action: 'record',
+                reason: params.knowledgeType || 'knowledge_update',
+                confidence: params.source === 'user_explicit' ? 1 : 0.6,
+                actor: params.source || 'system'
+            },
+            forensic: {
+                trace: { radar_ts: null, bridge_ts: null, orchestrator_ts: null, background_ts: timestamp },
+                valid: true,
+                risk_flags: [],
+                schema_hash: null
+            },
+            extensions: {
+                knowledge: params
+            }
+        }
+    };
+
+    try {
+        await acceptAndProxyTelemetry(payload, null);
+    } catch (_) { }
+}
+
  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // 🛡️ v16.14 LISTENER GUARD: Reject invalid contexts
     if (!message || !sender?.tab) return false;
@@ -259,22 +974,16 @@ async function broadcastEpoch() {
     const tabId = sender.tab.id;
 
     if (message.type === 'FORENSIC_MEMORY_COMMIT') {
-        const { update, epoch } = message;
+        const { epoch } = message;
         if (epoch && epoch !== globalEpoch) {
             sendResponse({ status: 'dropped', reason: 'STALE_EPOCH' });
             return false;
         }
 
-        if (update && update.domain) {
-            withLock(update.domain, (isOverflow) => {
-                const norm = normalizeDomain(update.domain, update.updates?.types || []).domain;
-                const oldState = domainBehaviorCache.get(norm) || createEmptyDomainState();
-                const newState = { ...oldState, ...update.updates, lastAccess: Date.now(), lastActive: Date.now() };
-                domainBehaviorCache.set(norm, newState);
-            });
-        }
-        sendResponse({ status: 'ok' });
-        return false;
+        applyStateIfValid(message, sender)
+            .then(sendResponse)
+            .catch(err => sendResponse({ status: 'error', reason: err.message }));
+        return true;
     }
 
     if (message.type === 'FORENSIC_MEMORY_FETCH') {
@@ -287,13 +996,18 @@ async function broadcastEpoch() {
     if (message.type === 'ACK_EPOCH_SYNC') {
         if (message.epoch === globalEpoch) {
             const tab = tabRegistry.get(tabId);
-            if (tab) tab.status = 'SYNCED';
+            if (tab) {
+                tab.status = 'SYNCED';
+                tab.instanceId = message.tabId || tab.instanceId || null;
+                tab.lastSeen = now;
+            }
         }
         return false;
     }
 
     if (message.type === 'INITIAL_HANDSHAKE') {
-        tabRegistry.set(tabId, { lastSeen: now, status: 'HANDSHAKE' });
+        const prev = tabRegistry.get(tabId) || {};
+        tabRegistry.set(tabId, { ...prev, lastSeen: now, status: 'HANDSHAKE' });
         safeSendTabMessage(tabId, {
             source: 'adsfriendly-background',
             type: 'EPOCH_UPDATE',
@@ -322,8 +1036,20 @@ async function broadcastEpoch() {
             .catch(err => console.error("Negative learning error:", err));
         return true;
     } else if (message.type === 'USER_DECISION') {
-        handleUserDecision(message)
+        handleUserDecision(message, sender)
             .then(() => sendResponse({ status: 'ok' }))
+            .catch(err => sendResponse({ status: 'error', error: err.message }));
+        return true;
+    } else if (message.type === 'LOG_USER_ACTION') {
+        const payload = buildUserActionRecord(message, sender);
+        acceptAndProxyTelemetry(payload, sender)
+            .then((result) => sendResponse(result?.status === 'dropped' ? result : { status: 'ok', result }))
+            .catch(err => sendResponse({ status: 'error', error: err.message }));
+        return true;
+    } else if (message.type === 'LEGACY_ENGINE_SIGNAL') {
+        const payload = buildLegacySignalPayload(message, sender);
+        acceptAndProxyTelemetry(payload, sender)
+            .then((result) => sendResponse(result?.status === 'dropped' ? result : { status: 'ok', result }))
             .catch(err => sendResponse({ status: 'error', error: err.message }));
         return true;
     } else if (message.type === 'PATH_RESTORED') {
@@ -377,9 +1103,9 @@ async function broadcastEpoch() {
             .catch(() => sendResponse({ status: 'error' }));
         return true;
     } else if (message.type === 'PROXY_TELEMETRY') {
-        proxyTelemetry(message.payload)
-            .then(() => sendResponse({ status: 'ok' }))
-            .catch(() => sendResponse({ status: 'error' }));
+        acceptAndProxyTelemetry(message.payload, sender)
+            .then((result) => sendResponse(result?.status === 'dropped' ? result : { status: 'ok', result }))
+            .catch((err) => sendResponse({ status: 'error', error: err.message }));
         return true;
     }
 });
@@ -735,7 +1461,7 @@ chrome.runtime.onInstalled.addListener(async () => {
 });
 
 // Separate handler for cleaner async/await
-async function handleUserDecision(message) {
+async function handleUserDecision(message, sender = null) {
   const { action, domain } = message;
 
   if (action === 'WHITELIST') {
@@ -744,6 +1470,15 @@ async function handleUserDecision(message) {
       whitelist.push(domain);
       await chrome.storage.local.set({ whitelist });
     }
+    emitKnowledgeRecord({
+      knowledgeType: 'trusted_site',
+      subject: { domain },
+      source: 'user_explicit',
+      sensor: 'blocked_ui',
+      pageDomain: domain,
+      targetDomain: domain,
+      metadata: { action: 'WHITELIST', senderTabId: sender?.tab?.id || null }
+    });
   } else if (action === 'BLACKLIST') {
     const { blacklist = [] } = await chrome.storage.local.get(['blacklist']);
     const standardRule = `||${domain}^`;
@@ -751,6 +1486,15 @@ async function handleUserDecision(message) {
       blacklist.push(standardRule);
       await chrome.storage.local.set({ blacklist });
     }
+    emitKnowledgeRecord({
+      knowledgeType: 'blocked_site',
+      subject: { domain, rule: standardRule },
+      source: 'user_explicit',
+      sensor: 'blocked_ui',
+      pageDomain: domain,
+      targetDomain: domain,
+      metadata: { action: 'BLACKLIST', senderTabId: sender?.tab?.id || null }
+    });
   }
 }
 
@@ -773,6 +1517,17 @@ async function syncTrustedPath(source, target, isManual = false) {
 
   await chrome.storage.local.set({ [shardKey]: entry });
   console.log(`[AdsFriendly Pulse] Path learned: ${source} -> ${target} (Visits: ${entry.visits}, Manual: ${entry.isManual})`);
+  if (entry.isManual || entry.visits === 1 || entry.visits === 3) {
+    emitKnowledgeRecord({
+      knowledgeType: 'learned_workflow',
+      subject: { source, target, visits: entry.visits, isManual: entry.isManual },
+      source: isManual ? 'user_explicit' : 'behavioral_learning',
+      sensor: 'deep_pulse',
+      pageDomain: source,
+      targetDomain: target,
+      metadata: { shardKey, visits: entry.visits, isManual: entry.isManual }
+    });
+  }
 }
 
 async function logBlockedNavigation(url, source) {
@@ -807,9 +1562,22 @@ async function proxyTelemetry(payload) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         });
-        return await response.json();
+        const body = await response.json().catch(() => ({
+            success: response.ok,
+            parse_error: true
+        }));
+        return {
+            success: response.ok,
+            status: response.status,
+            body
+        };
     } catch (err) {
         console.error("Telemetry failed:", err);
+        return {
+            success: false,
+            status: 0,
+            error: err.message
+        };
     }
 }
 

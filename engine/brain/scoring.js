@@ -16,6 +16,7 @@ const RAW_SCHEMA = {
             iframe: 0.6,
             script: 0.4,
             script_unknown: 0.4,
+            media_trust_multiplier: 0.1,
             media_trust_extended_multiplier: 0.2,
             marketing_param: 0.3,
             source_disparity: 0.5,

@@ -22,7 +22,7 @@ function normalizeLog(l) {
     // --- 0. Forensic Titan Schema (v16.14 - Vanguard V16) ---
     if (identity.provider_type === 'VANGUARD_V16') {
         const domain = (data.domain || '').toLowerCase().trim();
-        const label = data.label_pred || '';
+        const label = data.reason || data.label_pred || '';
         
         if (!domain || domain === 'unknown') return null;
 
@@ -39,7 +39,7 @@ function normalizeLog(l) {
             badgeClass,
             score: data.score || 0,
             confidence: data.confidence || 0,
-            action: data.action || 'ALLOW',
+            action: data.action || 'allow',
             features: data.features || data.forensic?.featureAttribution || {},
             context: data.context || {},
             decisionPath: data.decisionPath || {},
@@ -241,7 +241,7 @@ const fnSamples = normalizedLines.filter(l => l.label === 'SAFE' && l.label_true
 if (fnSamples.length > 0) {
     console.log('\n❌ FALSE NEGATIVES (Missed ADS):');
     fnSamples.forEach((l, i) => {
-        console.log(`[${i + 1}] ${l.domain} | Flags: ${l.flags.join(', ') || 'none'}`);
+        console.log(`[${i + 1}] ${l.domain} | Flags: ${(l.flags || []).join(', ') || 'none'}`);
     });
 }
 
@@ -250,7 +250,7 @@ const fpSamples = normalizedLines.filter(l => l.label === 'HIGH_RISK' && l.label
 if (fpSamples.length > 0) {
     console.log('\n⚠️ FALSE POSITIVES (Over-blocking):');
     fpSamples.forEach((l, i) => {
-        console.log(`[${i + 1}] ${l.domain} | Flags: ${l.flags.join(', ') || 'none'}`);
+        console.log(`[${i + 1}] ${l.domain} | Flags: ${(l.flags || []).join(', ') || 'none'}`);
     });
 }
 

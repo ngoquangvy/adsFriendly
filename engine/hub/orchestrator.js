@@ -42,8 +42,8 @@ const TITAN_NULL_RESULT = (reason, domain = 'unknown', event = {}) => ({
     eventId: event.eventId || '',
     epoch: event.epoch || 0,
     engine_v: ENGINE_VERSION,
-    label_pred: 'SKIPPED',
-    action: 'ALLOW',
+    reason: 'SKIPPED',
+    action: 'allow',
     score: 0,
     confidence: 0,
     isDeterministic: true,
@@ -59,13 +59,13 @@ const Orchestrator = {
         if (!brain || !brain.RAW_SCHEMA) return;
 
         // 1. Immutable Forensic Anchoring
-        const raw = JSON.parse(JSON.stringify(brain.RAW_SCHEMA)); 
+        const raw = JSON.parse(JSON.stringify(brain.RAW_SCHEMA));
         FROZEN_SCHEMA = deepFreeze(deepSort(raw));
-        
+
         // 2. Deterministic Versioning
         SCHEMA_HASH = generateStableHash(JSON.stringify(FROZEN_SCHEMA));
         STABLE_HASH = generateStableHash(JSON.stringify(FROZEN_SCHEMA.STABLE));
-        
+
         console.log(`%c[TITAN] Engine Ready | ${ENGINE_VERSION} | Hash: ${SCHEMA_HASH}`, "color: #10b981; font-weight: bold;");
     },
 
@@ -74,24 +74,60 @@ const Orchestrator = {
         const startTimestamp = Date.now();
         const now = Date.now();
 
+        // ✅ HANDLE SCHEMA ERRORS FROM BRAINBRIDGE
+        if (event?.label_pred?.startsWith('SCHEMA_ERROR:')) {
+            console.error(`[Orchestrator] Schema error from BrainBridge: ${event.label_pred}`);
+            return { 
+                decision: TITAN_NULL_RESULT(`UPSTREAM_${event.label_pred}`, event?.domain || 'unknown', event), 
+                stateUpdate: null 
+            };
+        }
+
+        console.log("[ORCHESTRATOR INPUT]", {
+            eventId: event.eventId,
+            url: event.url,
+            domain: event.domain,
+            type: event.type,
+            method: event.method
+        });
         try {
             const brain = window.Engine.brain;
             const bridge = window.Engine.brainBridge;
             if (!brain || !brain.Classifier || !brain.Scoring || !bridge) throw new Error('Expert Infrastructure missing');
 
-            const url = this._normalize(event.url);
-            if (!url) return { decision: TITAN_NULL_RESULT('MALFORMED_URL', 'unknown', event), stateUpdate: null };
-            
+            // ✅ SAFE URL NORMALIZATION: Handle synthetic URLs gracefully
+            let url = event.url;
+            if (!url.startsWith('radar://')) {
+                url = this._normalize(event.url);
+                if (!url) return { decision: TITAN_NULL_RESULT('MALFORMED_URL', 'unknown', event), stateUpdate: null };
+            } else {
+                // Synthetic URL - skip normalization, treat as error
+                console.warn(`[Orchestrator] Synthetic URL detected (malformed source): ${url}`);
+                return { decision: TITAN_NULL_RESULT('SYNTHETIC_URL_MALFORMED', event?.domain || 'unknown', event), stateUpdate: null };
+            }
+
             const domain = brain.Classifier.extractDomain(url);
             const domainClass = brain.Classifier.classify(url);
             const nowVal = Date.now(); // Renamed to avoid shadowed now if needed, or just use 'now'
             const newType = event.type || 'unknown';
 
+            // --- ✅ ENRICHMENT: EventClassifier (semantic context) ---
+            const enrichedEvent = window.EventClassifier 
+                ? window.EventClassifier.enrichEvent(event)
+                : event;
+            
+            const resourceClass = enrichedEvent.resourceClass || 'other_asset';
+            const transport = enrichedEvent.transport || {};
+            const subClass = enrichedEvent.subClass || {};
+
             // --- 🕵️ LAYER 0: CONTEXT AGGREGATION ---
             const label_hints = {
                 isVideoPlaying: typeof document !== 'undefined' ? Array.from(document.querySelectorAll('video')).some(v => !v.paused && !v.ended) : false,
-                userInteracted: (now - (window.__V_LAST_INTERACTION || 0)) < 5000,
-                visibilityState: typeof document !== 'undefined' ? document.visibilityState : 'visible'
+                userInteracted: (enrichedEvent.context?.interactionAge >= 0 && enrichedEvent.context?.interactionAge < 5000),
+                visibilityState: typeof document !== 'undefined' ? document.visibilityState : 'visible',
+                resourceClass: resourceClass,
+                isCDNVideo: transport.isVideoCDN || false,
+                isTracking: enrichedEvent.context?.isTracking || false
             };
 
             // --- 🛡️ LAYER 1: PLATFORM PROTECTION ---
@@ -102,8 +138,8 @@ const Orchestrator = {
                         eventId: event.eventId || '',
                         epoch: event.epoch || 0,
                         engine_v: ENGINE_VERSION,
-                        action: 'ALLOW',
-                        label_pred: 'SAFE',
+                        action: 'allow',
+                        reason: 'SAFE',
                         score: 0,
                         confidence: 1.0,
                         timestamp: event.timestamp || now,
@@ -147,14 +183,14 @@ const Orchestrator = {
                     startTime: now,
                     lastSeen: 0,
                     count: 0,
-                    intervalWindow: [], 
-                    scoreWindow: [],       
+                    intervalWindow: [],
+                    scoreWindow: [],
                     types: [],
                     seenTypes: [],
                     isTrustedCDN: true,
                     reputation: 0,
                     confidence: 0,
-                    decisionScore: 0, 
+                    decisionScore: 0,
                     lastActionTime: 0,
                     isLocked: false,
                     lastSpikeTime: 0,
@@ -162,7 +198,7 @@ const Orchestrator = {
                     lastUrl: ''
                 };
             }
-            
+
             // Normalize types into Sets for logic (Internal only)
             const internalTypes = new Set(state.types || []);
             const internalSeenTypes = new Set(state.seenTypes || []);
@@ -172,7 +208,7 @@ const Orchestrator = {
             if (currentEventId && state.lastEventId === currentEventId) {
                 return { decision: TITAN_NULL_RESULT('DUPLICATE_COMMIT', domain, event), stateUpdate: null };
             }
-            
+
             // Tracking Update
             const interval = state.lastSeen > 0 ? now - state.lastSeen : 0;
             const updatedLastSeen = now;
@@ -182,20 +218,20 @@ const Orchestrator = {
             // --- 🚀 PHASE 2: FORENSIC ANALYSIS ---
             const featuresTitan = brain.Extractor.extract({ ...event, url, domain, domainClass }, { ...state, types: internalTypes });
             const analysis = brain.Scoring.compute(featuresTitan.v2, { ...state, types: internalTypes }, label_hints, FROZEN_SCHEMA);
-            
+
             const currentScore = analysis.score;
             const currentConfidence = analysis.confidence;
             const prevScore = state.decisionScore || 0;
             const prevConfidence = state.confidence || 0;
             const isKnownAdEndpoint = domainClass === 'ads_network' &&
                 /doubleclick|pagead|gampad|adview|output=xml_vast|videoplayfailed|video_ad_loaded|ad_break|preroll/i.test(url);
-            
+
             // A. Decision Inertia & Spike
             let decisionScore = (0.7 * prevScore) + (0.3 * currentScore);
             const highRiskIdx = (state.scoreWindow || []).map((s, i) => s > 0.6 ? i : -1).filter(i => i !== -1);
-            const hasCluster = highRiskIdx.some((idx, i) => i > 0 && (idx - highRiskIdx[i-1] <= 2));
+            const hasCluster = highRiskIdx.some((idx, i) => i > 0 && (idx - highRiskIdx[i - 1] <= 2));
             const isSpikeOverride = (currentScore - prevScore > 0.5) && highRiskIdx.length >= 2 && hasCluster;
-            
+
             let finalDecisionReason = 'inertia';
             if (isSpikeOverride) {
                 decisionScore = currentScore;
@@ -211,24 +247,33 @@ const Orchestrator = {
             if (isSpikeOverride) triggeredRules.push('spike');
             if (isKnownAdEndpoint) triggeredRules.push('ad_fast_path');
             if (!internalSeenTypes.has(newType) && (newType === 'script' || newType === 'iframe') && decisionScore > 0.4) triggeredRules.push('type_violation');
-            
+
             const gatesPassed = [];
             if (decisionScore > 0.6) gatesPassed.push('score > 0.6');
             if (currentConfidence > 0.5) gatesPassed.push('confidence > 0.5');
 
             // Hierarchical Decision
+            // Hierarchical Decision
             let label = 'SAFE';
-            if (decisionScore > 0.6 && currentConfidence > 0.5) label = 'HIGH_RISK';
-            else if (decisionScore > 0.3 && currentConfidence > 0.4) label = 'SUSPICIOUS';
-            else if (analysis.metrics.isTrustedMedia) label = 'MEDIA_PASS';
+            if (decisionScore > 0.6 && currentConfidence > 0.5) {
+                label = 'HIGH_RISK';
+            } else if (decisionScore > 0.6) {
+                label = 'SUSPICIOUS';
+            } else if (decisionScore > 0.3 && currentConfidence > 0.4) {
+                label = 'SUSPICIOUS';
+            } else if (analysis.metrics.isTrustedMedia) {
+                label = 'MEDIA_PASS';
+            }
 
-            let action = (label === 'HIGH_RISK') ? 'TAG' : 'ALLOW';
-            if (label === 'HIGH_RISK' && analysis.metrics.isTrustedMedia) action = 'ALLOW';
+            let action = (label === 'HIGH_RISK') ? 'flag' : 'allow';
+            if (label === 'HIGH_RISK' && analysis.metrics.isTrustedMedia) action = 'allow';
+
+            console.log(`[Orchestrator Debug] Event: ${url} | Score: ${decisionScore.toFixed(3)} | Conf: ${currentConfidence.toFixed(3)} | Label: ${label} | Action: ${action}`);
 
             // --- 🔒 PHASE 3: COOLDOWN & BYPASS ---
             const inCooldown = (now - (state.lastActionTime || 0) < 1000);
             const isCritical = (decisionScore > 0.85 && currentConfidence > 0.6 && !analysis.metrics.isTrustedMedia);
-            
+
             const skipAction = inCooldown && !isCritical;
             let blockedBy = [];
             if (skipAction) {
@@ -241,19 +286,19 @@ const Orchestrator = {
 
             let updatedLastActionTime = state.lastActionTime;
             if (!skipAction && label !== state.lockedLabel) {
-                 updatedLastActionTime = now;
+                updatedLastActionTime = now;
             }
 
             // Noise-Suppressed Normalization
             const rawContribs = { ...analysis.contributions };
             if (isSpikeOverride) rawContribs.spike = 0.5;
-            
+
             const contribSum = Object.values(rawContribs).reduce((a, b) => a + b, 0);
             const normalizedContributions = {};
             const epsilon = 0.0001;
             let isNoSignal = false;
             let dominantContribution = 'none';
-            
+
             if (contribSum >= epsilon) {
                 let maxVal = -1;
                 for (const [k, v] of Object.entries(rawContribs)) {
@@ -281,7 +326,7 @@ const Orchestrator = {
             internalSeenTypes.add(newType);
 
             const processingLag = Math.min(5000, Math.max(0, Date.now() - startTimestamp));
-            
+
             const diff = currentConfidence - prevConfidence;
             const confidenceTrend = Math.abs(diff) < 0.02 ? 'stable' : (diff > 0 ? 'increase' : 'decrease');
 
@@ -294,7 +339,7 @@ const Orchestrator = {
                     schema_hash: SCHEMA_HASH,
                     stable_hash: STABLE_HASH,
                     url, domain,
-                    label_pred: effectiveLabel,
+                    reason: effectiveLabel,
                     action: effectiveAction,
                     score: parseFloat(decisionScore.toFixed(3)),
                     confidence: parseFloat(currentConfidence.toFixed(2)),
@@ -303,8 +348,16 @@ const Orchestrator = {
                     isNoSignal,
                     processingLag,
                     decisionVariance: parseFloat(variance.toFixed(5)),
-                    decisionPath: { 
-                        triggeredRules, gatesPassed, blockedBy, finalDecisionReason, 
+                    raw_features: featuresTitan.v2 || {},
+                    // ✅ SEMANTIC CLASSIFICATION (from EventClassifier)
+                    semanticContext: {
+                        resourceClass,
+                        transport,
+                        subClass,
+                        interactionId: enrichedEvent.interactionId || 'autonomous'
+                    },
+                    decisionPath: {
+                        triggeredRules, gatesPassed, blockedBy, finalDecisionReason,
                         dominantContribution, causalChain: causalChain.join(' → ')
                     },
                     contributions: normalizedContributions,
@@ -362,7 +415,7 @@ const Orchestrator = {
         // 1. String-level normalization
         if (typeof input === 'string') {
             const parsed = this._safeURL(input);
-            return parsed ? parsed.href : input; 
+            return parsed ? parsed.href : input;
         }
 
         // 2. URL Object

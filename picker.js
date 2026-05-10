@@ -328,6 +328,32 @@
         if (e.key === 'Enter' && selectedItems.length > 0) confirmAllZaps();
     };
 
+    const buildSelectionTelemetryTargets = (items) => {
+        return items.map(item => {
+            const rect = item.element.getBoundingClientRect();
+            const links = item.element.tagName === 'A' ? [item.element] : Array.from(item.element.querySelectorAll('a'));
+            const linkedDomains = [];
+            links.forEach(link => {
+                try {
+                    const url = new URL(link.href);
+                    if (url.hostname) linkedDomains.push(url.hostname.replace(/^www\./, ''));
+                } catch (_) { }
+            });
+
+            return {
+                selector: item.selector,
+                fingerprint: item.fingerprint,
+                tagName: item.element.tagName?.toLowerCase() || 'unknown',
+                textHint: (item.element.innerText || item.element.alt || '').trim().slice(0, 120),
+                bounds: {
+                    width: Math.round(rect.width),
+                    height: Math.round(rect.height)
+                },
+                linkedDomains: Array.from(new Set(linkedDomains)).slice(0, 10)
+            };
+        });
+    };
+
     const confirmAllZaps = async () => {
         const hostname = window.location.hostname;
         const { userCustomRules = {}, siteResetHistory = {} } = await chrome.storage.local.get(['userCustomRules', 'siteResetHistory']);
@@ -416,6 +442,16 @@
             }
             
             chrome.runtime.sendMessage({ type: 'SYNC_LEARNING' });
+            chrome.runtime.sendMessage({
+                type: 'LOG_USER_ACTION',
+                actionKind: 'BLOCK_DOM_SELECTION',
+                timestamp: Date.now(),
+                pageUrl: window.location.href,
+                pageDomain: hostname,
+                isCorrectionLoop,
+                learnedDomains: Array.from(learnedDomains),
+                targets: buildSelectionTelemetryTargets(selectedItems)
+            });
         }
 
         stopPicker();
