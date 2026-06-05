@@ -1,0 +1,79 @@
+name: Build iOS
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Build for Simulator (unsigned)
+        if: ${{ secrets.APPLE_CERTIFICATE == '' }}
+        run: |
+          cd ios/AdsFriendly_iOS
+          xcodebuild -project AdsFriendly_iOS.xcodeproj \
+            -scheme AdsFriendly_iOS \
+            -sdk iphonesimulator \
+            -configuration Debug \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Build for Device (signed)
+        if: ${{ secrets.APPLE_CERTIFICATE != '' }}
+        env:
+          CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
+        run: |
+          # Decode certificate
+          echo "${{ secrets.APPLE_CERTIFICATE }}" | base64 --decode > certificate.p12
+          echo "${{ secrets.APPLE_PROFILE }}" | base64 --decode > profile.mobileprovision
+
+          # Create keychain
+          security create-keychain -p temp build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p temp build.keychain
+          security import certificate.p12 -k build.keychain -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k temp build.keychain
+
+          # Install provisioning profile
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp profile.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/
+
+          # Build
+          cd ios/AdsFriendly_iOS
+          xcodebuild -project AdsFriendly_iOS.xcodeproj \
+            -scheme AdsFriendly_iOS \
+            -sdk iphoneos \
+            -configuration Release \
+            -archivePath AdsFriendly.xcarchive \
+            archive
+
+          # Export .ipa
+          xcodebuild -exportArchive \
+            -archivePath AdsFriendly.xcarchive \
+            -exportPath ./build \
+            -exportOptionsPlist <(echo '<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>method</key><string>development</string>
+<key>signingStyle</key><string>manual</string>
+</dict></plist>')
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AdsFriendly-iOS
+          path: |
+            ios/AdsFriendly_iOS/build/AdsFriendly_iOS.ipa
+            /Users/runner/Library/Developer/Xcode/DerivedData/**/Build/Products/Debug-iphonesimulator/AdsFriendly_iOS.app

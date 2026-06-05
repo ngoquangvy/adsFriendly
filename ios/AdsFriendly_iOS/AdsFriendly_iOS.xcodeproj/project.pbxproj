@@ -1,0 +1,845 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		C1980DC92FD18DFE00001364 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1980DC82FD18DFE00001364 /* AppDelegate.swift */; };
+		C1980DCD2FD18DFE00001364 /* Main.html in Resources */ = {isa = PBXBuildFile; fileRef = C1980DCB2FD18DFE00001364 /* Main.html */; };
+		C1980DCF2FD18DFE00001364 /* Icon.png in Resources */ = {isa = PBXBuildFile; fileRef = C1980DCE2FD18DFE00001364 /* Icon.png */; };
+		C1980DD12FD18DFE00001364 /* Style.css in Resources */ = {isa = PBXBuildFile; fileRef = C1980DD02FD18DFE00001364 /* Style.css */; };
+		C1980DD32FD18DFE00001364 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1980DD22FD18DFE00001364 /* SceneDelegate.swift */; };
+		C1980DD52FD18DFE00001364 /* ViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1980DD42FD18DFE00001364 /* ViewController.swift */; };
+		C1980DD82FD18DFE00001364 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = C1980DD62FD18DFE00001364 /* LaunchScreen.storyboard */; };
+		C1980DDB2FD18DFE00001364 /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = C1980DD92FD18DFE00001364 /* Main.storyboard */; };
+		C1980DE72FD18E0E00001364 /* AdsFriendly_iOSTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1980DE62FD18E0E00001364 /* AdsFriendly_iOSTests.swift */; };
+		C1980DF12FD18E0E00001364 /* AdsFriendly_iOSUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1980DF02FD18E0E00001364 /* AdsFriendly_iOSUITests.swift */; };
+		C1980DF32FD18E0E00001364 /* AdsFriendly_iOSUITestsLaunchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1980DF22FD18E0E00001364 /* AdsFriendly_iOSUITestsLaunchTests.swift */; };
+		C1980DF92FD18E0E00001364 /* AdsFriendly_iOS Extension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = C1980DF82FD18E0E00001364 /* AdsFriendly_iOS Extension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		C1980DFE2FD18E0E00001364 /* SafariWebExtensionHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1980DFD2FD18E0E00001364 /* SafariWebExtensionHandler.swift */; };
+		C1980E012FD18E0E00001364 /* _locales in Resources */ = {isa = PBXBuildFile; fileRef = C1980E002FD18E0E00001364 /* _locales */; };
+		C1980E032FD18E0E00001364 /* images in Resources */ = {isa = PBXBuildFile; fileRef = C1980E022FD18E0E00001364 /* images */; };
+		C1980E052FD18E0E00001364 /* manifest.json in Resources */ = {isa = PBXBuildFile; fileRef = C1980E042FD18E0E00001364 /* manifest.json */; };
+		C1980E072FD18E0E00001364 /* background.js in Resources */ = {isa = PBXBuildFile; fileRef = C1980E062FD18E0E00001364 /* background.js */; };
+		C1980E092FD18E0E00001364 /* content.js in Resources */ = {isa = PBXBuildFile; fileRef = C1980E082FD18E0E00001364 /* content.js */; };
+		C1980E0B2FD18E0E00001364 /* popup.html in Resources */ = {isa = PBXBuildFile; fileRef = C1980E0A2FD18E0E00001364 /* popup.html */; };
+		C1980E0D2FD18E0E00001364 /* popup.css in Resources */ = {isa = PBXBuildFile; fileRef = C1980E0C2FD18E0E00001364 /* popup.css */; };
+		C1980E0F2FD18E0E00001364 /* popup.js in Resources */ = {isa = PBXBuildFile; fileRef = C1980E0E2FD18E0E00001364 /* popup.js */; };
+		C1980E112FD18E0E00001364 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C1980DDC2FD18E0C00001364 /* Assets.xcassets */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		C1980DE32FD18E0E00001364 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = C1980DBD2FD18DFE00001364 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = C1980DC42FD18DFE00001364;
+			remoteInfo = AdsFriendly_iOS;
+		};
+		C1980DED2FD18E0E00001364 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = C1980DBD2FD18DFE00001364 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = C1980DC42FD18DFE00001364;
+			remoteInfo = AdsFriendly_iOS;
+		};
+		C1980DFA2FD18E0E00001364 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = C1980DBD2FD18DFE00001364 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = C1980DF72FD18E0E00001364;
+			remoteInfo = "AdsFriendly_iOS Extension";
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		C1980E172FD18E0E00001364 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				C1980DF92FD18E0E00001364 /* AdsFriendly_iOS Extension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		C1980DC52FD18DFE00001364 /* AdsFriendly_iOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AdsFriendly_iOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C1980DC82FD18DFE00001364 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		C1980DCC2FD18DFE00001364 /* Base */ = {isa = PBXFileReference; lastKnownFileType = text.html; name = Base; path = ../Base.lproj/Main.html; sourceTree = "<group>"; };
+		C1980DCE2FD18DFE00001364 /* Icon.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = Icon.png; sourceTree = "<group>"; };
+		C1980DD02FD18DFE00001364 /* Style.css */ = {isa = PBXFileReference; lastKnownFileType = text.css; path = Style.css; sourceTree = "<group>"; };
+		C1980DD22FD18DFE00001364 /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
+		C1980DD42FD18DFE00001364 /* ViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewController.swift; sourceTree = "<group>"; };
+		C1980DD72FD18DFE00001364 /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
+		C1980DDA2FD18DFE00001364 /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/Main.storyboard; sourceTree = "<group>"; };
+		C1980DDC2FD18E0C00001364 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		C1980DDD2FD18E0C00001364 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		C1980DE22FD18E0E00001364 /* AdsFriendly_iOSTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AdsFriendly_iOSTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		C1980DE62FD18E0E00001364 /* AdsFriendly_iOSTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdsFriendly_iOSTests.swift; sourceTree = "<group>"; };
+		C1980DEC2FD18E0E00001364 /* AdsFriendly_iOSUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AdsFriendly_iOSUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		C1980DF02FD18E0E00001364 /* AdsFriendly_iOSUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdsFriendly_iOSUITests.swift; sourceTree = "<group>"; };
+		C1980DF22FD18E0E00001364 /* AdsFriendly_iOSUITestsLaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdsFriendly_iOSUITestsLaunchTests.swift; sourceTree = "<group>"; };
+		C1980DF82FD18E0E00001364 /* AdsFriendly_iOS Extension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = "AdsFriendly_iOS Extension.appex"; sourceTree = BUILT_PRODUCTS_DIR; };
+		C1980DFD2FD18E0E00001364 /* SafariWebExtensionHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafariWebExtensionHandler.swift; sourceTree = "<group>"; };
+		C1980E002FD18E0E00001364 /* _locales */ = {isa = PBXFileReference; lastKnownFileType = folder; path = _locales; sourceTree = "<group>"; };
+		C1980E022FD18E0E00001364 /* images */ = {isa = PBXFileReference; lastKnownFileType = folder; path = images; sourceTree = "<group>"; };
+		C1980E042FD18E0E00001364 /* manifest.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = manifest.json; sourceTree = "<group>"; };
+		C1980E062FD18E0E00001364 /* background.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = background.js; sourceTree = "<group>"; };
+		C1980E082FD18E0E00001364 /* content.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = content.js; sourceTree = "<group>"; };
+		C1980E0A2FD18E0E00001364 /* popup.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = popup.html; sourceTree = "<group>"; };
+		C1980E0C2FD18E0E00001364 /* popup.css */ = {isa = PBXFileReference; lastKnownFileType = text.css; path = popup.css; sourceTree = "<group>"; };
+		C1980E0E2FD18E0E00001364 /* popup.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = popup.js; sourceTree = "<group>"; };
+		C1980E102FD18E0E00001364 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		C1980DC22FD18DFE00001364 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C1980DDF2FD18E0E00001364 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C1980DE92FD18E0E00001364 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C1980DF52FD18E0E00001364 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		C1980DBC2FD18DFE00001364 = {
+			isa = PBXGroup;
+			children = (
+				C1980DC72FD18DFE00001364 /* AdsFriendly_iOS */,
+				C1980DE52FD18E0E00001364 /* AdsFriendly_iOSTests */,
+				C1980DEF2FD18E0E00001364 /* AdsFriendly_iOSUITests */,
+				C1980DFC2FD18E0E00001364 /*  Extension */,
+				C1980DC62FD18DFE00001364 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		C1980DC62FD18DFE00001364 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				C1980DC52FD18DFE00001364 /* AdsFriendly_iOS.app */,
+				C1980DE22FD18E0E00001364 /* AdsFriendly_iOSTests.xctest */,
+				C1980DEC2FD18E0E00001364 /* AdsFriendly_iOSUITests.xctest */,
+				C1980DF82FD18E0E00001364 /* AdsFriendly_iOS Extension.appex */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		C1980DC72FD18DFE00001364 /* AdsFriendly_iOS */ = {
+			isa = PBXGroup;
+			children = (
+				C1980DC82FD18DFE00001364 /* AppDelegate.swift */,
+				C1980DD22FD18DFE00001364 /* SceneDelegate.swift */,
+				C1980DD42FD18DFE00001364 /* ViewController.swift */,
+				C1980DD62FD18DFE00001364 /* LaunchScreen.storyboard */,
+				C1980DD92FD18DFE00001364 /* Main.storyboard */,
+				C1980DDC2FD18E0C00001364 /* Assets.xcassets */,
+				C1980DDD2FD18E0C00001364 /* Info.plist */,
+				C1980DCA2FD18DFE00001364 /* Resources */,
+			);
+			path = AdsFriendly_iOS;
+			sourceTree = "<group>";
+		};
+		C1980DCA2FD18DFE00001364 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				C1980DCB2FD18DFE00001364 /* Main.html */,
+				C1980DCE2FD18DFE00001364 /* Icon.png */,
+				C1980DD02FD18DFE00001364 /* Style.css */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		C1980DE52FD18E0E00001364 /* AdsFriendly_iOSTests */ = {
+			isa = PBXGroup;
+			children = (
+				C1980DE62FD18E0E00001364 /* AdsFriendly_iOSTests.swift */,
+			);
+			path = AdsFriendly_iOSTests;
+			sourceTree = "<group>";
+		};
+		C1980DEF2FD18E0E00001364 /* AdsFriendly_iOSUITests */ = {
+			isa = PBXGroup;
+			children = (
+				C1980DF02FD18E0E00001364 /* AdsFriendly_iOSUITests.swift */,
+				C1980DF22FD18E0E00001364 /* AdsFriendly_iOSUITestsLaunchTests.swift */,
+			);
+			path = AdsFriendly_iOSUITests;
+			sourceTree = "<group>";
+		};
+		C1980DFC2FD18E0E00001364 /*  Extension */ = {
+			isa = PBXGroup;
+			children = (
+				C1980DFD2FD18E0E00001364 /* SafariWebExtensionHandler.swift */,
+				C1980E102FD18E0E00001364 /* Info.plist */,
+				C1980DFF2FD18E0E00001364 /* Resources */,
+			);
+			path = "AdsFriendly_iOS Extension";
+			sourceTree = "<group>";
+		};
+		C1980DFF2FD18E0E00001364 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				C1980E002FD18E0E00001364 /* _locales */,
+				C1980E022FD18E0E00001364 /* images */,
+				C1980E042FD18E0E00001364 /* manifest.json */,
+				C1980E062FD18E0E00001364 /* background.js */,
+				C1980E082FD18E0E00001364 /* content.js */,
+				C1980E0A2FD18E0E00001364 /* popup.html */,
+				C1980E0C2FD18E0E00001364 /* popup.css */,
+				C1980E0E2FD18E0E00001364 /* popup.js */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		C1980DC42FD18DFE00001364 /* AdsFriendly_iOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C1980E182FD18E0E00001364 /* Build configuration list for PBXNativeTarget "AdsFriendly_iOS" */;
+			buildPhases = (
+				C1980DC12FD18DFE00001364 /* Sources */,
+				C1980DC22FD18DFE00001364 /* Frameworks */,
+				C1980DC32FD18DFE00001364 /* Resources */,
+				C1980E172FD18E0E00001364 /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				C1980DFB2FD18E0E00001364 /* PBXTargetDependency */,
+			);
+			name = AdsFriendly_iOS;
+			productName = AdsFriendly_iOS;
+			productReference = C1980DC52FD18DFE00001364 /* AdsFriendly_iOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+		C1980DE12FD18E0E00001364 /* AdsFriendly_iOSTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C1980E1B2FD18E0E00001364 /* Build configuration list for PBXNativeTarget "AdsFriendly_iOSTests" */;
+			buildPhases = (
+				C1980DDE2FD18E0E00001364 /* Sources */,
+				C1980DDF2FD18E0E00001364 /* Frameworks */,
+				C1980DE02FD18E0E00001364 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				C1980DE42FD18E0E00001364 /* PBXTargetDependency */,
+			);
+			name = AdsFriendly_iOSTests;
+			productName = AdsFriendly_iOSTests;
+			productReference = C1980DE22FD18E0E00001364 /* AdsFriendly_iOSTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		C1980DEB2FD18E0E00001364 /* AdsFriendly_iOSUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C1980E1E2FD18E0E00001364 /* Build configuration list for PBXNativeTarget "AdsFriendly_iOSUITests" */;
+			buildPhases = (
+				C1980DE82FD18E0E00001364 /* Sources */,
+				C1980DE92FD18E0E00001364 /* Frameworks */,
+				C1980DEA2FD18E0E00001364 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				C1980DEE2FD18E0E00001364 /* PBXTargetDependency */,
+			);
+			name = AdsFriendly_iOSUITests;
+			productName = AdsFriendly_iOSUITests;
+			productReference = C1980DEC2FD18E0E00001364 /* AdsFriendly_iOSUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		C1980DF72FD18E0E00001364 /* AdsFriendly_iOS Extension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C1980E142FD18E0E00001364 /* Build configuration list for PBXNativeTarget "AdsFriendly_iOS Extension" */;
+			buildPhases = (
+				C1980DF42FD18E0E00001364 /* Sources */,
+				C1980DF52FD18E0E00001364 /* Frameworks */,
+				C1980DF62FD18E0E00001364 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "AdsFriendly_iOS Extension";
+			productName = "AdsFriendly_iOS Extension";
+			productReference = C1980DF82FD18E0E00001364 /* AdsFriendly_iOS Extension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		C1980DBD2FD18DFE00001364 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1420;
+				LastUpgradeCheck = 1420;
+				TargetAttributes = {
+					C1980DC42FD18DFE00001364 = {
+						CreatedOnToolsVersion = 14.2;
+					};
+					C1980DE12FD18E0E00001364 = {
+						CreatedOnToolsVersion = 14.2;
+						TestTargetID = C1980DC42FD18DFE00001364;
+					};
+					C1980DEB2FD18E0E00001364 = {
+						CreatedOnToolsVersion = 14.2;
+						TestTargetID = C1980DC42FD18DFE00001364;
+					};
+					C1980DF72FD18E0E00001364 = {
+						CreatedOnToolsVersion = 14.2;
+					};
+				};
+			};
+			buildConfigurationList = C1980DC02FD18DFE00001364 /* Build configuration list for PBXProject "AdsFriendly_iOS" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = C1980DBC2FD18DFE00001364;
+			productRefGroup = C1980DC62FD18DFE00001364 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				C1980DC42FD18DFE00001364 /* AdsFriendly_iOS */,
+				C1980DE12FD18E0E00001364 /* AdsFriendly_iOSTests */,
+				C1980DEB2FD18E0E00001364 /* AdsFriendly_iOSUITests */,
+				C1980DF72FD18E0E00001364 /* AdsFriendly_iOS Extension */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		C1980DC32FD18DFE00001364 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C1980DCF2FD18DFE00001364 /* Icon.png in Resources */,
+				C1980DDB2FD18DFE00001364 /* Main.storyboard in Resources */,
+				C1980DD82FD18DFE00001364 /* LaunchScreen.storyboard in Resources */,
+				C1980DCD2FD18DFE00001364 /* Main.html in Resources */,
+				C1980E112FD18E0E00001364 /* Assets.xcassets in Resources */,
+				C1980DD12FD18DFE00001364 /* Style.css in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C1980DE02FD18E0E00001364 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C1980DEA2FD18E0E00001364 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C1980DF62FD18E0E00001364 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C1980E072FD18E0E00001364 /* background.js in Resources */,
+				C1980E0D2FD18E0E00001364 /* popup.css in Resources */,
+				C1980E0B2FD18E0E00001364 /* popup.html in Resources */,
+				C1980E032FD18E0E00001364 /* images in Resources */,
+				C1980E052FD18E0E00001364 /* manifest.json in Resources */,
+				C1980E012FD18E0E00001364 /* _locales in Resources */,
+				C1980E092FD18E0E00001364 /* content.js in Resources */,
+				C1980E0F2FD18E0E00001364 /* popup.js in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		C1980DC12FD18DFE00001364 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C1980DD52FD18DFE00001364 /* ViewController.swift in Sources */,
+				C1980DC92FD18DFE00001364 /* AppDelegate.swift in Sources */,
+				C1980DD32FD18DFE00001364 /* SceneDelegate.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C1980DDE2FD18E0E00001364 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C1980DE72FD18E0E00001364 /* AdsFriendly_iOSTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C1980DE82FD18E0E00001364 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C1980DF32FD18E0E00001364 /* AdsFriendly_iOSUITestsLaunchTests.swift in Sources */,
+				C1980DF12FD18E0E00001364 /* AdsFriendly_iOSUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C1980DF42FD18E0E00001364 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C1980DFE2FD18E0E00001364 /* SafariWebExtensionHandler.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		C1980DE42FD18E0E00001364 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = C1980DC42FD18DFE00001364 /* AdsFriendly_iOS */;
+			targetProxy = C1980DE32FD18E0E00001364 /* PBXContainerItemProxy */;
+		};
+		C1980DEE2FD18E0E00001364 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = C1980DC42FD18DFE00001364 /* AdsFriendly_iOS */;
+			targetProxy = C1980DED2FD18E0E00001364 /* PBXContainerItemProxy */;
+		};
+		C1980DFB2FD18E0E00001364 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = C1980DF72FD18E0E00001364 /* AdsFriendly_iOS Extension */;
+			targetProxy = C1980DFA2FD18E0E00001364 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin PBXVariantGroup section */
+		C1980DCB2FD18DFE00001364 /* Main.html */ = {
+			isa = PBXVariantGroup;
+			children = (
+				C1980DCC2FD18DFE00001364 /* Base */,
+			);
+			name = Main.html;
+			sourceTree = "<group>";
+		};
+		C1980DD62FD18DFE00001364 /* LaunchScreen.storyboard */ = {
+			isa = PBXVariantGroup;
+			children = (
+				C1980DD72FD18DFE00001364 /* Base */,
+			);
+			name = LaunchScreen.storyboard;
+			sourceTree = "<group>";
+		};
+		C1980DD92FD18DFE00001364 /* Main.storyboard */ = {
+			isa = PBXVariantGroup;
+			children = (
+				C1980DDA2FD18DFE00001364 /* Base */,
+			);
+			name = Main.storyboard;
+			sourceTree = "<group>";
+		};
+/* End PBXVariantGroup section */
+
+/* Begin XCBuildConfiguration section */
+		C1980E122FD18E0E00001364 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.2;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		C1980E132FD18E0E00001364 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.2;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		C1980E152FD18E0E00001364 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 99KS8Z4JX3;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "AdsFriendly_iOS Extension/Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "AdsFriendly_iOS Extension";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"-framework",
+					SafariServices,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.vyngo.AdsFriendly-iOS.Extension";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		C1980E162FD18E0E00001364 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 99KS8Z4JX3;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "AdsFriendly_iOS Extension/Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "AdsFriendly_iOS Extension";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"-framework",
+					SafariServices,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.vyngo.AdsFriendly-iOS.Extension";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		C1980E192FD18E0E00001364 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 99KS8Z4JX3;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = AdsFriendly_iOS/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = AdsFriendly_iOS;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
+				INFOPLIST_KEY_UIMainStoryboardFile = Main;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"-framework",
+					SafariServices,
+					"-framework",
+					WebKit,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.vyngo.AdsFriendly-iOS";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		C1980E1A2FD18E0E00001364 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 99KS8Z4JX3;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = AdsFriendly_iOS/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = AdsFriendly_iOS;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
+				INFOPLIST_KEY_UIMainStoryboardFile = Main;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"-framework",
+					SafariServices,
+					"-framework",
+					WebKit,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.vyngo.AdsFriendly-iOS";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		C1980E1C2FD18E0E00001364 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.vyngo.AdsFriendly-iOSTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/AdsFriendly_iOS.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/AdsFriendly_iOS";
+			};
+			name = Debug;
+		};
+		C1980E1D2FD18E0E00001364 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.vyngo.AdsFriendly-iOSTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/AdsFriendly_iOS.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/AdsFriendly_iOS";
+			};
+			name = Release;
+		};
+		C1980E1F2FD18E0E00001364 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.vyngo.AdsFriendly-iOSUITests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = AdsFriendly_iOS;
+			};
+			name = Debug;
+		};
+		C1980E202FD18E0E00001364 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.vyngo.AdsFriendly-iOSUITests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = AdsFriendly_iOS;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		C1980DC02FD18DFE00001364 /* Build configuration list for PBXProject "AdsFriendly_iOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C1980E122FD18E0E00001364 /* Debug */,
+				C1980E132FD18E0E00001364 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C1980E142FD18E0E00001364 /* Build configuration list for PBXNativeTarget "AdsFriendly_iOS Extension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C1980E152FD18E0E00001364 /* Debug */,
+				C1980E162FD18E0E00001364 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C1980E182FD18E0E00001364 /* Build configuration list for PBXNativeTarget "AdsFriendly_iOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C1980E192FD18E0E00001364 /* Debug */,
+				C1980E1A2FD18E0E00001364 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C1980E1B2FD18E0E00001364 /* Build configuration list for PBXNativeTarget "AdsFriendly_iOSTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C1980E1C2FD18E0E00001364 /* Debug */,
+				C1980E1D2FD18E0E00001364 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C1980E1E2FD18E0E00001364 /* Build configuration list for PBXNativeTarget "AdsFriendly_iOSUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C1980E1F2FD18E0E00001364 /* Debug */,
+				C1980E202FD18E0E00001364 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = C1980DBD2FD18DFE00001364 /* Project object */;
+}

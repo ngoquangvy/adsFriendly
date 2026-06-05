@@ -1,0 +1,47 @@
+#adsfriendly-popup-container {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: rgba(33, 33, 33, 0.95);
+  color: #fff;
+  padding: 12px 20px;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  z-index: 2147483647; /* Đảm bảo luôn nằm trên cùng */
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  transition: opacity 0.3s ease-in-out;
+  opacity: 1;
+}
+
+#adsfriendly-popup-container.adsfriendly-hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.adsfriendly-message {
+  flex-grow: 1;
+}
+
+.adsfriendly-btn {
+  background: transparent;
+  border: none;
+  color: #4da6ff;
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0;
+  margin-left: 8px;
+}
+
+.adsfriendly-btn:hover {
+  text-decoration: underline;
+}
+
+.adsfriendly-btn.close {
+  color: #ff6666;
+}
