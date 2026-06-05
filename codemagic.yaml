@@ -1,0 +1,41 @@
+workflows:
+  ios-build:
+    name: AdsFriendly iOS
+    max_build_duration: 30
+    instance_type: mac_mini_m1
+    environment:
+      ios_signing:
+        provisioning_profiles:
+          - AdsFriendly_iOS_Development.mobileprovision
+        certificates:
+          - ios_development.p12
+      vars:
+        XCODE_WORKSPACE: ""
+        XCODE_SCHEME: "AdsFriendly_iOS"
+        BUNDLE_ID: "com.vyngo.AdsFriendly-iOS"
+        APP_STORE_CONNECT_ISSUER_ID: ""
+        APP_STORE_CONNECT_KEY_ID: ""
+        APP_STORE_CONNECT_PRIVATE_KEY: ""
+    scripts:
+      - name: Build iOS
+        script: |
+          cd $CM_BUILD_DIR/ios/AdsFriendly_iOS
+          xcodebuild build \
+            -project AdsFriendly_iOS.xcodeproj \
+            -scheme "$XCODE_SCHEME" \
+            -sdk iphoneos \
+            -configuration Release \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM=$CM_DEVELOPMENT_TEAM \
+            PROVISIONING_PROFILE_SPECIFIER=$CM_PROVISIONING_PROFILE_SPECIFIER \
+            | xcpretty
+    artifacts:
+      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/Products/Release-iphoneos/*.app
+      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/Products/Release-iphoneos/*.ipa
+    publishing:
+      email:
+        recipients:
+          - vyngo@users.noreply.github.com
+        notify:
+          success: true
+          failure: true
