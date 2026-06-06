@@ -67,8 +67,8 @@
       for (var i = 0; i < closeCandidates.length; i++) {
         if (textMatchesSignature(closeCandidates[i])) {
           var banner = findBannerFromCloseButton(closeCandidates[i]);
-          if (banner && isSuspiciousBanner(banner) && hasCrossOriginLink(banner)) {
-            hideBanner(banner, "close-btn + cross-origin link");
+          if (banner && isSuspiciousBanner(banner)) {
+            hideBanner(banner, "close-btn");
           }
         }
       }
@@ -79,8 +79,8 @@
     var allElements = document.querySelectorAll('body *');
     for (var i = 0; i < allElements.length; i++) {
       var el = allElements[i];
-      if (isSuspiciousBanner(el) && hasCloseButton(el) && hasCrossOriginLink(el)) {
-        hideBanner(el, "fixed/sticky + close-btn + cross-origin");
+      if (isSuspiciousBanner(el) && hasCloseButton(el)) {
+        hideBanner(el, "fixed/sticky + close-btn");
       }
     }
   }
