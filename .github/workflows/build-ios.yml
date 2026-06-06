@@ -17,40 +17,46 @@ jobs:
       - name: Show Xcode version
         run: xcodebuild -version
 
-      - name: Build for Simulator (unsigned)
-        if: ${{ secrets.APPLE_CERTIFICATE == '' }}
+      - name: Build unsigned IPA for device
         run: |
           cd ios/AdsFriendly_iOS
           xcodebuild -project AdsFriendly_iOS.xcodeproj \
             -scheme AdsFriendly_iOS \
-            -sdk iphonesimulator \
+            -sdk iphoneos \
             -configuration Debug \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
             build
 
-      - name: Build for Device (signed)
+          # Locate .app
+          APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -name "AdsFriendly_iOS.app" -path "*/Debug-iphoneos/*" | head -1)
+          echo "App found at: $APP_PATH"
+
+          # Create IPA structure
+          mkdir -p Payload
+          cp -R "$APP_PATH" Payload/
+          mkdir -p build
+          zip -r build/AdsFriendly_iOS.ipa Payload/
+          rm -rf Payload
+
+      - name: Create signed IPA (when certs provided)
         if: ${{ secrets.APPLE_CERTIFICATE != '' }}
         env:
           CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
         run: |
-          # Decode certificate
           echo "${{ secrets.APPLE_CERTIFICATE }}" | base64 --decode > certificate.p12
           echo "${{ secrets.APPLE_PROFILE }}" | base64 --decode > profile.mobileprovision
 
-          # Create keychain
           security create-keychain -p temp build.keychain
           security default-keychain -s build.keychain
           security unlock-keychain -p temp build.keychain
           security import certificate.p12 -k build.keychain -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k temp build.keychain
 
-          # Install provisioning profile
           mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
           cp profile.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/
 
-          # Build
           cd ios/AdsFriendly_iOS
           xcodebuild -project AdsFriendly_iOS.xcodeproj \
             -scheme AdsFriendly_iOS \
@@ -59,7 +65,6 @@ jobs:
             -archivePath AdsFriendly.xcarchive \
             archive
 
-          # Export .ipa
           xcodebuild -exportArchive \
             -archivePath AdsFriendly.xcarchive \
             -exportPath ./build \
@@ -74,6 +79,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: AdsFriendly-iOS
-          path: |
-            ios/AdsFriendly_iOS/build/AdsFriendly_iOS.ipa
-            /Users/runner/Library/Developer/Xcode/DerivedData/**/Build/Products/Debug-iphonesimulator/AdsFriendly_iOS.app
+          path: ios/AdsFriendly_iOS/build/AdsFriendly_iOS.ipa
