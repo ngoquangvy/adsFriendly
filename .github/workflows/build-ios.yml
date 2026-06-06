@@ -18,7 +18,6 @@ jobs:
         run: xcodebuild -version
 
       - name: Build unsigned IPA for device
-        if: ${{ secrets.APPLE_CERTIFICATE == '' }}
         run: |
           cd ios/AdsFriendly_iOS
           xcodebuild -project AdsFriendly_iOS.xcodeproj \
@@ -40,45 +39,6 @@ jobs:
           mkdir -p build
           zip -r build/AdsFriendly_iOS.ipa Payload/
           rm -rf Payload
-
-      - name: Create signed IPA (when certs provided)
-        if: ${{ secrets.APPLE_CERTIFICATE != '' }}
-        env:
-          CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
-        run: |
-          echo "${{ secrets.APPLE_CERTIFICATE }}" | base64 --decode > certificate.p12
-          echo "${{ secrets.APPLE_PROFILE }}" | base64 --decode > profile.mobileprovision
-
-          security create-keychain -p temp build.keychain
-          security default-keychain -s build.keychain
-          security unlock-keychain -p temp build.keychain
-          security import certificate.p12 -k build.keychain -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k temp build.keychain
-
-          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-          cp profile.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/
-
-          cd ios/AdsFriendly_iOS
-          cat > ExportOptions.plist << 'EOF'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0"><dict>
-          <key>method</key><string>development</string>
-          <key>signingStyle</key><string>manual</string>
-          </dict></plist>
-          EOF
-
-          xcodebuild -project AdsFriendly_iOS.xcodeproj \
-            -scheme AdsFriendly_iOS \
-            -sdk iphoneos \
-            -configuration Release \
-            -archivePath AdsFriendly.xcarchive \
-            archive
-
-          xcodebuild -exportArchive \
-            -archivePath AdsFriendly.xcarchive \
-            -exportPath ./build \
-            -exportOptionsPlist ExportOptions.plist
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
