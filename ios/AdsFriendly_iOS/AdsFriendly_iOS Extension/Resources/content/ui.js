@@ -1,6 +1,7 @@
 var blockedUrls = [];
 var hideTimeout = null;
 var container = null;
+var _throttleTimer = null;
 
 function createUI() {
   if (container) return;
@@ -104,5 +105,10 @@ function notifyBlocked(url) {
   if (!blockedUrls.includes(url)) {
     blockedUrls.push(url);
   }
+  if (_throttleTimer) return;
+  _throttleTimer = setTimeout(function() {
+    _throttleTimer = null;
+    updateUI();
+  }, 500);
   updateUI();
 }

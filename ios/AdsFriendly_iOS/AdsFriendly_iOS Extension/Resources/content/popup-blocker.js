@@ -34,7 +34,6 @@
     if (opensNewTab && isCrossOrigin(a.href) && !isWhitelisted(a.href)) {
       e.preventDefault();
       e.stopPropagation();
-      e.stopImmediatePropagation();
       log("Chan click -> a[target=_blank]:", a.href);
       notifyBlocked(a.href);
     }
