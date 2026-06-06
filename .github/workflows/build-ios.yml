@@ -59,11 +59,14 @@ jobs:
           cp profile.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/
 
           cd ios/AdsFriendly_iOS
-          python3 -c "
-import plistlib
-with open('ExportOptions.plist', 'wb') as f:
-    plistlib.dump({'method': 'development', 'signingStyle': 'manual'}, f, fmt=plistlib.FMT_XML)
-          "
+          cat > ExportOptions.plist << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+          <key>method</key><string>development</string>
+          <key>signingStyle</key><string>manual</string>
+          </dict></plist>
+          EOF
 
           xcodebuild -project AdsFriendly_iOS.xcodeproj \
             -scheme AdsFriendly_iOS \
