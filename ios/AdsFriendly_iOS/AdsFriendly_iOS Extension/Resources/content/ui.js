@@ -14,7 +14,7 @@ function createUI() {
 
   var openBtn = document.createElement("button");
   openBtn.className = "adsfriendly-btn";
-  openBtn.innerText = "Mo";
+  openBtn.innerText = "\u2192";
   openBtn.addEventListener("click", function(e) {
     e.stopPropagation();
     openAllBlocked();
@@ -22,7 +22,7 @@ function createUI() {
 
   var closeBtn = document.createElement("button");
   closeBtn.className = "adsfriendly-btn close";
-  closeBtn.innerText = "Bo qua";
+  closeBtn.innerText = "\u2715";
   closeBtn.addEventListener("click", function(e) {
     e.stopPropagation();
     hideUI();
@@ -67,12 +67,12 @@ function updateUI() {
   if (blockedUrls.length === 1) {
     try {
       var hostname = new URL(blockedUrls[0]).hostname;
-      fullMsg = "Da chan " + truncateHostname(hostname, 24);
+      fullMsg = "\u26D4 " + truncateHostname(hostname, 24);
     } catch(e) {
-      fullMsg = "Da chan 1 popup";
+      fullMsg = "\u26D4 1 popup";
     }
   } else {
-    fullMsg = "Da chan " + blockedUrls.length + " popup";
+    fullMsg = "\u26D4 " + blockedUrls.length + " popups";
   }
 
   messageSpan.innerText = fullMsg;
