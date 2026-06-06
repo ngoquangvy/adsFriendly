@@ -44,6 +44,11 @@ function createUI() {
   appendToBody();
 }
 
+function truncateHostname(hostname, maxLen) {
+  if (hostname.length <= maxLen) return hostname;
+  return hostname.substring(0, maxLen - 3) + "...";
+}
+
 function updateUI() {
   if (!container) createUI();
   if (!container) return;
@@ -57,18 +62,21 @@ function updateUI() {
   }
 
   var messageSpan = container.querySelector(".adsfriendly-message");
+  var fullMsg = "";
 
   if (blockedUrls.length === 1) {
     try {
       var hostname = new URL(blockedUrls[0]).hostname;
-      messageSpan.innerText = "Da chan popup tu " + hostname;
+      fullMsg = "Da chan " + truncateHostname(hostname, 24);
     } catch(e) {
-      messageSpan.innerText = "Da chan 1 popup";
+      fullMsg = "Da chan 1 popup";
     }
   } else {
-    messageSpan.innerText = "Da chan " + blockedUrls.length + " popup an";
+    fullMsg = "Da chan " + blockedUrls.length + " popup";
   }
 
+  messageSpan.innerText = fullMsg;
+  messageSpan.title = fullMsg;
   container.classList.remove("adsfriendly-hidden");
 
   if (hideTimeout) clearTimeout(hideTimeout);
