@@ -1,11 +1,6 @@
-// ============================================================
-// ui.js - Giao diện thông báo popup bị chặn
-// Hiển thị thanh thông báo dưới đáy, tự ẩn sau 5s, gộp thông báo
-// ============================================================
-
-let blockedUrls = [];
-let hideTimeout = null;
-let container = null;
+var blockedUrls = [];
+var hideTimeout = null;
+var container = null;
 
 function createUI() {
   if (container) return;
@@ -14,20 +9,20 @@ function createUI() {
   container.id = "adsfriendly-popup-container";
   container.className = "adsfriendly-hidden";
 
-  const messageSpan = document.createElement("span");
+  var messageSpan = document.createElement("span");
   messageSpan.className = "adsfriendly-message";
-  
-  const openBtn = document.createElement("button");
+
+  var openBtn = document.createElement("button");
   openBtn.className = "adsfriendly-btn";
-  openBtn.innerText = "Mở";
+  openBtn.innerText = "Mo";
   openBtn.addEventListener("click", function(e) {
     e.stopPropagation();
     openAllBlocked();
   });
 
-  const closeBtn = document.createElement("button");
+  var closeBtn = document.createElement("button");
   closeBtn.className = "adsfriendly-btn close";
-  closeBtn.innerText = "Bỏ qua";
+  closeBtn.innerText = "Bo qua";
   closeBtn.addEventListener("click", function(e) {
     e.stopPropagation();
     hideUI();
@@ -37,7 +32,6 @@ function createUI() {
   container.appendChild(openBtn);
   container.appendChild(closeBtn);
 
-  // Chờ body sẵn sàng mới thêm vào
   function appendToBody() {
     if (document.body) {
       document.body.appendChild(container);
@@ -52,9 +46,8 @@ function createUI() {
 
 function updateUI() {
   if (!container) createUI();
-  if (!container) return; // Phòng trường hợp body chưa sẵn sàng
+  if (!container) return;
 
-  // Đảm bảo container đã nằm trong DOM
   if (!container.parentNode) {
     if (document.body) {
       document.body.appendChild(container);
@@ -62,23 +55,22 @@ function updateUI() {
       return;
     }
   }
-  
-  const messageSpan = container.querySelector(".adsfriendly-message");
-  
+
+  var messageSpan = container.querySelector(".adsfriendly-message");
+
   if (blockedUrls.length === 1) {
     try {
-      const hostname = new URL(blockedUrls[0]).hostname;
-      messageSpan.innerText = "🛡 Đã chặn popup từ " + hostname;
+      var hostname = new URL(blockedUrls[0]).hostname;
+      messageSpan.innerText = "Da chan popup tu " + hostname;
     } catch(e) {
-      messageSpan.innerText = "🛡 Đã chặn 1 popup";
+      messageSpan.innerText = "Da chan 1 popup";
     }
   } else {
-    messageSpan.innerText = "🛡 Đã chặn " + blockedUrls.length + " popup ẩn";
+    messageSpan.innerText = "Da chan " + blockedUrls.length + " popup an";
   }
 
   container.classList.remove("adsfriendly-hidden");
 
-  // Đặt lại đếm ngược 5 giây
   if (hideTimeout) clearTimeout(hideTimeout);
   hideTimeout = setTimeout(hideUI, 5000);
 }
@@ -94,7 +86,6 @@ function hideUI() {
 
 function openAllBlocked() {
   if (blockedUrls.length > 0) {
-    // Gửi lệnh cho Background Script mở các tab
     api.runtime.sendMessage({ action: "open_tabs", urls: blockedUrls });
   }
   hideUI();

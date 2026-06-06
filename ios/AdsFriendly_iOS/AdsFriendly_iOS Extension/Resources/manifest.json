@@ -3,7 +3,7 @@
   "default_locale": "en",
   "name": "AdsFriendly",
   "version": "1.0",
-  "description": "Trình chặn popup tự động thông minh cho Safari",
+  "description": "Trinh chan popup va banner quang cao thong minh cho Safari",
   "permissions": [
     "activeTab",
     "tabs",
@@ -19,9 +19,13 @@
     {
       "matches": [ "<all_urls>" ],
       "js": [
+        "utils/config.js",
         "utils/helpers.js",
         "content/ui.js",
-        "content/blocker.js"
+        "content/injector.js",
+        "content/popup-blocker.js",
+        "content/banner-detector.js",
+        "content/mutation-watcher.js"
       ],
       "css": [
         "content/style.css"
