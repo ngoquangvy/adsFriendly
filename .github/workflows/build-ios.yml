@@ -18,6 +18,7 @@ jobs:
         run: xcodebuild -version
 
       - name: Build unsigned IPA for device
+        if: ${{ secrets.APPLE_CERTIFICATE == '' }}
         run: |
           cd ios/AdsFriendly_iOS
           xcodebuild -project AdsFriendly_iOS.xcodeproj \
@@ -58,6 +59,15 @@ jobs:
           cp profile.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/
 
           cd ios/AdsFriendly_iOS
+          cat > ExportOptions.plist << EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>method</key><string>development</string>
+<key>signingStyle</key><string>manual</string>
+</dict></plist>
+EOF
+
           xcodebuild -project AdsFriendly_iOS.xcodeproj \
             -scheme AdsFriendly_iOS \
             -sdk iphoneos \
@@ -68,12 +78,7 @@ jobs:
           xcodebuild -exportArchive \
             -archivePath AdsFriendly.xcarchive \
             -exportPath ./build \
-            -exportOptionsPlist <(echo '<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-<key>method</key><string>development</string>
-<key>signingStyle</key><string>manual</string>
-</dict></plist>')
+            -exportOptionsPlist ExportOptions.plist
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
