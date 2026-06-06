@@ -28,6 +28,9 @@
 		C1980E0B2FD18E0E00001364 /* popup.html in Resources */ = {isa = PBXBuildFile; fileRef = C1980E0A2FD18E0E00001364 /* popup.html */; };
 		C1980E0D2FD18E0E00001364 /* popup.css in Resources */ = {isa = PBXBuildFile; fileRef = C1980E0C2FD18E0E00001364 /* popup.css */; };
 		C1980E0F2FD18E0E00001364 /* popup.js in Resources */ = {isa = PBXBuildFile; fileRef = C1980E0E2FD18E0E00001364 /* popup.js */; };
+		C1980E222FD18E0E00001364 /* utils in Resources */ = {isa = PBXBuildFile; fileRef = C1980E212FD18E0E00001364 /* utils */; };
+		C1980E242FD18E0E00001364 /* content in Resources */ = {isa = PBXBuildFile; fileRef = C1980E232FD18E0E00001364 /* content */; };
+		C1980E262FD18E0E00001364 /* background in Resources */ = {isa = PBXBuildFile; fileRef = C1980E252FD18E0E00001364 /* background */; };
 		C1980E112FD18E0E00001364 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C1980DDC2FD18E0C00001364 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
@@ -96,6 +99,9 @@
 		C1980E0A2FD18E0E00001364 /* popup.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = popup.html; sourceTree = "<group>"; };
 		C1980E0C2FD18E0E00001364 /* popup.css */ = {isa = PBXFileReference; lastKnownFileType = text.css; path = popup.css; sourceTree = "<group>"; };
 		C1980E0E2FD18E0E00001364 /* popup.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = popup.js; sourceTree = "<group>"; };
+		C1980E212FD18E0E00001364 /* utils */ = {isa = PBXFileReference; lastKnownFileType = folder; path = utils; sourceTree = "<group>"; };
+		C1980E232FD18E0E00001364 /* content */ = {isa = PBXFileReference; lastKnownFileType = folder; path = content; sourceTree = "<group>"; };
+		C1980E252FD18E0E00001364 /* background */ = {isa = PBXFileReference; lastKnownFileType = folder; path = background; sourceTree = "<group>"; };
 		C1980E102FD18E0E00001364 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -216,6 +222,10 @@
 				C1980E0A2FD18E0E00001364 /* popup.html */,
 				C1980E0C2FD18E0E00001364 /* popup.css */,
 				C1980E0E2FD18E0E00001364 /* popup.js */,
+				C1980E212FD18E0E00001364 /* utils */,
+				C1980E232FD18E0E00001364 /* content */,
+				C1980E252FD18E0E00001364 /* background */
+
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -382,6 +392,10 @@
 				C1980E012FD18E0E00001364 /* _locales in Resources */,
 				C1980E092FD18E0E00001364 /* content.js in Resources */,
 				C1980E0F2FD18E0E00001364 /* popup.js in Resources */,
+				C1980E222FD18E0E00001364 /* utils in Resources */,
+				C1980E242FD18E0E00001364 /* content in Resources */,
+				C1980E262FD18E0E00001364 /* background in Resources */
+
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

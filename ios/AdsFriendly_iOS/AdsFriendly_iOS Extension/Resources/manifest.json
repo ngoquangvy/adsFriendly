@@ -13,7 +13,12 @@
     "<all_urls>"
   ],
   "background": {
-    "scripts": ["background.js"]
+    "scripts": [
+      "background/whitelist.js",
+      "background/neutralize.js",
+      "background/tab-tracker.js",
+      "background.js"
+    ]
   },
   "content_scripts": [
     {

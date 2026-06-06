@@ -1,4 +1,4 @@
-const AF_CONFIG = {
+var AF_CONFIG = {
   debug: true,
 
   whitelist: [

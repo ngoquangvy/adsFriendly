@@ -1,10 +1,3 @@
-// background.js - Entry point, load modules theo thu tu
-importScripts(
-  "background/whitelist.js",
-  "background/neutralize.js",
-  "background/tab-tracker.js"
-);
-
 var bgApi = (typeof browser !== 'undefined') ? browser : chrome;
 
 bgApi.runtime.onMessage.addListener(function(request) {
