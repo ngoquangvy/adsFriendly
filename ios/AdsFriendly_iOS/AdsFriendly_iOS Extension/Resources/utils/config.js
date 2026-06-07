@@ -32,6 +32,26 @@ var AF_CONFIG = {
       "\u00D7", "\u2715", "\u2716", "X", "x",
       "Close", "close", "Dong", "dong",
       "Tat", "tat", "Skip", "skip"
+    ],
+
+    adContentKeywords: [
+      "sponsored by", "advertisement", "powered by",
+      "qu\u1EA3ng c\u00E1o", "t\u00E0i tr\u1EE3", "qc",
+      "ad feedback", "promoted by", "google ad",
+      "display ad", "banner ad"
+    ],
+
+    adClassPatterns: [
+      "ad-", "-ad", "ads-", "-ads",
+      "sponsored-", "promoted-",
+      "google_ad", "dfp_", "banner-ad"
+    ],
+
+    loginTextSignatures: [
+      "sign in", "log in", "sign on",
+      "\u0111\u0103ng nh\u1EADp", "password",
+      "forgot password", "create account",
+      "sign up", "register"
     ]
   },
 
