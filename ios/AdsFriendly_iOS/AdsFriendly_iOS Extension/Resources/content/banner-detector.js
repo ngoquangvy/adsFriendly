@@ -77,6 +77,11 @@
     return false;
   }
 
+  function getStyleVal(el, prop) {
+    var v = window.getComputedStyle(el)[prop];
+    return v === 'auto' ? 0 : (parseInt(v, 10) || 0);
+  }
+
   function isLargeOverlay(el) {
     var rect = el.getBoundingClientRect();
     var vpW = window.innerWidth;
@@ -86,7 +91,9 @@
     if (areaRatio < 0.2) return false;
     var cx = vpW / 2, cy = vpH / 2;
     if (rect.left > cx + 100 || rect.right < cx - 100) return false;
-    return true;
+    var zi = getStyleVal(el, 'zIndex');
+    if (areaRatio >= 0.5 || zi >= 10000) return true;
+    return false;
   }
 
   function isInvisibleOverlay(el) {
