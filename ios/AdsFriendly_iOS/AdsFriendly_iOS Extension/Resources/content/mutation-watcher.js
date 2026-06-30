@@ -1,6 +1,32 @@
 (function() {
+  function elementHasAdSignal(el) {
+    if (!el) return false;
+    var current = el;
+    var clsPatterns = AF_CONFIG.bannerDetection.adClassPatterns || [];
+
+    while (current && current !== document.body) {
+      var sig = (
+        (current.className || '') + ' ' +
+        (current.id || '') + ' ' +
+        (current.getAttribute ? (current.getAttribute('aria-label') || '') : '') + ' ' +
+        (current.getAttribute ? (current.getAttribute('title') || '') : '')
+      ).toLowerCase();
+      for (var i = 0; i < clsPatterns.length; i++) {
+        if (sig.indexOf(clsPatterns[i]) !== -1) return true;
+      }
+      current = current.parentElement;
+    }
+
+    return false;
+  }
+
+  function isInsideProtectedNavigation(el) {
+    return !!(el && el.closest && el.closest('nav, header, [role="navigation"]'));
+  }
+
   function processNewNode(node) {
     if (node.nodeType !== 1) return;
+    if (isTrustedInitiatorPage()) return;
 
     var links = node.tagName === 'A' ? [node] : (node.querySelectorAll ? node.querySelectorAll('a[target="_blank"]') : []);
     for (var i = 0; i < links.length; i++) {
@@ -16,7 +42,7 @@
 
       var isOverlay = style.position === 'fixed' || style.position === 'absolute' || style.position === 'sticky';
 
-      if (isHidden || isOverlay) {
+      if ((isHidden || isOverlay) && !isInsideProtectedNavigation(a) && (isAdLikeUrl(a.href) || elementHasAdSignal(a))) {
         var href = a.href;
         a.removeAttribute('href');
         a.setAttribute('data-afs-href', href);

@@ -1,7 +1,30 @@
 (function() {
+  function linkHasAdSignal(a) {
+    if (!a || !a.href) return false;
+    if (isAdLikeUrl(a.href)) return true;
+
+    var sig = (
+      (a.className || '') + ' ' +
+      (a.id || '') + ' ' +
+      (a.getAttribute('aria-label') || '') + ' ' +
+      (a.getAttribute('title') || '')
+    ).toLowerCase();
+    var patterns = AF_CONFIG.bannerDetection.adClassPatterns || [];
+    for (var i = 0; i < patterns.length; i++) {
+      if (sig.indexOf(patterns[i]) !== -1) return true;
+    }
+    return false;
+  }
+
   function onPopupEvent(url) {
-    if (!url || url === '' || url.startsWith('javascript:')) return;
-    if (!isCrossOrigin(url) || isWhitelisted(url)) {
+    if (!url || url === '') {
+      if (isTrustedInitiatorPage()) {
+        document.documentElement.setAttribute('__afs_allow__', 'yes');
+      }
+      return;
+    }
+    if (url.startsWith('javascript:')) return;
+    if (isTrustedInitiatorPage() || !isCrossOrigin(url) || isWhitelisted(url) || !isAdLikeUrl(url)) {
       document.documentElement.setAttribute('__afs_allow__', 'yes');
       log("Cho phep popup:", url);
       return;
@@ -19,7 +42,7 @@
   document.addEventListener('mousedown', function(e) {
     if (e.button !== 0) return;
     var a = e.target.closest('a');
-    if (a && a.href && a.target === '_blank' && isCrossOrigin(a.href) && !isWhitelisted(a.href)) {
+    if (!isTrustedInitiatorPage() && a && a.href && a.target === '_blank' && isCrossOrigin(a.href) && !isWhitelisted(a.href) && linkHasAdSignal(a)) {
       e.preventDefault();
       e.stopPropagation();
       log("Chan mousedown -> a[target=_blank]:", a.href);
@@ -31,7 +54,7 @@
     var a = e.target.closest('a');
     if (!a || !a.href) return;
     var opensNewTab = a.target === '_blank' || e.metaKey || e.ctrlKey;
-    if (opensNewTab && isCrossOrigin(a.href) && !isWhitelisted(a.href)) {
+    if (!isTrustedInitiatorPage() && opensNewTab && isCrossOrigin(a.href) && !isWhitelisted(a.href) && linkHasAdSignal(a)) {
       e.preventDefault();
       e.stopPropagation();
       log("Chan click -> a[target=_blank]:", a.href);
@@ -41,7 +64,7 @@
 
   document.addEventListener('touchstart', function(e) {
     var a = e.target.closest('a');
-    if (a && a.href && a.target === '_blank' && isCrossOrigin(a.href) && !isWhitelisted(a.href)) {
+    if (!isTrustedInitiatorPage() && a && a.href && a.target === '_blank' && isCrossOrigin(a.href) && !isWhitelisted(a.href) && linkHasAdSignal(a)) {
       e.preventDefault();
       e.stopPropagation();
       log("Chan touchstart -> a[target=_blank]:", a.href);
@@ -59,7 +82,7 @@
       if (pointerCount >= AF_CONFIG.popupBlocking.popUnderClickThreshold) {
         log("Pop-under detected (" + pointerCount + " clicks)");
         document.querySelectorAll('a[target="_blank"]').forEach(function(a) {
-          if (a.href && isCrossOrigin(a.href) && !isWhitelisted(a.href)) {
+          if (!isTrustedInitiatorPage() && a.href && isCrossOrigin(a.href) && !isWhitelisted(a.href) && linkHasAdSignal(a)) {
             var href = a.href;
             a.removeAttribute('href');
             a.setAttribute('data-afs-href', href);

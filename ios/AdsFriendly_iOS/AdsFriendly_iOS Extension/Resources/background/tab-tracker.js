@@ -33,7 +33,8 @@
 
       bgApi.tabs.get(sourceTabId, function(sourceTab) {
         if (bgApi.runtime.lastError || !sourceTab || !sourceTab.url) return;
-        if (!bgAreSameSite(sourceTab.url, url) && !bgIsWhitelisted(url)) {
+        if (bgIsTrustedInitiator(sourceTab.url)) return;
+        if (!bgAreSameSite(sourceTab.url, url) && !bgIsWhitelisted(url) && bgIsAdLikeUrl(url)) {
           neutralizeTab(tabId, sourceTabId, url);
         }
       });
@@ -73,14 +74,16 @@
       if (bgApi.runtime.lastError || !sourceTab || !sourceTab.url) {
         bgApi.tabs.get(info.openerTabId, function(fallbackTab) {
           if (bgApi.runtime.lastError || !fallbackTab || !fallbackTab.url) return;
-          if (!bgAreSameSite(fallbackTab.url, url)) {
+          if (bgIsTrustedInitiator(fallbackTab.url)) return;
+          if (!bgAreSameSite(fallbackTab.url, url) && bgIsAdLikeUrl(url)) {
             console.log("[AdsFriendly BG] cross-origin -> BLOCK (fallback)");
             neutralizeTab(tabId, info.openerTabId, url);
           }
         });
         return;
       }
-      if (!bgAreSameSite(sourceTab.url, url)) {
+      if (bgIsTrustedInitiator(sourceTab.url)) return;
+      if (!bgAreSameSite(sourceTab.url, url) && bgIsAdLikeUrl(url)) {
         console.log("[AdsFriendly BG] cross-origin -> BLOCK");
         neutralizeTab(tabId, info.openerTabId, url);
       } else {
@@ -120,7 +123,8 @@
 
         bgApi.tabs.get(originalId, function(sourceTab) {
           if (bgApi.runtime.lastError || !sourceTab || !sourceTab.url) return;
-          if (!bgAreSameSite(sourceTab.url, newTab.url)) {
+          if (bgIsTrustedInitiator(sourceTab.url)) return;
+          if (!bgAreSameSite(sourceTab.url, newTab.url) && bgIsAdLikeUrl(newTab.url)) {
             console.log("[AdsFriendly BG] Chan (timeout backup):", newTab.url);
             neutralizeTab(newTabId, openerId, newTab.url);
           }

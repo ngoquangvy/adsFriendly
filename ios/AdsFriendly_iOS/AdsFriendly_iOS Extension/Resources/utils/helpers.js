@@ -2,11 +2,39 @@ const api = (typeof browser !== 'undefined') ? browser : chrome;
 
 function isWhitelisted(url) {
   try {
-    var hostname = new URL(url).hostname;
+    var hostname = new URL(url, window.location.href).hostname.toLowerCase();
     return AF_CONFIG.whitelist.some(function(d) {
-      return hostname === d || hostname.endsWith("." + d);
-    });
+      return hostMatchesDomain(hostname, d);
+    }) || isGoogleHost(hostname);
   } catch(e) { return false; }
+}
+
+function normalizeHost(hostname) {
+  return (hostname || '').toLowerCase().replace(/\.$/, '');
+}
+
+function hostMatchesDomain(hostname, domain) {
+  hostname = normalizeHost(hostname);
+  domain = normalizeHost(domain);
+  return hostname === domain || hostname.endsWith("." + domain);
+}
+
+function isGoogleHost(hostname) {
+  hostname = normalizeHost(hostname);
+  return /^(.+\.)?google\.(com|[a-z]{2}|com\.[a-z]{2}|co\.[a-z]{2})$/.test(hostname);
+}
+
+function isTrustedInitiator(url) {
+  try {
+    var hostname = new URL(url, window.location.href).hostname.toLowerCase();
+    return AF_CONFIG.trustedInitiators.some(function(d) {
+      return hostMatchesDomain(hostname, d);
+    }) || isGoogleHost(hostname);
+  } catch(e) { return false; }
+}
+
+function isTrustedInitiatorPage() {
+  return isTrustedInitiator(window.location.href);
 }
 
 function isCrossOrigin(url) {
@@ -19,7 +47,7 @@ function isCrossOrigin(url) {
 
 function getRootDomain(url) {
   try {
-    var hostname = new URL(url).hostname;
+    var hostname = new URL(url, window.location.href).hostname;
     var parts = hostname.split('.');
     return parts.slice(-2).join('.');
   } catch(e) { return ''; }
@@ -43,6 +71,24 @@ function hasCrossOriginLink(el) {
       return true;
     }
   }
+  return false;
+}
+
+function isAdLikeUrl(url) {
+  try {
+    var parsed = new URL(url, window.location.href);
+    var host = parsed.hostname.toLowerCase();
+    var full = (parsed.hostname + parsed.pathname + parsed.search).toLowerCase();
+    var hostPatterns = AF_CONFIG.bannerDetection.adLinkHostPatterns || [];
+    var pathPatterns = AF_CONFIG.bannerDetection.adLinkPathPatterns || [];
+
+    for (var i = 0; i < hostPatterns.length; i++) {
+      if (hostMatchesDomain(host, hostPatterns[i])) return true;
+    }
+    for (var j = 0; j < pathPatterns.length; j++) {
+      if (full.indexOf(pathPatterns[j].toLowerCase()) !== -1) return true;
+    }
+  } catch(e) {}
   return false;
 }
 

@@ -60,6 +60,56 @@
     return false;
   }
 
+  function linkLooksLikeAd(a) {
+    if (!a || !a.href) return false;
+    if (isAdLikeUrl(a.href)) return true;
+
+    var sig = (
+      (a.className || '') + ' ' +
+      (a.id || '') + ' ' +
+      (a.getAttribute('aria-label') || '') + ' ' +
+      (a.getAttribute('title') || '')
+    ).toLowerCase();
+    var clsPatterns = AF_CONFIG.bannerDetection.adClassPatterns;
+    for (var i = 0; i < clsPatterns.length; i++) {
+      if (sig.indexOf(clsPatterns[i]) !== -1) return true;
+    }
+    return false;
+  }
+
+  function getAdLinkStats(el) {
+    var links = el.querySelectorAll ? el.querySelectorAll('a[href]') : [];
+    var total = 0;
+    var ad = 0;
+
+    for (var i = 0; i < links.length; i++) {
+      var a = links[i];
+      if (!a.href || a.href.indexOf('javascript:') === 0 || a.href.indexOf('#') === 0) continue;
+      total++;
+      if (linkLooksLikeAd(a)) ad++;
+    }
+
+    return {
+      total: total,
+      ad: ad,
+      ratio: total > 0 ? ad / total : 0
+    };
+  }
+
+  function hasHighAdLinkRatio(el) {
+    var stats = getAdLinkStats(el);
+    var minLinks = AF_CONFIG.bannerDetection.minLinksForAdRatio || 3;
+    var threshold = AF_CONFIG.bannerDetection.adLinkRatioThreshold || 0.8;
+    return stats.total >= minLinks && stats.ratio >= threshold;
+  }
+
+  function isProtectedNavigation(el) {
+    if (!el || !el.closest) return false;
+    var nav = el.closest('nav, header, [role="navigation"]');
+    if (!nav) return false;
+    return !hasHighAdLinkRatio(nav) && !hasAdContent(nav);
+  }
+
   function isLoginForm(el) {
     if (el.querySelector('input[type="password"]')) return true;
     var text = el.textContent.toLowerCase();
@@ -94,6 +144,10 @@
     var zi = getStyleVal(el, 'zIndex');
     if (areaRatio >= 0.5 || zi >= 10000) return true;
     return false;
+  }
+
+  function isLikelyAdContainer(el) {
+    return hasAdContent(el) || hasHighAdLinkRatio(el);
   }
 
   function isInvisibleOverlay(el) {
@@ -159,9 +213,10 @@
     for (var i = 0; i < positioned.length; i++) {
       var el = positioned[i];
       if (hiddenBanners.has(el)) continue;
+      if (isProtectedNavigation(el)) continue;
       if (!hasCloseButton(el)) continue;
 
-      if (hasAdContent(el)) {
+      if (isLikelyAdContainer(el)) {
         hideBanner(el, "ad (close + ad keywords)");
       } else if (isLoginForm(el)) {
         continue;
@@ -175,9 +230,10 @@
       var el = positioned[i];
       if (hiddenBanners.has(el)) continue;
       if (toggledElements.has(el)) continue;
+      if (isProtectedNavigation(el)) continue;
       if (hasCloseButton(el)) continue;
       var toggleBtn = hasToggleButton(el);
-      if (toggleBtn) {
+      if (toggleBtn && isLikelyAdContainer(el)) {
         toggleCollapse(el, toggleBtn);
       }
     }
@@ -192,7 +248,8 @@
         if (textMatchesSignature(candidates[i])) {
           var banner = findBannerFromCloseButton(candidates[i]);
           if (banner && !hiddenBanners.has(banner)) {
-            if (hasAdContent(banner)) {
+            if (isProtectedNavigation(banner)) continue;
+            if (isLikelyAdContainer(banner)) {
               hideBanner(banner, "ad (close selector)");
             } else if (!isLoginForm(banner) && isLargeOverlay(banner)) {
               hideBanner(banner, "ad (close selector, large)");

@@ -3,6 +3,18 @@ var AF_CONFIG = {
 
   whitelist: [
     "google.com", "accounts.google.com",
+    "bing.com", "duckduckgo.com", "yahoo.com", "search.yahoo.com",
+    "baidu.com", "yandex.com",
+    "github.com",
+    "microsoft.com", "login.microsoftonline.com", "live.com",
+    "apple.com", "appleid.apple.com",
+    "facebook.com", "accounts.facebook.com"
+  ],
+
+  trustedInitiators: [
+    "google.com", "accounts.google.com",
+    "bing.com", "duckduckgo.com", "yahoo.com", "search.yahoo.com",
+    "baidu.com", "yandex.com",
     "github.com",
     "microsoft.com", "login.microsoftonline.com", "live.com",
     "apple.com", "appleid.apple.com",
@@ -45,6 +57,19 @@ var AF_CONFIG = {
       "ad-", "-ad", "ads-", "-ads",
       "sponsored-", "promoted-",
       "google_ad", "dfp_", "banner-ad"
+    ],
+
+    adLinkRatioThreshold: 0.8,
+    minLinksForAdRatio: 3,
+    adLinkHostPatterns: [
+      "doubleclick.net", "googlesyndication.com", "googleadservices.com",
+      "adservice.google.com", "adnxs.com", "taboola.com", "outbrain.com",
+      "mgid.com", "criteo.com", "popads.net", "propellerads.com"
+    ],
+    adLinkPathPatterns: [
+      "/ad/", "/ads/", "/adv/", "/advert", "/banner",
+      "utm_medium=cpc", "utm_source=ad", "adclick", "clickad",
+      "doubleclick", "googlesyndication", "googleadservices"
     ],
 
     loginTextSignatures: [
