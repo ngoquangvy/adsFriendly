@@ -2,6 +2,8 @@
   var bgApi = (typeof browser !== 'undefined') ? browser : chrome;
 
   var lastActiveTabId = null;
+  var trustedClicksByTab = {};
+  var lastTrustedClickTime = 0;
 
   bgApi.tabs.query({ active: true, lastFocusedWindow: true }, function(tabs) {
     if (tabs && tabs[0]) {
@@ -15,6 +17,22 @@
   });
 
   var pendingNewTabs = {};
+
+  bgApi.runtime.onMessage.addListener(function(request, sender) {
+    if (!request || request.action !== "trusted_click" || !request.url) return;
+    var tabId = sender && sender.tab ? sender.tab.id : null;
+    if (!tabId) return;
+    trustedClicksByTab[tabId] = {
+      url: request.url,
+      time: Date.now()
+    };
+    lastTrustedClickTime = Date.now();
+    setTimeout(function() {
+      if (trustedClicksByTab[tabId] && Date.now() - trustedClicksByTab[tabId].time > 5000) {
+        delete trustedClicksByTab[tabId];
+      }
+    }, 6000);
+  });
 
   function cleanupPending(tabId) {
     setTimeout(function() {
@@ -33,8 +51,8 @@
 
       bgApi.tabs.get(sourceTabId, function(sourceTab) {
         if (bgApi.runtime.lastError || !sourceTab || !sourceTab.url) return;
-        if (bgIsTrustedInitiator(sourceTab.url)) return;
-        if (!bgAreSameSite(sourceTab.url, url) && !bgIsWhitelisted(url) && bgIsAdLikeUrl(url)) {
+        if (shouldAllowNavigation(sourceTabId, sourceTab.url, url)) return;
+        if (shouldBlockNavigation(sourceTabId, sourceTab.url, url)) {
           neutralizeTab(tabId, sourceTabId, url);
         }
       });
@@ -42,7 +60,7 @@
   }
 
   bgApi.tabs.onCreated.addListener(function(tab) {
-    var openerId = tab.openerTabId || lastActiveTabId;
+    var openerId = tab.openerTabId || (hasRecentTrustedClick() ? lastActiveTabId : null);
     var originalId = openerId;
 
     if (openerId && pendingNewTabs[openerId]) {
@@ -74,16 +92,16 @@
       if (bgApi.runtime.lastError || !sourceTab || !sourceTab.url) {
         bgApi.tabs.get(info.openerTabId, function(fallbackTab) {
           if (bgApi.runtime.lastError || !fallbackTab || !fallbackTab.url) return;
-          if (bgIsTrustedInitiator(fallbackTab.url)) return;
-          if (!bgAreSameSite(fallbackTab.url, url) && bgIsAdLikeUrl(url)) {
+          if (shouldAllowNavigation(info.openerTabId, fallbackTab.url, url)) return;
+          if (shouldBlockNavigation(info.openerTabId, fallbackTab.url, url)) {
             console.log("[AdsFriendly BG] cross-origin -> BLOCK (fallback)");
             neutralizeTab(tabId, info.openerTabId, url);
           }
         });
         return;
       }
-      if (bgIsTrustedInitiator(sourceTab.url)) return;
-      if (!bgAreSameSite(sourceTab.url, url) && bgIsAdLikeUrl(url)) {
+      if (shouldAllowNavigation(checkTabId, sourceTab.url, url)) return;
+      if (shouldBlockNavigation(checkTabId, sourceTab.url, url)) {
         console.log("[AdsFriendly BG] cross-origin -> BLOCK");
         neutralizeTab(tabId, info.openerTabId, url);
       } else {
@@ -106,7 +124,7 @@
 
   bgApi.tabs.onCreated.addListener(function(tab) {
     var newTabId = tab.id;
-    var openerId = tab.openerTabId || lastActiveTabId;
+    var openerId = tab.openerTabId || (hasRecentTrustedClick() ? lastActiveTabId : null);
     var originalId = (openerId && pendingNewTabs[openerId])
       ? (pendingNewTabs[openerId].originalSourceTabId || openerId)
       : openerId;
@@ -123,8 +141,8 @@
 
         bgApi.tabs.get(originalId, function(sourceTab) {
           if (bgApi.runtime.lastError || !sourceTab || !sourceTab.url) return;
-          if (bgIsTrustedInitiator(sourceTab.url)) return;
-          if (!bgAreSameSite(sourceTab.url, newTab.url) && bgIsAdLikeUrl(newTab.url)) {
+          if (shouldAllowNavigation(originalId, sourceTab.url, newTab.url)) return;
+          if (shouldBlockNavigation(originalId, sourceTab.url, newTab.url)) {
             console.log("[AdsFriendly BG] Chan (timeout backup):", newTab.url);
             neutralizeTab(newTabId, openerId, newTab.url);
           }
@@ -132,6 +150,35 @@
       });
     }, 1500);
   });
+
+  function hasRecentTrustedClick() {
+    return Date.now() - lastTrustedClickTime < 1500;
+  }
+
+  function hasIntentFor(tabId, url) {
+    var click = trustedClicksByTab[tabId];
+    if (!click || !click.url) return false;
+    if (Date.now() - click.time > 2500) return false;
+    return bgAreSameSite(click.url, url);
+  }
+
+  function shouldAllowNavigation(sourceTabId, sourceUrl, targetUrl) {
+    if (!targetUrl || targetUrl === "" || targetUrl.indexOf("about:") === 0) return true;
+    if (bgIsUserBlockedPopup(targetUrl)) return false;
+    if (bgIsUserAllowedPopup(targetUrl)) return true;
+    if (bgIsTrustedInitiator(sourceUrl)) return true;
+    if (bgIsWhitelisted(targetUrl)) return true;
+    if (bgAreSameSite(sourceUrl, targetUrl)) return true;
+    if (hasIntentFor(sourceTabId, targetUrl)) return true;
+    return false;
+  }
+
+  function shouldBlockNavigation(sourceTabId, sourceUrl, targetUrl) {
+    if (!targetUrl || targetUrl === "" || targetUrl.indexOf("about:") === 0) return false;
+    if (bgIsUserBlockedPopup(targetUrl)) return true;
+    if (shouldAllowNavigation(sourceTabId, sourceUrl, targetUrl)) return false;
+    return !bgAreSameSite(sourceUrl, targetUrl) || bgIsAdLikeUrl(targetUrl);
+  }
 
   console.log("[AdsFriendly BG] tab-tracker.js loaded.");
 })();

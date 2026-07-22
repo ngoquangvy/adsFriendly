@@ -4,7 +4,8 @@
     "bing.com", "duckduckgo.com", "yahoo.com", "search.yahoo.com",
     "baidu.com", "yandex.com",
     "microsoft.com", "login.microsoftonline.com", "live.com",
-    "apple.com", "appleid.apple.com", "facebook.com"
+    "apple.com", "appleid.apple.com", "facebook.com", "accounts.facebook.com",
+    "cloudflare.com", "challenges.cloudflare.com"
   ];
 
   var bgTrustedInitiators = [
@@ -12,7 +13,8 @@
     "bing.com", "duckduckgo.com", "yahoo.com", "search.yahoo.com",
     "baidu.com", "yandex.com",
     "microsoft.com", "login.microsoftonline.com", "live.com",
-    "apple.com", "appleid.apple.com", "facebook.com"
+    "apple.com", "appleid.apple.com", "facebook.com", "accounts.facebook.com",
+    "cloudflare.com", "challenges.cloudflare.com"
   ];
 
   var bgAdLinkHostPatterns = [
@@ -26,6 +28,10 @@
     "utm_medium=cpc", "utm_source=ad", "adclick", "clickad",
     "doubleclick", "googlesyndication", "googleadservices"
   ];
+
+  var bgApi = (typeof browser !== 'undefined') ? browser : chrome;
+  var bgUserAllowedPopupHosts = {};
+  var bgUserBlockedPopupHosts = {};
 
   function normalizeHost(hostname) {
     return (hostname || '').toLowerCase().replace(/\.$/, '');
@@ -49,6 +55,72 @@
         return hostMatchesDomain(hostname, d);
       }) || isGoogleHost(hostname);
     } catch(e) { return false; }
+  };
+
+  function popupHostKey(url) {
+    try {
+      return normalizeHost(new URL(url).hostname);
+    } catch(e) {
+      return "";
+    }
+  }
+
+  function savePopupRules(callback) {
+    if (!bgApi.storage || !bgApi.storage.local) {
+      if (callback) callback();
+      return;
+    }
+    bgApi.storage.local.set({
+      afsAllowedPopupHosts: bgUserAllowedPopupHosts,
+      afsBlockedPopupHosts: bgUserBlockedPopupHosts
+    }, function() {
+      if (callback) callback();
+    });
+  }
+
+  window.bgGetPopupHostKey = popupHostKey;
+
+  window.bgGetPopupRules = function() {
+    return {
+      allowed: bgUserAllowedPopupHosts,
+      blocked: bgUserBlockedPopupHosts
+    };
+  };
+
+  window.bgIsUserAllowedPopup = function(url) {
+    var key = popupHostKey(url);
+    return !!(key && bgUserAllowedPopupHosts[key]);
+  };
+
+  window.bgIsUserBlockedPopup = function(url) {
+    var key = popupHostKey(url);
+    return !!(key && bgUserBlockedPopupHosts[key]);
+  };
+
+  window.bgRememberAllowedPopup = function(url, callback) {
+    var key = popupHostKey(url);
+    if (!key) {
+      if (callback) callback(false);
+      return;
+    }
+    bgUserAllowedPopupHosts[key] = { url: url, time: Date.now() };
+    delete bgUserBlockedPopupHosts[key];
+    savePopupRules(function() {
+      if (callback) callback(true);
+    });
+  };
+
+  window.bgRememberBlockedPopup = function(url, callback) {
+    var key = popupHostKey(url);
+    if (!key) {
+      if (callback) callback(false);
+      return;
+    }
+    bgUserBlockedPopupHosts[key] = { url: url, time: Date.now() };
+    delete bgUserAllowedPopupHosts[key];
+    savePopupRules(function() {
+      if (callback) callback(true);
+    });
   };
 
   window.bgIsTrustedInitiator = function(url) {
@@ -88,6 +160,13 @@
     var r2 = bgGetRootDomain(url2);
     return r1 !== '' && r2 !== '' && r1 === r2;
   };
+
+  if (bgApi.storage && bgApi.storage.local) {
+    bgApi.storage.local.get(["afsAllowedPopupHosts", "afsBlockedPopupHosts"], function(result) {
+      bgUserAllowedPopupHosts = result.afsAllowedPopupHosts || {};
+      bgUserBlockedPopupHosts = result.afsBlockedPopupHosts || {};
+    });
+  }
 
   console.log("[AdsFriendly BG] whitelist.js loaded.");
 })();

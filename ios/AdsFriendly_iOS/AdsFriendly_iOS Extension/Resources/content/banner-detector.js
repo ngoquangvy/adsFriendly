@@ -178,6 +178,23 @@
   function hideBanner(el, reason) {
     if (hiddenBanners.has(el)) return;
     hiddenBanners.add(el);
+    if (typeof afsRecordTelemetry === 'function') {
+      afsRecordTelemetry({
+        unit: "ui_overlay",
+        label: "ad",
+        label_source: "heuristic_blocked",
+        ad_type: "banner",
+        reason: reason,
+        element: el,
+        action: "hide",
+        outcome: "hidden_element",
+        evidence: {
+          has_close_button: hasCloseButton(el),
+          high_ad_link_ratio: hasHighAdLinkRatio(el),
+          large_overlay: isLargeOverlay(el)
+        }
+      });
+    }
     el.style.setProperty('display', 'none', 'important');
     log("Banner:", reason, "-", el.tagName + (el.id ? "#" + el.id : "") + (el.className ? "." + el.className : ""));
   }
@@ -185,6 +202,22 @@
   function toggleCollapse(el, toggleBtn) {
     if (toggledElements.has(el)) return;
     toggledElements.add(el);
+    if (typeof afsRecordTelemetry === 'function') {
+      afsRecordTelemetry({
+        unit: "ui_overlay",
+        label: "ad",
+        label_source: "heuristic_blocked",
+        ad_type: "banner",
+        reason: "toggle_collapse",
+        element: el,
+        action: "collapse",
+        outcome: "clicked_toggle",
+        evidence: {
+          high_ad_link_ratio: hasHighAdLinkRatio(el),
+          toggle_text: (toggleBtn.textContent || '').trim().slice(0, 20)
+        }
+      });
+    }
     toggleBtn.click();
     log("Banner: collapsed via toggle");
   }

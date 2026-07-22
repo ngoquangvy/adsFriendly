@@ -7,7 +7,8 @@
   "permissions": [
     "activeTab",
     "tabs",
-    "webNavigation"
+    "webNavigation",
+    "storage"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -15,6 +16,7 @@
   "background": {
     "scripts": [
       "background/whitelist.js",
+      "background/telemetry.js",
       "background/neutralize.js",
       "background/tab-tracker.js",
       "background.js"
@@ -26,6 +28,7 @@
       "js": [
         "utils/config.js",
         "utils/helpers.js",
+        "content/telemetry.js",
         "content/ui.js",
         "content/injector.js",
         "content/popup-blocker.js",

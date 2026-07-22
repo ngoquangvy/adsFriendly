@@ -3,7 +3,9 @@ name: Build iOS
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
+    branches:
+      - main
+      - codex/**
 
 jobs:
   build:

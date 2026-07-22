@@ -44,6 +44,23 @@
 
       if ((isHidden || isOverlay) && !isInsideProtectedNavigation(a) && (isAdLikeUrl(a.href) || elementHasAdSignal(a))) {
         var href = a.href;
+        if (typeof afsRecordTelemetry === 'function') {
+          afsRecordTelemetry({
+            unit: "navigation",
+            label: "ad",
+            label_source: "heuristic_blocked",
+            ad_type: "popup",
+            targetUrl: href,
+            reason: isHidden ? "hidden_target_blank_link" : "overlay_target_blank_link",
+            element: a,
+            action: "disable",
+            outcome: "removed_href",
+            evidence: {
+              hidden: isHidden,
+              overlay_position: isOverlay
+            }
+          });
+        }
         a.removeAttribute('href');
         a.setAttribute('data-afs-href', href);
         a.style.setProperty('pointer-events', 'none', 'important');

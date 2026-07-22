@@ -2,6 +2,7 @@ var blockedUrls = [];
 var hideTimeout = null;
 var container = null;
 var _throttleTimer = null;
+var currentMode = "blocked";
 
 function createUI() {
   if (container) return;
@@ -14,11 +15,11 @@ function createUI() {
   messageSpan.className = "adsfriendly-message";
 
   var openBtn = document.createElement("button");
-  openBtn.className = "adsfriendly-btn";
-  openBtn.innerText = "\u2192";
+  openBtn.className = "adsfriendly-btn adsfriendly-primary";
+  openBtn.innerText = "Restore";
   openBtn.addEventListener("click", function(e) {
     e.stopPropagation();
-    openAllBlocked();
+    runPrimaryAction();
   });
 
   var closeBtn = document.createElement("button");
@@ -63,17 +64,28 @@ function updateUI() {
   }
 
   var messageSpan = container.querySelector(".adsfriendly-message");
+  var primaryBtn = container.querySelector(".adsfriendly-primary");
   var fullMsg = "";
 
-  if (blockedUrls.length === 1) {
+  if (currentMode === "allowed") {
+    try {
+      var allowedHost = new URL(blockedUrls[0]).hostname;
+      fullMsg = "Allowed " + truncateHostname(allowedHost, 20);
+    } catch(e) {
+      fullMsg = "Allowed popup";
+    }
+    primaryBtn.innerText = "Block";
+  } else if (blockedUrls.length === 1) {
     try {
       var hostname = new URL(blockedUrls[0]).hostname;
-      fullMsg = "\u26D4 " + truncateHostname(hostname, 24);
+      fullMsg = "Blocked " + truncateHostname(hostname, 20);
     } catch(e) {
-      fullMsg = "\u26D4 1 popup";
+      fullMsg = "Blocked popup";
     }
+    primaryBtn.innerText = "Restore";
   } else {
-    fullMsg = "\u26D4 " + blockedUrls.length + " popups";
+    fullMsg = "Blocked " + blockedUrls.length + " popups";
+    primaryBtn.innerText = "Restore";
   }
 
   messageSpan.innerText = fullMsg;
@@ -81,7 +93,7 @@ function updateUI() {
   container.classList.remove("adsfriendly-hidden");
 
   if (hideTimeout) clearTimeout(hideTimeout);
-  hideTimeout = setTimeout(hideUI, 5000);
+  hideTimeout = setTimeout(hideUI, 3000);
 }
 
 function hideUI() {
@@ -91,20 +103,37 @@ function hideUI() {
   if (hideTimeout) clearTimeout(hideTimeout);
   hideTimeout = null;
   blockedUrls = [];
+  currentMode = "blocked";
 }
 
-function openAllBlocked() {
+function runPrimaryAction() {
   if (blockedUrls.length > 0) {
-    api.runtime.sendMessage({ action: "open_tabs", urls: blockedUrls });
+    api.runtime.sendMessage({
+      action: currentMode === "allowed" ? "block_tabs" : "restore_tabs",
+      urls: blockedUrls
+    });
   }
   hideUI();
 }
 
 function notifyBlocked(url) {
   if (!url) return;
+  currentMode = "blocked";
   if (!blockedUrls.includes(url)) {
     blockedUrls.push(url);
   }
+  if (_throttleTimer) return;
+  _throttleTimer = setTimeout(function() {
+    _throttleTimer = null;
+    updateUI();
+  }, 500);
+  updateUI();
+}
+
+function notifyAllowed(url) {
+  if (!url) return;
+  currentMode = "allowed";
+  blockedUrls = [url];
   if (_throttleTimer) return;
   _throttleTimer = setTimeout(function() {
     _throttleTimer = null;

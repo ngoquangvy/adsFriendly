@@ -8,7 +8,8 @@ var AF_CONFIG = {
     "github.com",
     "microsoft.com", "login.microsoftonline.com", "live.com",
     "apple.com", "appleid.apple.com",
-    "facebook.com", "accounts.facebook.com"
+    "facebook.com", "accounts.facebook.com",
+    "cloudflare.com", "challenges.cloudflare.com"
   ],
 
   trustedInitiators: [
@@ -18,7 +19,8 @@ var AF_CONFIG = {
     "github.com",
     "microsoft.com", "login.microsoftonline.com", "live.com",
     "apple.com", "appleid.apple.com",
-    "facebook.com", "accounts.facebook.com"
+    "facebook.com", "accounts.facebook.com",
+    "cloudflare.com", "challenges.cloudflare.com"
   ],
 
   popupBlocking: {
