@@ -1,0 +1,20 @@
+{
+  "name": "adsfriendly-extension",
+  "version": "2.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check": "node scripts/build.mjs --check",
+    "test:e2e:dom": "node scripts/e2e-dom.mjs",
+    "test:e2e:live": "node scripts/e2e-live-sites.mjs",
+    "test:e2e:nav": "node scripts/e2e-nav-safety.mjs",
+    "test:ios-nav": "node scripts/test-ios-navigation-policy.mjs",
+    "server": "npm --prefix server start",
+    "server:test": "npm --prefix server test"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "prettier": "^3.6.0"
+  }
+}

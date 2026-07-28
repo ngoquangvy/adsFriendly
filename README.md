@@ -1,26 +1,31 @@
-# AdsFriendly 🛡️🌿
+# AdsFriendly
 
-**AdsFriendly** là một Chrome Extension hiện đại, hiệu năng cao, được thiết kế để bảo vệ trải nghiệm duyệt web của bạn một cách "thân thiện". 
+AdsFriendly is a Chrome extension focused on friendly ad protection: pop-under prevention, safer navigation decisions, lightweight in-page ad cleanup, and early video-ad detection.
 
-Khác với các trình chặn quảng cáo thông thường can thiệp vào mã nguồn trang web, AdsFriendly tập trung vào việc ngăn chặn các hành vi "xâm lấn" từ phía sau, đảm bảo bạn không bị làm phiền bởi các tab quảng cáo tự động mở (Pop-under).
+## Features
 
-## Tính năng nổi bật
+- Pop-under and suspicious new-tab protection.
+- User intent tracking for safer navigation decisions.
+- In-page ad cleanup with learned rules.
+- Manual picker for marking ads and training local patterns.
+- Video ad heuristics with stream manifest inspection.
+- Modular source layout under `src/`, bundled with esbuild.
 
-- **Chặn Tab chạy ngầm (Pop-under):** Tự động phát hiện và ngăn chặn khi một trang web cố tình mở tab mới sang tên miền khác không phải do bạn chủ động click.
-- **Cơ chế Học hỏi thông minh:** Giao diện cảnh báo cho phép bạn chọn:
-  - `Luôn tin tưởng`: Cho vào Whitelist.
-  - `Chặn vĩnh viễn`: Cho vào Blacklist (tự động đóng âm thầm lần sau).
-  - `Chỉ mở lần này`: Không lưu trạng thái.
-- **Quản lý danh sách:** Trang cài đặt riêng giúp bạn dễ dàng quản lý (thêm/xóa) các trang trong danh sách tin tưởng hoặc danh sách chặn.
-- **Không can thiệp trang hiện tại:** Không làm hỏng giao diện trang web bạn đang xem, chỉ can thiệp vào các tab phát sinh ngoài ý muốn.
-- **Hiệu năng cao:** Sử dụng chuẩn Manifest V3 và logic JavaScript tối ưu.
+## Development
 
-## Cài đặt (Dành cho nhà phát triển)
+Install dependencies and build the runtime bundles:
 
-1. Tải mã nguồn về máy.
-2. Mở trình duyệt Chrome, truy cập `chrome://extensions/`.
-3. Bật **Developer mode** (Chế độ nhà phát triển).
-4. Nhấn **Load unpacked** (Tải tiện ích đã giải nén) và chọn thư mục của dự án này.
+```powershell
+pnpm install
+pnpm build
+```
 
-## Giấy phép
-Dự án này được phát triển với mục đích bảo vệ quyền lợi và trải nghiệm của người dùng internet.
+The Chrome extension manifest loads the generated root files:
+
+- `background.js`
+- `content.js`
+- `picker.js`
+- `video_surgeon.js`
+- `injected_spy.js`
+
+Source modules live in `src/`. Architecture notes are in `docs/ARCHITECTURE.md`.

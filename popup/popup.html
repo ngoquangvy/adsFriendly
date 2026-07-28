@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="vi">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <style>
@@ -179,26 +179,25 @@
     <div class="status-card">
         <span class="stat-label">Ads Blocked</span>
         <div class="stat-value" id="blocked-count">0</div>
-        
+
         <button class="settings-btn" id="magic-wand-btn" style="background: rgba(16, 185, 129, 0.1); border: 1px dashed rgba(16, 185, 129, 0.4); margin-bottom: 8px;">
-            <span style="font-size: 1.2rem;">🎯</span>
+            <span style="font-size: 1rem;">Target</span>
             <span>Zap Ad (Magic Wand)</span>
         </button>
         <button class="settings-btn" id="reset-rules-btn" style="background: rgba(239, 68, 68, 0.05); border: 1px solid rgba(239, 68, 68, 0.2); margin-bottom: 8px; color: #f87171; font-size: 0.7rem;">
-            <span>↻</span>
+            <span>Reset</span>
             <span>Reset Rules for this Site</span>
         </button>
 
-        <!-- Reflex Core: Undo Section -->
         <div id="undo-section" style="display: none; background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.2); border-radius: 10px; padding: 10px; margin-bottom: 20px; animation: slideIn 0.3s ease;">
             <div style="display: flex; justify-content: space-between; align-items: center;">
-                <span style="font-size: 0.7rem; color: #10b981;">Lỡ tay xóa nhầm?</span>
-                <button id="undo-btn" style="background: #10b981; color: white; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 0.7rem; font-weight: bold;">Khôi phục</button>
+                <span style="font-size: 0.7rem; color: #10b981;">Removed something by mistake?</span>
+                <button id="undo-btn" style="background: #10b981; color: white; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 0.7rem; font-weight: bold;">Restore</button>
             </div>
         </div>
 
         <div class="toggle-container">
-            <span>🛡️ General Protection</span>
+            <span>General Protection</span>
             <label class="switch">
                 <input type="checkbox" checked id="status-toggle">
                 <span class="slider global"></span>
@@ -206,7 +205,7 @@
         </div>
         <div class="toggle-container" style="border-top: 1px solid rgba(255,255,255,0.05); padding-top: 15px; margin-top: 15px;">
             <div style="display: flex; flex-direction: column; gap: 4px;">
-                <span>🧹 Friendly Mode</span>
+                <span>Friendly Mode</span>
                 <span style="font-size: 0.6rem; color: #64748b;">(ON: Stealth & Bypass | OFF: Basic Blocking)</span>
             </div>
             <label class="switch">

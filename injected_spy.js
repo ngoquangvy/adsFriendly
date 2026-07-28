@@ -1,71 +1,96 @@
-/**
- * AdsFriendly: Injected Spy (Main World Context)
- * Used to intercept networking and timers that are invisible to Content Scripts.
- */
-(function() {
-    console.log('[AdsFriendly Spy] Injected and active.');
+var AdsFriendlyMainWorld = (() => {
+  // src/main-world/bridge.js
+  function notifyContentScript(data) {
+    window.postMessage({ source: "adsfriendly-spy", ...data }, "*");
+  }
+  function onContentMessage(handler) {
+    window.addEventListener("message", (event) => {
+      if (event.data?.source === "adsfriendly-content") handler(event.data);
+    });
+  }
 
+  // src/main-world/manifest-analyzer.js
+  var AD_MARKERS = [
+    "#EXT-X-CUE-OUT",
+    "#EXT-X-DATERANGE",
+    "adunit",
+    "vpaid",
+    "doubleclick"
+  ];
+  function analyzeManifest(url, body) {
+    if (!AD_MARKERS.some((marker) => body.includes(marker))) return;
+    console.log("[AdsFriendly Spy] Ad segment detected in manifest:", url);
+    notifyContentScript({ type: "AD_MAP_DETECTED", url });
+  }
+
+  // src/main-world/network-capture.js
+  function installNetworkCapture() {
+    installFetchCapture();
+    installXhrCapture();
+  }
+  function installFetchCapture() {
     const originalFetch = window.fetch;
-    const originalXHR = XMLHttpRequest.prototype.send;
+    window.fetch = async function(...args) {
+      const url = requestUrl(args[0]);
+      const response = await originalFetch.apply(this, args);
+      if (isManifestLike(url))
+        response.clone().text().then((body) => analyzeManifest(url, body)).catch(() => {
+        });
+      return response;
+    };
+  }
+  function installXhrCapture() {
+    const originalOpen = XMLHttpRequest.prototype.open;
+    const originalSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+      this.__adsfriendly_url = requestUrl(url);
+      return originalOpen.call(this, method, url, ...rest);
+    };
+    XMLHttpRequest.prototype.send = function(...args) {
+      this.addEventListener("load", () => {
+        const url = this.__adsfriendly_url || "";
+        if (!isManifestLike(url)) return;
+        try {
+          if (typeof this.responseText === "string")
+            analyzeManifest(url, this.responseText);
+        } catch {
+        }
+      });
+      return originalSend.apply(this, args);
+    };
+  }
+  function requestUrl(input) {
+    if (!input) return "";
+    if (typeof input === "string") return input;
+    if (input instanceof Request) return input.url;
+    if (input instanceof URL) return input.href;
+    return input.toString();
+  }
+  function isManifestLike(url = "") {
+    return url.includes(".m3u8") || url.includes(".mpd") || url.includes("player/v1/player");
+  }
+
+  // src/main-world/timer-control.js
+  var isAdMode = false;
+  function setAdMode(value) {
+    isAdMode = !!value;
+    console.log("[AdsFriendly Spy] Ad mode changed:", isAdMode);
+  }
+  function installTimerControl() {
     const originalTimeout = window.setTimeout;
     const originalInterval = window.setInterval;
+    window.setTimeout = (handler, timeout, ...args) => originalTimeout(handler, scaled(timeout), ...args);
+    window.setInterval = (handler, timeout, ...args) => originalInterval(handler, scaled(timeout), ...args);
+  }
+  function scaled(timeout) {
+    return isAdMode && typeof timeout === "number" && timeout > 50 ? timeout / 100 : timeout;
+  }
 
-    let isAdMode = false;
-
-    // 1. Networking Interception (Fetch)
-    window.fetch = async function(...args) {
-        const url = args[0] ? args[0].toString() : '';
-        const response = await originalFetch(...args);
-        
-        if (url.includes('.m3u8') || url.includes('.mpd') || url.includes('player/v1/player')) {
-            const clone = response.clone();
-            clone.text().then(body => {
-                analyzeManifest(url, body);
-            }).catch(() => {});
-        }
-        return response;
-    };
-
-    // 2. Timer Manipulation (Accelerating the clock during ads)
-    window.setTimeout = function(handler, timeout, ...args) {
-        let finalTimeout = timeout;
-        if (isAdMode && typeof timeout === 'number' && timeout > 50) {
-            finalTimeout = timeout / 100; // 100x speed
-        }
-        return originalTimeout(handler, finalTimeout, ...args);
-    };
-
-    window.setInterval = function(handler, timeout, ...args) {
-        let finalTimeout = timeout;
-        if (isAdMode && typeof timeout === 'number' && timeout > 50) {
-            finalTimeout = timeout / 100; // 100x speed
-        }
-        return originalInterval(handler, finalTimeout, ...args);
-    };
-
-    // 3. Manifest Analysis
-    function analyzeManifest(url, body) {
-        const adMarkers = ['#EXT-X-DISCONTINUITY', '#EXT-X-CUE-OUT', 'adunit', 'vpaid', 'doubleclick'];
-        const hasAd = adMarkers.some(marker => body.includes(marker));
-
-        if (hasAd) {
-            console.log('[AdsFriendly Spy] Ad segment detected in manifest:', url);
-            notifyContentScript({ type: 'AD_MAP_DETECTED', url });
-        }
-    }
-
-    function notifyContentScript(data) {
-        window.postMessage({ source: 'adsfriendly-spy', ...data }, '*');
-    }
-
-    // 4. Listen for control signals from Content Script
-    window.addEventListener('message', (event) => {
-        if (event.data && event.data.source === 'adsfriendly-content') {
-            if (event.data.type === 'SET_AD_MODE') {
-                isAdMode = event.data.value;
-                console.log('[AdsFriendly Spy] Ad mode changed:', isAdMode);
-            }
-        }
-    });
-
+  // src/main-world/index.js
+  console.log("[AdsFriendly Spy] Injected and active.");
+  installNetworkCapture();
+  installTimerControl();
+  onContentMessage((message) => {
+    if (message.type === "SET_AD_MODE") setAdMode(message.value);
+  });
 })();

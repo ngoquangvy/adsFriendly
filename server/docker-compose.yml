@@ -1,0 +1,12 @@
+services:
+  adsfriendly-telemetry:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3000
+      STORAGE_DIR: /data
+      CORS_ORIGIN: "*"
+    volumes:
+      - ./storage:/data

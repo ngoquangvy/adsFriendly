@@ -1,0 +1,10 @@
+﻿import { injectSpy } from "./spy-injector.js";
+import { startIntentTracker } from "../navigation/content/intent-tracker.js";
+import { startInPageEngine } from "../dom/engine.js";
+import { startNavigationToast } from "../navigation/content/navigation-toast.js";
+import { startYouTubeCleaner } from "../dom/youtube-cleaner.js";
+injectSpy();
+startYouTubeCleaner();
+startIntentTracker();
+startInPageEngine();
+startNavigationToast();

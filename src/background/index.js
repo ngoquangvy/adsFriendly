@@ -1,0 +1,11 @@
+﻿import { registerMessageRouter } from "./message-router.js";
+import { registerNavigationGuard } from "../navigation/background/guard.js";
+import { cleanupStaleMemory } from "./reputation.js";
+import { seedBaselinePatterns } from "./pattern-learning.js";
+import { startTelemetryFlush } from "./telemetry.js";
+registerMessageRouter();
+registerNavigationGuard();
+startTelemetryFlush();
+chrome.runtime.onStartup.addListener(cleanupStaleMemory);
+cleanupStaleMemory();
+chrome.runtime.onInstalled.addListener(seedBaselinePatterns);

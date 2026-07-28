@@ -14,3 +14,5 @@ logs
 node_modules/
 dist/
 .env
+_metadata/
+server/storage/*.jsonl

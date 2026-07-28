@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AdsFriendly Telemetry</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <h1>AdsFriendly Telemetry</h1>
+          <p>Local dataset intake and inspection dashboard.</p>
+        </div>
+        <div class="actions">
+          <button id="refresh">Refresh</button>
+          <a href="/api/export.jsonl">Export JSONL</a>
+        </div>
+      </header>
+
+      <section class="stats" id="stats"></section>
+
+      <section class="panel">
+        <div class="panel-title">
+          <h2>Review Queue</h2>
+          <span id="review-count"></span>
+        </div>
+        <div id="review-list" class="review-list"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title">
+          <h2>Recent Events</h2>
+          <span id="event-count"></span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Domain</th>
+                <th>Unit</th>
+                <th>Label</th>
+                <th>Source</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="events"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title">
+          <h2>Selected Event</h2>
+        </div>
+        <pre id="selected">Click an event row to inspect JSON.</pre>
+      </section>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>
