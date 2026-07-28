@@ -92,6 +92,12 @@ function isAdLikeUrl(url) {
   return false;
 }
 
+function hasAdTokenSignal(value) {
+  return /(^|[\s_-])(?:ad|ads|adv|advert|banner|promo|sponsor|popup)(?=$|[\s_-])/i.test(
+    String(value || '')
+  );
+}
+
 function log() {
   if (AF_CONFIG.debug) {
     var args = Array.prototype.slice.call(arguments);

@@ -2,8 +2,6 @@
   function elementHasAdSignal(el) {
     if (!el) return false;
     var current = el;
-    var clsPatterns = AF_CONFIG.bannerDetection.adClassPatterns || [];
-
     while (current && current !== document.body) {
       var sig = (
         (current.className || '') + ' ' +
@@ -11,9 +9,7 @@
         (current.getAttribute ? (current.getAttribute('aria-label') || '') : '') + ' ' +
         (current.getAttribute ? (current.getAttribute('title') || '') : '')
       ).toLowerCase();
-      for (var i = 0; i < clsPatterns.length; i++) {
-        if (sig.indexOf(clsPatterns[i]) !== -1) return true;
-      }
+      if (hasAdTokenSignal(sig)) return true;
       current = current.parentElement;
     }
 

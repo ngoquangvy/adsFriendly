@@ -69,18 +69,14 @@
       (a.getAttribute('aria-label') || '') + ' ' +
       (a.getAttribute('title') || '')
     ).toLowerCase();
-    var patterns = AF_CONFIG.bannerDetection.adClassPatterns || [];
-    for (var i = 0; i < patterns.length; i++) {
-      if (sig.indexOf(patterns[i]) !== -1) return true;
-    }
-    return false;
+    return hasAdTokenSignal(sig);
   }
 
   function rememberTrustedIntent(a) {
     if (!a || !a.href || isBlankUrl(a.href)) return;
     if (isTrustedInitiatorPage() || isWhitelisted(a.href)) return;
     if (!isCrossOrigin(a.href)) return;
-    if (!isVisibleLink(a) || isLikelyClickLayer(a) || linkHasAdSignal(a)) return;
+    if (!isVisibleLink(a) || isLikelyClickLayer(a)) return;
 
     lastTrustedIntent = { url: a.href, time: Date.now() };
     api.runtime.sendMessage({
@@ -95,9 +91,17 @@
     return areSameSite(url, lastTrustedIntent.url);
   }
 
-  function onPopupEvent(url) {
+  function onPopupEvent(url, userInitiated) {
+    if (userInitiated) {
+      try {
+        api.runtime.sendMessage({
+          action: "trusted_popup",
+          url: url || ""
+        });
+      } catch(e) {}
+    }
     if (isBlankUrl(url)) {
-      if (isTrustedInitiatorPage()) {
+      if (userInitiated || isTrustedInitiatorPage()) {
         document.documentElement.setAttribute('__afs_allow__', 'yes');
       }
       return;
@@ -115,7 +119,7 @@
       notifyBlocked(url);
       return;
     }
-    if (isTrustedInitiatorPage() || !isCrossOrigin(url) || isWhitelisted(url) || isUserAllowedPopup(url) || matchesTrustedIntent(url)) {
+    if (userInitiated || isTrustedInitiatorPage() || !isCrossOrigin(url) || isWhitelisted(url) || isUserAllowedPopup(url) || matchesTrustedIntent(url)) {
       document.documentElement.setAttribute('__afs_allow__', 'yes');
       log("Cho phep popup:", url);
       return;
@@ -134,72 +138,26 @@
 
   window.addEventListener('__AFS_popup__', function(e) {
     try {
-      onPopupEvent(JSON.parse(e.detail).url);
+      var detail = JSON.parse(e.detail);
+      onPopupEvent(detail.url, detail.userInitiated === true);
     } catch(err) {}
   });
 
   document.addEventListener('mousedown', function(e) {
-    if (e.button !== 0) return;
     var a = e.target.closest('a');
     rememberTrustedIntent(a);
-    if (!isTrustedInitiatorPage() && a && a.href && a.target === '_blank' && isCrossOrigin(a.href) && !isWhitelisted(a.href) && linkHasAdSignal(a)) {
-      e.preventDefault();
-      e.stopPropagation();
-      log("Chan mousedown -> a[target=_blank]:", a.href);
-      if (typeof afsRecordTelemetry === 'function') afsRecordTelemetry({
-        label: "ad",
-        label_source: "heuristic_blocked",
-        targetUrl: a.href,
-        reason: "mousedown_ad_link_target_blank",
-        element: a,
-        action: "block",
-        outcome: "prevented_default"
-      });
-      notifyBlocked(a.href);
-    }
   }, true);
 
   document.addEventListener('click', function(e) {
     var a = e.target.closest('a');
     if (!a || !a.href) return;
     rememberTrustedIntent(a);
-    var opensNewTab = a.target === '_blank' || e.metaKey || e.ctrlKey;
-    if (!isTrustedInitiatorPage() && opensNewTab && isCrossOrigin(a.href) && !isWhitelisted(a.href) && linkHasAdSignal(a)) {
-      e.preventDefault();
-      e.stopPropagation();
-      log("Chan click -> a[target=_blank]:", a.href);
-      if (typeof afsRecordTelemetry === 'function') afsRecordTelemetry({
-        label: "ad",
-        label_source: "heuristic_blocked",
-        targetUrl: a.href,
-        reason: "click_ad_link_new_tab",
-        element: a,
-        action: "block",
-        outcome: "prevented_default"
-      });
-      notifyBlocked(a.href);
-    }
   }, true);
 
   document.addEventListener('touchstart', function(e) {
     var a = e.target.closest('a');
     rememberTrustedIntent(a);
-    if (!isTrustedInitiatorPage() && a && a.href && a.target === '_blank' && isCrossOrigin(a.href) && !isWhitelisted(a.href) && linkHasAdSignal(a)) {
-      e.preventDefault();
-      e.stopPropagation();
-      log("Chan touchstart -> a[target=_blank]:", a.href);
-      if (typeof afsRecordTelemetry === 'function') afsRecordTelemetry({
-        label: "ad",
-        label_source: "heuristic_blocked",
-        targetUrl: a.href,
-        reason: "touchstart_ad_link_target_blank",
-        element: a,
-        action: "block",
-        outcome: "prevented_default"
-      });
-      notifyBlocked(a.href);
-    }
-  }, { capture: true, passive: false });
+  }, { capture: true, passive: true });
 
   var pointerCount = 0;
   var pointerTimer = null;
@@ -209,27 +167,7 @@
     if (pointerTimer) clearTimeout(pointerTimer);
     pointerTimer = setTimeout(function() {
       if (pointerCount >= AF_CONFIG.popupBlocking.popUnderClickThreshold) {
-        log("Pop-under detected (" + pointerCount + " clicks)");
-        document.querySelectorAll('a[target="_blank"]').forEach(function(a) {
-          if (!isTrustedInitiatorPage() && a.href && isCrossOrigin(a.href) && !isWhitelisted(a.href) && linkHasAdSignal(a)) {
-            var href = a.href;
-            a.removeAttribute('href');
-            a.setAttribute('data-afs-href', href);
-            a.addEventListener('click', function(ev) {
-              ev.preventDefault();
-              if (typeof afsRecordTelemetry === 'function') afsRecordTelemetry({
-                label: "ad",
-                label_source: "heuristic_blocked",
-                targetUrl: href,
-                reason: "pop_under_threshold_disabled_link",
-                element: a,
-                action: "block",
-                outcome: "disabled_link"
-              });
-              notifyBlocked(href);
-            }, true);
-          }
-        });
+        log("Nhieu thao tac lien tiep; giu nguyen cac link do nguoi dung mo.");
       }
       pointerCount = 0;
     }, AF_CONFIG.popupBlocking.popUnderTimeWindowMs);

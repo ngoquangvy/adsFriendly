@@ -53,11 +53,7 @@
       if (text.indexOf(adKeywords[i]) !== -1) return true;
     }
     var cls = (el.className + " " + el.id).toLowerCase();
-    var clsPatterns = AF_CONFIG.bannerDetection.adClassPatterns;
-    for (var i = 0; i < clsPatterns.length; i++) {
-      if (cls.indexOf(clsPatterns[i]) !== -1) return true;
-    }
-    return false;
+    return hasAdTokenSignal(cls);
   }
 
   function linkLooksLikeAd(a) {
@@ -70,11 +66,7 @@
       (a.getAttribute('aria-label') || '') + ' ' +
       (a.getAttribute('title') || '')
     ).toLowerCase();
-    var clsPatterns = AF_CONFIG.bannerDetection.adClassPatterns;
-    for (var i = 0; i < clsPatterns.length; i++) {
-      if (sig.indexOf(clsPatterns[i]) !== -1) return true;
-    }
-    return false;
+    return hasAdTokenSignal(sig);
   }
 
   function getAdLinkStats(el) {
@@ -105,9 +97,7 @@
 
   function isProtectedNavigation(el) {
     if (!el || !el.closest) return false;
-    var nav = el.closest('nav, header, [role="navigation"]');
-    if (!nav) return false;
-    return !hasHighAdLinkRatio(nav) && !hasAdContent(nav);
+    return !!el.closest('nav, header, [role="navigation"]');
   }
 
   function isLoginForm(el) {

@@ -1,29 +1,33 @@
-var bgApi = (typeof browser !== 'undefined') ? browser : chrome;
+var bgApi = typeof browser !== "undefined" ? browser : chrome;
 
 function notifyPopupRulesUpdated() {
-  bgApi.tabs.query({}, function(tabs) {
+  bgApi.tabs.query({}, function (tabs) {
     if (!tabs) return;
-    tabs.forEach(function(tab) {
+    tabs.forEach(function (tab) {
       if (!tab.id) return;
-      bgApi.tabs.sendMessage(tab.id, { action: "popup_rules_updated" }, function() {});
+      bgApi.tabs.sendMessage(
+        tab.id,
+        { action: "popup_rules_updated" },
+        function () {},
+      );
     });
   });
 }
 
-bgApi.runtime.onMessage.addListener(function(request, sender, sendResponse) {
+bgApi.runtime.onMessage.addListener(function (request, sender, sendResponse) {
   if (request.action === "log_ad_event" && request.event) {
     bgRecordAdEvent(request.event);
   }
 
   if (request.action === "open_tabs" && request.urls) {
-    request.urls.forEach(function(url) {
+    request.urls.forEach(function (url) {
       bgApi.tabs.create({ url: url, active: false });
     });
   }
 
   if (request.action === "restore_tabs" && request.urls) {
-    request.urls.forEach(function(url) {
-      bgRememberAllowedPopup(url, function() {
+    request.urls.forEach(function (url) {
+      bgRememberAllowedPopup(url, function () {
         bgRecordAdEvent({
           unit: "feedback",
           label: "false_positive",
@@ -32,7 +36,12 @@ bgApi.runtime.onMessage.addListener(function(request, sender, sendResponse) {
           targetUrl: url,
           action: "restore",
           outcome: "user_allowed_popup",
-          surface: "restore_toast"
+          surface: "restore_toast",
+          feedback: {
+            user_action: "restore",
+            correction: "false_positive",
+            surface: "restore_toast",
+          },
         });
         notifyPopupRulesUpdated();
         bgApi.tabs.create({ url: url, active: true });
@@ -41,7 +50,7 @@ bgApi.runtime.onMessage.addListener(function(request, sender, sendResponse) {
   }
 
   if (request.action === "block_tabs" && request.urls) {
-    request.urls.forEach(function(url) {
+    request.urls.forEach(function (url) {
       bgRecordAdEvent({
         unit: "feedback",
         label: "ad",
@@ -50,7 +59,11 @@ bgApi.runtime.onMessage.addListener(function(request, sender, sendResponse) {
         targetUrl: url,
         action: "block",
         outcome: "user_blocked_popup",
-        surface: "restore_toast"
+        surface: "restore_toast",
+        feedback: {
+          user_action: "block",
+          surface: "restore_toast",
+        },
       });
       bgRememberBlockedPopup(url, notifyPopupRulesUpdated);
     });

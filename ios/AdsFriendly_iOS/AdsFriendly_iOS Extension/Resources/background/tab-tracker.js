@@ -19,11 +19,12 @@
   var pendingNewTabs = {};
 
   bgApi.runtime.onMessage.addListener(function(request, sender) {
-    if (!request || request.action !== "trusted_click" || !request.url) return;
+    if (!request || (request.action !== "trusted_click" && request.action !== "trusted_popup")) return;
     var tabId = sender && sender.tab ? sender.tab.id : null;
     if (!tabId) return;
     trustedClicksByTab[tabId] = {
-      url: request.url,
+      url: request.url || "",
+      allowAnyPopup: request.action === "trusted_popup",
       time: Date.now()
     };
     lastTrustedClickTime = Date.now();
@@ -49,13 +50,15 @@
       var sourceTabId = details.sourceTabId;
       console.log("[AdsFriendly BG] onCreatedNavigationTarget:", tabId, url, "source:", sourceTabId);
 
-      bgApi.tabs.get(sourceTabId, function(sourceTab) {
-        if (bgApi.runtime.lastError || !sourceTab || !sourceTab.url) return;
-        if (shouldAllowNavigation(sourceTabId, sourceTab.url, url)) return;
-        if (shouldBlockNavigation(sourceTabId, sourceTab.url, url)) {
-          neutralizeTab(tabId, sourceTabId, url);
-        }
-      });
+      setTimeout(function() {
+        bgApi.tabs.get(sourceTabId, function(sourceTab) {
+          if (bgApi.runtime.lastError || !sourceTab || !sourceTab.url) return;
+          if (shouldAllowNavigation(sourceTabId, sourceTab.url, url)) return;
+          if (shouldBlockNavigation(sourceTabId, sourceTab.url, url)) {
+            neutralizeTab(tabId, sourceTabId, url);
+          }
+        });
+      }, 180);
     });
   }
 
@@ -110,15 +113,25 @@
     });
   }
 
+  function scheduleNewTabNavigation(tabId, url, source) {
+    var info = pendingNewTabs[tabId];
+    if (!info) return;
+    info.pendingUrl = url;
+    if (info.checkTimer) clearTimeout(info.checkTimer);
+    info.checkTimer = setTimeout(function() {
+      checkNewTabNavigation(tabId, info.pendingUrl, source);
+    }, 180);
+  }
+
   bgApi.tabs.onUpdated.addListener(function(tabId, changeInfo) {
     if (!changeInfo.url) return;
-    checkNewTabNavigation(tabId, changeInfo.url, "onUpdated");
+    scheduleNewTabNavigation(tabId, changeInfo.url, "onUpdated");
   });
 
   if (bgApi.webNavigation && bgApi.webNavigation.onCommitted) {
     bgApi.webNavigation.onCommitted.addListener(function(details) {
       if (details.frameId !== 0) return;
-      checkNewTabNavigation(details.tabId, details.url, "onCommitted");
+      scheduleNewTabNavigation(details.tabId, details.url, "onCommitted");
     });
   }
 
@@ -157,8 +170,10 @@
 
   function hasIntentFor(tabId, url) {
     var click = trustedClicksByTab[tabId];
-    if (!click || !click.url) return false;
+    if (!click) return false;
     if (Date.now() - click.time > 2500) return false;
+    if (click.allowAnyPopup) return true;
+    if (!click.url) return false;
     return bgAreSameSite(click.url, url);
   }
 
@@ -177,7 +192,7 @@
     if (!targetUrl || targetUrl === "" || targetUrl.indexOf("about:") === 0) return false;
     if (bgIsUserBlockedPopup(targetUrl)) return true;
     if (shouldAllowNavigation(sourceTabId, sourceUrl, targetUrl)) return false;
-    return !bgAreSameSite(sourceUrl, targetUrl) || bgIsAdLikeUrl(targetUrl);
+    return bgIsAdLikeUrl(targetUrl);
   }
 
   console.log("[AdsFriendly BG] tab-tracker.js loaded.");
