@@ -123,13 +123,18 @@ async function hideCandidate(candidate, outcome) {
   BLOCKING_STRATEGIES.STEALTH(candidate.target);
   if (activePolicy?.can(CAPABILITIES.LEARNING_FEEDBACK))
     recordDomSample(candidate, outcome, "ad");
-  if (outcome === "user_hide" && candidate.selector)
+  if (outcome === "user_hide") {
+    if (!candidate.selector)
+      throw new Error("This element does not have a reusable selector.");
     await persistCustomRule(candidate, outcome);
-  chrome.runtime.sendMessage({
-    type: "REPORT_AD_DENSITY",
-    hostname: location.hostname,
-    count: 1,
-  });
+  }
+  try {
+    await chrome.runtime.sendMessage({
+      type: "REPORT_AD_DENSITY",
+      hostname: location.hostname,
+      count: 1,
+    });
+  } catch {}
 }
 
 function allowCandidate(candidate) {

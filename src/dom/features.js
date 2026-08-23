@@ -101,6 +101,7 @@ export function getSmallestSafeDomTarget(element, features) {
 }
 
 export function buildDomSelector(element) {
+  if (!element?.tagName) return null;
   const tag = element.tagName.toLowerCase();
   if (element.id && AD_TOKEN_RE.test(element.id))
     return `#${cssEscape(element.id)}`;
@@ -111,7 +112,23 @@ export function buildDomSelector(element) {
   if (className) return `${tag}.${cssEscape(className)}`;
   if (element.id && !/\d{5,}/.test(element.id))
     return `#${cssEscape(element.id)}`;
-  return null;
+
+  // Candidates such as image ads often have no useful id/class. A user click
+  // on Hide must still be durable, so prefer a site-scoped resource or link
+  // host before falling back to a narrow structural selector.
+  const hrefHost = safeHost(element.getAttribute?.("href") || element.href);
+  if (tag === "a" && hrefHost)
+    return `a[href*="${cssAttributeValue(`//${hrefHost}`)}"]`;
+
+  const srcHost = safeHost(
+    element.getAttribute?.("src") || element.currentSrc || element.src,
+  );
+  if (["img", "iframe"].includes(tag) && srcHost)
+    return `${tag}[src*="${cssAttributeValue(`//${srcHost}`)}"]`;
+
+  const labelledSelector = buildLabelSelector(element, tag);
+  if (labelledSelector) return labelledSelector;
+  return buildStructuralSelector(element);
 }
 
 export function tokensHaveAdSignal(tokens) {
@@ -201,7 +218,11 @@ function tokenize(value = "") {
 
 function safeHost(url) {
   try {
-    return new URL(url, location.href).hostname.toLowerCase();
+    const base =
+      typeof location === "undefined"
+        ? "https://adsfriendly.invalid/"
+        : location.href;
+    return new URL(url, base).hostname.toLowerCase();
   } catch {
     return "";
   }
@@ -248,8 +269,49 @@ function viewportArea() {
 }
 
 function cssEscape(value) {
-  if (window.CSS?.escape) return CSS.escape(value);
+  if (typeof window !== "undefined" && window.CSS?.escape)
+    return window.CSS.escape(value);
   return String(value).replace(/["\\#.;:[\],>+~*='()]/g, "\\$&");
+}
+
+function cssAttributeValue(value) {
+  return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function buildLabelSelector(element, tag) {
+  for (const attribute of ["alt", "title", "aria-label"]) {
+    const value = String(element.getAttribute?.(attribute) || "").trim();
+    if (value.length >= 3 && value.length <= 120) {
+      return `${tag}[${attribute}="${cssAttributeValue(value)}"]`;
+    }
+  }
+  return null;
+}
+
+function buildStructuralSelector(element) {
+  const segments = [];
+  let current = element;
+  while (current?.tagName && segments.length < 5) {
+    const tag = current.tagName.toLowerCase();
+    if (["html", "body"].includes(tag)) break;
+    if (current.id && !/\d{5,}/.test(current.id)) {
+      segments.unshift(`#${cssEscape(current.id)}`);
+      return segments.join(" > ");
+    }
+    const parent = current.parentElement;
+    let segment = tag;
+    if (parent?.children) {
+      const sameTag = Array.from(parent.children).filter(
+        (child) => child.tagName?.toLowerCase() === tag,
+      );
+      const index = sameTag.indexOf(current);
+      if (sameTag.length > 1 && index >= 0)
+        segment += `:nth-of-type(${index + 1})`;
+    }
+    segments.unshift(segment);
+    current = parent;
+  }
+  return segments.length >= 2 ? segments.join(" > ") : null;
 }
 
 function uniqueHosts(hosts) {

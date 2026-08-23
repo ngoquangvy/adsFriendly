@@ -36,7 +36,13 @@ function renderActiveToast() {
   toast.querySelector(".adsfriendly-dom-scope").textContent = isSavedRuleSummary
     ? "PAGE"
     : "ELEMENT";
-  if (active.state === "hidden") {
+  if (active.state === "error") {
+    message.textContent = "Hidden once · not saved";
+    message.title = active.error?.message || "Could not save this rule";
+    hideButton.hidden = true;
+    allowButton.textContent = "Show";
+    clearHighlight();
+  } else if (active.state === "hidden") {
     const hiddenCount = active.candidate.hiddenCount || 1;
     message.textContent = isSavedRuleSummary
       ? `${hiddenCount} element${hiddenCount === 1 ? "" : "s"} hidden`
@@ -154,7 +160,12 @@ function ensureToast() {
     renderActiveToast();
     current.pendingHide = Promise.resolve(
       current.handlers?.onHide?.(current.candidate),
-    ).catch(() => {});
+    ).catch((error) => {
+      current.error = error;
+      current.state = "error";
+      if (active === current) renderActiveToast();
+      return false;
+    });
   };
   toast.querySelector(".adsfriendly-dom-allow").onclick = () => {
     if (!active) return;

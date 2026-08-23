@@ -361,6 +361,7 @@ var AdsFriendlyContent = (() => {
     return element;
   }
   function buildDomSelector(element) {
+    if (!element?.tagName) return null;
     const tag = element.tagName.toLowerCase();
     if (element.id && AD_TOKEN_RE.test(element.id))
       return `#${cssEscape(element.id)}`;
@@ -368,7 +369,17 @@ var AdsFriendlyContent = (() => {
     if (className) return `${tag}.${cssEscape(className)}`;
     if (element.id && !/\d{5,}/.test(element.id))
       return `#${cssEscape(element.id)}`;
-    return null;
+    const hrefHost = safeHost(element.getAttribute?.("href") || element.href);
+    if (tag === "a" && hrefHost)
+      return `a[href*="${cssAttributeValue(`//${hrefHost}`)}"]`;
+    const srcHost = safeHost(
+      element.getAttribute?.("src") || element.currentSrc || element.src
+    );
+    if (["img", "iframe"].includes(tag) && srcHost)
+      return `${tag}[src*="${cssAttributeValue(`//${srcHost}`)}"]`;
+    const labelledSelector = buildLabelSelector(element, tag);
+    if (labelledSelector) return labelledSelector;
+    return buildStructuralSelector(element);
   }
   function tokensHaveAdSignal(tokens) {
     return tokens.some((token) => AD_TOKEN_RE.test(token));
@@ -438,7 +449,8 @@ var AdsFriendlyContent = (() => {
   }
   function safeHost(url) {
     try {
-      return new URL(url, location.href).hostname.toLowerCase();
+      const base = typeof location === "undefined" ? "https://adsfriendly.invalid/" : location.href;
+      return new URL(url, base).hostname.toLowerCase();
     } catch {
       return "";
     }
@@ -470,8 +482,46 @@ var AdsFriendlyContent = (() => {
     return window.innerWidth * window.innerHeight;
   }
   function cssEscape(value) {
-    if (window.CSS?.escape) return CSS.escape(value);
+    if (typeof window !== "undefined" && window.CSS?.escape)
+      return window.CSS.escape(value);
     return String(value).replace(/["\\#.;:[\],>+~*='()]/g, "\\$&");
+  }
+  function cssAttributeValue(value) {
+    return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  }
+  function buildLabelSelector(element, tag) {
+    for (const attribute of ["alt", "title", "aria-label"]) {
+      const value = String(element.getAttribute?.(attribute) || "").trim();
+      if (value.length >= 3 && value.length <= 120) {
+        return `${tag}[${attribute}="${cssAttributeValue(value)}"]`;
+      }
+    }
+    return null;
+  }
+  function buildStructuralSelector(element) {
+    const segments = [];
+    let current = element;
+    while (current?.tagName && segments.length < 5) {
+      const tag = current.tagName.toLowerCase();
+      if (["html", "body"].includes(tag)) break;
+      if (current.id && !/\d{5,}/.test(current.id)) {
+        segments.unshift(`#${cssEscape(current.id)}`);
+        return segments.join(" > ");
+      }
+      const parent = current.parentElement;
+      let segment = tag;
+      if (parent?.children) {
+        const sameTag = Array.from(parent.children).filter(
+          (child) => child.tagName?.toLowerCase() === tag
+        );
+        const index = sameTag.indexOf(current);
+        if (sameTag.length > 1 && index >= 0)
+          segment += `:nth-of-type(${index + 1})`;
+      }
+      segments.unshift(segment);
+      current = parent;
+    }
+    return segments.length >= 2 ? segments.join(" > ") : null;
   }
   function uniqueHosts(hosts) {
     return [...new Set(hosts.filter(Boolean))].slice(0, 12);
@@ -547,7 +597,13 @@ var AdsFriendlyContent = (() => {
     const allowButton = toast.querySelector(".adsfriendly-dom-allow");
     const isSavedRuleSummary = active.candidate.isSavedRuleSummary === true;
     toast.querySelector(".adsfriendly-dom-scope").textContent = isSavedRuleSummary ? "PAGE" : "ELEMENT";
-    if (active.state === "hidden") {
+    if (active.state === "error") {
+      message.textContent = "Hidden once \xB7 not saved";
+      message.title = active.error?.message || "Could not save this rule";
+      hideButton.hidden = true;
+      allowButton.textContent = "Show";
+      clearHighlight();
+    } else if (active.state === "hidden") {
       const hiddenCount = active.candidate.hiddenCount || 1;
       message.textContent = isSavedRuleSummary ? `${hiddenCount} element${hiddenCount === 1 ? "" : "s"} hidden` : `${label} hidden`;
       message.title = isSavedRuleSummary ? `Hidden by ${active.candidate.savedRuleCount || 1} saved rule${active.candidate.savedRuleCount === 1 ? "" : "s"}` : "Hidden by your saved rule";
@@ -654,7 +710,11 @@ var AdsFriendlyContent = (() => {
       renderActiveToast();
       current.pendingHide = Promise.resolve(
         current.handlers?.onHide?.(current.candidate)
-      ).catch(() => {
+      ).catch((error) => {
+        current.error = error;
+        current.state = "error";
+        if (active === current) renderActiveToast();
+        return false;
       });
     };
     toast.querySelector(".adsfriendly-dom-allow").onclick = () => {
@@ -1015,13 +1075,19 @@ var AdsFriendlyContent = (() => {
     BLOCKING_STRATEGIES.STEALTH(candidate.target);
     if (activePolicy?.can(CAPABILITIES.LEARNING_FEEDBACK))
       recordDomSample(candidate, outcome, "ad");
-    if (outcome === "user_hide" && candidate.selector)
+    if (outcome === "user_hide") {
+      if (!candidate.selector)
+        throw new Error("This element does not have a reusable selector.");
       await persistCustomRule(candidate, outcome);
-    chrome.runtime.sendMessage({
-      type: "REPORT_AD_DENSITY",
-      hostname: location.hostname,
-      count: 1
-    });
+    }
+    try {
+      await chrome.runtime.sendMessage({
+        type: "REPORT_AD_DENSITY",
+        hostname: location.hostname,
+        count: 1
+      });
+    } catch {
+    }
   }
   function allowCandidate(candidate) {
     if (candidate.selector) allowedSelectors.add(candidate.selector);

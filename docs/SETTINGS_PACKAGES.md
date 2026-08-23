@@ -3,6 +3,11 @@
 A Settings Package is a portable, editable snapshot of user-managed behavior.
 It is separate from the built-in heuristic code and from training data.
 
+An installed package is a starting point, not a locked policy. Users can keep
+adding personal Hide, Magic Wand, whitelist, blacklist, and trusted-workflow
+choices. Those changes are stored locally, appear in Settings immediately, and
+are included the next time the user exports a package.
+
 ## Included
 
 - General protection enabled state.

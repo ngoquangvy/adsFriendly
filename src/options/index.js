@@ -14,12 +14,37 @@ const blacklistEl = $("blacklist-list");
 const domSamplesEl = $("dom-samples-container");
 const packageStatusEl = $("package-status");
 let currentSnapshot = {};
+let storageRefreshTimer = null;
 
 initialize().catch((error) => showPackageStatus(error.message, true));
 
 async function initialize() {
   bindStaticActions();
+  chrome.storage.onChanged.addListener(handleStorageChange);
+  window.addEventListener("unload", () =>
+    chrome.storage.onChanged.removeListener(handleStorageChange),
+  );
   await loadPage();
+}
+
+function handleStorageChange(changes, areaName) {
+  if (areaName !== "local") return;
+  const keys = Object.keys(changes);
+  const affectsSettings = keys.some(
+    (key) =>
+      [
+        "appSettings",
+        "whitelist",
+        "blacklist",
+        "userCustomRules",
+        SETTINGS_PACKAGE_STATE_KEY,
+      ].includes(key) || key.startsWith("p:"),
+  );
+  if (!affectsSettings) return;
+  clearTimeout(storageRefreshTimer);
+  storageRefreshTimer = setTimeout(() => {
+    loadPage().catch((error) => showPackageStatus(error.message, true));
+  }, 80);
 }
 
 function bindStaticActions() {
