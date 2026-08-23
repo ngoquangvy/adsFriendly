@@ -113,24 +113,9 @@ var AdsFriendlyBackground = (() => {
   }
 
   // src/shared/pattern-store.js
-  var DOM_PATTERN_TYPES = /* @__PURE__ */ new Set([
-    "alt",
-    "title",
-    "domain",
-    "class",
-    "id",
-    "srcHost",
-    "classToken",
-    "idToken"
-  ]);
   async function getGlobalPatterns() {
     const { globalAdPatterns = [] } = await chrome.storage.local.get("globalAdPatterns");
     return Array.isArray(globalAdPatterns) ? globalAdPatterns : [];
-  }
-  async function getDomPatterns() {
-    return (await getGlobalPatterns()).filter(
-      (pattern) => DOM_PATTERN_TYPES.has(pattern?.type)
-    );
   }
   async function upsertGlobalPattern(nextPattern, merge) {
     if (!nextPattern?.type || !nextPattern.value) return;
@@ -736,6 +721,27 @@ var AdsFriendlyBackground = (() => {
     }
   }
 
+  // src/navigation/background/new-tab-policy.js
+  var NEW_TAB_DECISIONS = Object.freeze({
+    ALLOW: "allow",
+    CLOSE: "close",
+    VERIFY: "verify"
+  });
+  function decideNewTabNavigation({
+    sameSite = false,
+    trustedInitiator = false,
+    trustedTarget = false,
+    whitelisted = false,
+    blacklisted = false,
+    intentMatched = false,
+    trustedPath = false
+  } = {}) {
+    if (sameSite || trustedInitiator || trustedTarget || whitelisted || intentMatched || trustedPath)
+      return NEW_TAB_DECISIONS.ALLOW;
+    if (blacklisted) return NEW_TAB_DECISIONS.CLOSE;
+    return NEW_TAB_DECISIONS.VERIFY;
+  }
+
   // src/navigation/background/reverse-popunder.js
   var REVERSE_POPUNDER_WINDOW_MS = 7e3;
   function isSelfCloneNavigation(originalUrl, cloneUrl) {
@@ -801,27 +807,6 @@ var AdsFriendlyBackground = (() => {
   var reverseCandidatesByClone = /* @__PURE__ */ new Map();
   var lastActiveTabId = null;
   var navigationPolicy = null;
-  function isSuspiciousURL(url, patterns = []) {
-    const u = parseUrl(url);
-    if (!u) return false;
-    const suspiciousKeys = [
-      "clickid",
-      "pop_id",
-      "popunder",
-      "bannerid",
-      "zoneid"
-    ];
-    if ([...u.searchParams.keys()].some(
-      (key) => suspiciousKeys.includes(key.toLowerCase())
-    ))
-      return true;
-    return patterns.some(
-      (pattern) => pattern?.type === "domain" && sameHostnameOrSubdomain(
-        u.hostname,
-        String(pattern.value || "").replace(/^\|\|/, "").replace(/\^$/, "").toLowerCase()
-      )
-    );
-  }
   function registerNavigationGuard(policy) {
     navigationPolicy = policy;
     const onCreatedNavigationTarget = (details) => {
@@ -1051,15 +1036,7 @@ var AdsFriendlyBackground = (() => {
       const sourceUrl = new URL(capturedSourceUrl);
       const targetUrl = new URL(url);
       const targetDomain = targetUrl.hostname;
-      if (sameHostnameOrSubdomain(sourceUrl.hostname, targetDomain) || sameHostnameOrSubdomain(targetDomain, sourceUrl.hostname))
-        return;
-      if (isTrustedInitiator(sourceUrl.hostname)) return;
-      if (isTrustedTarget(targetDomain)) return;
-      if (whitelist.includes(targetDomain)) return;
-      if (isBlacklistedTarget(targetDomain, blacklist)) {
-        await logBlockedNavigationIfAllowed(url, sourceUrl.hostname);
-        return closeTabQuietly(tabId);
-      }
+      const sameSite = sameHostnameOrSubdomain(sourceUrl.hostname, targetDomain) || sameHostnameOrSubdomain(targetDomain, sourceUrl.hostname);
       const trustWindow = await getDynamicTrustWindow(sourceUrl.hostname);
       let intentMatched = hasMatchingIntent(
         sourceTabId,
@@ -1067,21 +1044,30 @@ var AdsFriendlyBackground = (() => {
         trustWindow
       );
       const path = await getTrustedPath(sourceUrl.hostname, targetDomain);
-      if (path && (path.isManual || path.visits >= 3)) return;
+      const decision = decideNewTabNavigation({
+        sameSite,
+        trustedInitiator: isTrustedInitiator(sourceUrl.hostname),
+        trustedTarget: isTrustedTarget(targetDomain),
+        whitelisted: whitelist.includes(targetDomain),
+        blacklisted: isBlacklistedTarget(targetDomain, blacklist),
+        intentMatched,
+        trustedPath: !!path && (path.isManual || path.visits >= 3)
+      });
+      if (decision === NEW_TAB_DECISIONS.ALLOW) {
+        if (intentMatched) syncTrustedPath(sourceUrl.hostname, targetDomain);
+        return;
+      }
+      if (decision === NEW_TAB_DECISIONS.CLOSE) {
+        await logBlockedNavigationIfAllowed(url, sourceUrl.hostname);
+        return closeTabQuietly(tabId);
+      }
+      await delay(180);
+      intentMatched = hasMatchingIntent(sourceTabId, targetDomain, trustWindow);
       if (intentMatched) {
         syncTrustedPath(sourceUrl.hostname, targetDomain);
         return;
       }
-      const suspicious = isSuspiciousURL(url, await getDomPatterns());
-      if (suspicious) {
-        await delay(180);
-        intentMatched = hasMatchingIntent(sourceTabId, targetDomain, trustWindow);
-        if (intentMatched) {
-          syncTrustedPath(sourceUrl.hostname, targetDomain);
-          return;
-        }
-        return redirectToBlockedPage(tabId, url, sourceUrl.hostname);
-      }
+      return redirectToBlockedPage(tabId, url, sourceUrl.hostname);
     } catch (err) {
       console.error("Error evaluating navigation:", err);
     } finally {

@@ -56,7 +56,7 @@ run.
 
 Protection modes are capability bundles rather than feature-specific booleans:
 
-- `safe`: verified static rules, reverse pop-under protection, and manual controls;
+- `safe`: verified static rules, untrusted new-tab verification, reverse pop-under protection, and manual controls;
 - `assist`: observation and user-confirmed suggestions;
 - `auto`: registered automatic actions and learned-pattern execution.
 

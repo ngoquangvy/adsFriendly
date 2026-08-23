@@ -5,6 +5,26 @@ import {
   isReversePopunderSequence,
   isSelfCloneNavigation,
 } from "../src/navigation/background/reverse-popunder.js";
+import {
+  NEW_TAB_DECISIONS,
+  decideNewTabNavigation,
+} from "../src/navigation/background/new-tab-policy.js";
+
+test("untrusted cross-site tabs require user verification", () => {
+  assert.equal(decideNewTabNavigation(), NEW_TAB_DECISIONS.VERIFY);
+  assert.equal(
+    decideNewTabNavigation({ intentMatched: true }),
+    NEW_TAB_DECISIONS.ALLOW,
+  );
+  assert.equal(
+    decideNewTabNavigation({ whitelisted: true }),
+    NEW_TAB_DECISIONS.ALLOW,
+  );
+  assert.equal(
+    decideNewTabNavigation({ blacklisted: true }),
+    NEW_TAB_DECISIONS.CLOSE,
+  );
+});
 
 test("recognizes a same-site clone", () => {
   assert.equal(

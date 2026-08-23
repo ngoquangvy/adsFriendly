@@ -3,8 +3,11 @@ import { runtimeState } from "../../background/state.js";
 import { getDynamicTrustWindow } from "../../background/reputation.js";
 import { logBlockedNavigation } from "../../background/logs.js";
 import { getTrustedPath, syncTrustedPath } from "./trusted-paths.js";
-import { getDomPatterns } from "../../shared/pattern-store.js";
 import { CAPABILITIES } from "../../runtime/feature-catalog.js";
+import {
+  NEW_TAB_DECISIONS,
+  decideNewTabNavigation,
+} from "./new-tab-policy.js";
 import {
   REVERSE_POPUNDER_WINDOW_MS,
   isReversePopunderSequence,
@@ -49,34 +52,6 @@ const reverseCandidatesByClone = new Map();
 let lastActiveTabId = null;
 let navigationPolicy = null;
 
-export function isSuspiciousURL(url, patterns = []) {
-  const u = parseUrl(url);
-  if (!u) return false;
-  const suspiciousKeys = [
-    "clickid",
-    "pop_id",
-    "popunder",
-    "bannerid",
-    "zoneid",
-  ];
-  if (
-    [...u.searchParams.keys()].some((key) =>
-      suspiciousKeys.includes(key.toLowerCase()),
-    )
-  )
-    return true;
-  return patterns.some(
-    (pattern) =>
-      pattern?.type === "domain" &&
-      sameHostnameOrSubdomain(
-        u.hostname,
-        String(pattern.value || "")
-          .replace(/^\|\|/, "")
-          .replace(/\^$/, "")
-          .toLowerCase(),
-      ),
-  );
-}
 export function registerNavigationGuard(policy) {
   navigationPolicy = policy;
   const onCreatedNavigationTarget = (details) => {
@@ -360,20 +335,9 @@ async function evaluateNewTab({ sourceTabId, tabId, url }) {
     const sourceUrl = new URL(capturedSourceUrl);
     const targetUrl = new URL(url);
     const targetDomain = targetUrl.hostname;
-    if (
+    const sameSite =
       sameHostnameOrSubdomain(sourceUrl.hostname, targetDomain) ||
-      sameHostnameOrSubdomain(targetDomain, sourceUrl.hostname)
-    )
-      return;
-
-    if (isTrustedInitiator(sourceUrl.hostname)) return;
-    if (isTrustedTarget(targetDomain)) return;
-    if (whitelist.includes(targetDomain)) return;
-    if (isBlacklistedTarget(targetDomain, blacklist)) {
-      await logBlockedNavigationIfAllowed(url, sourceUrl.hostname);
-      return closeTabQuietly(tabId);
-    }
-
+      sameHostnameOrSubdomain(targetDomain, sourceUrl.hostname);
     const trustWindow = await getDynamicTrustWindow(sourceUrl.hostname);
     let intentMatched = hasMatchingIntent(
       sourceTabId,
@@ -381,26 +345,33 @@ async function evaluateNewTab({ sourceTabId, tabId, url }) {
       trustWindow,
     );
     const path = await getTrustedPath(sourceUrl.hostname, targetDomain);
-    if (path && (path.isManual || path.visits >= 3)) return;
+    const decision = decideNewTabNavigation({
+      sameSite,
+      trustedInitiator: isTrustedInitiator(sourceUrl.hostname),
+      trustedTarget: isTrustedTarget(targetDomain),
+      whitelisted: whitelist.includes(targetDomain),
+      blacklisted: isBlacklistedTarget(targetDomain, blacklist),
+      intentMatched,
+      trustedPath: !!path && (path.isManual || path.visits >= 3),
+    });
 
+    if (decision === NEW_TAB_DECISIONS.ALLOW) {
+      if (intentMatched) syncTrustedPath(sourceUrl.hostname, targetDomain);
+      return;
+    }
+    if (decision === NEW_TAB_DECISIONS.CLOSE) {
+      await logBlockedNavigationIfAllowed(url, sourceUrl.hostname);
+      return closeTabQuietly(tabId);
+    }
+
+    // Give the trusted-click message a moment to arrive before quarantining.
+    await delay(180);
+    intentMatched = hasMatchingIntent(sourceTabId, targetDomain, trustWindow);
     if (intentMatched) {
       syncTrustedPath(sourceUrl.hostname, targetDomain);
       return;
     }
-
-    const suspicious = isSuspiciousURL(url, await getDomPatterns());
-    if (suspicious) {
-      await delay(180);
-      intentMatched = hasMatchingIntent(sourceTabId, targetDomain, trustWindow);
-      if (intentMatched) {
-        syncTrustedPath(sourceUrl.hostname, targetDomain);
-        return;
-      }
-      return redirectToBlockedPage(tabId, url, sourceUrl.hostname);
-    }
-
-    // Cross-site navigation without a strong blocking signal is ambiguous.
-    // Keep the user's tab open instead of quarantining it by default.
+    return redirectToBlockedPage(tabId, url, sourceUrl.hostname);
   } catch (err) {
     console.error("Error evaluating navigation:", err);
   } finally {
