@@ -6,7 +6,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "check": "node scripts/build.mjs --check",
-    "test:unit": "node --test tests/feature-registry.test.js server/src/schema.test.js",
+    "test:unit": "node --test tests/feature-registry.test.js tests/navigation-guard.test.js server/src/schema.test.js",
     "test:e2e:dom": "node scripts/e2e-dom.mjs",
     "test:e2e:live": "node scripts/e2e-live-sites.mjs",
     "test:e2e:nav": "node scripts/e2e-nav-safety.mjs",

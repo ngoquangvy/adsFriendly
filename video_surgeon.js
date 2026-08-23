@@ -122,6 +122,7 @@ var AdsFriendlyVideo = (() => {
     CORE_MESSAGING: "core.messaging",
     CORE_MAINTENANCE: "core.maintenance",
     NAVIGATION_GUARD: "navigation.guard",
+    NAVIGATION_REVERSE_POPUNDER: "navigation.reverse_popunder",
     NAVIGATION_INTENT: "navigation.intent",
     NAVIGATION_FEEDBACK: "navigation.feedback",
     DOM_STATIC_RULES: "dom.static_rules",
@@ -143,6 +144,7 @@ var AdsFriendlyVideo = (() => {
       C.CORE_MESSAGING,
       C.CORE_MAINTENANCE,
       C.NAVIGATION_GUARD,
+      C.NAVIGATION_REVERSE_POPUNDER,
       C.NAVIGATION_INTENT,
       C.NAVIGATION_FEEDBACK,
       C.DOM_STATIC_RULES,
@@ -155,6 +157,7 @@ var AdsFriendlyVideo = (() => {
       C.CORE_MESSAGING,
       C.CORE_MAINTENANCE,
       C.NAVIGATION_GUARD,
+      C.NAVIGATION_REVERSE_POPUNDER,
       C.NAVIGATION_INTENT,
       C.NAVIGATION_FEEDBACK,
       C.DOM_STATIC_RULES,
@@ -171,6 +174,7 @@ var AdsFriendlyVideo = (() => {
       C.CORE_MESSAGING,
       C.CORE_MAINTENANCE,
       C.NAVIGATION_GUARD,
+      C.NAVIGATION_REVERSE_POPUNDER,
       C.NAVIGATION_INTENT,
       C.NAVIGATION_FEEDBACK,
       C.DOM_STATIC_RULES,
@@ -195,7 +199,10 @@ var AdsFriendlyVideo = (() => {
       C.LEARNING_FEEDBACK,
       C.TELEMETRY_QUEUE
     ]),
-    feature("background.navigation-guard", "background", C.NAVIGATION_GUARD),
+    feature("background.navigation-guard", "background", C.NAVIGATION_GUARD, [
+      C.NAVIGATION_REVERSE_POPUNDER,
+      C.TELEMETRY_QUEUE
+    ]),
     feature("background.telemetry-flush", "background", C.TELEMETRY_QUEUE),
     feature("background.memory-cleanup", "background", C.CORE_MAINTENANCE),
     feature("background.pattern-seed", "background", C.LEARNING_SEED),

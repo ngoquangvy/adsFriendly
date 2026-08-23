@@ -52,6 +52,7 @@ async function route(message, sender) {
     runtimeState.lastTrustedClick = {
       timestamp: Date.now(),
       intentUrl: message.intentUrl,
+      sourceUrl: message.sourceUrl || sender?.tab?.url || null,
       tabId: sender?.tab?.id || null,
     };
     return;

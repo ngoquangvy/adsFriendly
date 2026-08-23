@@ -2,11 +2,11 @@ export function startIntentTracker() {
   const recordIntent = (event) => {
     if (!event.isTrusted) return;
     try {
-      const link = event.target.closest("a[href]");
-      if (!link?.href) return;
+      const link = event.target?.closest?.("a[href]");
       chrome.runtime.sendMessage({
         type: "TRUSTED_CLICK",
-        intentUrl: link.href,
+        intentUrl: link?.href || null,
+        sourceUrl: location.href,
       });
     } catch {}
   };

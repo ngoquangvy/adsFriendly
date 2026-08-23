@@ -36,6 +36,12 @@ test("catalog rejects unknown features and capabilities", () => {
 
 test("mode policy separates suggestion and automatic actions", () => {
   assert.equal(
+    getCapabilitiesForMode("safe").includes(
+      CAPABILITIES.NAVIGATION_REVERSE_POPUNDER,
+    ),
+    true,
+  );
+  assert.equal(
     getCapabilitiesForMode("safe").includes(CAPABILITIES.DOM_OBSERVE),
     false,
   );

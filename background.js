@@ -1,7 +1,12 @@
 var AdsFriendlyBackground = (() => {
   // src/background/state.js
   var runtimeState = {
-    lastTrustedClick: { timestamp: 0, intentUrl: null, tabId: null }
+    lastTrustedClick: {
+      timestamp: 0,
+      intentUrl: null,
+      sourceUrl: null,
+      tabId: null
+    }
   };
 
   // src/shared/ad-patterns.js
@@ -407,6 +412,7 @@ var AdsFriendlyBackground = (() => {
     CORE_MESSAGING: "core.messaging",
     CORE_MAINTENANCE: "core.maintenance",
     NAVIGATION_GUARD: "navigation.guard",
+    NAVIGATION_REVERSE_POPUNDER: "navigation.reverse_popunder",
     NAVIGATION_INTENT: "navigation.intent",
     NAVIGATION_FEEDBACK: "navigation.feedback",
     DOM_STATIC_RULES: "dom.static_rules",
@@ -428,6 +434,7 @@ var AdsFriendlyBackground = (() => {
       C.CORE_MESSAGING,
       C.CORE_MAINTENANCE,
       C.NAVIGATION_GUARD,
+      C.NAVIGATION_REVERSE_POPUNDER,
       C.NAVIGATION_INTENT,
       C.NAVIGATION_FEEDBACK,
       C.DOM_STATIC_RULES,
@@ -440,6 +447,7 @@ var AdsFriendlyBackground = (() => {
       C.CORE_MESSAGING,
       C.CORE_MAINTENANCE,
       C.NAVIGATION_GUARD,
+      C.NAVIGATION_REVERSE_POPUNDER,
       C.NAVIGATION_INTENT,
       C.NAVIGATION_FEEDBACK,
       C.DOM_STATIC_RULES,
@@ -456,6 +464,7 @@ var AdsFriendlyBackground = (() => {
       C.CORE_MESSAGING,
       C.CORE_MAINTENANCE,
       C.NAVIGATION_GUARD,
+      C.NAVIGATION_REVERSE_POPUNDER,
       C.NAVIGATION_INTENT,
       C.NAVIGATION_FEEDBACK,
       C.DOM_STATIC_RULES,
@@ -480,7 +489,10 @@ var AdsFriendlyBackground = (() => {
       C.LEARNING_FEEDBACK,
       C.TELEMETRY_QUEUE
     ]),
-    feature("background.navigation-guard", "background", C.NAVIGATION_GUARD),
+    feature("background.navigation-guard", "background", C.NAVIGATION_GUARD, [
+      C.NAVIGATION_REVERSE_POPUNDER,
+      C.TELEMETRY_QUEUE
+    ]),
     feature("background.telemetry-flush", "background", C.TELEMETRY_QUEUE),
     feature("background.memory-cleanup", "background", C.CORE_MAINTENANCE),
     feature("background.pattern-seed", "background", C.LEARNING_SEED),
@@ -602,6 +614,7 @@ var AdsFriendlyBackground = (() => {
       runtimeState.lastTrustedClick = {
         timestamp: Date.now(),
         intentUrl: message.intentUrl,
+        sourceUrl: message.sourceUrl || sender?.tab?.url || null,
         tabId: sender?.tab?.id || null
       };
       return;
@@ -723,6 +736,35 @@ var AdsFriendlyBackground = (() => {
     }
   }
 
+  // src/navigation/background/reverse-popunder.js
+  var REVERSE_POPUNDER_WINDOW_MS = 7e3;
+  function isSelfCloneNavigation(originalUrl, cloneUrl) {
+    const original = parseUrl(originalUrl);
+    const clone = parseUrl(cloneUrl);
+    if (!isHttpUrl(original) || !isHttpUrl(clone)) return false;
+    return original.hostname.toLowerCase() === clone.hostname.toLowerCase() && normalizePath(original.pathname) === normalizePath(clone.pathname);
+  }
+  function isReversePopunderSequence({
+    originalUrl,
+    cloneUrl,
+    redirectedUrl,
+    elapsedMs
+  }) {
+    if (elapsedMs < 0 || elapsedMs > REVERSE_POPUNDER_WINDOW_MS) return false;
+    if (!isSelfCloneNavigation(originalUrl, cloneUrl)) return false;
+    const original = parseUrl(originalUrl);
+    const redirected = parseUrl(redirectedUrl);
+    if (!isHttpUrl(redirected)) return false;
+    return !(sameHostnameOrSubdomain(original.hostname, redirected.hostname) || sameHostnameOrSubdomain(redirected.hostname, original.hostname));
+  }
+  function isHttpUrl(url) {
+    return url?.protocol === "http:" || url?.protocol === "https:";
+  }
+  function normalizePath(pathname) {
+    const normalized = pathname.replace(/\/+$/, "");
+    return normalized || "/";
+  }
+
   // src/navigation/background/guard.js
   var TRUSTED_INITIATORS = [
     "google.com",
@@ -755,6 +797,8 @@ var AdsFriendlyBackground = (() => {
   ];
   var pendingTabs = /* @__PURE__ */ new Map();
   var handledTabs = /* @__PURE__ */ new Map();
+  var reverseCandidatesBySource = /* @__PURE__ */ new Map();
+  var reverseCandidatesByClone = /* @__PURE__ */ new Map();
   var lastActiveTabId = null;
   var navigationPolicy = null;
   function isSuspiciousURL(url, patterns = []) {
@@ -780,27 +824,37 @@ var AdsFriendlyBackground = (() => {
   }
   function registerNavigationGuard(policy) {
     navigationPolicy = policy;
-    chrome.webNavigation.onCreatedNavigationTarget.addListener(
-      (details) => evaluateNewTab({
+    const onCreatedNavigationTarget = (details) => {
+      trackReverseCandidate({
+        sourceTabId: details.sourceTabId,
+        cloneTabId: details.tabId,
+        cloneUrl: details.url
+      }).catch(logReversePopunderError);
+      evaluateNewTab({
         sourceTabId: details.sourceTabId,
         tabId: details.tabId,
         url: details.url
-      })
-    );
+      });
+    };
     chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
       lastActiveTabId = tabs?.[0]?.id || null;
     });
-    chrome.tabs.onActivated.addListener((activeInfo) => {
+    const onActivated = (activeInfo) => {
       lastActiveTabId = activeInfo.tabId;
-    });
-    chrome.tabs.onCreated.addListener((tab) => {
-      const sourceTabId = tab.openerTabId || (hasRecentLinkIntentFromActiveTab(1500) ? lastActiveTabId : null);
+    };
+    const onCreated = (tab) => {
+      const sourceTabId = tab.openerTabId || (hasRecentUserGestureFromActiveTab(1500) ? lastActiveTabId : null);
       if (!sourceTabId || !tab.id) return;
       pendingTabs.set(tab.id, {
         sourceTabId,
         createdAt: Date.now(),
         hasRealOpener: !!tab.openerTabId
       });
+      trackReverseCandidate({
+        sourceTabId,
+        cloneTabId: tab.id,
+        cloneUrl: tab.url
+      }).catch(logReversePopunderError);
       setTimeout(
         () => pendingTabs.delete(tab.id),
         tab.openerTabId ? 1e4 : 2e3
@@ -808,9 +862,10 @@ var AdsFriendlyBackground = (() => {
       if (tab.url && !isBlankUrl(tab.url)) {
         evaluateNewTab({ sourceTabId, tabId: tab.id, url: tab.url });
       }
-    });
-    chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+    };
+    const onUpdated = (tabId, changeInfo) => {
       if (!changeInfo.url || isBlankUrl(changeInfo.url)) return;
+      observeReverseNavigation(tabId, changeInfo.url);
       const pending = pendingTabs.get(tabId);
       if (!pending) return;
       if (isExpiredFallbackPending(pending)) {
@@ -822,9 +877,10 @@ var AdsFriendlyBackground = (() => {
         tabId,
         url: changeInfo.url
       });
-    });
-    chrome.webNavigation.onCommitted.addListener((details) => {
+    };
+    const onCommitted = (details) => {
       if (details.frameId !== 0 || isBlankUrl(details.url)) return;
+      observeReverseNavigation(details.tabId, details.url);
       const pending = pendingTabs.get(details.tabId);
       if (!pending) return;
       if (isExpiredFallbackPending(pending)) {
@@ -836,13 +892,152 @@ var AdsFriendlyBackground = (() => {
         tabId: details.tabId,
         url: details.url
       });
-    });
+    };
+    chrome.webNavigation.onCreatedNavigationTarget.addListener(
+      onCreatedNavigationTarget
+    );
+    chrome.tabs.onActivated.addListener(onActivated);
+    chrome.tabs.onCreated.addListener(onCreated);
+    chrome.tabs.onUpdated.addListener(onUpdated);
+    chrome.webNavigation.onCommitted.addListener(onCommitted);
+    return () => {
+      chrome.webNavigation.onCreatedNavigationTarget.removeListener(
+        onCreatedNavigationTarget
+      );
+      chrome.tabs.onActivated.removeListener(onActivated);
+      chrome.tabs.onCreated.removeListener(onCreated);
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      chrome.webNavigation.onCommitted.removeListener(onCommitted);
+      pendingTabs.clear();
+      reverseCandidatesBySource.clear();
+      reverseCandidatesByClone.clear();
+      navigationPolicy = null;
+    };
   }
-  function hasRecentLinkIntentFromActiveTab(windowMs) {
-    return !!runtimeState.lastTrustedClick.intentUrl && runtimeState.lastTrustedClick.tabId === lastActiveTabId && Date.now() - runtimeState.lastTrustedClick.timestamp < windowMs;
+  function hasRecentUserGestureFromActiveTab(windowMs) {
+    return !!runtimeState.lastTrustedClick.sourceUrl && runtimeState.lastTrustedClick.tabId === lastActiveTabId && Date.now() - runtimeState.lastTrustedClick.timestamp < windowMs;
   }
   function isExpiredFallbackPending(pending) {
     return !pending.hasRealOpener && Date.now() - pending.createdAt > 2e3;
+  }
+  async function trackReverseCandidate({ sourceTabId, cloneTabId, cloneUrl }) {
+    if (!navigationPolicy?.can(CAPABILITIES.NAVIGATION_REVERSE_POPUNDER) || !sourceTabId || !cloneTabId)
+      return;
+    let candidate = reverseCandidatesBySource.get(sourceTabId);
+    if (candidate && candidate.cloneTabId !== cloneTabId) {
+      cleanupReverseCandidate(candidate);
+      candidate = null;
+    }
+    if (!candidate) {
+      candidate = {
+        sourceTabId,
+        cloneTabId,
+        originalUrl: getRecentSourceUrl(sourceTabId),
+        cloneUrl: null,
+        redirectedUrl: null,
+        createdAt: Date.now(),
+        handling: false
+      };
+      reverseCandidatesBySource.set(sourceTabId, candidate);
+      reverseCandidatesByClone.set(cloneTabId, candidate);
+      setTimeout(
+        () => cleanupReverseCandidate(candidate),
+        REVERSE_POPUNDER_WINDOW_MS + 500
+      );
+    }
+    if (!candidate.originalUrl) {
+      try {
+        const sourceTab = await chrome.tabs.get(sourceTabId);
+        if (sourceTab?.url?.startsWith("http")) {
+          candidate.originalUrl = sourceTab.url;
+        }
+      } catch {
+      }
+    }
+    if (cloneUrl && !isBlankUrl(cloneUrl)) candidate.cloneUrl = cloneUrl;
+    maybeHandleReversePopunder(candidate).catch(logReversePopunderError);
+  }
+  function observeReverseNavigation(tabId, url) {
+    const cloneCandidate = reverseCandidatesByClone.get(tabId);
+    if (cloneCandidate) {
+      cloneCandidate.cloneUrl = url;
+      maybeHandleReversePopunder(cloneCandidate).catch(logReversePopunderError);
+    }
+    const sourceCandidate = reverseCandidatesBySource.get(tabId);
+    if (sourceCandidate) {
+      sourceCandidate.redirectedUrl = url;
+      maybeHandleReversePopunder(sourceCandidate).catch(logReversePopunderError);
+    }
+  }
+  async function maybeHandleReversePopunder(candidate) {
+    if (candidate.handling || !candidate.originalUrl || !candidate.cloneUrl || !candidate.redirectedUrl)
+      return;
+    const elapsedMs = Date.now() - candidate.createdAt;
+    if (!isReversePopunderSequence({
+      originalUrl: candidate.originalUrl,
+      cloneUrl: candidate.cloneUrl,
+      redirectedUrl: candidate.redirectedUrl,
+      elapsedMs
+    }))
+      return;
+    candidate.handling = true;
+    if (await isAllowedReverseRedirect(candidate)) {
+      cleanupReverseCandidate(candidate);
+      return;
+    }
+    const sourceHost = new URL(candidate.originalUrl).hostname;
+    await logBlockedNavigationIfAllowed(candidate.redirectedUrl, sourceHost);
+    try {
+      const cloneTab = await chrome.tabs.get(candidate.cloneTabId);
+      if (!cloneTab?.url || !isSelfCloneNavigation(candidate.originalUrl, cloneTab.url))
+        throw new Error("clone gone");
+      await chrome.tabs.update(candidate.cloneTabId, { active: true });
+      await chrome.tabs.remove(candidate.sourceTabId);
+    } catch {
+      try {
+        await chrome.tabs.update(candidate.sourceTabId, {
+          url: candidate.originalUrl
+        });
+      } catch {
+      }
+    } finally {
+      pendingTabs.delete(candidate.cloneTabId);
+      handledTabs.set(candidate.sourceTabId, Date.now());
+      cleanupReverseCandidate(candidate);
+    }
+  }
+  async function isAllowedReverseRedirect(candidate) {
+    const original = new URL(candidate.originalUrl);
+    const redirected = new URL(candidate.redirectedUrl);
+    if (isTrustedTarget(redirected.hostname)) return true;
+    const { whitelist = [] } = await chrome.storage.local.get("whitelist");
+    if (whitelist.includes(redirected.hostname)) return true;
+    const trustWindow = await getDynamicTrustWindow(original.hostname);
+    if (hasMatchingIntent(
+      candidate.sourceTabId,
+      redirected.hostname,
+      trustWindow
+    ))
+      return true;
+    const path = await getTrustedPath(original.hostname, redirected.hostname);
+    return !!path && (path.isManual || path.visits >= 3);
+  }
+  function getRecentSourceUrl(sourceTabId) {
+    const click = runtimeState.lastTrustedClick;
+    if (click.tabId === sourceTabId && click.sourceUrl?.startsWith("http") && Date.now() - click.timestamp < 2e3)
+      return click.sourceUrl;
+    return null;
+  }
+  function cleanupReverseCandidate(candidate) {
+    if (reverseCandidatesBySource.get(candidate.sourceTabId) === candidate) {
+      reverseCandidatesBySource.delete(candidate.sourceTabId);
+    }
+    if (reverseCandidatesByClone.get(candidate.cloneTabId) === candidate) {
+      reverseCandidatesByClone.delete(candidate.cloneTabId);
+    }
+  }
+  function logReversePopunderError(error) {
+    console.error("Reverse pop-under guard failed:", error);
   }
   async function evaluateNewTab({ sourceTabId, tabId, url }) {
     if (!navigationPolicy?.can(CAPABILITIES.NAVIGATION_GUARD)) return;
@@ -851,8 +1046,9 @@ var AdsFriendlyBackground = (() => {
     try {
       const { whitelist = [], blacklist = [] } = await chrome.storage.local.get(["whitelist", "blacklist"]);
       const sourceTab = await chrome.tabs.get(sourceTabId);
-      if (!sourceTab?.url?.startsWith("http")) return;
-      const sourceUrl = new URL(sourceTab.url);
+      const capturedSourceUrl = reverseCandidatesBySource.get(sourceTabId)?.originalUrl || sourceTab?.url;
+      if (!capturedSourceUrl?.startsWith("http")) return;
+      const sourceUrl = new URL(capturedSourceUrl);
       const targetUrl = new URL(url);
       const targetDomain = targetUrl.hostname;
       if (sameHostnameOrSubdomain(sourceUrl.hostname, targetDomain) || sameHostnameOrSubdomain(targetDomain, sourceUrl.hostname))
@@ -861,7 +1057,7 @@ var AdsFriendlyBackground = (() => {
       if (isTrustedTarget(targetDomain)) return;
       if (whitelist.includes(targetDomain)) return;
       if (isBlacklistedTarget(targetDomain, blacklist)) {
-        await logBlockedNavigation(url, sourceUrl.hostname);
+        await logBlockedNavigationIfAllowed(url, sourceUrl.hostname);
         return closeTabQuietly(tabId);
       }
       const trustWindow = await getDynamicTrustWindow(sourceUrl.hostname);
@@ -905,12 +1101,17 @@ var AdsFriendlyBackground = (() => {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
   async function redirectToBlockedPage(tabId, url, source) {
-    await logBlockedNavigation(url, source);
+    await logBlockedNavigationIfAllowed(url, source);
     await chrome.tabs.update(tabId, {
       url: chrome.runtime.getURL(
         `ui/blocked.html?url=${encodeURIComponent(url)}&source=${encodeURIComponent(source)}`
       )
     });
+  }
+  async function logBlockedNavigationIfAllowed(url, source) {
+    if (navigationPolicy?.can(CAPABILITIES.TELEMETRY_QUEUE)) {
+      await logBlockedNavigation(url, source);
+    }
   }
   async function closeTabQuietly(tabId) {
     try {

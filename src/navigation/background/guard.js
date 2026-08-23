@@ -5,6 +5,11 @@ import { logBlockedNavigation } from "../../background/logs.js";
 import { getTrustedPath, syncTrustedPath } from "./trusted-paths.js";
 import { getDomPatterns } from "../../shared/pattern-store.js";
 import { CAPABILITIES } from "../../runtime/feature-catalog.js";
+import {
+  REVERSE_POPUNDER_WINDOW_MS,
+  isReversePopunderSequence,
+  isSelfCloneNavigation,
+} from "./reverse-popunder.js";
 
 const TRUSTED_INITIATORS = [
   "google.com",
@@ -39,6 +44,8 @@ const TRUSTED_TARGETS = [
 
 const pendingTabs = new Map();
 const handledTabs = new Map();
+const reverseCandidatesBySource = new Map();
+const reverseCandidatesByClone = new Map();
 let lastActiveTabId = null;
 let navigationPolicy = null;
 
@@ -72,32 +79,42 @@ export function isSuspiciousURL(url, patterns = []) {
 }
 export function registerNavigationGuard(policy) {
   navigationPolicy = policy;
-  chrome.webNavigation.onCreatedNavigationTarget.addListener((details) =>
+  const onCreatedNavigationTarget = (details) => {
+    trackReverseCandidate({
+      sourceTabId: details.sourceTabId,
+      cloneTabId: details.tabId,
+      cloneUrl: details.url,
+    }).catch(logReversePopunderError);
     evaluateNewTab({
       sourceTabId: details.sourceTabId,
       tabId: details.tabId,
       url: details.url,
-    }),
-  );
+    });
+  };
 
   chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
     lastActiveTabId = tabs?.[0]?.id || null;
   });
 
-  chrome.tabs.onActivated.addListener((activeInfo) => {
+  const onActivated = (activeInfo) => {
     lastActiveTabId = activeInfo.tabId;
-  });
+  };
 
-  chrome.tabs.onCreated.addListener((tab) => {
+  const onCreated = (tab) => {
     const sourceTabId =
       tab.openerTabId ||
-      (hasRecentLinkIntentFromActiveTab(1500) ? lastActiveTabId : null);
+      (hasRecentUserGestureFromActiveTab(1500) ? lastActiveTabId : null);
     if (!sourceTabId || !tab.id) return;
     pendingTabs.set(tab.id, {
       sourceTabId,
       createdAt: Date.now(),
       hasRealOpener: !!tab.openerTabId,
     });
+    trackReverseCandidate({
+      sourceTabId,
+      cloneTabId: tab.id,
+      cloneUrl: tab.url,
+    }).catch(logReversePopunderError);
     setTimeout(
       () => pendingTabs.delete(tab.id),
       tab.openerTabId ? 10000 : 2000,
@@ -105,10 +122,11 @@ export function registerNavigationGuard(policy) {
     if (tab.url && !isBlankUrl(tab.url)) {
       evaluateNewTab({ sourceTabId, tabId: tab.id, url: tab.url });
     }
-  });
+  };
 
-  chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  const onUpdated = (tabId, changeInfo) => {
     if (!changeInfo.url || isBlankUrl(changeInfo.url)) return;
+    observeReverseNavigation(tabId, changeInfo.url);
     const pending = pendingTabs.get(tabId);
     if (!pending) return;
     if (isExpiredFallbackPending(pending)) {
@@ -120,10 +138,11 @@ export function registerNavigationGuard(policy) {
       tabId,
       url: changeInfo.url,
     });
-  });
+  };
 
-  chrome.webNavigation.onCommitted.addListener((details) => {
+  const onCommitted = (details) => {
     if (details.frameId !== 0 || isBlankUrl(details.url)) return;
+    observeReverseNavigation(details.tabId, details.url);
     const pending = pendingTabs.get(details.tabId);
     if (!pending) return;
     if (isExpiredFallbackPending(pending)) {
@@ -135,12 +154,34 @@ export function registerNavigationGuard(policy) {
       tabId: details.tabId,
       url: details.url,
     });
-  });
+  };
+
+  chrome.webNavigation.onCreatedNavigationTarget.addListener(
+    onCreatedNavigationTarget,
+  );
+  chrome.tabs.onActivated.addListener(onActivated);
+  chrome.tabs.onCreated.addListener(onCreated);
+  chrome.tabs.onUpdated.addListener(onUpdated);
+  chrome.webNavigation.onCommitted.addListener(onCommitted);
+
+  return () => {
+    chrome.webNavigation.onCreatedNavigationTarget.removeListener(
+      onCreatedNavigationTarget,
+    );
+    chrome.tabs.onActivated.removeListener(onActivated);
+    chrome.tabs.onCreated.removeListener(onCreated);
+    chrome.tabs.onUpdated.removeListener(onUpdated);
+    chrome.webNavigation.onCommitted.removeListener(onCommitted);
+    pendingTabs.clear();
+    reverseCandidatesBySource.clear();
+    reverseCandidatesByClone.clear();
+    navigationPolicy = null;
+  };
 }
 
-function hasRecentLinkIntentFromActiveTab(windowMs) {
+function hasRecentUserGestureFromActiveTab(windowMs) {
   return (
-    !!runtimeState.lastTrustedClick.intentUrl &&
+    !!runtimeState.lastTrustedClick.sourceUrl &&
     runtimeState.lastTrustedClick.tabId === lastActiveTabId &&
     Date.now() - runtimeState.lastTrustedClick.timestamp < windowMs
   );
@@ -148,6 +189,160 @@ function hasRecentLinkIntentFromActiveTab(windowMs) {
 
 function isExpiredFallbackPending(pending) {
   return !pending.hasRealOpener && Date.now() - pending.createdAt > 2000;
+}
+
+async function trackReverseCandidate({ sourceTabId, cloneTabId, cloneUrl }) {
+  if (
+    !navigationPolicy?.can(CAPABILITIES.NAVIGATION_REVERSE_POPUNDER) ||
+    !sourceTabId ||
+    !cloneTabId
+  )
+    return;
+
+  let candidate = reverseCandidatesBySource.get(sourceTabId);
+  if (candidate && candidate.cloneTabId !== cloneTabId) {
+    cleanupReverseCandidate(candidate);
+    candidate = null;
+  }
+  if (!candidate) {
+    candidate = {
+      sourceTabId,
+      cloneTabId,
+      originalUrl: getRecentSourceUrl(sourceTabId),
+      cloneUrl: null,
+      redirectedUrl: null,
+      createdAt: Date.now(),
+      handling: false,
+    };
+    reverseCandidatesBySource.set(sourceTabId, candidate);
+    reverseCandidatesByClone.set(cloneTabId, candidate);
+    setTimeout(
+      () => cleanupReverseCandidate(candidate),
+      REVERSE_POPUNDER_WINDOW_MS + 500,
+    );
+  }
+
+  if (!candidate.originalUrl) {
+    try {
+      const sourceTab = await chrome.tabs.get(sourceTabId);
+      if (sourceTab?.url?.startsWith("http")) {
+        candidate.originalUrl = sourceTab.url;
+      }
+    } catch {}
+  }
+  if (cloneUrl && !isBlankUrl(cloneUrl)) candidate.cloneUrl = cloneUrl;
+  maybeHandleReversePopunder(candidate).catch(logReversePopunderError);
+}
+
+function observeReverseNavigation(tabId, url) {
+  const cloneCandidate = reverseCandidatesByClone.get(tabId);
+  if (cloneCandidate) {
+    cloneCandidate.cloneUrl = url;
+    maybeHandleReversePopunder(cloneCandidate).catch(logReversePopunderError);
+  }
+
+  const sourceCandidate = reverseCandidatesBySource.get(tabId);
+  if (sourceCandidate) {
+    sourceCandidate.redirectedUrl = url;
+    maybeHandleReversePopunder(sourceCandidate).catch(logReversePopunderError);
+  }
+}
+
+async function maybeHandleReversePopunder(candidate) {
+  if (
+    candidate.handling ||
+    !candidate.originalUrl ||
+    !candidate.cloneUrl ||
+    !candidate.redirectedUrl
+  )
+    return;
+
+  const elapsedMs = Date.now() - candidate.createdAt;
+  if (
+    !isReversePopunderSequence({
+      originalUrl: candidate.originalUrl,
+      cloneUrl: candidate.cloneUrl,
+      redirectedUrl: candidate.redirectedUrl,
+      elapsedMs,
+    })
+  )
+    return;
+
+  candidate.handling = true;
+  if (await isAllowedReverseRedirect(candidate)) {
+    cleanupReverseCandidate(candidate);
+    return;
+  }
+
+  const sourceHost = new URL(candidate.originalUrl).hostname;
+  await logBlockedNavigationIfAllowed(candidate.redirectedUrl, sourceHost);
+
+  try {
+    const cloneTab = await chrome.tabs.get(candidate.cloneTabId);
+    if (
+      !cloneTab?.url ||
+      !isSelfCloneNavigation(candidate.originalUrl, cloneTab.url)
+    )
+      throw new Error("clone gone");
+    await chrome.tabs.update(candidate.cloneTabId, { active: true });
+    await chrome.tabs.remove(candidate.sourceTabId);
+  } catch {
+    try {
+      await chrome.tabs.update(candidate.sourceTabId, {
+        url: candidate.originalUrl,
+      });
+    } catch {}
+  } finally {
+    pendingTabs.delete(candidate.cloneTabId);
+    handledTabs.set(candidate.sourceTabId, Date.now());
+    cleanupReverseCandidate(candidate);
+  }
+}
+
+async function isAllowedReverseRedirect(candidate) {
+  const original = new URL(candidate.originalUrl);
+  const redirected = new URL(candidate.redirectedUrl);
+  if (isTrustedTarget(redirected.hostname)) return true;
+
+  const { whitelist = [] } = await chrome.storage.local.get("whitelist");
+  if (whitelist.includes(redirected.hostname)) return true;
+
+  const trustWindow = await getDynamicTrustWindow(original.hostname);
+  if (
+    hasMatchingIntent(
+      candidate.sourceTabId,
+      redirected.hostname,
+      trustWindow,
+    )
+  )
+    return true;
+
+  const path = await getTrustedPath(original.hostname, redirected.hostname);
+  return !!path && (path.isManual || path.visits >= 3);
+}
+
+function getRecentSourceUrl(sourceTabId) {
+  const click = runtimeState.lastTrustedClick;
+  if (
+    click.tabId === sourceTabId &&
+    click.sourceUrl?.startsWith("http") &&
+    Date.now() - click.timestamp < 2000
+  )
+    return click.sourceUrl;
+  return null;
+}
+
+function cleanupReverseCandidate(candidate) {
+  if (reverseCandidatesBySource.get(candidate.sourceTabId) === candidate) {
+    reverseCandidatesBySource.delete(candidate.sourceTabId);
+  }
+  if (reverseCandidatesByClone.get(candidate.cloneTabId) === candidate) {
+    reverseCandidatesByClone.delete(candidate.cloneTabId);
+  }
+}
+
+function logReversePopunderError(error) {
+  console.error("Reverse pop-under guard failed:", error);
 }
 
 async function evaluateNewTab({ sourceTabId, tabId, url }) {
@@ -159,8 +354,10 @@ async function evaluateNewTab({ sourceTabId, tabId, url }) {
     const { whitelist = [], blacklist = [] } =
       await chrome.storage.local.get(["whitelist", "blacklist"]);
     const sourceTab = await chrome.tabs.get(sourceTabId);
-    if (!sourceTab?.url?.startsWith("http")) return;
-    const sourceUrl = new URL(sourceTab.url);
+    const capturedSourceUrl =
+      reverseCandidatesBySource.get(sourceTabId)?.originalUrl || sourceTab?.url;
+    if (!capturedSourceUrl?.startsWith("http")) return;
+    const sourceUrl = new URL(capturedSourceUrl);
     const targetUrl = new URL(url);
     const targetDomain = targetUrl.hostname;
     if (
@@ -173,7 +370,7 @@ async function evaluateNewTab({ sourceTabId, tabId, url }) {
     if (isTrustedTarget(targetDomain)) return;
     if (whitelist.includes(targetDomain)) return;
     if (isBlacklistedTarget(targetDomain, blacklist)) {
-      await logBlockedNavigation(url, sourceUrl.hostname);
+      await logBlockedNavigationIfAllowed(url, sourceUrl.hostname);
       return closeTabQuietly(tabId);
     }
 
@@ -232,12 +429,18 @@ function delay(ms) {
 }
 
 async function redirectToBlockedPage(tabId, url, source) {
-  await logBlockedNavigation(url, source);
+  await logBlockedNavigationIfAllowed(url, source);
   await chrome.tabs.update(tabId, {
     url: chrome.runtime.getURL(
       `ui/blocked.html?url=${encodeURIComponent(url)}&source=${encodeURIComponent(source)}`,
     ),
   });
+}
+
+async function logBlockedNavigationIfAllowed(url, source) {
+  if (navigationPolicy?.can(CAPABILITIES.TELEMETRY_QUEUE)) {
+    await logBlockedNavigation(url, source);
+  }
 }
 
 async function closeTabQuietly(tabId) {
