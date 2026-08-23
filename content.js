@@ -13,16 +13,78 @@ var AdsFriendlyContent = (() => {
     }
   }
 
+  // src/shared/url.js
+  function parseUrl(value, base) {
+    try {
+      return new URL(value, base);
+    } catch {
+      return null;
+    }
+  }
+  function sameHostnameOrSubdomain(hostname, parent) {
+    if (!hostname || !parent) return false;
+    const h = hostname.toLowerCase();
+    const p = parent.toLowerCase();
+    return h === p || h.endsWith(`.${p}`);
+  }
+
+  // src/navigation/shared/intent-classifier.js
+  var STRONG_TRACKING_KEYS = /* @__PURE__ */ new Set([
+    "adid",
+    "aff_id",
+    "affiliate",
+    "bannerid",
+    "clickid",
+    "gclid",
+    "pop_id",
+    "popunder",
+    "zoneid"
+  ]);
+  var PROMOTIONAL_TOKEN_RE = /(^|[^a-z0-9])(?:ad|ads|advert|banner|casino|hitclub|promo|sponsor|bet)([^a-z0-9]|$)/i;
+  function classifyNavigationIntent({
+    intentUrl,
+    sourceUrl,
+    evidence = ""
+  } = {}) {
+    const intent = parseUrl(intentUrl);
+    const source = parseUrl(sourceUrl);
+    if (!intent || !/^https?:$/.test(intent.protocol)) {
+      return { likelyAd: false, reasons: [] };
+    }
+    const external = !source || !(sameHostnameOrSubdomain(intent.hostname, source.hostname) || sameHostnameOrSubdomain(source.hostname, intent.hostname));
+    if (!external) return { likelyAd: false, reasons: [] };
+    const keys = [...intent.searchParams.keys()].map((key) => key.toLowerCase());
+    const strongTracking = keys.some((key) => STRONG_TRACKING_KEYS.has(key));
+    const marketingCount = keys.filter((key) => key.startsWith("utm_")).length;
+    const tokenEvidence = `${intent.hostname} ${intent.pathname} ${evidence}`;
+    const promotionalToken = PROMOTIONAL_TOKEN_RE.test(tokenEvidence);
+    const reasons = [];
+    if (strongTracking) reasons.push("strong_tracking_parameter");
+    if (marketingCount >= 2) reasons.push("multiple_campaign_parameters");
+    if (promotionalToken) reasons.push("promotional_element_or_destination");
+    return {
+      likelyAd: reasons.length > 0,
+      reasons
+    };
+  }
+
   // src/navigation/content/intent-tracker.js
   function startIntentTracker() {
     const recordIntent = (event) => {
       if (!event.isTrusted) return;
       try {
         const link = event.target?.closest?.("a[href]");
+        const intent = classifyNavigationIntent({
+          intentUrl: link?.href,
+          sourceUrl: location.href,
+          evidence: buildClickEvidence(link, event.target)
+        });
         chrome.runtime.sendMessage({
           type: "TRUSTED_CLICK",
           intentUrl: link?.href || null,
-          sourceUrl: location.href
+          sourceUrl: location.href,
+          intentKind: intent.likelyAd ? "promotional" : "navigation",
+          intentReasons: intent.reasons
         });
       } catch {
       }
@@ -38,6 +100,17 @@ var AdsFriendlyContent = (() => {
       document.removeEventListener("contextmenu", recordIntent, true);
       document.removeEventListener("keydown", onKeydown, true);
     };
+  }
+  function buildClickEvidence(link, target) {
+    return [
+      link?.id,
+      typeof link?.className === "string" ? link.className : "",
+      link?.title,
+      target?.id,
+      typeof target?.className === "string" ? target.className : "",
+      target?.getAttribute?.("alt"),
+      target?.getAttribute?.("title")
+    ].filter(Boolean).join(" ");
   }
 
   // src/dom/actions.js

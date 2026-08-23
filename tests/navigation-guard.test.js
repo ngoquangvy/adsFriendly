@@ -11,6 +11,30 @@ import {
   shouldKeepTrackingNewTab,
 } from "../src/navigation/background/new-tab-policy.js";
 import { isExtensionContextInvalidated } from "../src/shared/extension-context.js";
+import { classifyNavigationIntent } from "../src/navigation/shared/intent-classifier.js";
+
+test("classifies the reported HitClub banner click as promotional", () => {
+  const result = classifyNavigationIntent({
+    sourceUrl: "https://animevietsub.work/phim/example/tap-20.html",
+    intentUrl:
+      "https://hitclub.voting/?a=01d52ef1408e7407ed98f13a699a6ec6&utm_source=animevietsubapp&utm_medium=topbanner2&utm_campaign=cpd&utm_content=phim",
+    evidence: "IMG hitclub",
+  });
+  assert.equal(result.likelyAd, true);
+  assert(result.reasons.includes("multiple_campaign_parameters"));
+  assert(result.reasons.includes("promotional_element_or_destination"));
+});
+
+test("does not downgrade an ordinary explicitly clicked external link", () => {
+  assert.equal(
+    classifyNavigationIntent({
+      sourceUrl: "https://example.test/article",
+      intentUrl: "https://docs.example.dev/guide?utm_source=newsletter",
+      evidence: "Read documentation",
+    }).likelyAd,
+    false,
+  );
+});
 
 test("recognizes an invalidated extension context", () => {
   assert.equal(

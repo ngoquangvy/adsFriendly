@@ -5,6 +5,8 @@ var AdsFriendlyBackground = (() => {
       timestamp: 0,
       intentUrl: null,
       sourceUrl: null,
+      intentKind: "navigation",
+      intentReasons: [],
       tabId: null
     }
   };
@@ -600,6 +602,8 @@ var AdsFriendlyBackground = (() => {
         timestamp: Date.now(),
         intentUrl: message.intentUrl,
         sourceUrl: message.sourceUrl || sender?.tab?.url || null,
+        intentKind: message.intentKind || "navigation",
+        intentReasons: Array.isArray(message.intentReasons) ? message.intentReasons : [],
         tabId: sender?.tab?.id || null
       };
       return;
@@ -772,6 +776,46 @@ var AdsFriendlyBackground = (() => {
   function normalizePath(pathname) {
     const normalized = pathname.replace(/\/+$/, "");
     return normalized || "/";
+  }
+
+  // src/navigation/shared/intent-classifier.js
+  var STRONG_TRACKING_KEYS = /* @__PURE__ */ new Set([
+    "adid",
+    "aff_id",
+    "affiliate",
+    "bannerid",
+    "clickid",
+    "gclid",
+    "pop_id",
+    "popunder",
+    "zoneid"
+  ]);
+  var PROMOTIONAL_TOKEN_RE = /(^|[^a-z0-9])(?:ad|ads|advert|banner|casino|hitclub|promo|sponsor|bet)([^a-z0-9]|$)/i;
+  function classifyNavigationIntent({
+    intentUrl,
+    sourceUrl,
+    evidence = ""
+  } = {}) {
+    const intent = parseUrl(intentUrl);
+    const source = parseUrl(sourceUrl);
+    if (!intent || !/^https?:$/.test(intent.protocol)) {
+      return { likelyAd: false, reasons: [] };
+    }
+    const external = !source || !(sameHostnameOrSubdomain(intent.hostname, source.hostname) || sameHostnameOrSubdomain(source.hostname, intent.hostname));
+    if (!external) return { likelyAd: false, reasons: [] };
+    const keys = [...intent.searchParams.keys()].map((key) => key.toLowerCase());
+    const strongTracking = keys.some((key) => STRONG_TRACKING_KEYS.has(key));
+    const marketingCount = keys.filter((key) => key.startsWith("utm_")).length;
+    const tokenEvidence = `${intent.hostname} ${intent.pathname} ${evidence}`;
+    const promotionalToken = PROMOTIONAL_TOKEN_RE.test(tokenEvidence);
+    const reasons = [];
+    if (strongTracking) reasons.push("strong_tracking_parameter");
+    if (marketingCount >= 2) reasons.push("multiple_campaign_parameters");
+    if (promotionalToken) reasons.push("promotional_element_or_destination");
+    return {
+      likelyAd: reasons.length > 0,
+      reasons
+    };
   }
 
   // src/navigation/background/guard.js
@@ -1086,6 +1130,14 @@ var AdsFriendlyBackground = (() => {
     const click = runtimeState.lastTrustedClick;
     if (click.tabId !== sourceTabId) return false;
     const intent = parseUrl(click.intentUrl);
+    const classification = classifyNavigationIntent({
+      intentUrl: click.intentUrl,
+      sourceUrl: click.sourceUrl,
+      evidence: click.intentKind === "promotional" ? "promo" : ""
+    });
+    if (click.intentKind === "promotional" || classification.likelyAd) {
+      return false;
+    }
     const timeSinceClick = Date.now() - click.timestamp;
     return timeSinceClick >= 0 && timeSinceClick < trustWindow && !!intent && (sameHostnameOrSubdomain(targetDomain, intent.hostname) || sameHostnameOrSubdomain(intent.hostname, targetDomain));
   }

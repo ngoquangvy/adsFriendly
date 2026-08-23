@@ -53,6 +53,10 @@ async function route(message, sender) {
       timestamp: Date.now(),
       intentUrl: message.intentUrl,
       sourceUrl: message.sourceUrl || sender?.tab?.url || null,
+      intentKind: message.intentKind || "navigation",
+      intentReasons: Array.isArray(message.intentReasons)
+        ? message.intentReasons
+        : [],
       tabId: sender?.tab?.id || null,
     };
     return;

@@ -14,6 +14,7 @@ import {
   isReversePopunderSequence,
   isSelfCloneNavigation,
 } from "./reverse-popunder.js";
+import { classifyNavigationIntent } from "../shared/intent-classifier.js";
 
 const TRUSTED_INITIATORS = [
   "google.com",
@@ -393,6 +394,14 @@ function hasMatchingIntent(sourceTabId, targetDomain, trustWindow) {
   const click = runtimeState.lastTrustedClick;
   if (click.tabId !== sourceTabId) return false;
   const intent = parseUrl(click.intentUrl);
+  const classification = classifyNavigationIntent({
+    intentUrl: click.intentUrl,
+    sourceUrl: click.sourceUrl,
+    evidence: click.intentKind === "promotional" ? "promo" : "",
+  });
+  if (click.intentKind === "promotional" || classification.likelyAd) {
+    return false;
+  }
   const timeSinceClick = Date.now() - click.timestamp;
   return (
     timeSinceClick >= 0 &&
