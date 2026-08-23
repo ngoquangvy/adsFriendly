@@ -25,3 +25,7 @@ export function decideNewTabNavigation({
   if (blacklisted) return NEW_TAB_DECISIONS.CLOSE;
   return NEW_TAB_DECISIONS.VERIFY;
 }
+
+export function shouldKeepTrackingNewTab({ sameSite = false } = {}) {
+  return sameSite;
+}

@@ -741,6 +741,9 @@ var AdsFriendlyBackground = (() => {
     if (blacklisted) return NEW_TAB_DECISIONS.CLOSE;
     return NEW_TAB_DECISIONS.VERIFY;
   }
+  function shouldKeepTrackingNewTab({ sameSite = false } = {}) {
+    return sameSite;
+  }
 
   // src/navigation/background/reverse-popunder.js
   var REVERSE_POPUNDER_WINDOW_MS = 7e3;
@@ -805,7 +808,6 @@ var AdsFriendlyBackground = (() => {
   var handledTabs = /* @__PURE__ */ new Map();
   var reverseCandidatesBySource = /* @__PURE__ */ new Map();
   var reverseCandidatesByClone = /* @__PURE__ */ new Map();
-  var lastActiveTabId = null;
   var navigationPolicy = null;
   function registerNavigationGuard(policy) {
     navigationPolicy = policy;
@@ -821,14 +823,8 @@ var AdsFriendlyBackground = (() => {
         url: details.url
       });
     };
-    chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
-      lastActiveTabId = tabs?.[0]?.id || null;
-    });
-    const onActivated = (activeInfo) => {
-      lastActiveTabId = activeInfo.tabId;
-    };
     const onCreated = (tab) => {
-      const sourceTabId = tab.openerTabId || (hasRecentUserGestureFromActiveTab(1500) ? lastActiveTabId : null);
+      const sourceTabId = tab.openerTabId || getRecentUserGestureSourceTabId(2500);
       if (!sourceTabId || !tab.id) return;
       pendingTabs.set(tab.id, {
         sourceTabId,
@@ -838,14 +834,15 @@ var AdsFriendlyBackground = (() => {
       trackReverseCandidate({
         sourceTabId,
         cloneTabId: tab.id,
-        cloneUrl: tab.url
+        cloneUrl: tab.pendingUrl || tab.url
       }).catch(logReversePopunderError);
       setTimeout(
         () => pendingTabs.delete(tab.id),
-        tab.openerTabId ? 1e4 : 2e3
+        tab.openerTabId ? 1e4 : REVERSE_POPUNDER_WINDOW_MS + 500
       );
-      if (tab.url && !isBlankUrl(tab.url)) {
-        evaluateNewTab({ sourceTabId, tabId: tab.id, url: tab.url });
+      const initialUrl = tab.pendingUrl || tab.url;
+      if (initialUrl && !isBlankUrl(initialUrl)) {
+        evaluateNewTab({ sourceTabId, tabId: tab.id, url: initialUrl });
       }
     };
     const onUpdated = (tabId, changeInfo) => {
@@ -881,7 +878,6 @@ var AdsFriendlyBackground = (() => {
     chrome.webNavigation.onCreatedNavigationTarget.addListener(
       onCreatedNavigationTarget
     );
-    chrome.tabs.onActivated.addListener(onActivated);
     chrome.tabs.onCreated.addListener(onCreated);
     chrome.tabs.onUpdated.addListener(onUpdated);
     chrome.webNavigation.onCommitted.addListener(onCommitted);
@@ -889,7 +885,6 @@ var AdsFriendlyBackground = (() => {
       chrome.webNavigation.onCreatedNavigationTarget.removeListener(
         onCreatedNavigationTarget
       );
-      chrome.tabs.onActivated.removeListener(onActivated);
       chrome.tabs.onCreated.removeListener(onCreated);
       chrome.tabs.onUpdated.removeListener(onUpdated);
       chrome.webNavigation.onCommitted.removeListener(onCommitted);
@@ -899,11 +894,14 @@ var AdsFriendlyBackground = (() => {
       navigationPolicy = null;
     };
   }
-  function hasRecentUserGestureFromActiveTab(windowMs) {
-    return !!runtimeState.lastTrustedClick.sourceUrl && runtimeState.lastTrustedClick.tabId === lastActiveTabId && Date.now() - runtimeState.lastTrustedClick.timestamp < windowMs;
+  function getRecentUserGestureSourceTabId(windowMs) {
+    const click = runtimeState.lastTrustedClick;
+    if (!click.tabId || !click.sourceUrl || Date.now() - click.timestamp >= windowMs)
+      return null;
+    return click.tabId;
   }
   function isExpiredFallbackPending(pending) {
-    return !pending.hasRealOpener && Date.now() - pending.createdAt > 2e3;
+    return !pending.hasRealOpener && Date.now() - pending.createdAt > REVERSE_POPUNDER_WINDOW_MS;
   }
   async function trackReverseCandidate({ sourceTabId, cloneTabId, cloneUrl }) {
     if (!navigationPolicy?.can(CAPABILITIES.NAVIGATION_REVERSE_POPUNDER) || !sourceTabId || !cloneTabId)
@@ -1028,6 +1026,7 @@ var AdsFriendlyBackground = (() => {
     if (!navigationPolicy?.can(CAPABILITIES.NAVIGATION_GUARD)) return;
     if (!sourceTabId || !tabId || !url || isBlankUrl(url)) return;
     if (handledTabs.has(tabId)) return;
+    let shouldFinalize = false;
     try {
       const { whitelist = [], blacklist = [] } = await chrome.storage.local.get(["whitelist", "blacklist"]);
       const sourceTab = await chrome.tabs.get(sourceTabId);
@@ -1037,6 +1036,7 @@ var AdsFriendlyBackground = (() => {
       const targetUrl = new URL(url);
       const targetDomain = targetUrl.hostname;
       const sameSite = sameHostnameOrSubdomain(sourceUrl.hostname, targetDomain) || sameHostnameOrSubdomain(targetDomain, sourceUrl.hostname);
+      if (shouldKeepTrackingNewTab({ sameSite })) return;
       const trustWindow = await getDynamicTrustWindow(sourceUrl.hostname);
       let intentMatched = hasMatchingIntent(
         sourceTabId,
@@ -1054,26 +1054,32 @@ var AdsFriendlyBackground = (() => {
         trustedPath: !!path && (path.isManual || path.visits >= 3)
       });
       if (decision === NEW_TAB_DECISIONS.ALLOW) {
+        shouldFinalize = true;
         if (intentMatched) syncTrustedPath(sourceUrl.hostname, targetDomain);
         return;
       }
       if (decision === NEW_TAB_DECISIONS.CLOSE) {
+        shouldFinalize = true;
         await logBlockedNavigationIfAllowed(url, sourceUrl.hostname);
         return closeTabQuietly(tabId);
       }
       await delay(180);
       intentMatched = hasMatchingIntent(sourceTabId, targetDomain, trustWindow);
       if (intentMatched) {
+        shouldFinalize = true;
         syncTrustedPath(sourceUrl.hostname, targetDomain);
         return;
       }
+      shouldFinalize = true;
       return redirectToBlockedPage(tabId, url, sourceUrl.hostname);
     } catch (err) {
       console.error("Error evaluating navigation:", err);
     } finally {
-      pendingTabs.delete(tabId);
-      handledTabs.set(tabId, Date.now());
-      setTimeout(() => handledTabs.delete(tabId), 15e3);
+      if (shouldFinalize) {
+        pendingTabs.delete(tabId);
+        handledTabs.set(tabId, Date.now());
+        setTimeout(() => handledTabs.delete(tabId), 15e3);
+      }
     }
   }
   function hasMatchingIntent(sourceTabId, targetDomain, trustWindow) {

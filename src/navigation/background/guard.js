@@ -7,6 +7,7 @@ import { CAPABILITIES } from "../../runtime/feature-catalog.js";
 import {
   NEW_TAB_DECISIONS,
   decideNewTabNavigation,
+  shouldKeepTrackingNewTab,
 } from "./new-tab-policy.js";
 import {
   REVERSE_POPUNDER_WINDOW_MS,
@@ -49,7 +50,6 @@ const pendingTabs = new Map();
 const handledTabs = new Map();
 const reverseCandidatesBySource = new Map();
 const reverseCandidatesByClone = new Map();
-let lastActiveTabId = null;
 let navigationPolicy = null;
 
 export function registerNavigationGuard(policy) {
@@ -67,18 +67,10 @@ export function registerNavigationGuard(policy) {
     });
   };
 
-  chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
-    lastActiveTabId = tabs?.[0]?.id || null;
-  });
-
-  const onActivated = (activeInfo) => {
-    lastActiveTabId = activeInfo.tabId;
-  };
-
   const onCreated = (tab) => {
     const sourceTabId =
       tab.openerTabId ||
-      (hasRecentUserGestureFromActiveTab(1500) ? lastActiveTabId : null);
+      getRecentUserGestureSourceTabId(2500);
     if (!sourceTabId || !tab.id) return;
     pendingTabs.set(tab.id, {
       sourceTabId,
@@ -88,14 +80,15 @@ export function registerNavigationGuard(policy) {
     trackReverseCandidate({
       sourceTabId,
       cloneTabId: tab.id,
-      cloneUrl: tab.url,
+      cloneUrl: tab.pendingUrl || tab.url,
     }).catch(logReversePopunderError);
     setTimeout(
       () => pendingTabs.delete(tab.id),
-      tab.openerTabId ? 10000 : 2000,
+      tab.openerTabId ? 10000 : REVERSE_POPUNDER_WINDOW_MS + 500,
     );
-    if (tab.url && !isBlankUrl(tab.url)) {
-      evaluateNewTab({ sourceTabId, tabId: tab.id, url: tab.url });
+    const initialUrl = tab.pendingUrl || tab.url;
+    if (initialUrl && !isBlankUrl(initialUrl)) {
+      evaluateNewTab({ sourceTabId, tabId: tab.id, url: initialUrl });
     }
   };
 
@@ -134,7 +127,6 @@ export function registerNavigationGuard(policy) {
   chrome.webNavigation.onCreatedNavigationTarget.addListener(
     onCreatedNavigationTarget,
   );
-  chrome.tabs.onActivated.addListener(onActivated);
   chrome.tabs.onCreated.addListener(onCreated);
   chrome.tabs.onUpdated.addListener(onUpdated);
   chrome.webNavigation.onCommitted.addListener(onCommitted);
@@ -143,7 +135,6 @@ export function registerNavigationGuard(policy) {
     chrome.webNavigation.onCreatedNavigationTarget.removeListener(
       onCreatedNavigationTarget,
     );
-    chrome.tabs.onActivated.removeListener(onActivated);
     chrome.tabs.onCreated.removeListener(onCreated);
     chrome.tabs.onUpdated.removeListener(onUpdated);
     chrome.webNavigation.onCommitted.removeListener(onCommitted);
@@ -154,16 +145,22 @@ export function registerNavigationGuard(policy) {
   };
 }
 
-function hasRecentUserGestureFromActiveTab(windowMs) {
-  return (
-    !!runtimeState.lastTrustedClick.sourceUrl &&
-    runtimeState.lastTrustedClick.tabId === lastActiveTabId &&
-    Date.now() - runtimeState.lastTrustedClick.timestamp < windowMs
-  );
+function getRecentUserGestureSourceTabId(windowMs) {
+  const click = runtimeState.lastTrustedClick;
+  if (
+    !click.tabId ||
+    !click.sourceUrl ||
+    Date.now() - click.timestamp >= windowMs
+  )
+    return null;
+  return click.tabId;
 }
 
 function isExpiredFallbackPending(pending) {
-  return !pending.hasRealOpener && Date.now() - pending.createdAt > 2000;
+  return (
+    !pending.hasRealOpener &&
+    Date.now() - pending.createdAt > REVERSE_POPUNDER_WINDOW_MS
+  );
 }
 
 async function trackReverseCandidate({ sourceTabId, cloneTabId, cloneUrl }) {
@@ -325,6 +322,7 @@ async function evaluateNewTab({ sourceTabId, tabId, url }) {
   if (!sourceTabId || !tabId || !url || isBlankUrl(url)) return;
   if (handledTabs.has(tabId)) return;
 
+  let shouldFinalize = false;
   try {
     const { whitelist = [], blacklist = [] } =
       await chrome.storage.local.get(["whitelist", "blacklist"]);
@@ -338,6 +336,10 @@ async function evaluateNewTab({ sourceTabId, tabId, url }) {
     const sameSite =
       sameHostnameOrSubdomain(sourceUrl.hostname, targetDomain) ||
       sameHostnameOrSubdomain(targetDomain, sourceUrl.hostname);
+    // A same-site landing page may only be an intermediate redirect. Keep the
+    // tab associated with its source until it leaves the site or expires.
+    if (shouldKeepTrackingNewTab({ sameSite })) return;
+
     const trustWindow = await getDynamicTrustWindow(sourceUrl.hostname);
     let intentMatched = hasMatchingIntent(
       sourceTabId,
@@ -356,10 +358,12 @@ async function evaluateNewTab({ sourceTabId, tabId, url }) {
     });
 
     if (decision === NEW_TAB_DECISIONS.ALLOW) {
+      shouldFinalize = true;
       if (intentMatched) syncTrustedPath(sourceUrl.hostname, targetDomain);
       return;
     }
     if (decision === NEW_TAB_DECISIONS.CLOSE) {
+      shouldFinalize = true;
       await logBlockedNavigationIfAllowed(url, sourceUrl.hostname);
       return closeTabQuietly(tabId);
     }
@@ -368,16 +372,20 @@ async function evaluateNewTab({ sourceTabId, tabId, url }) {
     await delay(180);
     intentMatched = hasMatchingIntent(sourceTabId, targetDomain, trustWindow);
     if (intentMatched) {
+      shouldFinalize = true;
       syncTrustedPath(sourceUrl.hostname, targetDomain);
       return;
     }
+    shouldFinalize = true;
     return redirectToBlockedPage(tabId, url, sourceUrl.hostname);
   } catch (err) {
     console.error("Error evaluating navigation:", err);
   } finally {
-    pendingTabs.delete(tabId);
-    handledTabs.set(tabId, Date.now());
-    setTimeout(() => handledTabs.delete(tabId), 15000);
+    if (shouldFinalize) {
+      pendingTabs.delete(tabId);
+      handledTabs.set(tabId, Date.now());
+      setTimeout(() => handledTabs.delete(tabId), 15000);
+    }
   }
 }
 

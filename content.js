@@ -424,7 +424,9 @@ var AdsFriendlyContent = (() => {
     active = { candidate, handlers };
     const toast = ensureToast();
     const label = candidate.features.tag.toUpperCase();
-    toast.querySelector(".adsfriendly-dom-message").textContent = `Possible ad: ${label} (${Math.round(candidate.decision.confidence * 100)}%)`;
+    const confidence = Math.round(candidate.decision.confidence * 100);
+    toast.querySelector(".adsfriendly-dom-message").textContent = `${label} \xB7 ${confidence}% confidence`;
+    toast.querySelector(".adsfriendly-dom-message").title = candidate.decision.reasons?.join(", ") || "Heuristic DOM signals";
     toast.classList.remove("adsfriendly-dom-hidden");
     scheduleHide();
   }
@@ -437,9 +439,10 @@ var AdsFriendlyContent = (() => {
     toast.setAttribute("role", "status");
     toast.setAttribute("aria-live", "polite");
     toast.innerHTML = `
+    <span class="adsfriendly-dom-scope">PAGE ELEMENT</span>
     <span class="adsfriendly-dom-message"></span>
-    <button class="adsfriendly-dom-hide" type="button">Hide</button>
-    <button class="adsfriendly-dom-allow" type="button">Allow</button>
+    <button class="adsfriendly-dom-hide" type="button">Hide element</button>
+    <button class="adsfriendly-dom-allow" type="button">Keep element</button>
     <button class="adsfriendly-dom-close" type="button">x</button>
   `;
     const style = document.createElement("style");
@@ -471,6 +474,16 @@ var AdsFriendlyContent = (() => {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+    #${TOAST_ID} .adsfriendly-dom-scope {
+      padding: 3px 5px;
+      border-radius: 5px;
+      background: rgba(96, 165, 250, 0.16);
+      color: #93c5fd;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      flex: 0 0 auto;
     }
     #${TOAST_ID} button {
       border: 0;
@@ -902,6 +915,11 @@ var AdsFriendlyContent = (() => {
     "section"
   ];
 
+  // src/shared/extension-context.js
+  function isExtensionContextInvalidated(error) {
+    return /extension context invalidated/i.test(String(error?.message || error));
+  }
+
   // src/dom/rule-blocker.js
   var PROTECTED_SELECTOR2 = 'nav, header, [role="navigation"], form, [data-testid*="login" i]';
   async function blockAdsOnPage() {
@@ -916,7 +934,8 @@ var AdsFriendlyContent = (() => {
       ]);
       customSelectors = result.userCustomRules?.[hostname] || [];
       resetHistory = result.siteResetHistory?.[hostname] || resetHistory;
-    } catch {
+    } catch (error) {
+      if (isExtensionContextInvalidated(error)) throw error;
     }
     const isBlacklisted = (el) => resetHistory.oldRules.some((oldRule) => {
       if (typeof oldRule === "string") return false;
@@ -937,11 +956,15 @@ var AdsFriendlyContent = (() => {
     });
     STATIC_AD_SELECTORS.forEach((selector) => hide(selector, true));
     if (blockedCount > 0) {
-      chrome.runtime.sendMessage({
-        type: "REPORT_AD_DENSITY",
-        hostname,
-        count: blockedCount
-      });
+      try {
+        await chrome.runtime.sendMessage({
+          type: "REPORT_AD_DENSITY",
+          hostname,
+          count: blockedCount
+        });
+      } catch (error) {
+        if (isExtensionContextInvalidated(error)) throw error;
+      }
       window.postMessage(
         {
           source: "adsfriendly-content",
@@ -1056,20 +1079,32 @@ var AdsFriendlyContent = (() => {
 
   // src/dom/engine.js
   function startStaticDomBlocker() {
-    blockAdsOnPage();
-    const intervalId = setInterval(blockAdsOnPage, 2e3);
-    return () => clearInterval(intervalId);
+    return startManagedLoop(blockAdsOnPage);
   }
   function startLearnedDomBlocker() {
+    return startManagedLoop(async () => {
+      hidePredictedAds(await getDomPatterns());
+    });
+  }
+  function startManagedLoop(task) {
+    let stopped = false;
+    let intervalId = null;
+    const stop = () => {
+      stopped = true;
+      if (intervalId) clearInterval(intervalId);
+      intervalId = null;
+    };
     const run = async () => {
+      if (stopped) return;
       try {
-        hidePredictedAds(await getDomPatterns());
-      } catch {
+        await task();
+      } catch (error) {
+        if (isExtensionContextInvalidated(error)) stop();
       }
     };
+    intervalId = setInterval(run, 2e3);
     run();
-    const intervalId = setInterval(run, 2e3);
-    return () => clearInterval(intervalId);
+    return stop;
   }
 
   // src/navigation/content/navigation-toast.js

@@ -3,6 +3,7 @@
   DANGEROUS_SELECTOR_TAGS,
 } from "./ad-selectors.js";
 import { BLOCKING_STRATEGIES } from "./actions.js";
+import { isExtensionContextInvalidated } from "../shared/extension-context.js";
 const PROTECTED_SELECTOR =
   'nav, header, [role="navigation"], form, [data-testid*="login" i]';
 
@@ -18,7 +19,9 @@ export async function blockAdsOnPage() {
     ]);
     customSelectors = result.userCustomRules?.[hostname] || [];
     resetHistory = result.siteResetHistory?.[hostname] || resetHistory;
-  } catch {}
+  } catch (error) {
+    if (isExtensionContextInvalidated(error)) throw error;
+  }
   const isBlacklisted = (el) =>
     resetHistory.oldRules.some((oldRule) => {
       if (typeof oldRule === "string") return false;
@@ -49,11 +52,15 @@ export async function blockAdsOnPage() {
   });
   STATIC_AD_SELECTORS.forEach((selector) => hide(selector, true));
   if (blockedCount > 0) {
-    chrome.runtime.sendMessage({
-      type: "REPORT_AD_DENSITY",
-      hostname,
-      count: blockedCount,
-    });
+    try {
+      await chrome.runtime.sendMessage({
+        type: "REPORT_AD_DENSITY",
+        hostname,
+        count: blockedCount,
+      });
+    } catch (error) {
+      if (isExtensionContextInvalidated(error)) throw error;
+    }
     window.postMessage(
       {
         source: "adsfriendly-content",

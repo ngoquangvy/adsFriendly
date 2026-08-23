@@ -8,7 +8,19 @@ import {
 import {
   NEW_TAB_DECISIONS,
   decideNewTabNavigation,
+  shouldKeepTrackingNewTab,
 } from "../src/navigation/background/new-tab-policy.js";
+import { isExtensionContextInvalidated } from "../src/shared/extension-context.js";
+
+test("recognizes an invalidated extension context", () => {
+  assert.equal(
+    isExtensionContextInvalidated(
+      new Error("Extension context invalidated."),
+    ),
+    true,
+  );
+  assert.equal(isExtensionContextInvalidated(new Error("network failed")), false);
+});
 
 test("untrusted cross-site tabs require user verification", () => {
   assert.equal(decideNewTabNavigation(), NEW_TAB_DECISIONS.VERIFY);
@@ -24,6 +36,8 @@ test("untrusted cross-site tabs require user verification", () => {
     decideNewTabNavigation({ blacklisted: true }),
     NEW_TAB_DECISIONS.CLOSE,
   );
+  assert.equal(shouldKeepTrackingNewTab({ sameSite: true }), true);
+  assert.equal(shouldKeepTrackingNewTab({ sameSite: false }), false);
 });
 
 test("recognizes a same-site clone", () => {

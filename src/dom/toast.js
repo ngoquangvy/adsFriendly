@@ -7,8 +7,11 @@ export function showDomCandidateToast(candidate, handlers) {
   active = { candidate, handlers };
   const toast = ensureToast();
   const label = candidate.features.tag.toUpperCase();
+  const confidence = Math.round(candidate.decision.confidence * 100);
   toast.querySelector(".adsfriendly-dom-message").textContent =
-    `Possible ad: ${label} (${Math.round(candidate.decision.confidence * 100)}%)`;
+    `${label} · ${confidence}% confidence`;
+  toast.querySelector(".adsfriendly-dom-message").title =
+    candidate.decision.reasons?.join(", ") || "Heuristic DOM signals";
   toast.classList.remove("adsfriendly-dom-hidden");
 
   scheduleHide();
@@ -24,9 +27,10 @@ function ensureToast() {
   toast.setAttribute("role", "status");
   toast.setAttribute("aria-live", "polite");
   toast.innerHTML = `
+    <span class="adsfriendly-dom-scope">PAGE ELEMENT</span>
     <span class="adsfriendly-dom-message"></span>
-    <button class="adsfriendly-dom-hide" type="button">Hide</button>
-    <button class="adsfriendly-dom-allow" type="button">Allow</button>
+    <button class="adsfriendly-dom-hide" type="button">Hide element</button>
+    <button class="adsfriendly-dom-allow" type="button">Keep element</button>
     <button class="adsfriendly-dom-close" type="button">x</button>
   `;
 
@@ -59,6 +63,16 @@ function ensureToast() {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+    #${TOAST_ID} .adsfriendly-dom-scope {
+      padding: 3px 5px;
+      border-radius: 5px;
+      background: rgba(96, 165, 250, 0.16);
+      color: #93c5fd;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      flex: 0 0 auto;
     }
     #${TOAST_ID} button {
       border: 0;
