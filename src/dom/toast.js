@@ -1,4 +1,5 @@
 const TOAST_ID = "adsfriendly-dom-toast";
+const TOAST_TIMEOUT_MS = 12000;
 let active = null;
 let hideTimer = null;
 
@@ -10,8 +11,7 @@ export function showDomCandidateToast(candidate, handlers) {
     `Possible ad: ${label} (${Math.round(candidate.decision.confidence * 100)}%)`;
   toast.classList.remove("adsfriendly-dom-hidden");
 
-  if (hideTimer) clearTimeout(hideTimer);
-  hideTimer = setTimeout(hideDomToast, 4000);
+  scheduleHide();
 }
 
 function ensureToast() {
@@ -21,6 +21,8 @@ function ensureToast() {
   toast = document.createElement("div");
   toast.id = TOAST_ID;
   toast.className = "adsfriendly-dom-hidden";
+  toast.setAttribute("role", "status");
+  toast.setAttribute("aria-live", "polite");
   toast.innerHTML = `
     <span class="adsfriendly-dom-message"></span>
     <button class="adsfriendly-dom-hide" type="button">Hide</button>
@@ -83,10 +85,24 @@ function ensureToast() {
     hideDomToast();
   };
   toast.querySelector(".adsfriendly-dom-close").onclick = hideDomToast;
+  toast.addEventListener("mouseenter", pauseHide);
+  toast.addEventListener("mouseleave", scheduleHide);
+  toast.addEventListener("focusin", pauseHide);
+  toast.addEventListener("focusout", scheduleHide);
 
   (document.head || document.documentElement).appendChild(style);
   (document.body || document.documentElement).appendChild(toast);
   return toast;
+}
+
+function scheduleHide() {
+  pauseHide();
+  if (active) hideTimer = setTimeout(hideDomToast, TOAST_TIMEOUT_MS);
+}
+
+function pauseHide() {
+  if (hideTimer) clearTimeout(hideTimer);
+  hideTimer = null;
 }
 
 function hideDomToast() {
