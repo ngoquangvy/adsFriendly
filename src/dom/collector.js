@@ -1,4 +1,8 @@
-import { BLOCKING_STRATEGIES } from "./actions.js";
+import {
+  BLOCKING_STRATEGIES,
+  captureInlineVisibility,
+  restoreInlineVisibility,
+} from "./actions.js";
 import { decideDomCandidate } from "./decision.js";
 import {
   buildDomSelector,
@@ -108,15 +112,19 @@ function showCandidate(candidate) {
   showDomCandidateToast(candidate, {
     onHide: (item) => hideCandidate(item, "user_hide"),
     onAllow: allowCandidate,
+    onShow: restoreCandidate,
   });
 }
 
-function hideCandidate(candidate, outcome) {
+async function hideCandidate(candidate, outcome) {
+  candidate.previousInlineVisibility ||= captureInlineVisibility(
+    candidate.target,
+  );
   BLOCKING_STRATEGIES.STEALTH(candidate.target);
   if (activePolicy?.can(CAPABILITIES.LEARNING_FEEDBACK))
     recordDomSample(candidate, outcome, "ad");
   if (outcome === "user_hide" && candidate.selector)
-    persistCustomRule(candidate, outcome);
+    await persistCustomRule(candidate, outcome);
   chrome.runtime.sendMessage({
     type: "REPORT_AD_DENSITY",
     hostname: location.hostname,
@@ -128,6 +136,16 @@ function allowCandidate(candidate) {
   if (candidate.selector) allowedSelectors.add(candidate.selector);
   if (activePolicy?.can(CAPABILITIES.LEARNING_FEEDBACK))
     recordDomSample(candidate, "user_allow", "content");
+}
+
+async function restoreCandidate(candidate) {
+  restoreInlineVisibility(candidate.target, candidate.previousInlineVisibility);
+  if (candidate.selector) {
+    allowedSelectors.add(candidate.selector);
+    await removeCustomRule(candidate.selector);
+  }
+  if (activePolicy?.can(CAPABILITIES.LEARNING_FEEDBACK))
+    recordDomSample(candidate, "user_show", "content");
 }
 
 async function persistCustomRule(candidate, outcome) {
@@ -154,6 +172,18 @@ async function persistCustomRule(candidate, outcome) {
     source: outcome,
   });
   userCustomRules[location.hostname] = rules;
+  await chrome.storage.local.set({ userCustomRules });
+  chrome.runtime.sendMessage({ type: "SYNC_LEARNING" });
+}
+
+async function removeCustomRule(selector) {
+  const { userCustomRules = {} } =
+    await chrome.storage.local.get("userCustomRules");
+  const rules = userCustomRules[location.hostname] || [];
+  const remaining = rules.filter((rule) => rule.selector !== selector);
+  if (remaining.length === rules.length) return;
+  if (remaining.length) userCustomRules[location.hostname] = remaining;
+  else delete userCustomRules[location.hostname];
   await chrome.storage.local.set({ userCustomRules });
   chrome.runtime.sendMessage({ type: "SYNC_LEARNING" });
 }
@@ -188,10 +218,12 @@ async function recordDomSample(candidate, outcome, label) {
         ? {
             user_action: outcome,
             surface: "dom_candidate_toast",
-            correction: outcome === "user_allow" ? "false_positive" : null,
+            correction: ["user_allow", "user_show"].includes(outcome)
+              ? "false_positive"
+              : null,
           }
         : null,
-      action: outcome === "user_allow" ? "allow" : "hide",
+      action: ["user_allow", "user_show"].includes(outcome) ? "allow" : "hide",
       outcome,
     };
     domTrainingSamples.push(sample);

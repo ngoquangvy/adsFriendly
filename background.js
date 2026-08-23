@@ -478,6 +478,7 @@ var AdsFriendlyBackground = (() => {
     ]),
     feature("background.navigation-guard", "background", C.NAVIGATION_GUARD, [
       C.NAVIGATION_REVERSE_POPUNDER,
+      C.NAVIGATION_FEEDBACK,
       C.TELEMETRY_QUEUE
     ]),
     feature("background.telemetry-flush", "background", C.TELEMETRY_QUEUE),
@@ -487,7 +488,10 @@ var AdsFriendlyBackground = (() => {
     feature("content.youtube-cleaner", "content", C.DOM_STATIC_RULES),
     feature("content.navigation-intent", "content", C.NAVIGATION_INTENT),
     feature("content.navigation-toast", "content", C.NAVIGATION_FEEDBACK),
-    feature("content.dom-static-blocker", "content", C.DOM_STATIC_RULES),
+    feature("content.dom-static-blocker", "content", C.DOM_STATIC_RULES, [
+      C.LEARNING_FEEDBACK,
+      C.TELEMETRY_QUEUE
+    ]),
     feature("content.dom-candidate-collector", "content", C.DOM_OBSERVE, [
       C.DOM_SUGGEST,
       C.DOM_AUTO_HIDE,
@@ -516,7 +520,9 @@ var AdsFriendlyBackground = (() => {
     return definition;
   }
   function getFeaturesForContext(context) {
-    return FEATURE_CATALOG.filter((featureItem) => featureItem.context === context);
+    return FEATURE_CATALOG.filter(
+      (featureItem) => featureItem.context === context
+    );
   }
   function assertRegisteredCapability(capability) {
     if (!CAPABILITY_SET.has(capability)) {
@@ -545,7 +551,9 @@ var AdsFriendlyBackground = (() => {
     const ids = /* @__PURE__ */ new Set();
     for (const definition of FEATURE_CATALOG) {
       if (ids.has(definition.id)) {
-        throw new Error(`[FeatureRegistry] Duplicate feature "${definition.id}".`);
+        throw new Error(
+          `[FeatureRegistry] Duplicate feature "${definition.id}".`
+        );
       }
       ids.add(definition.id);
       for (const capability of definition.capabilities) {
@@ -572,6 +580,8 @@ var AdsFriendlyBackground = (() => {
     PATH_RESTORED: CAPABILITIES.NAVIGATION_FEEDBACK,
     RESTORE_GRAY_NAVIGATION: CAPABILITIES.NAVIGATION_FEEDBACK,
     BLOCK_GRAY_NAVIGATION: CAPABILITIES.NAVIGATION_FEEDBACK,
+    KEEP_REVIEWED_TAB: CAPABILITIES.NAVIGATION_FEEDBACK,
+    BLOCK_REVIEWED_TAB: CAPABILITIES.NAVIGATION_FEEDBACK,
     LEARN_VIDEO_AD: CAPABILITIES.LEARNING_FEEDBACK,
     SYNC_VIDEO_LEARNING: CAPABILITIES.LEARNING_FEEDBACK,
     REPORT_AD_DENSITY: CAPABILITIES.CORE_MAINTENANCE,
@@ -663,6 +673,61 @@ var AdsFriendlyBackground = (() => {
       });
       return handleUserDecision({ action: "BLACKLIST", domain: message.target });
     }
+    if (message.type === "KEEP_REVIEWED_TAB") {
+      await syncTrustedPath(message.source, message.target, true);
+      await recordTelemetry({
+        unit: "navigation",
+        label: "false_positive",
+        label_source: "user_keep",
+        label_strength: "strong",
+        ad_type: "popunder",
+        targetUrl: message.url,
+        sourceUrl: `https://${message.source}/`,
+        action: "allow",
+        outcome: "user_kept_reviewed_tab",
+        context: {
+          source_host: message.source,
+          target_host: message.target,
+          surface: "navigation_toast"
+        },
+        feedback: {
+          user_action: "keep",
+          correction: "false_positive",
+          surface: "navigation_toast"
+        }
+      });
+      return;
+    }
+    if (message.type === "BLOCK_REVIEWED_TAB") {
+      await recordTelemetry({
+        unit: "navigation",
+        label: "ad",
+        label_source: "user_block",
+        label_strength: "strong",
+        ad_type: "popunder",
+        targetUrl: message.url,
+        sourceUrl: `https://${message.source}/`,
+        action: "block",
+        outcome: "user_blocked_reviewed_tab",
+        context: {
+          source_host: message.source,
+          target_host: message.target,
+          surface: "navigation_toast"
+        },
+        feedback: {
+          user_action: "block",
+          surface: "navigation_toast"
+        }
+      });
+      await handleUserDecision({ action: "BLACKLIST", domain: message.target });
+      if (Number.isInteger(message.tabId)) {
+        try {
+          await chrome.tabs.remove(message.tabId);
+        } catch {
+        }
+      }
+      return;
+    }
     if (message.type === "LEARN_VIDEO_AD") return handleLearnVideoAd(message);
     if (message.type === "SYNC_VIDEO_LEARNING")
       return handleVideoLearning(message);
@@ -731,6 +796,10 @@ var AdsFriendlyBackground = (() => {
     CLOSE: "close",
     VERIFY: "verify"
   });
+  var NEW_TAB_REVIEW_SURFACES = Object.freeze({
+    FULL_PAGE: "full_page",
+    TOAST: "toast"
+  });
   function decideNewTabNavigation({
     sameSite = false,
     trustedInitiator = false,
@@ -748,6 +817,12 @@ var AdsFriendlyBackground = (() => {
   }
   function shouldKeepTrackingNewTab({ sameSite = false } = {}) {
     return sameSite;
+  }
+  function chooseNewTabReviewSurface({
+    promotionalIntent = false,
+    targetLikelyAd = false
+  } = {}) {
+    return promotionalIntent || targetLikelyAd ? NEW_TAB_REVIEW_SURFACES.FULL_PAGE : NEW_TAB_REVIEW_SURFACES.TOAST;
   }
 
   // src/navigation/background/reverse-popunder.js
@@ -799,8 +874,12 @@ var AdsFriendlyBackground = (() => {
   } = {}) {
     const intent = parseUrl(intentUrl);
     const source = parseUrl(sourceUrl);
+    const promotionalEvidence = PROMOTIONAL_TOKEN_RE.test(evidence);
     if (!intent || !/^https?:$/.test(intent.protocol)) {
-      return { likelyAd: false, reasons: [] };
+      return {
+        likelyAd: promotionalEvidence,
+        reasons: promotionalEvidence ? ["promotional_element_or_destination"] : []
+      };
     }
     const external = !source || !(sameHostnameOrSubdomain(intent.hostname, source.hostname) || sameHostnameOrSubdomain(source.hostname, intent.hostname));
     if (!external) return { likelyAd: false, reasons: [] };
@@ -1041,11 +1120,7 @@ var AdsFriendlyBackground = (() => {
     const { whitelist = [] } = await chrome.storage.local.get("whitelist");
     if (whitelist.includes(redirected.hostname)) return true;
     const trustWindow = await getDynamicTrustWindow(original.hostname);
-    if (hasMatchingIntent(
-      candidate.sourceTabId,
-      redirected.hostname,
-      trustWindow
-    ))
+    if (hasMatchingIntent(candidate.sourceTabId, redirected.hostname, trustWindow))
       return true;
     const path = await getTrustedPath(original.hostname, redirected.hostname);
     return !isPromotionalIntent(candidate.sourceTabId) && !!path && (path.isManual || path.visits >= 3);
@@ -1073,7 +1148,10 @@ var AdsFriendlyBackground = (() => {
     if (handledTabs.has(tabId)) return;
     let shouldFinalize = false;
     try {
-      const { whitelist = [], blacklist = [] } = await chrome.storage.local.get(["whitelist", "blacklist"]);
+      const { whitelist = [], blacklist = [] } = await chrome.storage.local.get([
+        "whitelist",
+        "blacklist"
+      ]);
       const sourceTab = await chrome.tabs.get(sourceTabId);
       const capturedSourceUrl = reverseCandidatesBySource.get(sourceTabId)?.originalUrl || sourceTab?.url;
       if (!capturedSourceUrl?.startsWith("http")) return;
@@ -1117,7 +1195,26 @@ var AdsFriendlyBackground = (() => {
         syncTrustedPath(sourceUrl.hostname, targetDomain);
         return;
       }
+      const targetClassification = classifyNavigationIntent({
+        intentUrl: url,
+        sourceUrl: capturedSourceUrl
+      });
+      const reviewSurface = chooseNewTabReviewSurface({
+        promotionalIntent: promotionalIntent || isPromotionalIntent(sourceTabId),
+        targetLikelyAd: targetClassification.likelyAd
+      });
       shouldFinalize = true;
+      if (reviewSurface === NEW_TAB_REVIEW_SURFACES.FULL_PAGE) {
+        return redirectToBlockedPage(tabId, url, sourceUrl.hostname);
+      }
+      const toastShown = await showNavigationReviewToast({
+        sourceTabId,
+        tabId,
+        url,
+        source: sourceUrl.hostname,
+        target: targetDomain
+      });
+      if (toastShown) return;
       return redirectToBlockedPage(tabId, url, sourceUrl.hostname);
     } catch (err) {
       console.error("Error evaluating navigation:", err);
@@ -1136,6 +1233,34 @@ var AdsFriendlyBackground = (() => {
     if (isPromotionalIntent(sourceTabId)) return false;
     const timeSinceClick = Date.now() - click.timestamp;
     return timeSinceClick >= 0 && timeSinceClick < trustWindow && !!intent && (sameHostnameOrSubdomain(targetDomain, intent.hostname) || sameHostnameOrSubdomain(intent.hostname, targetDomain));
+  }
+  async function showNavigationReviewToast({
+    sourceTabId,
+    tabId,
+    url,
+    source,
+    target
+  }) {
+    if (!navigationPolicy?.can(CAPABILITIES.NAVIGATION_FEEDBACK)) return false;
+    const message = {
+      type: "SHOW_GRAY_NAVIGATION",
+      tabId,
+      url,
+      source,
+      target
+    };
+    for (const destinationTabId of [tabId, sourceTabId]) {
+      if (!destinationTabId) continue;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          await chrome.tabs.sendMessage(destinationTabId, message);
+          return true;
+        } catch {
+          if (attempt === 0) await delay(180);
+        }
+      }
+    }
+    return false;
   }
   function isPromotionalIntent(sourceTabId) {
     const click = runtimeState.lastTrustedClick;

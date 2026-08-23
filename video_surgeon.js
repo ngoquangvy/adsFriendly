@@ -201,6 +201,7 @@ var AdsFriendlyVideo = (() => {
     ]),
     feature("background.navigation-guard", "background", C.NAVIGATION_GUARD, [
       C.NAVIGATION_REVERSE_POPUNDER,
+      C.NAVIGATION_FEEDBACK,
       C.TELEMETRY_QUEUE
     ]),
     feature("background.telemetry-flush", "background", C.TELEMETRY_QUEUE),
@@ -210,7 +211,10 @@ var AdsFriendlyVideo = (() => {
     feature("content.youtube-cleaner", "content", C.DOM_STATIC_RULES),
     feature("content.navigation-intent", "content", C.NAVIGATION_INTENT),
     feature("content.navigation-toast", "content", C.NAVIGATION_FEEDBACK),
-    feature("content.dom-static-blocker", "content", C.DOM_STATIC_RULES),
+    feature("content.dom-static-blocker", "content", C.DOM_STATIC_RULES, [
+      C.LEARNING_FEEDBACK,
+      C.TELEMETRY_QUEUE
+    ]),
     feature("content.dom-candidate-collector", "content", C.DOM_OBSERVE, [
       C.DOM_SUGGEST,
       C.DOM_AUTO_HIDE,
@@ -239,7 +243,9 @@ var AdsFriendlyVideo = (() => {
     return definition;
   }
   function getFeaturesForContext(context) {
-    return FEATURE_CATALOG.filter((featureItem) => featureItem.context === context);
+    return FEATURE_CATALOG.filter(
+      (featureItem) => featureItem.context === context
+    );
   }
   function assertRegisteredCapability(capability) {
     if (!CAPABILITY_SET.has(capability)) {
@@ -268,7 +274,9 @@ var AdsFriendlyVideo = (() => {
     const ids = /* @__PURE__ */ new Set();
     for (const definition of FEATURE_CATALOG) {
       if (ids.has(definition.id)) {
-        throw new Error(`[FeatureRegistry] Duplicate feature "${definition.id}".`);
+        throw new Error(
+          `[FeatureRegistry] Duplicate feature "${definition.id}".`
+        );
       }
       ids.add(definition.id);
       for (const capability of definition.capabilities) {

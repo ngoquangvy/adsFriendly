@@ -48,8 +48,12 @@ var AdsFriendlyContent = (() => {
   } = {}) {
     const intent = parseUrl(intentUrl);
     const source = parseUrl(sourceUrl);
+    const promotionalEvidence = PROMOTIONAL_TOKEN_RE.test(evidence);
     if (!intent || !/^https?:$/.test(intent.protocol)) {
-      return { likelyAd: false, reasons: [] };
+      return {
+        likelyAd: promotionalEvidence,
+        reasons: promotionalEvidence ? ["promotional_element_or_destination"] : []
+      };
     }
     const external = !source || !(sameHostnameOrSubdomain(intent.hostname, source.hostname) || sameHostnameOrSubdomain(source.hostname, intent.hostname));
     if (!external) return { likelyAd: false, reasons: [] };
@@ -122,6 +126,29 @@ var AdsFriendlyContent = (() => {
       el.style.setProperty("pointer-events", "none", "important");
     }
   };
+  var VISIBILITY_PROPERTIES = ["opacity", "visibility", "pointer-events"];
+  function captureInlineVisibility(element) {
+    return Object.fromEntries(
+      VISIBILITY_PROPERTIES.map((property) => [
+        property,
+        {
+          value: element.style.getPropertyValue(property),
+          priority: element.style.getPropertyPriority(property)
+        }
+      ])
+    );
+  }
+  function restoreInlineVisibility(element, snapshot) {
+    if (!element || !snapshot) return;
+    for (const property of VISIBILITY_PROPERTIES) {
+      const previous = snapshot[property];
+      if (previous?.value) {
+        element.style.setProperty(property, previous.value, previous.priority);
+      } else {
+        element.style.removeProperty(property);
+      }
+    }
+  }
 
   // src/shared/decision.js
   var DECISION_ACTIONS = Object.freeze({
@@ -490,16 +517,49 @@ var AdsFriendlyContent = (() => {
 
   // src/dom/toast.js
   var TOAST_ID = "adsfriendly-dom-toast";
-  var TOAST_TIMEOUT_MS = 12e3;
+  var HIGHLIGHT_ID = "adsfriendly-dom-highlight";
+  var TOAST_TIMEOUT_MS = 1e4;
+  var queuedCandidates = [];
   var active = null;
   var hideTimer = null;
+  var highlightFrame = null;
   function showDomCandidateToast(candidate, handlers) {
-    active = { candidate, handlers };
+    enqueueOrShow({ candidate, handlers, state: "review" });
+  }
+  function showDomHiddenToast(candidate, handlers) {
+    enqueueOrShow({ candidate, handlers, state: "hidden" });
+  }
+  function enqueueOrShow(entry) {
+    if (active) {
+      if (queuedCandidates.length < 8) queuedCandidates.push(entry);
+      return;
+    }
+    active = entry;
+    renderActiveToast();
+  }
+  function renderActiveToast() {
+    if (!active) return;
     const toast = ensureToast();
-    const label = candidate.features.tag.toUpperCase();
-    const confidence = Math.round(candidate.decision.confidence * 100);
-    toast.querySelector(".adsfriendly-dom-message").textContent = `${label} \xB7 ${confidence}% confidence`;
-    toast.querySelector(".adsfriendly-dom-message").title = candidate.decision.reasons?.join(", ") || "Heuristic DOM signals";
+    const label = active.candidate.features.tag.toUpperCase();
+    const message = toast.querySelector(".adsfriendly-dom-message");
+    const hideButton = toast.querySelector(".adsfriendly-dom-hide");
+    const allowButton = toast.querySelector(".adsfriendly-dom-allow");
+    toast.querySelector(".adsfriendly-dom-scope").textContent = "ELEMENT";
+    if (active.state === "hidden") {
+      message.textContent = `${label} hidden`;
+      message.title = "Hidden by your saved rule";
+      hideButton.hidden = true;
+      allowButton.textContent = "Show";
+      clearHighlight();
+    } else {
+      const confidence = Math.round(active.candidate.decision.confidence * 100);
+      message.textContent = `${label} \xB7 ${confidence}%`;
+      message.title = active.candidate.decision.reasons?.join(", ") || "Heuristic DOM signals";
+      hideButton.hidden = false;
+      hideButton.textContent = "Hide";
+      allowButton.textContent = "Keep";
+      highlightCandidate(active.candidate);
+    }
     toast.classList.remove("adsfriendly-dom-hidden");
     scheduleHide();
   }
@@ -512,10 +572,10 @@ var AdsFriendlyContent = (() => {
     toast.setAttribute("role", "status");
     toast.setAttribute("aria-live", "polite");
     toast.innerHTML = `
-    <span class="adsfriendly-dom-scope">PAGE ELEMENT</span>
+    <span class="adsfriendly-dom-scope">ELEMENT</span>
     <span class="adsfriendly-dom-message"></span>
-    <button class="adsfriendly-dom-hide" type="button">Hide element</button>
-    <button class="adsfriendly-dom-allow" type="button">Keep element</button>
+    <button class="adsfriendly-dom-hide" type="button">Hide</button>
+    <button class="adsfriendly-dom-allow" type="button">Keep</button>
     <button class="adsfriendly-dom-close" type="button">x</button>
   `;
     const style = document.createElement("style");
@@ -528,7 +588,7 @@ var AdsFriendlyContent = (() => {
       display: flex;
       align-items: center;
       gap: 8px;
-      max-width: min(440px, calc(100vw - 32px));
+      max-width: min(390px, calc(100vw - 32px));
       padding: 8px 9px 8px 12px;
       border-radius: 8px;
       background: rgba(15, 23, 42, 0.96);
@@ -572,13 +632,34 @@ var AdsFriendlyContent = (() => {
     #${TOAST_ID} .adsfriendly-dom-close {
       color: #94a3b8;
     }
+    #${HIGHLIGHT_ID} {
+      position: fixed;
+      z-index: 2147483646;
+      pointer-events: none;
+      box-sizing: border-box;
+      border: 3px solid var(--adsfriendly-highlight-color, #f59e0b);
+      border-radius: 4px;
+      box-shadow: 0 0 0 2px rgba(15, 23, 42, 0.72),
+        0 0 16px var(--adsfriendly-highlight-color, #f59e0b);
+    }
   `;
     toast.querySelector(".adsfriendly-dom-hide").onclick = () => {
-      active?.handlers?.onHide?.(active.candidate);
-      hideDomToast();
+      if (!active || active.state !== "review") return;
+      const current = active;
+      current.state = "hidden";
+      clearHighlight();
+      renderActiveToast();
+      current.pendingHide = Promise.resolve(
+        current.handlers?.onHide?.(current.candidate)
+      ).catch(() => {
+      });
     };
     toast.querySelector(".adsfriendly-dom-allow").onclick = () => {
-      active?.handlers?.onAllow?.(active.candidate);
+      if (!active) return;
+      const current = active;
+      const handler = current.state === "hidden" ? current.handlers?.onShow : current.handlers?.onAllow;
+      Promise.resolve(current.pendingHide).then(() => handler?.(current.candidate)).catch(() => {
+      });
       hideDomToast();
     };
     toast.querySelector(".adsfriendly-dom-close").onclick = hideDomToast;
@@ -589,6 +670,43 @@ var AdsFriendlyContent = (() => {
     (document.head || document.documentElement).appendChild(style);
     (document.body || document.documentElement).appendChild(toast);
     return toast;
+  }
+  function highlightCandidate(candidate) {
+    clearHighlight();
+    const target = candidate.target || candidate.element;
+    if (!target?.isConnected) return;
+    const highlight = document.createElement("div");
+    highlight.id = HIGHLIGHT_ID;
+    highlight.style.setProperty(
+      "--adsfriendly-highlight-color",
+      highlightColor(candidate.decision.confidence)
+    );
+    (document.body || document.documentElement).appendChild(highlight);
+    const update = () => {
+      if (!active || !target.isConnected || !highlight.isConnected) return;
+      const rect = target.getBoundingClientRect();
+      const left = Math.max(0, rect.left);
+      const top = Math.max(0, rect.top);
+      const right = Math.min(window.innerWidth, rect.right);
+      const bottom = Math.min(window.innerHeight, rect.bottom);
+      highlight.style.left = `${left}px`;
+      highlight.style.top = `${top}px`;
+      highlight.style.width = `${Math.max(0, right - left)}px`;
+      highlight.style.height = `${Math.max(0, bottom - top)}px`;
+      highlight.hidden = right <= left || bottom <= top;
+      highlightFrame = requestAnimationFrame(update);
+    };
+    update();
+  }
+  function highlightColor(confidence) {
+    if (confidence >= 0.9) return "#ef4444";
+    if (confidence >= 0.75) return "#f59e0b";
+    return "#eab308";
+  }
+  function clearHighlight() {
+    if (highlightFrame) cancelAnimationFrame(highlightFrame);
+    highlightFrame = null;
+    document.getElementById(HIGHLIGHT_ID)?.remove();
   }
   function scheduleHide() {
     pauseHide();
@@ -601,9 +719,11 @@ var AdsFriendlyContent = (() => {
   function hideDomToast() {
     const toast = document.getElementById(TOAST_ID);
     if (toast) toast.classList.add("adsfriendly-dom-hidden");
-    if (hideTimer) clearTimeout(hideTimer);
-    hideTimer = null;
+    pauseHide();
+    clearHighlight();
     active = null;
+    const next = queuedCandidates.shift();
+    if (next) setTimeout(() => enqueueOrShow(next), 180);
   }
 
   // src/runtime/feature-catalog.js
@@ -695,6 +815,7 @@ var AdsFriendlyContent = (() => {
     ]),
     feature("background.navigation-guard", "background", C.NAVIGATION_GUARD, [
       C.NAVIGATION_REVERSE_POPUNDER,
+      C.NAVIGATION_FEEDBACK,
       C.TELEMETRY_QUEUE
     ]),
     feature("background.telemetry-flush", "background", C.TELEMETRY_QUEUE),
@@ -704,7 +825,10 @@ var AdsFriendlyContent = (() => {
     feature("content.youtube-cleaner", "content", C.DOM_STATIC_RULES),
     feature("content.navigation-intent", "content", C.NAVIGATION_INTENT),
     feature("content.navigation-toast", "content", C.NAVIGATION_FEEDBACK),
-    feature("content.dom-static-blocker", "content", C.DOM_STATIC_RULES),
+    feature("content.dom-static-blocker", "content", C.DOM_STATIC_RULES, [
+      C.LEARNING_FEEDBACK,
+      C.TELEMETRY_QUEUE
+    ]),
     feature("content.dom-candidate-collector", "content", C.DOM_OBSERVE, [
       C.DOM_SUGGEST,
       C.DOM_AUTO_HIDE,
@@ -733,7 +857,9 @@ var AdsFriendlyContent = (() => {
     return definition;
   }
   function getFeaturesForContext(context) {
-    return FEATURE_CATALOG.filter((featureItem) => featureItem.context === context);
+    return FEATURE_CATALOG.filter(
+      (featureItem) => featureItem.context === context
+    );
   }
   function assertRegisteredCapability(capability) {
     if (!CAPABILITY_SET.has(capability)) {
@@ -762,7 +888,9 @@ var AdsFriendlyContent = (() => {
     const ids = /* @__PURE__ */ new Set();
     for (const definition of FEATURE_CATALOG) {
       if (ids.has(definition.id)) {
-        throw new Error(`[FeatureRegistry] Duplicate feature "${definition.id}".`);
+        throw new Error(
+          `[FeatureRegistry] Duplicate feature "${definition.id}".`
+        );
       }
       ids.add(definition.id);
       for (const capability of definition.capabilities) {
@@ -869,15 +997,19 @@ var AdsFriendlyContent = (() => {
   function showCandidate(candidate) {
     showDomCandidateToast(candidate, {
       onHide: (item) => hideCandidate(item, "user_hide"),
-      onAllow: allowCandidate
+      onAllow: allowCandidate,
+      onShow: restoreCandidate
     });
   }
-  function hideCandidate(candidate, outcome) {
+  async function hideCandidate(candidate, outcome) {
+    candidate.previousInlineVisibility ||= captureInlineVisibility(
+      candidate.target
+    );
     BLOCKING_STRATEGIES.STEALTH(candidate.target);
     if (activePolicy?.can(CAPABILITIES.LEARNING_FEEDBACK))
       recordDomSample(candidate, outcome, "ad");
     if (outcome === "user_hide" && candidate.selector)
-      persistCustomRule(candidate, outcome);
+      await persistCustomRule(candidate, outcome);
     chrome.runtime.sendMessage({
       type: "REPORT_AD_DENSITY",
       hostname: location.hostname,
@@ -888,6 +1020,15 @@ var AdsFriendlyContent = (() => {
     if (candidate.selector) allowedSelectors.add(candidate.selector);
     if (activePolicy?.can(CAPABILITIES.LEARNING_FEEDBACK))
       recordDomSample(candidate, "user_allow", "content");
+  }
+  async function restoreCandidate(candidate) {
+    restoreInlineVisibility(candidate.target, candidate.previousInlineVisibility);
+    if (candidate.selector) {
+      allowedSelectors.add(candidate.selector);
+      await removeCustomRule(candidate.selector);
+    }
+    if (activePolicy?.can(CAPABILITIES.LEARNING_FEEDBACK))
+      recordDomSample(candidate, "user_show", "content");
   }
   async function persistCustomRule(candidate, outcome) {
     const { userCustomRules = {} } = await chrome.storage.local.get("userCustomRules");
@@ -912,6 +1053,16 @@ var AdsFriendlyContent = (() => {
       source: outcome
     });
     userCustomRules[location.hostname] = rules;
+    await chrome.storage.local.set({ userCustomRules });
+    chrome.runtime.sendMessage({ type: "SYNC_LEARNING" });
+  }
+  async function removeCustomRule(selector) {
+    const { userCustomRules = {} } = await chrome.storage.local.get("userCustomRules");
+    const rules = userCustomRules[location.hostname] || [];
+    const remaining = rules.filter((rule) => rule.selector !== selector);
+    if (remaining.length === rules.length) return;
+    if (remaining.length) userCustomRules[location.hostname] = remaining;
+    else delete userCustomRules[location.hostname];
     await chrome.storage.local.set({ userCustomRules });
     chrome.runtime.sendMessage({ type: "SYNC_LEARNING" });
   }
@@ -943,9 +1094,9 @@ var AdsFriendlyContent = (() => {
         feedback: outcome.startsWith("user_") ? {
           user_action: outcome,
           surface: "dom_candidate_toast",
-          correction: outcome === "user_allow" ? "false_positive" : null
+          correction: ["user_allow", "user_show"].includes(outcome) ? "false_positive" : null
         } : null,
-        action: outcome === "user_allow" ? "allow" : "hide",
+        action: ["user_allow", "user_show"].includes(outcome) ? "allow" : "hide",
         outcome
       };
       domTrainingSamples.push(sample);
@@ -995,6 +1146,8 @@ var AdsFriendlyContent = (() => {
 
   // src/dom/rule-blocker.js
   var PROTECTED_SELECTOR2 = 'nav, header, [role="navigation"], form, [data-testid*="login" i]';
+  var notifiedCustomSelectors = /* @__PURE__ */ new Set();
+  var customRuleSnapshots = /* @__PURE__ */ new Map();
   async function blockAdsOnPage() {
     const hostname = location.hostname;
     let customSelectors = [];
@@ -1025,7 +1178,36 @@ var AdsFriendlyContent = (() => {
       const selector = typeof rule === "string" ? rule : rule.selector;
       if (!selector || DANGEROUS_SELECTOR_TAGS.includes(selector.toLowerCase().trim()))
         return;
-      hide(selector);
+      const snapshots = customRuleSnapshots.get(selector) || /* @__PURE__ */ new Map();
+      const matched = [];
+      document.querySelectorAll(selector).forEach((element) => {
+        if (isBlacklisted(element)) return;
+        if (!snapshots.has(element)) {
+          snapshots.set(element, captureInlineVisibility(element));
+        }
+        BLOCKING_STRATEGIES.STEALTH(element);
+        matched.push(element);
+        blockedCount++;
+      });
+      customRuleSnapshots.set(selector, snapshots);
+      if (matched.length && !notifiedCustomSelectors.has(selector)) {
+        notifiedCustomSelectors.add(selector);
+        const element = matched[0];
+        showDomHiddenToast(
+          {
+            target: element,
+            selector,
+            features: { tag: element.tagName.toLowerCase() },
+            decision: {
+              confidence: typeof rule === "string" ? 0.8 : rule.confidence || 0.8,
+              reasons: ["saved_user_rule"]
+            }
+          },
+          {
+            onShow: () => restoreSavedRule(selector, rule, snapshots)
+          }
+        );
+      }
     });
     STATIC_AD_SELECTORS.forEach((selector) => hide(selector, true));
     if (blockedCount > 0) {
@@ -1047,6 +1229,57 @@ var AdsFriendlyContent = (() => {
         "*"
       );
     }
+  }
+  async function restoreSavedRule(selector, rule, snapshots) {
+    snapshots.forEach(
+      (snapshot, element) => restoreInlineVisibility(element, snapshot)
+    );
+    customRuleSnapshots.delete(selector);
+    const { userCustomRules = {} } = await chrome.storage.local.get("userCustomRules");
+    const rules = userCustomRules[location.hostname] || [];
+    const remaining = rules.filter(
+      (entry) => typeof entry === "string" ? entry !== selector : entry.selector !== selector
+    );
+    if (remaining.length) userCustomRules[location.hostname] = remaining;
+    else delete userCustomRules[location.hostname];
+    await chrome.storage.local.set({ userCustomRules });
+    if (typeof rule !== "string" && rule.fingerprint) {
+      chrome.runtime.sendMessage({
+        type: "NEGATIVE_LEARNING",
+        fingerprint: rule.fingerprint
+      });
+    }
+    chrome.runtime.sendMessage({
+      type: "RECORD_TELEMETRY",
+      event: {
+        schema_version: "dataset.v1",
+        sample_id: randomId2(),
+        unit: "dom_element",
+        label: "content",
+        label_source: "user_show",
+        label_strength: "strong",
+        site: {
+          hostname: location.hostname,
+          url: location.href.split("#")[0]
+        },
+        timestamp: Date.now(),
+        context: { selector, surface: "saved_rule_toast" },
+        evidence: {
+          fingerprint: typeof rule === "string" ? null : rule.fingerprint
+        },
+        feedback: {
+          user_action: "show",
+          correction: "false_positive",
+          surface: "saved_rule_toast"
+        },
+        action: "allow",
+        outcome: "user_show"
+      }
+    });
+    chrome.runtime.sendMessage({ type: "SYNC_LEARNING" });
+  }
+  function randomId2() {
+    return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   }
 
   // src/dom/prediction-runner.js
@@ -1182,6 +1415,7 @@ var AdsFriendlyContent = (() => {
 
   // src/navigation/content/navigation-toast.js
   var TOAST_ID2 = "adsfriendly-nav-toast";
+  var TOAST_TIMEOUT_MS2 = 1e4;
   var toastTimer = null;
   var pendingNavigation = null;
   function startNavigationToast() {
@@ -1190,7 +1424,8 @@ var AdsFriendlyContent = (() => {
       pendingNavigation = {
         url: message.url,
         source: message.source,
-        target: message.target
+        target: message.target,
+        tabId: message.tabId
       };
       showNavigationToast();
     };
@@ -1201,10 +1436,9 @@ var AdsFriendlyContent = (() => {
     if (!pendingNavigation?.url) return;
     const toast = ensureToast2();
     const host = safeHost2(pendingNavigation.url);
-    toast.querySelector(".adsfriendly-toast-message").textContent = `Blocked unknown tab: ${truncate(host, 26)}`;
+    toast.querySelector(".adsfriendly-toast-message").textContent = `${truncate(host, 28)} may be an ad`;
     toast.classList.remove("adsfriendly-toast-hidden");
-    if (toastTimer) clearTimeout(toastTimer);
-    toastTimer = setTimeout(hideNavigationToast, 3500);
+    scheduleHide2();
   }
   function ensureToast2() {
     let toast = document.getElementById(TOAST_ID2);
@@ -1212,10 +1446,13 @@ var AdsFriendlyContent = (() => {
     toast = document.createElement("div");
     toast.id = TOAST_ID2;
     toast.className = "adsfriendly-toast-hidden";
+    toast.setAttribute("role", "status");
+    toast.setAttribute("aria-live", "polite");
     toast.innerHTML = `
+    <span class="adsfriendly-toast-scope">NEW TAB</span>
     <span class="adsfriendly-toast-message"></span>
-    <button class="adsfriendly-toast-primary" type="button">Open</button>
-    <button class="adsfriendly-toast-block" type="button">Block</button>
+    <button class="adsfriendly-toast-primary" type="button">Keep tab</button>
+    <button class="adsfriendly-toast-block" type="button">Block tab</button>
     <button class="adsfriendly-toast-close" type="button">x</button>
   `;
     const style = document.createElement("style");
@@ -1248,6 +1485,16 @@ var AdsFriendlyContent = (() => {
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    #${TOAST_ID2} .adsfriendly-toast-scope {
+      padding: 3px 5px;
+      border-radius: 5px;
+      background: rgba(245, 158, 11, 0.16);
+      color: #fbbf24;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      flex: 0 0 auto;
+    }
     #${TOAST_ID2} button {
       border: 0;
       background: transparent;
@@ -1265,7 +1512,7 @@ var AdsFriendlyContent = (() => {
     toast.querySelector(".adsfriendly-toast-primary").onclick = () => {
       if (!pendingNavigation?.url) return;
       chrome.runtime.sendMessage({
-        type: "RESTORE_GRAY_NAVIGATION",
+        type: "KEEP_REVIEWED_TAB",
         ...pendingNavigation
       });
       hideNavigationToast();
@@ -1273,21 +1520,33 @@ var AdsFriendlyContent = (() => {
     toast.querySelector(".adsfriendly-toast-block").onclick = () => {
       if (!pendingNavigation?.url) return;
       chrome.runtime.sendMessage({
-        type: "BLOCK_GRAY_NAVIGATION",
+        type: "BLOCK_REVIEWED_TAB",
         ...pendingNavigation
       });
       hideNavigationToast();
     };
     toast.querySelector(".adsfriendly-toast-close").onclick = hideNavigationToast;
+    toast.addEventListener("mouseenter", pauseHide2);
+    toast.addEventListener("mouseleave", scheduleHide2);
+    toast.addEventListener("focusin", pauseHide2);
+    toast.addEventListener("focusout", scheduleHide2);
     (document.head || document.documentElement).appendChild(style);
     (document.body || document.documentElement).appendChild(toast);
     return toast;
   }
+  function scheduleHide2() {
+    pauseHide2();
+    if (pendingNavigation)
+      toastTimer = setTimeout(hideNavigationToast, TOAST_TIMEOUT_MS2);
+  }
+  function pauseHide2() {
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = null;
+  }
   function hideNavigationToast() {
     const toast = document.getElementById(TOAST_ID2);
     if (toast) toast.classList.add("adsfriendly-toast-hidden");
-    if (toastTimer) clearTimeout(toastTimer);
-    toastTimer = null;
+    pauseHide2();
     pendingNavigation = null;
   }
   function safeHost2(url) {

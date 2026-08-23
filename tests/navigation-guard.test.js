@@ -7,6 +7,8 @@ import {
 } from "../src/navigation/background/reverse-popunder.js";
 import {
   NEW_TAB_DECISIONS,
+  NEW_TAB_REVIEW_SURFACES,
+  chooseNewTabReviewSurface,
   decideNewTabNavigation,
   shouldKeepTrackingNewTab,
 } from "../src/navigation/background/new-tab-policy.js";
@@ -36,14 +38,25 @@ test("does not downgrade an ordinary explicitly clicked external link", () => {
   );
 });
 
+test("recognizes promotional evidence even when an overlay has no link URL", () => {
+  const result = classifyNavigationIntent({
+    sourceUrl: "https://video.example/watch",
+    intentUrl: null,
+    evidence: "fullscreen overlay hitclub banner",
+  });
+  assert.equal(result.likelyAd, true);
+  assert(result.reasons.includes("promotional_element_or_destination"));
+});
+
 test("recognizes an invalidated extension context", () => {
   assert.equal(
-    isExtensionContextInvalidated(
-      new Error("Extension context invalidated."),
-    ),
+    isExtensionContextInvalidated(new Error("Extension context invalidated.")),
     true,
   );
-  assert.equal(isExtensionContextInvalidated(new Error("network failed")), false);
+  assert.equal(
+    isExtensionContextInvalidated(new Error("network failed")),
+    false,
+  );
 });
 
 test("untrusted cross-site tabs require user verification", () => {
@@ -69,6 +82,18 @@ test("untrusted cross-site tabs require user verification", () => {
   );
   assert.equal(shouldKeepTrackingNewTab({ sameSite: true }), true);
   assert.equal(shouldKeepTrackingNewTab({ sameSite: false }), false);
+});
+
+test("uses a toast for weak evidence and a full page for strong evidence", () => {
+  assert.equal(chooseNewTabReviewSurface(), NEW_TAB_REVIEW_SURFACES.TOAST);
+  assert.equal(
+    chooseNewTabReviewSurface({ promotionalIntent: true }),
+    NEW_TAB_REVIEW_SURFACES.FULL_PAGE,
+  );
+  assert.equal(
+    chooseNewTabReviewSurface({ targetLikelyAd: true }),
+    NEW_TAB_REVIEW_SURFACES.FULL_PAGE,
+  );
 });
 
 test("recognizes a same-site clone", () => {

@@ -4,6 +4,11 @@ export const NEW_TAB_DECISIONS = Object.freeze({
   VERIFY: "verify",
 });
 
+export const NEW_TAB_REVIEW_SURFACES = Object.freeze({
+  FULL_PAGE: "full_page",
+  TOAST: "toast",
+});
+
 export function decideNewTabNavigation({
   sameSite = false,
   trustedInitiator = false,
@@ -29,4 +34,13 @@ export function decideNewTabNavigation({
 
 export function shouldKeepTrackingNewTab({ sameSite = false } = {}) {
   return sameSite;
+}
+
+export function chooseNewTabReviewSurface({
+  promotionalIntent = false,
+  targetLikelyAd = false,
+} = {}) {
+  return promotionalIntent || targetLikelyAd
+    ? NEW_TAB_REVIEW_SURFACES.FULL_PAGE
+    : NEW_TAB_REVIEW_SURFACES.TOAST;
 }

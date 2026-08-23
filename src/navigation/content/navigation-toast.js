@@ -1,4 +1,5 @@
 const TOAST_ID = "adsfriendly-nav-toast";
+const TOAST_TIMEOUT_MS = 10000;
 let toastTimer = null;
 let pendingNavigation = null;
 
@@ -9,6 +10,7 @@ export function startNavigationToast() {
       url: message.url,
       source: message.source,
       target: message.target,
+      tabId: message.tabId,
     };
     showNavigationToast();
   };
@@ -22,11 +24,10 @@ function showNavigationToast() {
   const toast = ensureToast();
   const host = safeHost(pendingNavigation.url);
   toast.querySelector(".adsfriendly-toast-message").textContent =
-    `Blocked unknown tab: ${truncate(host, 26)}`;
+    `${truncate(host, 28)} may be an ad`;
   toast.classList.remove("adsfriendly-toast-hidden");
 
-  if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(hideNavigationToast, 3500);
+  scheduleHide();
 }
 
 function ensureToast() {
@@ -36,10 +37,13 @@ function ensureToast() {
   toast = document.createElement("div");
   toast.id = TOAST_ID;
   toast.className = "adsfriendly-toast-hidden";
+  toast.setAttribute("role", "status");
+  toast.setAttribute("aria-live", "polite");
   toast.innerHTML = `
+    <span class="adsfriendly-toast-scope">NEW TAB</span>
     <span class="adsfriendly-toast-message"></span>
-    <button class="adsfriendly-toast-primary" type="button">Open</button>
-    <button class="adsfriendly-toast-block" type="button">Block</button>
+    <button class="adsfriendly-toast-primary" type="button">Keep tab</button>
+    <button class="adsfriendly-toast-block" type="button">Block tab</button>
     <button class="adsfriendly-toast-close" type="button">x</button>
   `;
 
@@ -73,6 +77,16 @@ function ensureToast() {
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    #${TOAST_ID} .adsfriendly-toast-scope {
+      padding: 3px 5px;
+      border-radius: 5px;
+      background: rgba(245, 158, 11, 0.16);
+      color: #fbbf24;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      flex: 0 0 auto;
+    }
     #${TOAST_ID} button {
       border: 0;
       background: transparent;
@@ -91,7 +105,7 @@ function ensureToast() {
   toast.querySelector(".adsfriendly-toast-primary").onclick = () => {
     if (!pendingNavigation?.url) return;
     chrome.runtime.sendMessage({
-      type: "RESTORE_GRAY_NAVIGATION",
+      type: "KEEP_REVIEWED_TAB",
       ...pendingNavigation,
     });
     hideNavigationToast();
@@ -100,24 +114,38 @@ function ensureToast() {
   toast.querySelector(".adsfriendly-toast-block").onclick = () => {
     if (!pendingNavigation?.url) return;
     chrome.runtime.sendMessage({
-      type: "BLOCK_GRAY_NAVIGATION",
+      type: "BLOCK_REVIEWED_TAB",
       ...pendingNavigation,
     });
     hideNavigationToast();
   };
 
   toast.querySelector(".adsfriendly-toast-close").onclick = hideNavigationToast;
+  toast.addEventListener("mouseenter", pauseHide);
+  toast.addEventListener("mouseleave", scheduleHide);
+  toast.addEventListener("focusin", pauseHide);
+  toast.addEventListener("focusout", scheduleHide);
 
   (document.head || document.documentElement).appendChild(style);
   (document.body || document.documentElement).appendChild(toast);
   return toast;
 }
 
+function scheduleHide() {
+  pauseHide();
+  if (pendingNavigation)
+    toastTimer = setTimeout(hideNavigationToast, TOAST_TIMEOUT_MS);
+}
+
+function pauseHide() {
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = null;
+}
+
 function hideNavigationToast() {
   const toast = document.getElementById(TOAST_ID);
   if (toast) toast.classList.add("adsfriendly-toast-hidden");
-  if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = null;
+  pauseHide();
   pendingNavigation = null;
 }
 

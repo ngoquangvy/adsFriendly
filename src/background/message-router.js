@@ -20,6 +20,8 @@ const MESSAGE_CAPABILITIES = Object.freeze({
   PATH_RESTORED: CAPABILITIES.NAVIGATION_FEEDBACK,
   RESTORE_GRAY_NAVIGATION: CAPABILITIES.NAVIGATION_FEEDBACK,
   BLOCK_GRAY_NAVIGATION: CAPABILITIES.NAVIGATION_FEEDBACK,
+  KEEP_REVIEWED_TAB: CAPABILITIES.NAVIGATION_FEEDBACK,
+  BLOCK_REVIEWED_TAB: CAPABILITIES.NAVIGATION_FEEDBACK,
   LEARN_VIDEO_AD: CAPABILITIES.LEARNING_FEEDBACK,
   SYNC_VIDEO_LEARNING: CAPABILITIES.LEARNING_FEEDBACK,
   REPORT_AD_DENSITY: CAPABILITIES.CORE_MAINTENANCE,
@@ -115,6 +117,60 @@ async function route(message, sender) {
       },
     });
     return handleUserDecision({ action: "BLACKLIST", domain: message.target });
+  }
+  if (message.type === "KEEP_REVIEWED_TAB") {
+    await syncTrustedPath(message.source, message.target, true);
+    await recordTelemetry({
+      unit: "navigation",
+      label: "false_positive",
+      label_source: "user_keep",
+      label_strength: "strong",
+      ad_type: "popunder",
+      targetUrl: message.url,
+      sourceUrl: `https://${message.source}/`,
+      action: "allow",
+      outcome: "user_kept_reviewed_tab",
+      context: {
+        source_host: message.source,
+        target_host: message.target,
+        surface: "navigation_toast",
+      },
+      feedback: {
+        user_action: "keep",
+        correction: "false_positive",
+        surface: "navigation_toast",
+      },
+    });
+    return;
+  }
+  if (message.type === "BLOCK_REVIEWED_TAB") {
+    await recordTelemetry({
+      unit: "navigation",
+      label: "ad",
+      label_source: "user_block",
+      label_strength: "strong",
+      ad_type: "popunder",
+      targetUrl: message.url,
+      sourceUrl: `https://${message.source}/`,
+      action: "block",
+      outcome: "user_blocked_reviewed_tab",
+      context: {
+        source_host: message.source,
+        target_host: message.target,
+        surface: "navigation_toast",
+      },
+      feedback: {
+        user_action: "block",
+        surface: "navigation_toast",
+      },
+    });
+    await handleUserDecision({ action: "BLACKLIST", domain: message.target });
+    if (Number.isInteger(message.tabId)) {
+      try {
+        await chrome.tabs.remove(message.tabId);
+      } catch {}
+    }
+    return;
   }
   if (message.type === "LEARN_VIDEO_AD") return handleLearnVideoAd(message);
   if (message.type === "SYNC_VIDEO_LEARNING")

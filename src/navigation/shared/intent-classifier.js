@@ -21,8 +21,14 @@ export function classifyNavigationIntent({
 } = {}) {
   const intent = parseUrl(intentUrl);
   const source = parseUrl(sourceUrl);
+  const promotionalEvidence = PROMOTIONAL_TOKEN_RE.test(evidence);
   if (!intent || !/^https?:$/.test(intent.protocol)) {
-    return { likelyAd: false, reasons: [] };
+    return {
+      likelyAd: promotionalEvidence,
+      reasons: promotionalEvidence
+        ? ["promotional_element_or_destination"]
+        : [],
+    };
   }
 
   const external =

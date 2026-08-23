@@ -1,19 +1,54 @@
 const TOAST_ID = "adsfriendly-dom-toast";
-const TOAST_TIMEOUT_MS = 12000;
+const HIGHLIGHT_ID = "adsfriendly-dom-highlight";
+const TOAST_TIMEOUT_MS = 10000;
+const queuedCandidates = [];
 let active = null;
 let hideTimer = null;
+let highlightFrame = null;
 
 export function showDomCandidateToast(candidate, handlers) {
-  active = { candidate, handlers };
-  const toast = ensureToast();
-  const label = candidate.features.tag.toUpperCase();
-  const confidence = Math.round(candidate.decision.confidence * 100);
-  toast.querySelector(".adsfriendly-dom-message").textContent =
-    `${label} · ${confidence}% confidence`;
-  toast.querySelector(".adsfriendly-dom-message").title =
-    candidate.decision.reasons?.join(", ") || "Heuristic DOM signals";
-  toast.classList.remove("adsfriendly-dom-hidden");
+  enqueueOrShow({ candidate, handlers, state: "review" });
+}
 
+export function showDomHiddenToast(candidate, handlers) {
+  enqueueOrShow({ candidate, handlers, state: "hidden" });
+}
+
+function enqueueOrShow(entry) {
+  if (active) {
+    if (queuedCandidates.length < 8) queuedCandidates.push(entry);
+    return;
+  }
+  active = entry;
+  renderActiveToast();
+}
+
+function renderActiveToast() {
+  if (!active) return;
+  const toast = ensureToast();
+  const label = active.candidate.features.tag.toUpperCase();
+  const message = toast.querySelector(".adsfriendly-dom-message");
+  const hideButton = toast.querySelector(".adsfriendly-dom-hide");
+  const allowButton = toast.querySelector(".adsfriendly-dom-allow");
+
+  toast.querySelector(".adsfriendly-dom-scope").textContent = "ELEMENT";
+  if (active.state === "hidden") {
+    message.textContent = `${label} hidden`;
+    message.title = "Hidden by your saved rule";
+    hideButton.hidden = true;
+    allowButton.textContent = "Show";
+    clearHighlight();
+  } else {
+    const confidence = Math.round(active.candidate.decision.confidence * 100);
+    message.textContent = `${label} · ${confidence}%`;
+    message.title =
+      active.candidate.decision.reasons?.join(", ") || "Heuristic DOM signals";
+    hideButton.hidden = false;
+    hideButton.textContent = "Hide";
+    allowButton.textContent = "Keep";
+    highlightCandidate(active.candidate);
+  }
+  toast.classList.remove("adsfriendly-dom-hidden");
   scheduleHide();
 }
 
@@ -27,10 +62,10 @@ function ensureToast() {
   toast.setAttribute("role", "status");
   toast.setAttribute("aria-live", "polite");
   toast.innerHTML = `
-    <span class="adsfriendly-dom-scope">PAGE ELEMENT</span>
+    <span class="adsfriendly-dom-scope">ELEMENT</span>
     <span class="adsfriendly-dom-message"></span>
-    <button class="adsfriendly-dom-hide" type="button">Hide element</button>
-    <button class="adsfriendly-dom-allow" type="button">Keep element</button>
+    <button class="adsfriendly-dom-hide" type="button">Hide</button>
+    <button class="adsfriendly-dom-allow" type="button">Keep</button>
     <button class="adsfriendly-dom-close" type="button">x</button>
   `;
 
@@ -44,7 +79,7 @@ function ensureToast() {
       display: flex;
       align-items: center;
       gap: 8px;
-      max-width: min(440px, calc(100vw - 32px));
+      max-width: min(390px, calc(100vw - 32px));
       padding: 8px 9px 8px 12px;
       border-radius: 8px;
       background: rgba(15, 23, 42, 0.96);
@@ -88,14 +123,38 @@ function ensureToast() {
     #${TOAST_ID} .adsfriendly-dom-close {
       color: #94a3b8;
     }
+    #${HIGHLIGHT_ID} {
+      position: fixed;
+      z-index: 2147483646;
+      pointer-events: none;
+      box-sizing: border-box;
+      border: 3px solid var(--adsfriendly-highlight-color, #f59e0b);
+      border-radius: 4px;
+      box-shadow: 0 0 0 2px rgba(15, 23, 42, 0.72),
+        0 0 16px var(--adsfriendly-highlight-color, #f59e0b);
+    }
   `;
 
   toast.querySelector(".adsfriendly-dom-hide").onclick = () => {
-    active?.handlers?.onHide?.(active.candidate);
-    hideDomToast();
+    if (!active || active.state !== "review") return;
+    const current = active;
+    current.state = "hidden";
+    clearHighlight();
+    renderActiveToast();
+    current.pendingHide = Promise.resolve(
+      current.handlers?.onHide?.(current.candidate),
+    ).catch(() => {});
   };
   toast.querySelector(".adsfriendly-dom-allow").onclick = () => {
-    active?.handlers?.onAllow?.(active.candidate);
+    if (!active) return;
+    const current = active;
+    const handler =
+      current.state === "hidden"
+        ? current.handlers?.onShow
+        : current.handlers?.onAllow;
+    Promise.resolve(current.pendingHide)
+      .then(() => handler?.(current.candidate))
+      .catch(() => {});
     hideDomToast();
   };
   toast.querySelector(".adsfriendly-dom-close").onclick = hideDomToast;
@@ -107,6 +166,47 @@ function ensureToast() {
   (document.head || document.documentElement).appendChild(style);
   (document.body || document.documentElement).appendChild(toast);
   return toast;
+}
+
+function highlightCandidate(candidate) {
+  clearHighlight();
+  const target = candidate.target || candidate.element;
+  if (!target?.isConnected) return;
+  const highlight = document.createElement("div");
+  highlight.id = HIGHLIGHT_ID;
+  highlight.style.setProperty(
+    "--adsfriendly-highlight-color",
+    highlightColor(candidate.decision.confidence),
+  );
+  (document.body || document.documentElement).appendChild(highlight);
+
+  const update = () => {
+    if (!active || !target.isConnected || !highlight.isConnected) return;
+    const rect = target.getBoundingClientRect();
+    const left = Math.max(0, rect.left);
+    const top = Math.max(0, rect.top);
+    const right = Math.min(window.innerWidth, rect.right);
+    const bottom = Math.min(window.innerHeight, rect.bottom);
+    highlight.style.left = `${left}px`;
+    highlight.style.top = `${top}px`;
+    highlight.style.width = `${Math.max(0, right - left)}px`;
+    highlight.style.height = `${Math.max(0, bottom - top)}px`;
+    highlight.hidden = right <= left || bottom <= top;
+    highlightFrame = requestAnimationFrame(update);
+  };
+  update();
+}
+
+function highlightColor(confidence) {
+  if (confidence >= 0.9) return "#ef4444";
+  if (confidence >= 0.75) return "#f59e0b";
+  return "#eab308";
+}
+
+function clearHighlight() {
+  if (highlightFrame) cancelAnimationFrame(highlightFrame);
+  highlightFrame = null;
+  document.getElementById(HIGHLIGHT_ID)?.remove();
 }
 
 function scheduleHide() {
@@ -122,7 +222,9 @@ function pauseHide() {
 function hideDomToast() {
   const toast = document.getElementById(TOAST_ID);
   if (toast) toast.classList.add("adsfriendly-dom-hidden");
-  if (hideTimer) clearTimeout(hideTimer);
-  hideTimer = null;
+  pauseHide();
+  clearHighlight();
   active = null;
+  const next = queuedCandidates.shift();
+  if (next) setTimeout(() => enqueueOrShow(next), 180);
 }

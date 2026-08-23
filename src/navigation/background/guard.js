@@ -6,6 +6,8 @@ import { getTrustedPath, syncTrustedPath } from "./trusted-paths.js";
 import { CAPABILITIES } from "../../runtime/feature-catalog.js";
 import {
   NEW_TAB_DECISIONS,
+  NEW_TAB_REVIEW_SURFACES,
+  chooseNewTabReviewSurface,
   decideNewTabNavigation,
   shouldKeepTrackingNewTab,
 } from "./new-tab-policy.js";
@@ -70,8 +72,7 @@ export function registerNavigationGuard(policy) {
 
   const onCreated = (tab) => {
     const sourceTabId =
-      tab.openerTabId ||
-      getRecentUserGestureSourceTabId(2500);
+      tab.openerTabId || getRecentUserGestureSourceTabId(2500);
     if (!sourceTabId || !tab.id) return;
     pendingTabs.set(tab.id, {
       sourceTabId,
@@ -282,11 +283,7 @@ async function isAllowedReverseRedirect(candidate) {
 
   const trustWindow = await getDynamicTrustWindow(original.hostname);
   if (
-    hasMatchingIntent(
-      candidate.sourceTabId,
-      redirected.hostname,
-      trustWindow,
-    )
+    hasMatchingIntent(candidate.sourceTabId, redirected.hostname, trustWindow)
   )
     return true;
 
@@ -329,8 +326,10 @@ async function evaluateNewTab({ sourceTabId, tabId, url }) {
 
   let shouldFinalize = false;
   try {
-    const { whitelist = [], blacklist = [] } =
-      await chrome.storage.local.get(["whitelist", "blacklist"]);
+    const { whitelist = [], blacklist = [] } = await chrome.storage.local.get([
+      "whitelist",
+      "blacklist",
+    ]);
     const sourceTab = await chrome.tabs.get(sourceTabId);
     const capturedSourceUrl =
       reverseCandidatesBySource.get(sourceTabId)?.originalUrl || sourceTab?.url;
@@ -383,7 +382,27 @@ async function evaluateNewTab({ sourceTabId, tabId, url }) {
       syncTrustedPath(sourceUrl.hostname, targetDomain);
       return;
     }
+    const targetClassification = classifyNavigationIntent({
+      intentUrl: url,
+      sourceUrl: capturedSourceUrl,
+    });
+    const reviewSurface = chooseNewTabReviewSurface({
+      promotionalIntent: promotionalIntent || isPromotionalIntent(sourceTabId),
+      targetLikelyAd: targetClassification.likelyAd,
+    });
     shouldFinalize = true;
+    if (reviewSurface === NEW_TAB_REVIEW_SURFACES.FULL_PAGE) {
+      return redirectToBlockedPage(tabId, url, sourceUrl.hostname);
+    }
+
+    const toastShown = await showNavigationReviewToast({
+      sourceTabId,
+      tabId,
+      url,
+      source: sourceUrl.hostname,
+      target: targetDomain,
+    });
+    if (toastShown) return;
     return redirectToBlockedPage(tabId, url, sourceUrl.hostname);
   } catch (err) {
     console.error("Error evaluating navigation:", err);
@@ -409,6 +428,36 @@ function hasMatchingIntent(sourceTabId, targetDomain, trustWindow) {
     (sameHostnameOrSubdomain(targetDomain, intent.hostname) ||
       sameHostnameOrSubdomain(intent.hostname, targetDomain))
   );
+}
+
+async function showNavigationReviewToast({
+  sourceTabId,
+  tabId,
+  url,
+  source,
+  target,
+}) {
+  if (!navigationPolicy?.can(CAPABILITIES.NAVIGATION_FEEDBACK)) return false;
+  const message = {
+    type: "SHOW_GRAY_NAVIGATION",
+    tabId,
+    url,
+    source,
+    target,
+  };
+
+  for (const destinationTabId of [tabId, sourceTabId]) {
+    if (!destinationTabId) continue;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        await chrome.tabs.sendMessage(destinationTabId, message);
+        return true;
+      } catch {
+        if (attempt === 0) await delay(180);
+      }
+    }
+  }
+  return false;
 }
 
 function isPromotionalIntent(sourceTabId) {
