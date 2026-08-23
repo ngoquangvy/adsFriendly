@@ -1,4 +1,6 @@
-﻿const SKIP_SELECTORS = [
+import { CAPABILITIES } from "../runtime/feature-catalog.js";
+
+const SKIP_SELECTORS = [
   ".ytp-ad-skip-button",
   ".ytp-ad-skip-button-modern",
   ".ytp-ad-skip-button-container",
@@ -7,30 +9,33 @@
   'button[class*="skip"]',
   '[aria-label*="Skip ad"]',
 ];
-export function autoSkip() {
-  SKIP_SELECTORS.forEach((sel) => {
-    const btn = document.querySelector(sel);
-    clickIfVisible(btn);
+
+export function autoSkip(policy) {
+  if (!policy?.can(CAPABILITIES.VIDEO_AUTO_ACTION)) return;
+  SKIP_SELECTORS.forEach((selector) => {
+    const button = document.querySelector(selector);
+    clickIfVisible(button);
   });
   document
     .querySelectorAll('button, div[role="button"], span[role="button"]')
-    .forEach((btn) => {
-      const txt = btn.textContent.toLowerCase();
+    .forEach((button) => {
+      const text = button.textContent.toLowerCase();
       if (
-        (txt.includes("skip") || txt.includes("bỏ qua")) &&
-        (txt.includes("ad") || txt.includes("quảng")) &&
-        isVisible(btn)
-      )
-        clickIfVisible(btn);
+        (text.includes("skip") || text.includes("bỏ qua")) &&
+        (text.includes("ad") || text.includes("quảng")) &&
+        isVisible(button)
+      ) {
+        clickIfVisible(button);
+      }
     });
 }
 
-function clickIfVisible(el) {
-  if (!isVisible(el) || typeof el.click !== "function") return;
-  el.click();
+function clickIfVisible(element) {
+  if (!isVisible(element) || typeof element.click !== "function") return;
+  element.click();
 }
 
-function isVisible(el) {
-  if (!el) return false;
-  return el.offsetParent !== null || el.getClientRects().length > 0;
+function isVisible(element) {
+  if (!element) return false;
+  return element.offsetParent !== null || element.getClientRects().length > 0;
 }

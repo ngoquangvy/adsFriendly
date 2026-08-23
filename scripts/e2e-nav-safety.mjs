@@ -125,7 +125,7 @@ async function main() {
     await worker.send("Runtime.enable");
     await worker.send("Runtime.evaluate", {
       awaitPromise: true,
-      expression: `new Promise(resolve => chrome.storage.local.set({ isEnabled: true, friendlyMode: false, domTrainingSamples: [], userCustomRules: {}, blockedLogs: [] }, resolve))`,
+      expression: `new Promise(resolve => chrome.storage.local.set({ appSettings: { enabled: true, protectionMode: "auto", featureOverrides: {} }, isEnabled: true, friendlyMode: false, domTrainingSamples: [], userCustomRules: {}, blockedLogs: [] }, resolve))`,
     });
 
     const pageTarget = await newPage(testUrl);

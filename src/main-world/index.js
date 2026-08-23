@@ -1,9 +1,32 @@
-﻿import { onContentMessage } from "./bridge.js";
+import { onContentMessage } from "./bridge.js";
 import { installNetworkCapture } from "./network-capture.js";
 import { installTimerControl, setAdMode } from "./timer-control.js";
-console.log("[AdsFriendly Spy] Injected and active.");
-installNetworkCapture();
-installTimerControl();
+import { createMainController } from "../runtime/main-controller.js";
+
+const script = document.currentScript;
+const initialSettings = {
+  enabled: script?.dataset.protectionEnabled !== "false",
+  protectionMode: script?.dataset.protectionMode || "safe",
+};
+
+const controller = createMainController({
+  context: "main-world",
+  initialSettings,
+  watchSettings: false,
+  implementations: {
+    "main-world.network-capture": ({ policy }) =>
+      installNetworkCapture(policy),
+    "main-world.timer-control": ({ policy }) => installTimerControl(policy),
+  },
+});
+
 onContentMessage((message) => {
   if (message.type === "SET_AD_MODE") setAdMode(message.value);
+  if (message.type === "PROTECTION_SETTINGS_CHANGED")
+    controller.updateSettings(message.settings);
 });
+
+console.log("[AdsFriendly Spy] Injected and controlled by MainController.");
+controller.start().catch((error) =>
+  console.error("[AdsFriendly Spy] MainController failed", error),
+);

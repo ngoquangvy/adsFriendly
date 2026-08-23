@@ -1,23 +1,28 @@
-﻿import { analyzeManifest } from "./manifest-analyzer.js";
-export function installNetworkCapture() {
-  installFetchCapture();
-  installXhrCapture();
+import { analyzeManifest } from "./manifest-analyzer.js";
+import { CAPABILITIES } from "../runtime/feature-catalog.js";
+
+export function installNetworkCapture(policy) {
+  installFetchCapture(policy);
+  installXhrCapture(policy);
 }
-function installFetchCapture() {
+
+function installFetchCapture(policy) {
   const originalFetch = window.fetch;
   window.fetch = async function (...args) {
     const url = requestUrl(args[0]);
     const response = await originalFetch.apply(this, args);
-    if (isManifestLike(url))
+    if (policy.can(CAPABILITIES.MEDIA_OBSERVE) && isManifestLike(url)) {
       response
         .clone()
         .text()
         .then((body) => analyzeManifest(url, body))
         .catch(() => {});
+    }
     return response;
   };
 }
-function installXhrCapture() {
+
+function installXhrCapture(policy) {
   const originalOpen = XMLHttpRequest.prototype.open;
   const originalSend = XMLHttpRequest.prototype.send;
   XMLHttpRequest.prototype.open = function (method, url, ...rest) {
@@ -26,6 +31,7 @@ function installXhrCapture() {
   };
   XMLHttpRequest.prototype.send = function (...args) {
     this.addEventListener("load", () => {
+      if (!policy.can(CAPABILITIES.MEDIA_OBSERVE)) return;
       const url = this.__adsfriendly_url || "";
       if (!isManifestLike(url)) return;
       try {
@@ -36,6 +42,7 @@ function installXhrCapture() {
     return originalSend.apply(this, args);
   };
 }
+
 function requestUrl(input) {
   if (!input) return "";
   if (typeof input === "string") return input;
@@ -43,6 +50,7 @@ function requestUrl(input) {
   if (input instanceof URL) return input.href;
   return input.toString();
 }
+
 function isManifestLike(url = "") {
   return (
     url.includes(".m3u8") ||

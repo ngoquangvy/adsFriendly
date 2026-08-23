@@ -1,4 +1,8 @@
-(function () {
+import { createMainController } from "../runtime/main-controller.js";
+import { CAPABILITIES } from "../runtime/feature-catalog.js";
+
+function startPickerController(policy) {
+  (function () {
   let isActive = false;
   let hoveredElement = null;
   let selectedItems = []; // Array of { element, selector, fingerprint }
@@ -667,6 +671,22 @@
   };
 
   chrome.runtime.onMessage.addListener((message) => {
-    if (message.type === "START_PICKER") startPicker();
+    if (
+      message.type === "START_PICKER" &&
+      policy.can(CAPABILITIES.DOM_MANUAL_PICKER)
+    )
+      startPicker();
   });
-})();
+  })();
+}
+
+const controller = createMainController({
+  context: "picker",
+  implementations: {
+    "picker.controller": ({ policy }) => startPickerController(policy),
+  },
+});
+
+controller.start().catch((error) =>
+  console.error("[AdsFriendly Picker] MainController failed", error),
+);

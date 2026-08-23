@@ -1,95 +1,44 @@
 var AdsFriendlyContent = (() => {
   // src/content/spy-injector.js
-  function injectSpy() {
+  function injectSpy(settings = {}) {
     try {
-      const s = document.createElement("script");
-      s.src = chrome.runtime.getURL("injected_spy.js");
-      (document.head || document.documentElement).appendChild(s);
-      s.onload = () => s.remove();
-    } catch (e) {
-      console.error("[AdsFriendly] Injection failed:", e);
+      const script = document.createElement("script");
+      script.src = chrome.runtime.getURL("injected_spy.js");
+      script.dataset.protectionMode = settings.protectionMode || "safe";
+      script.dataset.protectionEnabled = String(settings.enabled !== false);
+      (document.head || document.documentElement).appendChild(script);
+      script.onload = () => script.remove();
+    } catch (error) {
+      console.error("[AdsFriendly] Injection failed:", error);
     }
   }
 
   // src/navigation/content/intent-tracker.js
   function startIntentTracker() {
-    document.addEventListener(
-      "pointerdown",
-      (event) => {
-        if (!event.isTrusted) return;
-        try {
-          const link = event.target.closest("a");
-          if (!link?.href) return;
-          chrome.runtime.sendMessage({
-            type: "TRUSTED_CLICK",
-            intentUrl: link.href
-          });
-        } catch {
-        }
-      },
-      true
-    );
-    document.addEventListener(
-      "contextmenu",
-      (event) => {
-        if (!event.isTrusted) return;
-        try {
-          const link = event.target.closest("a[href]");
-          if (!link?.href) return;
-          chrome.runtime.sendMessage({
-            type: "TRUSTED_CLICK",
-            intentUrl: link.href
-          });
-        } catch {
-        }
-      },
-      true
-    );
-    document.addEventListener(
-      "keydown",
-      (event) => {
-        if (!event.isTrusted || event.key !== "Enter") return;
-        try {
-          const link = event.target.closest("a[href]");
-          if (!link?.href) return;
-          chrome.runtime.sendMessage({
-            type: "TRUSTED_CLICK",
-            intentUrl: link.href
-          });
-        } catch {
-        }
-      },
-      true
-    );
+    const recordIntent = (event) => {
+      if (!event.isTrusted) return;
+      try {
+        const link = event.target.closest("a[href]");
+        if (!link?.href) return;
+        chrome.runtime.sendMessage({
+          type: "TRUSTED_CLICK",
+          intentUrl: link.href
+        });
+      } catch {
+      }
+    };
+    const onKeydown = (event) => {
+      if (event.key === "Enter") recordIntent(event);
+    };
+    document.addEventListener("pointerdown", recordIntent, true);
+    document.addEventListener("contextmenu", recordIntent, true);
+    document.addEventListener("keydown", onKeydown, true);
+    return () => {
+      document.removeEventListener("pointerdown", recordIntent, true);
+      document.removeEventListener("contextmenu", recordIntent, true);
+      document.removeEventListener("keydown", onKeydown, true);
+    };
   }
-
-  // src/dom/ad-selectors.js
-  var STATIC_AD_SELECTORS = [
-    '[id*="google_ads"]',
-    '[class*="adsbygoogle"]',
-    "ins.adsbygoogle",
-    'iframe[src*="doubleclick"]',
-    'a[href*="googleadservices.com"]',
-    'a[href*="utm_"]',
-    'a[href*="clickid="]',
-    'a[href*="aff_id="]',
-    'a[href*="javascript:hide_"]',
-    'img[src*="googleusercontent.com"][title]',
-    'img[src*="googleusercontent.com"][alt*="bet"]',
-    'img[src*="googleusercontent.com"][alt*="win"]',
-    'div[class*="popup-ad"]',
-    'div[id*="popup-ad"]'
-  ];
-  var DANGEROUS_SELECTOR_TAGS = [
-    "div",
-    "span",
-    "p",
-    "a",
-    "li",
-    "ul",
-    "img",
-    "section"
-  ];
 
   // src/dom/actions.js
   var BLOCKING_STRATEGIES = {
@@ -100,57 +49,6 @@ var AdsFriendlyContent = (() => {
       el.style.setProperty("pointer-events", "none", "important");
     }
   };
-
-  // src/dom/rule-blocker.js
-  var PROTECTED_SELECTOR = 'nav, header, [role="navigation"], form, [data-testid*="login" i]';
-  async function blockAdsOnPage() {
-    const hostname = location.hostname;
-    let customSelectors = [];
-    let blockedCount = 0;
-    let resetHistory = { oldRules: [] };
-    try {
-      const result = await chrome.storage.local.get([
-        "userCustomRules",
-        "siteResetHistory"
-      ]);
-      customSelectors = result.userCustomRules?.[hostname] || [];
-      resetHistory = result.siteResetHistory?.[hostname] || resetHistory;
-    } catch {
-    }
-    const isBlacklisted = (el) => resetHistory.oldRules.some((oldRule) => {
-      if (typeof oldRule === "string") return false;
-      const f = oldRule.fingerprint;
-      return f && (el.id && el.id === f.id || el.className && el.className === f.className && el.tagName.toLowerCase() === f.tag);
-    });
-    const hide = (selector, preserveProtectedArea = false) => document.querySelectorAll(selector).forEach((el) => {
-      if (isBlacklisted(el)) return;
-      if (preserveProtectedArea && el.closest(PROTECTED_SELECTOR)) return;
-      BLOCKING_STRATEGIES.STEALTH(el);
-      blockedCount++;
-    });
-    customSelectors.forEach((rule) => {
-      const selector = typeof rule === "string" ? rule : rule.selector;
-      if (!selector || DANGEROUS_SELECTOR_TAGS.includes(selector.toLowerCase().trim()))
-        return;
-      hide(selector);
-    });
-    STATIC_AD_SELECTORS.forEach((selector) => hide(selector, true));
-    if (blockedCount > 0) {
-      chrome.runtime.sendMessage({
-        type: "REPORT_AD_DENSITY",
-        hostname,
-        count: blockedCount
-      });
-      window.postMessage(
-        {
-          source: "adsfriendly-content",
-          type: "AD_DENSITY_VALUE",
-          value: blockedCount
-        },
-        "*"
-      );
-    }
-  }
 
   // src/shared/decision.js
   var DECISION_ACTIONS = Object.freeze({
@@ -281,7 +179,7 @@ var AdsFriendlyContent = (() => {
 
   // src/dom/features.js
   var AD_TOKEN_RE = /(^|[-_])(?:ad|ads|adv|advert|banner|promo|sponsor|popup|preload)([-_]|$)/i;
-  var PROTECTED_SELECTOR2 = 'nav, [role="navigation"], form, [data-testid*="login" i]';
+  var PROTECTED_SELECTOR = 'nav, [role="navigation"], form, [data-testid*="login" i]';
   var NAV_SELECTOR = 'nav, [role="navigation"]';
   function extractDomFeatures(element) {
     const rect = element.getBoundingClientRect();
@@ -326,7 +224,7 @@ var AdsFriendlyContent = (() => {
       visible: isVisible(element, rect, style),
       fixedOrSticky: style.position === "fixed" || style.position === "sticky",
       absoluteOrFixed: style.position === "absolute" || style.position === "fixed",
-      inProtectedArea: !!element.closest(PROTECTED_SELECTOR2),
+      inProtectedArea: !!element.closest(PROTECTED_SELECTOR),
       inNavigationArea: !!navRoot,
       navAdLinkRatio: navRoot ? getAdLinkRatio(navRoot) : 0,
       linkExternal: href ? safeHost(href) !== location.hostname : false,
@@ -341,7 +239,7 @@ var AdsFriendlyContent = (() => {
         id: parent.id || "",
         className: typeof parent.className === "string" ? parent.className : "",
         childCount: parent.children.length,
-        inProtectedArea: !!parent.closest(PROTECTED_SELECTOR2)
+        inProtectedArea: !!parent.closest(PROTECTED_SELECTOR)
       } : null,
       signals: {
         idHasAdToken: tokensHaveAdSignal(idTokens),
@@ -357,7 +255,7 @@ var AdsFriendlyContent = (() => {
   }
   function getSmallestSafeDomTarget(element, features) {
     const link = element.closest("a[href]");
-    if (link && features.linkExternal && link.children.length <= 2 && !link.closest(PROTECTED_SELECTOR2)) {
+    if (link && features.linkExternal && link.children.length <= 2 && !link.closest(PROTECTED_SELECTOR)) {
       return link;
     }
     return element;
@@ -608,9 +506,179 @@ var AdsFriendlyContent = (() => {
     active = null;
   }
 
+  // src/runtime/feature-catalog.js
+  var PROTECTION_MODES = Object.freeze({
+    SAFE: "safe",
+    ASSIST: "assist",
+    AUTO: "auto"
+  });
+  var CAPABILITIES = Object.freeze({
+    CORE_MESSAGING: "core.messaging",
+    CORE_MAINTENANCE: "core.maintenance",
+    NAVIGATION_GUARD: "navigation.guard",
+    NAVIGATION_INTENT: "navigation.intent",
+    NAVIGATION_FEEDBACK: "navigation.feedback",
+    DOM_STATIC_RULES: "dom.static_rules",
+    DOM_OBSERVE: "dom.observe",
+    DOM_SUGGEST: "dom.suggest",
+    DOM_AUTO_HIDE: "dom.auto_hide",
+    DOM_MANUAL_PICKER: "dom.manual_picker",
+    LEARNING_SEED: "learning.seed",
+    LEARNING_FEEDBACK: "learning.feedback",
+    LEARNING_APPLY: "learning.apply_patterns",
+    TELEMETRY_QUEUE: "telemetry.queue",
+    MEDIA_OBSERVE: "media.observe",
+    VIDEO_OBSERVE: "video.observe",
+    VIDEO_AUTO_ACTION: "video.auto_action"
+  });
+  var C = CAPABILITIES;
+  var MODE_CAPABILITIES = Object.freeze({
+    [PROTECTION_MODES.SAFE]: Object.freeze([
+      C.CORE_MESSAGING,
+      C.CORE_MAINTENANCE,
+      C.NAVIGATION_GUARD,
+      C.NAVIGATION_INTENT,
+      C.NAVIGATION_FEEDBACK,
+      C.DOM_STATIC_RULES,
+      C.DOM_MANUAL_PICKER,
+      C.LEARNING_SEED,
+      C.LEARNING_FEEDBACK,
+      C.TELEMETRY_QUEUE
+    ]),
+    [PROTECTION_MODES.ASSIST]: Object.freeze([
+      C.CORE_MESSAGING,
+      C.CORE_MAINTENANCE,
+      C.NAVIGATION_GUARD,
+      C.NAVIGATION_INTENT,
+      C.NAVIGATION_FEEDBACK,
+      C.DOM_STATIC_RULES,
+      C.DOM_OBSERVE,
+      C.DOM_SUGGEST,
+      C.DOM_MANUAL_PICKER,
+      C.LEARNING_SEED,
+      C.LEARNING_FEEDBACK,
+      C.TELEMETRY_QUEUE,
+      C.MEDIA_OBSERVE,
+      C.VIDEO_OBSERVE
+    ]),
+    [PROTECTION_MODES.AUTO]: Object.freeze([
+      C.CORE_MESSAGING,
+      C.CORE_MAINTENANCE,
+      C.NAVIGATION_GUARD,
+      C.NAVIGATION_INTENT,
+      C.NAVIGATION_FEEDBACK,
+      C.DOM_STATIC_RULES,
+      C.DOM_OBSERVE,
+      C.DOM_SUGGEST,
+      C.DOM_AUTO_HIDE,
+      C.DOM_MANUAL_PICKER,
+      C.LEARNING_SEED,
+      C.LEARNING_FEEDBACK,
+      C.LEARNING_APPLY,
+      C.TELEMETRY_QUEUE,
+      C.MEDIA_OBSERVE,
+      C.VIDEO_OBSERVE,
+      C.VIDEO_AUTO_ACTION
+    ])
+  });
+  var FEATURE_CATALOG = Object.freeze([
+    feature("background.message-router", "background", C.CORE_MESSAGING, [
+      C.CORE_MAINTENANCE,
+      C.NAVIGATION_INTENT,
+      C.NAVIGATION_FEEDBACK,
+      C.LEARNING_FEEDBACK,
+      C.TELEMETRY_QUEUE
+    ]),
+    feature("background.navigation-guard", "background", C.NAVIGATION_GUARD),
+    feature("background.telemetry-flush", "background", C.TELEMETRY_QUEUE),
+    feature("background.memory-cleanup", "background", C.CORE_MAINTENANCE),
+    feature("background.pattern-seed", "background", C.LEARNING_SEED),
+    feature("content.spy-injector", "content", C.MEDIA_OBSERVE),
+    feature("content.youtube-cleaner", "content", C.DOM_STATIC_RULES),
+    feature("content.navigation-intent", "content", C.NAVIGATION_INTENT),
+    feature("content.navigation-toast", "content", C.NAVIGATION_FEEDBACK),
+    feature("content.dom-static-blocker", "content", C.DOM_STATIC_RULES),
+    feature("content.dom-candidate-collector", "content", C.DOM_OBSERVE, [
+      C.DOM_SUGGEST,
+      C.DOM_AUTO_HIDE,
+      C.LEARNING_FEEDBACK
+    ]),
+    feature("content.dom-learned-blocker", "content", C.LEARNING_APPLY, [
+      C.DOM_AUTO_HIDE
+    ]),
+    feature("video.surgeon", "video", C.VIDEO_OBSERVE, [C.VIDEO_AUTO_ACTION]),
+    feature("picker.controller", "picker", C.DOM_MANUAL_PICKER, [
+      C.LEARNING_FEEDBACK
+    ]),
+    feature("main-world.network-capture", "main-world", C.MEDIA_OBSERVE),
+    feature("main-world.timer-control", "main-world", C.VIDEO_AUTO_ACTION)
+  ]);
+  var CAPABILITY_SET = new Set(Object.values(CAPABILITIES));
+  var FEATURE_BY_ID = new Map(FEATURE_CATALOG.map((item) => [item.id, item]));
+  validateCatalog();
+  function getFeatureDefinition(featureId) {
+    const definition = FEATURE_BY_ID.get(featureId);
+    if (!definition) {
+      throw new Error(
+        `[FeatureRegistry] Unknown feature "${featureId}". Register it in feature-catalog.js before use.`
+      );
+    }
+    return definition;
+  }
+  function getFeaturesForContext(context) {
+    return FEATURE_CATALOG.filter((featureItem) => featureItem.context === context);
+  }
+  function assertRegisteredCapability(capability) {
+    if (!CAPABILITY_SET.has(capability)) {
+      throw new Error(
+        `[FeatureRegistry] Unknown capability "${capability}". Register it in feature-catalog.js before use.`
+      );
+    }
+    return capability;
+  }
+  function getCapabilitiesForMode(mode) {
+    const capabilities = MODE_CAPABILITIES[mode];
+    if (!capabilities) {
+      throw new Error(`[FeatureRegistry] Unknown protection mode "${mode}".`);
+    }
+    return capabilities;
+  }
+  function feature(id, context, startCapability, extraCapabilities = []) {
+    return Object.freeze({
+      id,
+      context,
+      startCapability,
+      capabilities: Object.freeze([startCapability, ...extraCapabilities])
+    });
+  }
+  function validateCatalog() {
+    const ids = /* @__PURE__ */ new Set();
+    for (const definition of FEATURE_CATALOG) {
+      if (ids.has(definition.id)) {
+        throw new Error(`[FeatureRegistry] Duplicate feature "${definition.id}".`);
+      }
+      ids.add(definition.id);
+      for (const capability of definition.capabilities) {
+        assertRegisteredCapability(capability);
+      }
+    }
+    for (const [mode, capabilities] of Object.entries(MODE_CAPABILITIES)) {
+      for (const capability of capabilities) {
+        if (!CAPABILITY_SET.has(capability)) {
+          throw new Error(
+            `[FeatureRegistry] Mode "${mode}" uses unregistered capability "${capability}".`
+          );
+        }
+      }
+    }
+  }
+
   // src/dom/collector.js
   var observed = /* @__PURE__ */ new WeakSet();
   var allowedSelectors = /* @__PURE__ */ new Set();
+  var activePolicy = null;
+  var scanIntervalId = null;
+  var bodyObserver = null;
   var DOM_CANDIDATE_SELECTOR = [
     "img",
     "iframe",
@@ -626,8 +694,9 @@ var AdsFriendlyContent = (() => {
     '[id*="sponsor" i]',
     '[class*="sponsor" i]'
   ].join(",");
-  function startDomCandidateCollector() {
-    setInterval(scanDomCandidates, 2500);
+  function startDomCandidateCollector(policy) {
+    activePolicy = policy;
+    scanIntervalId = setInterval(scanDomCandidates, 2500);
     if (document.readyState === "loading") {
       document.addEventListener(
         "DOMContentLoaded",
@@ -637,22 +706,31 @@ var AdsFriendlyContent = (() => {
       setTimeout(scanDomCandidates, 400);
     }
     const startObserver = () => {
+      if (!activePolicy) return;
       if (!document.body) {
         setTimeout(startObserver, 100);
         return;
       }
-      new MutationObserver((mutations) => {
+      bodyObserver = new MutationObserver((mutations) => {
         for (const mutation of mutations) {
           for (const node of mutation.addedNodes) {
             if (node.nodeType === 1) scanNode(node);
           }
         }
-      }).observe(document.body, { childList: true, subtree: true });
+      });
+      bodyObserver.observe(document.body, { childList: true, subtree: true });
     };
     startObserver();
+    return () => {
+      if (scanIntervalId) clearInterval(scanIntervalId);
+      scanIntervalId = null;
+      bodyObserver?.disconnect();
+      bodyObserver = null;
+      activePolicy = null;
+    };
   }
-  async function scanDomCandidates() {
-    if (!await shouldRunDomCollector()) return;
+  function scanDomCandidates() {
+    if (!activePolicy?.can(CAPABILITIES.DOM_OBSERVE)) return;
     scanNode(document);
   }
   function scanNode(root) {
@@ -671,9 +749,17 @@ var AdsFriendlyContent = (() => {
     if (selector && allowedSelectors.has(selector)) return;
     const candidate = { element, target, selector, features, decision };
     if (decision.action === "block") {
-      hideCandidate(candidate, "heuristic_block");
+      if (activePolicy?.can(CAPABILITIES.DOM_AUTO_HIDE)) {
+        hideCandidate(candidate, "heuristic_block");
+      } else if (activePolicy?.can(CAPABILITIES.DOM_SUGGEST)) {
+        showCandidate(candidate);
+      }
       return;
     }
+    if (!activePolicy?.can(CAPABILITIES.DOM_SUGGEST)) return;
+    showCandidate(candidate);
+  }
+  function showCandidate(candidate) {
     showDomCandidateToast(candidate, {
       onHide: (item) => hideCandidate(item, "user_hide"),
       onAllow: allowCandidate
@@ -681,7 +767,8 @@ var AdsFriendlyContent = (() => {
   }
   function hideCandidate(candidate, outcome) {
     BLOCKING_STRATEGIES.STEALTH(candidate.target);
-    recordDomSample(candidate, outcome, "ad");
+    if (activePolicy?.can(CAPABILITIES.LEARNING_FEEDBACK))
+      recordDomSample(candidate, outcome, "ad");
     if (outcome === "user_hide" && candidate.selector)
       persistCustomRule(candidate, outcome);
     chrome.runtime.sendMessage({
@@ -692,7 +779,8 @@ var AdsFriendlyContent = (() => {
   }
   function allowCandidate(candidate) {
     if (candidate.selector) allowedSelectors.add(candidate.selector);
-    recordDomSample(candidate, "user_allow", "content");
+    if (activePolicy?.can(CAPABILITIES.LEARNING_FEEDBACK))
+      recordDomSample(candidate, "user_allow", "content");
   }
   async function persistCustomRule(candidate, outcome) {
     const { userCustomRules = {} } = await chrome.storage.local.get("userCustomRules");
@@ -719,17 +807,6 @@ var AdsFriendlyContent = (() => {
     userCustomRules[location.hostname] = rules;
     await chrome.storage.local.set({ userCustomRules });
     chrome.runtime.sendMessage({ type: "SYNC_LEARNING" });
-  }
-  async function shouldRunDomCollector() {
-    try {
-      const { isEnabled, friendlyMode } = await chrome.storage.local.get([
-        "isEnabled",
-        "friendlyMode"
-      ]);
-      return isEnabled !== false && friendlyMode === false;
-    } catch {
-      return false;
-    }
   }
   async function recordDomSample(candidate, outcome, label) {
     try {
@@ -774,6 +851,85 @@ var AdsFriendlyContent = (() => {
   }
   function randomId() {
     return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+
+  // src/dom/ad-selectors.js
+  var STATIC_AD_SELECTORS = [
+    '[id*="google_ads"]',
+    '[class*="adsbygoogle"]',
+    "ins.adsbygoogle",
+    'iframe[src*="doubleclick"]',
+    'a[href*="googleadservices.com"]',
+    'a[href*="utm_"]',
+    'a[href*="clickid="]',
+    'a[href*="aff_id="]',
+    'a[href*="javascript:hide_"]',
+    'img[src*="googleusercontent.com"][title]',
+    'img[src*="googleusercontent.com"][alt*="bet"]',
+    'img[src*="googleusercontent.com"][alt*="win"]',
+    'div[class*="popup-ad"]',
+    'div[id*="popup-ad"]'
+  ];
+  var DANGEROUS_SELECTOR_TAGS = [
+    "div",
+    "span",
+    "p",
+    "a",
+    "li",
+    "ul",
+    "img",
+    "section"
+  ];
+
+  // src/dom/rule-blocker.js
+  var PROTECTED_SELECTOR2 = 'nav, header, [role="navigation"], form, [data-testid*="login" i]';
+  async function blockAdsOnPage() {
+    const hostname = location.hostname;
+    let customSelectors = [];
+    let blockedCount = 0;
+    let resetHistory = { oldRules: [] };
+    try {
+      const result = await chrome.storage.local.get([
+        "userCustomRules",
+        "siteResetHistory"
+      ]);
+      customSelectors = result.userCustomRules?.[hostname] || [];
+      resetHistory = result.siteResetHistory?.[hostname] || resetHistory;
+    } catch {
+    }
+    const isBlacklisted = (el) => resetHistory.oldRules.some((oldRule) => {
+      if (typeof oldRule === "string") return false;
+      const f = oldRule.fingerprint;
+      return f && (el.id && el.id === f.id || el.className && el.className === f.className && el.tagName.toLowerCase() === f.tag);
+    });
+    const hide = (selector, preserveProtectedArea = false) => document.querySelectorAll(selector).forEach((el) => {
+      if (isBlacklisted(el)) return;
+      if (preserveProtectedArea && el.closest(PROTECTED_SELECTOR2)) return;
+      BLOCKING_STRATEGIES.STEALTH(el);
+      blockedCount++;
+    });
+    customSelectors.forEach((rule) => {
+      const selector = typeof rule === "string" ? rule : rule.selector;
+      if (!selector || DANGEROUS_SELECTOR_TAGS.includes(selector.toLowerCase().trim()))
+        return;
+      hide(selector);
+    });
+    STATIC_AD_SELECTORS.forEach((selector) => hide(selector, true));
+    if (blockedCount > 0) {
+      chrome.runtime.sendMessage({
+        type: "REPORT_AD_DENSITY",
+        hostname,
+        count: blockedCount
+      });
+      window.postMessage(
+        {
+          source: "adsfriendly-content",
+          type: "AD_DENSITY_VALUE",
+          value: blockedCount
+        },
+        "*"
+      );
+    }
   }
 
   // src/dom/prediction-runner.js
@@ -878,25 +1034,21 @@ var AdsFriendlyContent = (() => {
   }
 
   // src/dom/engine.js
-  function startInPageEngine() {
-    startDomCandidateCollector();
-    setInterval(run, 2e3);
-    chrome.storage.local.get(["friendlyMode", "isEnabled"], (result) => {
-      if (result?.isEnabled !== false && result.friendlyMode === false)
-        blockAdsOnPage();
-    });
+  function startStaticDomBlocker() {
+    blockAdsOnPage();
+    const intervalId = setInterval(blockAdsOnPage, 2e3);
+    return () => clearInterval(intervalId);
   }
-  async function run() {
-    try {
-      const { friendlyMode, isEnabled } = await chrome.storage.local.get([
-        "friendlyMode",
-        "isEnabled"
-      ]);
-      if (isEnabled === false || friendlyMode !== false) return;
-      await blockAdsOnPage();
-      hidePredictedAds(await getDomPatterns());
-    } catch {
-    }
+  function startLearnedDomBlocker() {
+    const run = async () => {
+      try {
+        hidePredictedAds(await getDomPatterns());
+      } catch {
+      }
+    };
+    run();
+    const intervalId = setInterval(run, 2e3);
+    return () => clearInterval(intervalId);
   }
 
   // src/navigation/content/navigation-toast.js
@@ -904,7 +1056,7 @@ var AdsFriendlyContent = (() => {
   var toastTimer = null;
   var pendingNavigation = null;
   function startNavigationToast() {
-    chrome.runtime.onMessage.addListener((message) => {
+    const onMessage = (message) => {
       if (message?.type !== "SHOW_GRAY_NAVIGATION") return;
       pendingNavigation = {
         url: message.url,
@@ -912,7 +1064,9 @@ var AdsFriendlyContent = (() => {
         target: message.target
       };
       showNavigationToast();
-    });
+    };
+    chrome.runtime.onMessage.addListener(onMessage);
+    return () => chrome.runtime.onMessage.removeListener(onMessage);
   }
   function showNavigationToast() {
     if (!pendingNavigation?.url) return;
@@ -1030,7 +1184,7 @@ var AdsFriendlyContent = (() => {
     ".ytd-promoted-video-renderer"
   ];
   function startYouTubeCleaner() {
-    setInterval(() => {
+    const run = () => {
       if (location.hostname !== "www.youtube.com") return;
       selectors.forEach(
         (sel) => document.querySelectorAll(sel).forEach((el) => el.style.setProperty("display", "none", "important"))
@@ -1040,13 +1194,251 @@ var AdsFriendlyContent = (() => {
         if (text.includes("sponsored") || text.includes("\u0111\u01B0\u1EE3c t\xE0i tr\u1EE3") || text.includes("qu\u1EA3ng c\xE1o"))
           card.style.setProperty("display", "none", "important");
       });
-    }, 2e3);
+    };
+    run();
+    const intervalId = setInterval(run, 2e3);
+    return () => clearInterval(intervalId);
+  }
+
+  // src/runtime/settings-store.js
+  var SETTINGS_KEY = "appSettings";
+  var DEFAULT_SETTINGS = Object.freeze({
+    enabled: true,
+    protectionMode: PROTECTION_MODES.SAFE,
+    featureOverrides: Object.freeze({})
+  });
+  function normalizeSettings(value = {}) {
+    const protectionMode = Object.values(PROTECTION_MODES).includes(
+      value.protectionMode
+    ) ? value.protectionMode : DEFAULT_SETTINGS.protectionMode;
+    return {
+      enabled: value.enabled !== false,
+      protectionMode,
+      featureOverrides: value.featureOverrides && typeof value.featureOverrides === "object" ? { ...value.featureOverrides } : {}
+    };
+  }
+  function migrateLegacySettings(stored = {}) {
+    if (stored[SETTINGS_KEY]) return normalizeSettings(stored[SETTINGS_KEY]);
+    const protectionMode = stored.friendlyMode === false ? PROTECTION_MODES.AUTO : PROTECTION_MODES.SAFE;
+    return normalizeSettings({
+      enabled: stored.isEnabled !== false,
+      protectionMode
+    });
+  }
+  async function loadSettings(storage = chrome.storage.local) {
+    const stored = await storage.get([SETTINGS_KEY, "isEnabled", "friendlyMode"]);
+    const settings = migrateLegacySettings(stored);
+    if (!stored[SETTINGS_KEY]) await storage.set({ [SETTINGS_KEY]: settings });
+    return settings;
+  }
+  function subscribeSettings(listener, storageArea = "local") {
+    const onChanged = (changes, areaName) => {
+      if (areaName !== storageArea || !changes[SETTINGS_KEY]) return;
+      listener(normalizeSettings(changes[SETTINGS_KEY].newValue));
+    };
+    chrome.storage.onChanged.addListener(onChanged);
+    return () => chrome.storage.onChanged.removeListener(onChanged);
+  }
+
+  // src/runtime/main-controller.js
+  function createMainController({
+    context,
+    implementations,
+    initialSettings = null,
+    watchSettings = true,
+    settingsLoader = loadSettings,
+    settingsSubscriber = subscribeSettings,
+    logger = console
+  }) {
+    const catalogFeatures = getFeaturesForContext(context);
+    validateImplementations(context, catalogFeatures, implementations);
+    let settings = normalizeSettings(initialSettings || DEFAULT_SETTINGS);
+    let unsubscribe = null;
+    let started = false;
+    const lifecycles = /* @__PURE__ */ new Map();
+    const listeners = /* @__PURE__ */ new Set();
+    const controller2 = {
+      context,
+      async start() {
+        if (started) return controller2;
+        started = true;
+        if (!initialSettings) settings = await settingsLoader();
+        await reconcile();
+        if (watchSettings) {
+          unsubscribe = settingsSubscriber((nextSettings) => {
+            controller2.updateSettings(nextSettings).catch(
+              (error) => logger.error(`[MainController:${context}] reconcile failed`, error)
+            );
+          });
+        }
+        notify();
+        return controller2;
+      },
+      async updateSettings(nextSettings) {
+        settings = normalizeSettings(nextSettings);
+        if (started) await reconcile();
+        notify();
+        return controller2.snapshot();
+      },
+      snapshot() {
+        return {
+          context,
+          settings: { ...settings, featureOverrides: { ...settings.featureOverrides } },
+          activeFeatures: [...lifecycles.entries()].filter(([, lifecycle]) => lifecycle.active).map(([featureId]) => featureId)
+        };
+      },
+      onChange(listener) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      async stop() {
+        if (unsubscribe) unsubscribe();
+        unsubscribe = null;
+        for (const [featureId, lifecycle] of lifecycles) {
+          await stopLifecycle(featureId, lifecycle);
+        }
+        lifecycles.clear();
+        started = false;
+      }
+    };
+    async function reconcile() {
+      validateFeatureOverrides(settings.featureOverrides);
+      for (const definition of catalogFeatures) {
+        const desired = shouldStartFeature(definition, settings);
+        const lifecycle = lifecycles.get(definition.id);
+        if (desired && !lifecycle?.active) {
+          const policy = createFeaturePolicy(definition, () => settings);
+          if (lifecycle?.started && !lifecycle.cleanup) {
+            lifecycle.active = true;
+            continue;
+          }
+          const result = implementations[definition.id]({
+            controller: controller2,
+            feature: definition,
+            policy
+          });
+          const cleanup = isPromiseLike(result) ? await result : result;
+          lifecycles.set(definition.id, {
+            active: true,
+            started: true,
+            cleanup: typeof cleanup === "function" ? cleanup : null
+          });
+        } else if (!desired && lifecycle?.active) {
+          if (lifecycle.cleanup) {
+            await stopLifecycle(definition.id, lifecycle);
+            lifecycles.delete(definition.id);
+          } else {
+            lifecycle.active = false;
+          }
+        }
+      }
+    }
+    async function stopLifecycle(featureId, lifecycle) {
+      if (!lifecycle.cleanup) {
+        lifecycle.active = false;
+        return;
+      }
+      try {
+        await lifecycle.cleanup();
+      } catch (error) {
+        logger.error(`[MainController:${context}] failed to stop ${featureId}`, error);
+      }
+      lifecycle.active = false;
+    }
+    function notify() {
+      const snapshot = controller2.snapshot();
+      for (const listener of listeners) listener(snapshot);
+    }
+    return controller2;
+  }
+  function createFeaturePolicy(definitionOrId, readSettings) {
+    const definition = typeof definitionOrId === "string" ? getFeatureDefinition(definitionOrId) : definitionOrId;
+    const declared = new Set(definition.capabilities);
+    function assertAllowed(capability) {
+      assertRegisteredCapability(capability);
+      if (!declared.has(capability)) {
+        throw new Error(
+          `[FeatureRegistry] Feature "${definition.id}" tried to use undeclared capability "${capability}". Add it to that feature in feature-catalog.js.`
+        );
+      }
+    }
+    return Object.freeze({
+      featureId: definition.id,
+      can(capability) {
+        assertAllowed(capability);
+        const settings = readSettings();
+        if (!settings.enabled) return false;
+        return getCapabilitiesForMode(settings.protectionMode).includes(capability);
+      },
+      require(capability) {
+        if (!this.can(capability)) {
+          const settings = readSettings();
+          throw new Error(
+            `[FeatureRegistry] Capability "${capability}" is disabled for feature "${definition.id}" in mode "${settings.protectionMode}".`
+          );
+        }
+        return true;
+      }
+    });
+  }
+  function shouldStartFeature(definition, settings) {
+    const override = settings.featureOverrides?.[definition.id];
+    if (override === false || !settings.enabled) return false;
+    return getCapabilitiesForMode(settings.protectionMode).includes(
+      definition.startCapability
+    );
+  }
+  function validateFeatureOverrides(featureOverrides = {}) {
+    for (const featureId of Object.keys(featureOverrides)) {
+      getFeatureDefinition(featureId);
+    }
+  }
+  function isPromiseLike(value) {
+    return value && typeof value.then === "function";
+  }
+  function validateImplementations(context, catalogFeatures, implementations) {
+    const expected = new Set(catalogFeatures.map((feature2) => feature2.id));
+    for (const featureId of Object.keys(implementations)) {
+      const definition = getFeatureDefinition(featureId);
+      if (definition.context !== context) {
+        throw new Error(
+          `[FeatureRegistry] Feature "${featureId}" belongs to context "${definition.context}", not "${context}".`
+        );
+      }
+    }
+    for (const featureId of expected) {
+      if (typeof implementations[featureId] !== "function") {
+        throw new Error(
+          `[FeatureRegistry] Feature "${featureId}" is registered for context "${context}" but has no implementation in its main feature list.`
+        );
+      }
+    }
   }
 
   // src/content/index.js
-  injectSpy();
-  startYouTubeCleaner();
-  startIntentTracker();
-  startInPageEngine();
-  startNavigationToast();
+  var controller = createMainController({
+    context: "content",
+    implementations: {
+      "content.spy-injector": ({ controller: main }) => injectSpy(main.snapshot().settings),
+      "content.youtube-cleaner": () => startYouTubeCleaner(),
+      "content.navigation-intent": () => startIntentTracker(),
+      "content.navigation-toast": () => startNavigationToast(),
+      "content.dom-static-blocker": () => startStaticDomBlocker(),
+      "content.dom-candidate-collector": ({ policy }) => startDomCandidateCollector(policy),
+      "content.dom-learned-blocker": () => startLearnedDomBlocker()
+    }
+  });
+  controller.onChange(({ settings }) => {
+    window.postMessage(
+      {
+        source: "adsfriendly-content",
+        type: "PROTECTION_SETTINGS_CHANGED",
+        settings
+      },
+      "*"
+    );
+  });
+  controller.start().catch(
+    (error) => console.error("[AdsFriendly Content] MainController failed", error)
+  );
 })();

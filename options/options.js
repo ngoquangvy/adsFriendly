@@ -317,7 +317,16 @@ resetBtn.onclick = async () => {
     confirm("DANGER: Wipe EVERYTHING? (Whitelist, Rules, AI Memory, History)")
   ) {
     await chrome.storage.local.clear();
-    await chrome.storage.local.set({ isEnabled: true, blockedCount: 0 });
+    await chrome.storage.local.set({
+      appSettings: {
+        enabled: true,
+        protectionMode: "safe",
+        featureOverrides: {},
+      },
+      isEnabled: true,
+      friendlyMode: true,
+      blockedCount: 0,
+    });
     chrome.action.setBadgeText({ text: "" });
     loadLists();
   }

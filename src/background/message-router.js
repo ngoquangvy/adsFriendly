@@ -10,13 +10,41 @@ import {
 } from "../navigation/background/trusted-paths.js";
 import { updateSiteReputation } from "./reputation.js";
 import { flushTelemetry, recordTelemetry } from "./telemetry.js";
-export function registerMessageRouter() {
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+import { CAPABILITIES } from "../runtime/feature-catalog.js";
+
+const MESSAGE_CAPABILITIES = Object.freeze({
+  TRUSTED_CLICK: CAPABILITIES.NAVIGATION_INTENT,
+  SYNC_LEARNING: CAPABILITIES.LEARNING_FEEDBACK,
+  NEGATIVE_LEARNING: CAPABILITIES.LEARNING_FEEDBACK,
+  USER_DECISION: CAPABILITIES.NAVIGATION_FEEDBACK,
+  PATH_RESTORED: CAPABILITIES.NAVIGATION_FEEDBACK,
+  RESTORE_GRAY_NAVIGATION: CAPABILITIES.NAVIGATION_FEEDBACK,
+  BLOCK_GRAY_NAVIGATION: CAPABILITIES.NAVIGATION_FEEDBACK,
+  LEARN_VIDEO_AD: CAPABILITIES.LEARNING_FEEDBACK,
+  SYNC_VIDEO_LEARNING: CAPABILITIES.LEARNING_FEEDBACK,
+  REPORT_AD_DENSITY: CAPABILITIES.CORE_MAINTENANCE,
+  RECORD_TELEMETRY: CAPABILITIES.TELEMETRY_QUEUE,
+  FLUSH_TELEMETRY: CAPABILITIES.TELEMETRY_QUEUE,
+});
+
+export function registerMessageRouter(policy) {
+  const onMessage = (message, sender, sendResponse) => {
+    if (!policy.can(CAPABILITIES.CORE_MESSAGING)) {
+      sendResponse({ status: "disabled" });
+      return false;
+    }
+    const capability = MESSAGE_CAPABILITIES[message?.type];
+    if (capability && !policy.can(capability)) {
+      sendResponse({ status: "capability_disabled" });
+      return false;
+    }
     route(message, sender)
       .then((r) => sendResponse(r || { status: "ok" }))
       .catch((err) => sendResponse({ status: "error", error: err.message }));
     return true;
-  });
+  };
+  chrome.runtime.onMessage.addListener(onMessage);
+  return () => chrome.runtime.onMessage.removeListener(onMessage);
 }
 async function route(message, sender) {
   if (!message) return { status: "ignored" };

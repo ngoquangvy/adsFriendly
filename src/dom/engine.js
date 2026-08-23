@@ -1,22 +1,26 @@
 import { blockAdsOnPage } from "./rule-blocker.js";
-import { startDomCandidateCollector } from "./collector.js";
 import { hidePredictedAds } from "./prediction-runner.js";
 import { getDomPatterns } from "../shared/pattern-store.js";
-export function startInPageEngine() {
-  startDomCandidateCollector();
-  setInterval(run, 2000);
-  chrome.storage.local.get(["friendlyMode", "isEnabled"], (result) => {
-    if (result?.isEnabled !== false && result.friendlyMode === false)
-      blockAdsOnPage();
-  });
+
+export function startStaticDomBlocker() {
+  blockAdsOnPage();
+  const intervalId = setInterval(blockAdsOnPage, 2000);
+  return () => clearInterval(intervalId);
 }
-async function run() {
+
+export function startLearnedDomBlocker() {
+  const run = async () => {
+    try {
+      hidePredictedAds(await getDomPatterns());
+    } catch {}
+  };
+  run();
+  const intervalId = setInterval(run, 2000);
+  return () => clearInterval(intervalId);
+}
+
+export async function runInPageEngineOnce() {
   try {
-    const { friendlyMode, isEnabled } = await chrome.storage.local.get([
-      "friendlyMode",
-      "isEnabled",
-    ]);
-    if (isEnabled === false || friendlyMode !== false) return;
     await blockAdsOnPage();
     hidePredictedAds(await getDomPatterns());
   } catch {}

@@ -3,17 +3,9 @@
   isProtectedPattern,
 } from "../shared/ad-patterns.js";
 export async function seedBaselinePatterns() {
-  const result = await chrome.storage.local.get([
-    "friendlyMode",
-    "isEnabled",
-    "globalAdPatterns",
-  ]);
+  const result = await chrome.storage.local.get(["globalAdPatterns"]);
   if (!result.globalAdPatterns || result.globalAdPatterns.length === 0)
     await chrome.storage.local.set({ globalAdPatterns: BASELINE_AD_PATTERNS });
-  if (result.friendlyMode === undefined)
-    await chrome.storage.local.set({ friendlyMode: true });
-  if (result.isEnabled === undefined)
-    await chrome.storage.local.set({ isEnabled: true });
 }
 export async function handleNegativeLearning(fingerprint) {
   if (!fingerprint) return;

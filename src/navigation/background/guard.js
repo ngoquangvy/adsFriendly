@@ -4,6 +4,7 @@ import { getDynamicTrustWindow } from "../../background/reputation.js";
 import { logBlockedNavigation } from "../../background/logs.js";
 import { getTrustedPath, syncTrustedPath } from "./trusted-paths.js";
 import { getDomPatterns } from "../../shared/pattern-store.js";
+import { CAPABILITIES } from "../../runtime/feature-catalog.js";
 
 const TRUSTED_INITIATORS = [
   "google.com",
@@ -39,6 +40,7 @@ const TRUSTED_TARGETS = [
 const pendingTabs = new Map();
 const handledTabs = new Map();
 let lastActiveTabId = null;
+let navigationPolicy = null;
 
 export function isSuspiciousURL(url, patterns = []) {
   const u = parseUrl(url);
@@ -68,7 +70,8 @@ export function isSuspiciousURL(url, patterns = []) {
       ),
   );
 }
-export function registerNavigationGuard() {
+export function registerNavigationGuard(policy) {
+  navigationPolicy = policy;
   chrome.webNavigation.onCreatedNavigationTarget.addListener((details) =>
     evaluateNewTab({
       sourceTabId: details.sourceTabId,
@@ -148,16 +151,13 @@ function isExpiredFallbackPending(pending) {
 }
 
 async function evaluateNewTab({ sourceTabId, tabId, url }) {
+  if (!navigationPolicy?.can(CAPABILITIES.NAVIGATION_GUARD)) return;
   if (!sourceTabId || !tabId || !url || isBlankUrl(url)) return;
   if (handledTabs.has(tabId)) return;
 
   try {
-    const {
-      isEnabled,
-      whitelist = [],
-      blacklist = [],
-    } = await chrome.storage.local.get(["isEnabled", "whitelist", "blacklist"]);
-    if (isEnabled === false) return;
+    const { whitelist = [], blacklist = [] } =
+      await chrome.storage.local.get(["whitelist", "blacklist"]);
     const sourceTab = await chrome.tabs.get(sourceTabId);
     if (!sourceTab?.url?.startsWith("http")) return;
     const sourceUrl = new URL(sourceTab.url);

@@ -100,6 +100,11 @@ async function main() {
       sessions.push(worker);
       await worker.send("Runtime.enable");
       await setExtensionState(worker, {
+        appSettings: {
+          enabled: true,
+          protectionMode: "auto",
+          featureOverrides: {},
+        },
         isEnabled: true,
         friendlyMode: false,
         domTrainingSamples: [],
@@ -202,6 +207,11 @@ async function injectDomHarness(page, contentSource) {
     awaitPromise: true,
     expression: `(() => {
       const storage = {
+        appSettings: {
+          enabled: true,
+          protectionMode: "auto",
+          featureOverrides: {}
+        },
         isEnabled: true,
         friendlyMode: false,
         domTrainingSamples: [],
@@ -234,7 +244,10 @@ async function injectDomHarness(page, contentSource) {
         }
       };
       const chromeObj = window.chrome || {};
-      chromeObj.storage = { local };
+      chromeObj.storage = {
+        local,
+        onChanged: { addListener() {}, removeListener() {} }
+      };
       chromeObj.runtime = {
         ...(chromeObj.runtime || {}),
         getURL() { return "data:text/javascript,"; },

@@ -34,3 +34,40 @@ Runtime rules and AI training samples must stay separate:
 ## Known Follow-up
 
 `src/picker/index.js` still preserves the old picker implementation as a single module to avoid behavior loss during the first architecture migration. It should be the next file split into UI state, selector generation, validation, fingerprinting, and manual labeling modules.
+
+## MainController, Feature Registry, and Capabilities
+
+`src/runtime/feature-catalog.js` is the only authority allowed to declare:
+
+- feature IDs and their execution contexts;
+- registered capability IDs;
+- capabilities granted by `safe`, `assist`, and `auto` modes;
+- capabilities each feature is allowed to request.
+
+Each execution context has a small implementation list in its entrypoint and is
+bootstrapped by the shared `MainController`. Feature modules do not read
+`friendlyMode` or `isEnabled` directly. The controller loads `appSettings`,
+starts and stops registered features, and supplies a scoped policy object.
+
+Unknown features, unknown capabilities, missing implementations, and capability
+calls not declared for the calling feature are hard runtime errors. Adding a
+feature or capability therefore requires an explicit catalog entry before it can
+run.
+
+Protection modes are capability bundles rather than feature-specific booleans:
+
+- `safe`: verified static rules and manual controls;
+- `assist`: observation and user-confirmed suggestions;
+- `auto`: registered automatic actions and learned-pattern execution.
+
+Legacy `friendlyMode` and `isEnabled` values are migrated once into:
+
+```json
+{
+  "appSettings": {
+    "enabled": true,
+    "protectionMode": "safe",
+    "featureOverrides": {}
+  }
+}
+```

@@ -1,10 +1,12 @@
-﻿export function injectSpy() {
+export function injectSpy(settings = {}) {
   try {
-    const s = document.createElement("script");
-    s.src = chrome.runtime.getURL("injected_spy.js");
-    (document.head || document.documentElement).appendChild(s);
-    s.onload = () => s.remove();
-  } catch (e) {
-    console.error("[AdsFriendly] Injection failed:", e);
+    const script = document.createElement("script");
+    script.src = chrome.runtime.getURL("injected_spy.js");
+    script.dataset.protectionMode = settings.protectionMode || "safe";
+    script.dataset.protectionEnabled = String(settings.enabled !== false);
+    (document.head || document.documentElement).appendChild(script);
+    script.onload = () => script.remove();
+  } catch (error) {
+    console.error("[AdsFriendly] Injection failed:", error);
   }
 }

@@ -51,7 +51,12 @@ export async function flushTelemetry() {
 export function startTelemetryFlush() {
   chrome.runtime.onStartup.addListener(flushTelemetry);
   chrome.runtime.onInstalled.addListener(flushTelemetry);
-  setInterval(flushTelemetry, 60000);
+  const intervalId = setInterval(flushTelemetry, 60000);
+  return () => {
+    clearInterval(intervalId);
+    chrome.runtime.onStartup.removeListener(flushTelemetry);
+    chrome.runtime.onInstalled.removeListener(flushTelemetry);
+  };
 }
 
 async function buildEvent(raw) {

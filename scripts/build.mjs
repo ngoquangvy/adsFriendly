@@ -7,6 +7,7 @@ const entries = [
   ["src/picker/index.js", "picker.js", "AdsFriendlyPicker"],
   ["src/video/index.js", "video_surgeon.js", "AdsFriendlyVideo"],
   ["src/main-world/index.js", "injected_spy.js", "AdsFriendlyMainWorld"],
+  ["src/popup/index.js", "popup/popup.js", "AdsFriendlyPopup"],
 ];
 const manifest = JSON.parse(await readFile("manifest.json", "utf8"));
 const scripts =

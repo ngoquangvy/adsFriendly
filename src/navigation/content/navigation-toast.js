@@ -3,7 +3,7 @@ let toastTimer = null;
 let pendingNavigation = null;
 
 export function startNavigationToast() {
-  chrome.runtime.onMessage.addListener((message) => {
+  const onMessage = (message) => {
     if (message?.type !== "SHOW_GRAY_NAVIGATION") return;
     pendingNavigation = {
       url: message.url,
@@ -11,7 +11,9 @@ export function startNavigationToast() {
       target: message.target,
     };
     showNavigationToast();
-  });
+  };
+  chrome.runtime.onMessage.addListener(onMessage);
+  return () => chrome.runtime.onMessage.removeListener(onMessage);
 }
 
 function showNavigationToast() {

@@ -6,9 +6,13 @@ import {
   getSmallestSafeDomTarget,
 } from "./features.js";
 import { showDomCandidateToast } from "./toast.js";
+import { CAPABILITIES } from "../runtime/feature-catalog.js";
 
 const observed = new WeakSet();
 const allowedSelectors = new Set();
+let activePolicy = null;
+let scanIntervalId = null;
+let bodyObserver = null;
 const DOM_CANDIDATE_SELECTOR = [
   "img",
   "iframe",
@@ -25,8 +29,9 @@ const DOM_CANDIDATE_SELECTOR = [
   '[class*="sponsor" i]',
 ].join(",");
 
-export function startDomCandidateCollector() {
-  setInterval(scanDomCandidates, 2500);
+export function startDomCandidateCollector(policy) {
+  activePolicy = policy;
+  scanIntervalId = setInterval(scanDomCandidates, 2500);
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", () =>
       setTimeout(scanDomCandidates, 400),
@@ -36,23 +41,33 @@ export function startDomCandidateCollector() {
   }
 
   const startObserver = () => {
+    if (!activePolicy) return;
     if (!document.body) {
       setTimeout(startObserver, 100);
       return;
     }
-    new MutationObserver((mutations) => {
+    bodyObserver = new MutationObserver((mutations) => {
       for (const mutation of mutations) {
         for (const node of mutation.addedNodes) {
           if (node.nodeType === 1) scanNode(node);
         }
       }
-    }).observe(document.body, { childList: true, subtree: true });
+    });
+    bodyObserver.observe(document.body, { childList: true, subtree: true });
   };
   startObserver();
+
+  return () => {
+    if (scanIntervalId) clearInterval(scanIntervalId);
+    scanIntervalId = null;
+    bodyObserver?.disconnect();
+    bodyObserver = null;
+    activePolicy = null;
+  };
 }
 
-async function scanDomCandidates() {
-  if (!(await shouldRunDomCollector())) return;
+function scanDomCandidates() {
+  if (!activePolicy?.can(CAPABILITIES.DOM_OBSERVE)) return;
   scanNode(document);
 }
 
@@ -78,9 +93,18 @@ function evaluateElement(element) {
 
   const candidate = { element, target, selector, features, decision };
   if (decision.action === "block") {
-    hideCandidate(candidate, "heuristic_block");
+    if (activePolicy?.can(CAPABILITIES.DOM_AUTO_HIDE)) {
+      hideCandidate(candidate, "heuristic_block");
+    } else if (activePolicy?.can(CAPABILITIES.DOM_SUGGEST)) {
+      showCandidate(candidate);
+    }
     return;
   }
+  if (!activePolicy?.can(CAPABILITIES.DOM_SUGGEST)) return;
+  showCandidate(candidate);
+}
+
+function showCandidate(candidate) {
   showDomCandidateToast(candidate, {
     onHide: (item) => hideCandidate(item, "user_hide"),
     onAllow: allowCandidate,
@@ -89,7 +113,8 @@ function evaluateElement(element) {
 
 function hideCandidate(candidate, outcome) {
   BLOCKING_STRATEGIES.STEALTH(candidate.target);
-  recordDomSample(candidate, outcome, "ad");
+  if (activePolicy?.can(CAPABILITIES.LEARNING_FEEDBACK))
+    recordDomSample(candidate, outcome, "ad");
   if (outcome === "user_hide" && candidate.selector)
     persistCustomRule(candidate, outcome);
   chrome.runtime.sendMessage({
@@ -101,7 +126,8 @@ function hideCandidate(candidate, outcome) {
 
 function allowCandidate(candidate) {
   if (candidate.selector) allowedSelectors.add(candidate.selector);
-  recordDomSample(candidate, "user_allow", "content");
+  if (activePolicy?.can(CAPABILITIES.LEARNING_FEEDBACK))
+    recordDomSample(candidate, "user_allow", "content");
 }
 
 async function persistCustomRule(candidate, outcome) {
@@ -130,18 +156,6 @@ async function persistCustomRule(candidate, outcome) {
   userCustomRules[location.hostname] = rules;
   await chrome.storage.local.set({ userCustomRules });
   chrome.runtime.sendMessage({ type: "SYNC_LEARNING" });
-}
-
-async function shouldRunDomCollector() {
-  try {
-    const { isEnabled, friendlyMode } = await chrome.storage.local.get([
-      "isEnabled",
-      "friendlyMode",
-    ]);
-    return isEnabled !== false && friendlyMode === false;
-  } catch {
-    return false;
-  }
 }
 
 async function recordDomSample(candidate, outcome, label) {

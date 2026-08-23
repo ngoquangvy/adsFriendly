@@ -9,7 +9,7 @@
   ".ytd-promoted-video-renderer",
 ];
 export function startYouTubeCleaner() {
-  setInterval(() => {
+  const run = () => {
     if (location.hostname !== "www.youtube.com") return;
     selectors.forEach((sel) =>
       document
@@ -27,5 +27,8 @@ export function startYouTubeCleaner() {
         )
           card.style.setProperty("display", "none", "important");
       });
-  }, 2000);
+  };
+  run();
+  const intervalId = setInterval(run, 2000);
+  return () => clearInterval(intervalId);
 }
