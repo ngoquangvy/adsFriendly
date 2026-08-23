@@ -161,6 +161,8 @@ const RecordFactory = {
                     contributions: decision.contributions || {}
                 },
                 feature_vector: decision.raw_features || null,
+                payload_analysis: event.payload_analysis || null,
+                media_context: event.media_context || null,
                 dom_context: event.context || {}
             }
         };

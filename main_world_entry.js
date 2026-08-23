@@ -10,6 +10,9 @@ import './engine/shared/url_normalizer.js';
 import './engine/shared/record_factory.js';
 import './core/BrainBridge.js';
 
+// 1.5 Media Analysis Layer (HLS Inspector — must load before Radar)
+import './core/modules/hls_inspector.js';
+
 // 2. Intelligence Layer (Brain)
 import './engine/brain/classifier.js';
 import './engine/brain/weights.js';

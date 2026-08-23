@@ -90,6 +90,140 @@ const tryCatch = (fn, source, fallback = null) => {
     }
 };
 
+// 🔬 PAYLOAD INTERCEPTOR: Analyze m3u8/xml/vast content
+// M3U8 analysis is delegated to HLSInspector (core/modules/hls_inspector.js)
+// VAST XML uses simple pattern matching (kept lightweight)
+const VAST_PATTERNS = [
+    { name: 'VAST_root', regex: /<VAST[\s>]/gi },
+    { name: 'Ad_element', regex: /<Ad[\s>]/g },
+    { name: 'MediaFile', regex: /<MediaFile[\s>]/gi },
+    { name: 'Tracking', regex: /<Tracking[\s>]/gi },
+    { name: 'Impression', regex: /<Impression[\s>]/gi },
+    { name: 'ClickThrough', regex: /<ClickThrough[\s>]/gi },
+    { name: 'VPAID', regex: /vpaid|VPAID/g }
+];
+
+// 📦 HLS REGISTRY: Lưu trữ các Playlist đã Parse để tra cứu Segment
+// Khi Radar bắt file .ts, nó sẽ dò URL vào Registry này
+if (!window.__V_HLS_REGISTRY) {
+    window.__V_HLS_REGISTRY = {
+        playlists: new Map(), // sourceUrl -> hlsStructure
+        segmentIndex: new Map() // segmentUrl -> { block_id, structural_role, ... }
+    };
+}
+
+function isPayloadTarget(url) {
+    if (!url || typeof url !== 'string') return null;
+    const lower = url.toLowerCase();
+    if (lower.includes('.m3u8') || lower.includes('.m3u')) return 'm3u8';
+    if (lower.includes('vast') || lower.includes('/xml') ||
+        lower.includes('vpaid') || lower.includes('ad_tag')) return 'vast';
+    return null;
+}
+
+function isMediaSegment(url) {
+    if (!url || typeof url !== 'string') return false;
+    const lower = url.toLowerCase();
+    return lower.includes('.ts') || lower.includes('.m4s') ||
+           lower.includes('.mp4') || lower.includes('.aac');
+}
+
+function analyzePayload(text, payloadType, sourceUrl) {
+    if (!text || typeof text !== 'string' || text.length < 10) return null;
+
+    // M3U8 → Delegate toàn bộ cho HLSInspector
+    if (payloadType === 'm3u8') {
+        const inspector = window.Engine?.modules?.HLSInspector;
+        if (!inspector) {
+            console.warn('[Radar] HLSInspector not available, skipping m3u8 parse');
+            return null;
+        }
+
+        const hlsStructure = inspector.parse(text, sourceUrl);
+        if (!hlsStructure) return null;
+
+        // Đăng ký vào Registry để tra cứu Segment sau này
+        const registry = window.__V_HLS_REGISTRY;
+        registry.playlists.set(sourceUrl, hlsStructure);
+
+        // Index tất cả segment URLs vào bảng tra cứu nhanh
+        if (hlsStructure.blocks) {
+            for (const block of hlsStructure.blocks) {
+                if (block.segments) {
+                    for (const seg of block.segments) {
+                        registry.segmentIndex.set(seg.url, {
+                            belongs_to_block_id: block.block_id,
+                            structural_role: block.is_ad_suspect ? 'ad_suspect' : 'content',
+                            block_duration: block.duration,
+                            sequence_index: seg.index,
+                            segment_time_start: seg.time_start,
+                            segment_time_end: seg.time_end,
+                            suspect_reasons: block.suspect_reasons || [],
+                            playlist_source: sourceUrl
+                        });
+                    }
+                }
+            }
+        }
+
+        // Trả về cấu trúc cho payload_analysis (gửi về Server)
+        // Tạo bản rút gọn (không gửi full segment list để giữ nhẹ Record)
+        return {
+            is_parsed: true,
+            payload_type: hlsStructure.playlist_type === 'master' ? 'm3u8_master' : 'm3u8_media',
+            hls_structure: {
+                playlist_type: hlsStructure.playlist_type,
+                content_type: hlsStructure.content_type || null,
+                total_duration: hlsStructure.total_duration || null,
+                total_segments: hlsStructure.total_segments || null,
+                target_duration: hlsStructure.target_duration || null,
+                variants_count: hlsStructure.variants_count || null,
+                blocks_count: hlsStructure.blocks_count || null,
+                blocks: (hlsStructure.blocks || []).map(b => ({
+                    block_id: b.block_id,
+                    is_ad_suspect: b.is_ad_suspect,
+                    suspect_reasons: b.suspect_reasons,
+                    duration: b.duration,
+                    segments_count: b.segments_count,
+                    base_hostnames: b.base_hostnames,
+                    preceded_by_discontinuity: b.preceded_by_discontinuity,
+                    has_cue_out: b.has_cue_out
+                })),
+                variants: hlsStructure.variants || null
+            }
+        };
+    }
+
+    // VAST XML → Pattern matching (Giữ nguyên logic cũ)
+    if (payloadType === 'vast') {
+        const markers_found = {};
+        for (const p of VAST_PATTERNS) {
+            const matches = text.match(p.regex);
+            markers_found[p.name] = matches ? matches.length : 0;
+        }
+
+        return {
+            is_parsed: true,
+            payload_type: 'vast',
+            body_length: text.length,
+            markers_found,
+            has_ad_markers: Object.values(markers_found).some(v => v > 0)
+        };
+    }
+
+    return null;
+}
+
+/**
+ * Tra cứu Segment: URL file .ts này thuộc Block nào?
+ * Trả về media_context nếu tìm thấy, null nếu không
+ */
+function lookupMediaContext(url) {
+    const registry = window.__V_HLS_REGISTRY;
+    if (!registry) return null;
+    return registry.segmentIndex.get(url) || null;
+}
+
 if (!window.__VANGUARD_RADAR_ACTIVE__) {
     window.__VANGUARD_RADAR_ACTIVE__ = true;
 
@@ -198,13 +332,45 @@ if (!window.__VANGUARD_RADAR_ACTIVE__) {
                 if (cl) size = parseInt(cl, 10);
             } catch { }
 
-            dispatchToEngine({
+            const responseEvent = {
                 ...baseEvent,
                 phase: 'response',
                 responseSize: size,
                 responseStatus: res.status,
                 isError: !res.ok
-            });
+            };
+
+            // 🔬 PAYLOAD INTERCEPTOR: Clone & analyze m3u8/xml
+            const targetType = isPayloadTarget(finalUrl);
+            if (targetType && res.ok) {
+                try {
+                    res.clone().text().then(bodyText => {
+                        const analysis = analyzePayload(bodyText, targetType, finalUrl);
+                        if (analysis) {
+                            dispatchToEngine({
+                                ...responseEvent,
+                                payload_analysis: analysis
+                            });
+                            console.log(`[Radar Payload] Analyzed ${targetType}: ${finalUrl.substring(0, 80)}...`, analysis);
+                        } else {
+                            dispatchToEngine(responseEvent);
+                        }
+                    }).catch(() => {
+                        dispatchToEngine(responseEvent);
+                    });
+                } catch {
+                    dispatchToEngine(responseEvent);
+                }
+            } else {
+                // 📦 SEGMENT LOOKUP: Kiểm tra .ts thuộc Block nào trong Playlist
+                if (isMediaSegment(finalUrl)) {
+                    const mediaCtx = lookupMediaContext(finalUrl);
+                    if (mediaCtx) {
+                        responseEvent.media_context = mediaCtx;
+                    }
+                }
+                dispatchToEngine(responseEvent);
+            }
         }).catch((err) => {
             dispatchToEngine({
                 ...baseEvent,
@@ -243,20 +409,44 @@ if (!window.__VANGUARD_RADAR_ACTIVE__) {
 
         dispatchToEngine(baseEvent);
 
+        const xhrRef = this;
         const cb = (phase) => {
             let size = -1;
             try {
-                const cl = this.getResponseHeader('Content-Length');
+                const cl = xhrRef.getResponseHeader('Content-Length');
                 if (cl) size = parseInt(cl, 10);
             } catch { }
 
-            dispatchToEngine({
+            const responseEvent = {
                 ...baseEvent,
                 phase: 'response',
                 responseSize: size,
-                responseStatus: this.status || 0,
-                isError: phase === 'error' || (this.status >= 400 && this.status !== 0)
-            });
+                responseStatus: xhrRef.status || 0,
+                isError: phase === 'error' || (xhrRef.status >= 400 && xhrRef.status !== 0)
+            };
+
+            // 🔬 PAYLOAD INTERCEPTOR: Analyze XHR responseText for m3u8/xml
+            const targetType = isPayloadTarget(baseEvent.url);
+            if (targetType && phase === 'load' && (xhrRef.responseType === '' || xhrRef.responseType === 'text')) {
+                try {
+                    const bodyText = xhrRef.responseText;
+                    const analysis = analyzePayload(bodyText, targetType, baseEvent.url);
+                    if (analysis) {
+                        responseEvent.payload_analysis = analysis;
+                        console.log(`[Radar Payload XHR] Analyzed ${targetType}: ${baseEvent.url.substring(0, 80)}...`, analysis);
+                    }
+                } catch { /* responseText not available */ }
+            }
+
+            // 📦 SEGMENT LOOKUP: Kiểm tra .ts thuộc Block nào trong Playlist
+            if (!responseEvent.payload_analysis && isMediaSegment(baseEvent.url)) {
+                const mediaCtx = lookupMediaContext(baseEvent.url);
+                if (mediaCtx) {
+                    responseEvent.media_context = mediaCtx;
+                }
+            }
+
+            dispatchToEngine(responseEvent);
         };
 
         this.addEventListener('load', () => cb('load'), { once: true });
