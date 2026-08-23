@@ -120,34 +120,47 @@ var AdsFriendlyContent = (() => {
   // src/dom/actions.js
   var BLOCKING_STRATEGIES = {
     STEALTH(el) {
-      if (el.style.opacity === "0") return;
+      el.setAttribute(HIDDEN_MARKER, "true");
+      if (el.style.getPropertyValue("opacity") === "0" && el.style.getPropertyValue("visibility") === "hidden")
+        return;
       el.style.setProperty("opacity", "0", "important");
       el.style.setProperty("visibility", "hidden", "important");
       el.style.setProperty("pointer-events", "none", "important");
     }
   };
+  var HIDDEN_MARKER = "data-adsfriendly-rule-hidden";
   var VISIBILITY_PROPERTIES = ["opacity", "visibility", "pointer-events"];
   function captureInlineVisibility(element) {
-    return Object.fromEntries(
-      VISIBILITY_PROPERTIES.map((property) => [
-        property,
-        {
-          value: element.style.getPropertyValue(property),
-          priority: element.style.getPropertyPriority(property)
-        }
-      ])
-    );
+    return {
+      marker: element.getAttribute(HIDDEN_MARKER),
+      properties: Object.fromEntries(
+        VISIBILITY_PROPERTIES.map((property) => [
+          property,
+          {
+            value: element.style.getPropertyValue(property),
+            priority: element.style.getPropertyPriority(property)
+          }
+        ])
+      )
+    };
   }
   function restoreInlineVisibility(element, snapshot) {
     if (!element || !snapshot) return;
+    const properties = snapshot.properties || snapshot;
     for (const property of VISIBILITY_PROPERTIES) {
-      const previous = snapshot[property];
+      const previous = properties[property];
       if (previous?.value) {
         element.style.setProperty(property, previous.value, previous.priority);
       } else {
         element.style.removeProperty(property);
       }
     }
+    if (snapshot.marker == null) element.removeAttribute(HIDDEN_MARKER);
+    else element.setAttribute(HIDDEN_MARKER, snapshot.marker);
+  }
+  function isHiddenByAdsFriendly(element) {
+    if (!element?.closest) return false;
+    return !!(element.closest(`[${HIDDEN_MARKER}]`) || element.querySelector?.(`[${HIDDEN_MARKER}]`));
   }
 
   // src/shared/decision.js
@@ -591,6 +604,7 @@ var AdsFriendlyContent = (() => {
     enqueueOrShow({ candidate, handlers, state: "hidden" });
   }
   function enqueueOrShow(entry) {
+    if (!isEntryReviewable(entry)) return;
     if (active) {
       if (queuedCandidates.length < 8) queuedCandidates.push(entry);
       return;
@@ -600,6 +614,10 @@ var AdsFriendlyContent = (() => {
   }
   function renderActiveToast() {
     if (!active) return;
+    if (!isEntryReviewable(active)) {
+      hideDomToast();
+      return;
+    }
     const toast = ensureToast();
     const label = active.candidate.features.tag.toUpperCase();
     const message = toast.querySelector(".adsfriendly-dom-message");
@@ -777,6 +795,10 @@ var AdsFriendlyContent = (() => {
     (document.body || document.documentElement).appendChild(highlight);
     const update = () => {
       if (!active || !target.isConnected || !highlight.isConnected) return;
+      if (isHiddenByAdsFriendly(target)) {
+        hideDomToast();
+        return;
+      }
       const rect = target.getBoundingClientRect();
       const left = Math.max(0, rect.left);
       const top = Math.max(0, rect.top);
@@ -790,6 +812,14 @@ var AdsFriendlyContent = (() => {
       highlightFrame = requestAnimationFrame(update);
     };
     update();
+  }
+  function isEntryReviewable(entry) {
+    if (entry.state !== "review") return true;
+    const target = entry.candidate.target || entry.candidate.element;
+    if (!target?.isConnected || isHiddenByAdsFriendly(target)) return false;
+    const rect = target.getBoundingClientRect();
+    const style = getComputedStyle(target);
+    return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden" && Number.parseFloat(style.opacity || "1") > 0.05;
   }
   function highlightColor(confidence) {
     if (confidence >= 0.9) return "#ef4444";
@@ -1076,12 +1106,14 @@ var AdsFriendlyContent = (() => {
     candidates.forEach(evaluateElement);
   }
   function evaluateElement(element) {
-    if (observed.has(element) || element.id?.includes("adsfriendly")) return;
+    if (observed.has(element) || element.id?.includes("adsfriendly") || isHiddenByAdsFriendly(element))
+      return;
     const features = extractDomFeatures(element);
     const decision = decideDomCandidate(features);
     if (decision.action === "observe") return;
     observed.add(element);
     const target = getSmallestSafeDomTarget(element, features);
+    if (isHiddenByAdsFriendly(target)) return;
     const selector = buildDomSelector(target);
     if (selector && allowedSelectors.has(selector)) return;
     const candidate = { element, target, selector, features, decision };
@@ -1526,15 +1558,16 @@ var AdsFriendlyContent = (() => {
   }
 
   // src/dom/engine.js
-  function startStaticDomBlocker() {
-    return startManagedLoop(blockAdsOnPage);
+  async function startStaticDomBlocker() {
+    await blockAdsOnPage();
+    return startManagedLoop(blockAdsOnPage, false);
   }
   function startLearnedDomBlocker() {
     return startManagedLoop(async () => {
       hidePredictedAds(await getDomPatterns());
     });
   }
-  function startManagedLoop(task) {
+  function startManagedLoop(task, runImmediately = true) {
     let stopped = false;
     let intervalId = null;
     const stop = () => {
@@ -1551,7 +1584,7 @@ var AdsFriendlyContent = (() => {
       }
     };
     intervalId = setInterval(run, 2e3);
-    run();
+    if (runImmediately) run();
     return stop;
   }
 

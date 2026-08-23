@@ -1,3 +1,5 @@
+import { isHiddenByAdsFriendly } from "./actions.js";
+
 const TOAST_ID = "adsfriendly-dom-toast";
 const HIGHLIGHT_ID = "adsfriendly-dom-highlight";
 const TOAST_TIMEOUT_MS = 10000;
@@ -16,6 +18,7 @@ export function showDomHiddenToast(candidate, handlers) {
 }
 
 function enqueueOrShow(entry) {
+  if (!isEntryReviewable(entry)) return;
   if (active) {
     if (queuedCandidates.length < 8) queuedCandidates.push(entry);
     return;
@@ -26,6 +29,10 @@ function enqueueOrShow(entry) {
 
 function renderActiveToast() {
   if (!active) return;
+  if (!isEntryReviewable(active)) {
+    hideDomToast();
+    return;
+  }
   const toast = ensureToast();
   const label = active.candidate.features.tag.toUpperCase();
   const message = toast.querySelector(".adsfriendly-dom-message");
@@ -228,6 +235,10 @@ function highlightCandidate(candidate) {
 
   const update = () => {
     if (!active || !target.isConnected || !highlight.isConnected) return;
+    if (isHiddenByAdsFriendly(target)) {
+      hideDomToast();
+      return;
+    }
     const rect = target.getBoundingClientRect();
     const left = Math.max(0, rect.left);
     const top = Math.max(0, rect.top);
@@ -241,6 +252,21 @@ function highlightCandidate(candidate) {
     highlightFrame = requestAnimationFrame(update);
   };
   update();
+}
+
+function isEntryReviewable(entry) {
+  if (entry.state !== "review") return true;
+  const target = entry.candidate.target || entry.candidate.element;
+  if (!target?.isConnected || isHiddenByAdsFriendly(target)) return false;
+  const rect = target.getBoundingClientRect();
+  const style = getComputedStyle(target);
+  return (
+    rect.width > 0 &&
+    rect.height > 0 &&
+    style.display !== "none" &&
+    style.visibility !== "hidden" &&
+    Number.parseFloat(style.opacity || "1") > 0.05
+  );
 }
 
 function highlightColor(confidence) {

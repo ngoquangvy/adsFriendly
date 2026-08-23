@@ -1,5 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import {
+  BLOCKING_STRATEGIES,
+  captureInlineVisibility,
+  isHiddenByAdsFriendly,
+  restoreInlineVisibility,
+} from "../src/dom/actions.js";
 import { buildDomSelector } from "../src/dom/features.js";
 
 function element(tag, attributes = {}, parentElement = null) {
@@ -55,4 +61,34 @@ test("falls back to a narrow structural selector", () => {
   const second = element("div", {}, section);
   assert.equal(buildDomSelector(second), "section > div:nth-of-type(2)");
   assert.notEqual(buildDomSelector(first), "div");
+});
+
+test("marks hidden rule regions and restores their previous state", () => {
+  const attributes = new Map();
+  const properties = new Map();
+  const target = {
+    style: {
+      getPropertyValue: (name) => properties.get(name)?.value || "",
+      getPropertyPriority: (name) => properties.get(name)?.priority || "",
+      setProperty: (name, value, priority) =>
+        properties.set(name, { value, priority }),
+      removeProperty: (name) => properties.delete(name),
+    },
+    getAttribute: (name) => attributes.get(name) ?? null,
+    setAttribute: (name, value) => attributes.set(name, value),
+    removeAttribute: (name) => attributes.delete(name),
+    closest: (selector) =>
+      selector === "[data-adsfriendly-rule-hidden]" &&
+      attributes.has("data-adsfriendly-rule-hidden")
+        ? target
+        : null,
+    querySelector: () => null,
+  };
+
+  const snapshot = captureInlineVisibility(target);
+  BLOCKING_STRATEGIES.STEALTH(target);
+  assert.equal(isHiddenByAdsFriendly(target), true);
+  restoreInlineVisibility(target, snapshot);
+  assert.equal(isHiddenByAdsFriendly(target), false);
+  assert.equal(properties.size, 0);
 });

@@ -3,8 +3,11 @@ import { hidePredictedAds } from "./prediction-runner.js";
 import { getDomPatterns } from "../shared/pattern-store.js";
 import { isExtensionContextInvalidated } from "../shared/extension-context.js";
 
-export function startStaticDomBlocker() {
-  return startManagedLoop(blockAdsOnPage);
+export async function startStaticDomBlocker() {
+  // The collector starts later in the feature catalog. Waiting here prevents
+  // saved rules and candidate review from racing during the first page load.
+  await blockAdsOnPage();
+  return startManagedLoop(blockAdsOnPage, false);
 }
 
 export function startLearnedDomBlocker() {
@@ -20,7 +23,7 @@ export async function runInPageEngineOnce() {
   } catch {}
 }
 
-function startManagedLoop(task) {
+function startManagedLoop(task, runImmediately = true) {
   let stopped = false;
   let intervalId = null;
   const stop = () => {
@@ -37,6 +40,6 @@ function startManagedLoop(task) {
     }
   };
   intervalId = setInterval(run, 2000);
-  run();
+  if (runImmediately) run();
   return stop;
 }

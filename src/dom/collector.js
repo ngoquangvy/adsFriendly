@@ -1,6 +1,7 @@
 import {
   BLOCKING_STRATEGIES,
   captureInlineVisibility,
+  isHiddenByAdsFriendly,
   restoreInlineVisibility,
 } from "./actions.js";
 import { decideDomCandidate } from "./decision.js";
@@ -84,7 +85,12 @@ function scanNode(root) {
 }
 
 function evaluateElement(element) {
-  if (observed.has(element) || element.id?.includes("adsfriendly")) return;
+  if (
+    observed.has(element) ||
+    element.id?.includes("adsfriendly") ||
+    isHiddenByAdsFriendly(element)
+  )
+    return;
 
   const features = extractDomFeatures(element);
   const decision = decideDomCandidate(features);
@@ -92,6 +98,7 @@ function evaluateElement(element) {
 
   observed.add(element);
   const target = getSmallestSafeDomTarget(element, features);
+  if (isHiddenByAdsFriendly(target)) return;
   const selector = buildDomSelector(target);
   if (selector && allowedSelectors.has(selector)) return;
 
