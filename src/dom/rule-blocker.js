@@ -11,8 +11,11 @@ import { showDomHiddenToast } from "./toast.js";
 import { isExtensionContextInvalidated } from "../shared/extension-context.js";
 const PROTECTED_SELECTOR =
   'nav, header, [role="navigation"], form, [data-testid*="login" i]';
-const notifiedCustomSelectors = new Set();
 const customRuleSnapshots = new Map();
+const savedRuleApplications = new Map();
+const suppressedCustomSelectors = new Set();
+let initialCustomSelectors = null;
+let savedRuleSummaryShown = false;
 
 export async function blockAdsOnPage() {
   const hostname = location.hostname;
@@ -28,6 +31,13 @@ export async function blockAdsOnPage() {
     resetHistory = result.siteResetHistory?.[hostname] || resetHistory;
   } catch (error) {
     if (isExtensionContextInvalidated(error)) throw error;
+  }
+  if (!initialCustomSelectors) {
+    initialCustomSelectors = new Set(
+      customSelectors
+        .map((rule) => (typeof rule === "string" ? rule : rule.selector))
+        .filter(Boolean),
+    );
   }
   const isBlacklisted = (el) =>
     resetHistory.oldRules.some((oldRule) => {
@@ -52,6 +62,7 @@ export async function blockAdsOnPage() {
     const selector = typeof rule === "string" ? rule : rule.selector;
     if (
       !selector ||
+      suppressedCustomSelectors.has(selector) ||
       DANGEROUS_SELECTOR_TAGS.includes(selector.toLowerCase().trim())
     )
       return;
@@ -68,25 +79,10 @@ export async function blockAdsOnPage() {
     });
     customRuleSnapshots.set(selector, snapshots);
 
-    if (matched.length && !notifiedCustomSelectors.has(selector)) {
-      notifiedCustomSelectors.add(selector);
-      const element = matched[0];
-      showDomHiddenToast(
-        {
-          target: element,
-          selector,
-          features: { tag: element.tagName.toLowerCase() },
-          decision: {
-            confidence: typeof rule === "string" ? 0.8 : rule.confidence || 0.8,
-            reasons: ["saved_user_rule"],
-          },
-        },
-        {
-          onShow: () => restoreSavedRule(selector, rule, snapshots),
-        },
-      );
-    }
+    if (matched.length && initialCustomSelectors.has(selector))
+      savedRuleApplications.set(selector, { rule, snapshots });
   });
+  showSavedRuleSummary();
   STATIC_AD_SELECTORS.forEach((selector) => hide(selector, true));
   if (blockedCount > 0) {
     try {
@@ -109,30 +105,67 @@ export async function blockAdsOnPage() {
   }
 }
 
-async function restoreSavedRule(selector, rule, snapshots) {
-  snapshots.forEach((snapshot, element) =>
-    restoreInlineVisibility(element, snapshot),
+function showSavedRuleSummary() {
+  if (savedRuleSummaryShown || !savedRuleApplications.size) return;
+  savedRuleSummaryShown = true;
+  const applications = [...savedRuleApplications.entries()];
+  const hiddenElements = new Set();
+  applications.forEach(([, { snapshots }]) =>
+    snapshots.forEach((_, element) => hiddenElements.add(element)),
   );
-  customRuleSnapshots.delete(selector);
+  const target = hiddenElements.values().next().value;
+  if (!target) return;
+
+  showDomHiddenToast(
+    {
+      target,
+      hiddenCount: hiddenElements.size,
+      savedRuleCount: applications.length,
+      isSavedRuleSummary: true,
+      features: { tag: "page" },
+      decision: {
+        confidence: 1,
+        reasons: ["saved_user_rules"],
+      },
+    },
+    {
+      onShow: restoreSavedRules,
+    },
+  );
+}
+
+async function restoreSavedRules() {
+  const applications = [...savedRuleApplications.entries()];
+  const selectors = new Set(applications.map(([selector]) => selector));
+  selectors.forEach((selector) => suppressedCustomSelectors.add(selector));
+  applications.forEach(([selector, { snapshots }]) => {
+    snapshots.forEach((snapshot, element) =>
+      restoreInlineVisibility(element, snapshot),
+    );
+    customRuleSnapshots.delete(selector);
+  });
+  savedRuleApplications.clear();
 
   const { userCustomRules = {} } =
     await chrome.storage.local.get("userCustomRules");
   const rules = userCustomRules[location.hostname] || [];
-  const remaining = rules.filter((entry) =>
-    typeof entry === "string"
-      ? entry !== selector
-      : entry.selector !== selector,
+  const remaining = rules.filter(
+    (entry) =>
+      !selectors.has(typeof entry === "string" ? entry : entry.selector),
   );
   if (remaining.length) userCustomRules[location.hostname] = remaining;
   else delete userCustomRules[location.hostname];
   await chrome.storage.local.set({ userCustomRules });
 
-  if (typeof rule !== "string" && rule.fingerprint) {
+  const fingerprints = applications
+    .map(([, { rule }]) => (typeof rule === "string" ? null : rule.fingerprint))
+    .filter(Boolean);
+  fingerprints.forEach((fingerprint) =>
     chrome.runtime.sendMessage({
       type: "NEGATIVE_LEARNING",
-      fingerprint: rule.fingerprint,
-    });
-  }
+      fingerprint,
+    }),
+  );
   chrome.runtime.sendMessage({
     type: "RECORD_TELEMETRY",
     event: {
@@ -147,14 +180,18 @@ async function restoreSavedRule(selector, rule, snapshots) {
         url: location.href.split("#")[0],
       },
       timestamp: Date.now(),
-      context: { selector, surface: "saved_rule_toast" },
-      evidence: {
-        fingerprint: typeof rule === "string" ? null : rule.fingerprint,
+      context: {
+        selectors: [...selectors],
+        hidden_count: new Set(
+          applications.flatMap(([, { snapshots }]) => [...snapshots.keys()]),
+        ).size,
+        surface: "saved_rule_summary_toast",
       },
+      evidence: { fingerprints },
       feedback: {
         user_action: "show",
         correction: "false_positive",
-        surface: "saved_rule_toast",
+        surface: "saved_rule_summary_toast",
       },
       action: "allow",
       outcome: "user_show",

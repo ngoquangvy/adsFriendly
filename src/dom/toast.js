@@ -1,6 +1,7 @@
 const TOAST_ID = "adsfriendly-dom-toast";
 const HIGHLIGHT_ID = "adsfriendly-dom-highlight";
 const TOAST_TIMEOUT_MS = 10000;
+const HIDDEN_TOAST_TIMEOUT_MS = 5000;
 const queuedCandidates = [];
 let active = null;
 let hideTimer = null;
@@ -31,12 +32,22 @@ function renderActiveToast() {
   const hideButton = toast.querySelector(".adsfriendly-dom-hide");
   const allowButton = toast.querySelector(".adsfriendly-dom-allow");
 
-  toast.querySelector(".adsfriendly-dom-scope").textContent = "ELEMENT";
+  const isSavedRuleSummary = active.candidate.isSavedRuleSummary === true;
+  toast.querySelector(".adsfriendly-dom-scope").textContent = isSavedRuleSummary
+    ? "PAGE"
+    : "ELEMENT";
   if (active.state === "hidden") {
-    message.textContent = `${label} hidden`;
-    message.title = "Hidden by your saved rule";
+    const hiddenCount = active.candidate.hiddenCount || 1;
+    message.textContent = isSavedRuleSummary
+      ? `${hiddenCount} element${hiddenCount === 1 ? "" : "s"} hidden`
+      : `${label} hidden`;
+    message.title = isSavedRuleSummary
+      ? `Hidden by ${active.candidate.savedRuleCount || 1} saved rule${
+          active.candidate.savedRuleCount === 1 ? "" : "s"
+        }`
+      : "Hidden by your saved rule";
     hideButton.hidden = true;
-    allowButton.textContent = "Show";
+    allowButton.textContent = isSavedRuleSummary ? "Show all" : "Show";
     clearHighlight();
   } else {
     const confidence = Math.round(active.candidate.decision.confidence * 100);
@@ -211,7 +222,11 @@ function clearHighlight() {
 
 function scheduleHide() {
   pauseHide();
-  if (active) hideTimer = setTimeout(hideDomToast, TOAST_TIMEOUT_MS);
+  if (active) {
+    const timeout =
+      active.state === "hidden" ? HIDDEN_TOAST_TIMEOUT_MS : TOAST_TIMEOUT_MS;
+    hideTimer = setTimeout(hideDomToast, timeout);
+  }
 }
 
 function pauseHide() {

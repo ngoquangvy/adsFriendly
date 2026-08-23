@@ -519,6 +519,7 @@ var AdsFriendlyContent = (() => {
   var TOAST_ID = "adsfriendly-dom-toast";
   var HIGHLIGHT_ID = "adsfriendly-dom-highlight";
   var TOAST_TIMEOUT_MS = 1e4;
+  var HIDDEN_TOAST_TIMEOUT_MS = 5e3;
   var queuedCandidates = [];
   var active = null;
   var hideTimer = null;
@@ -544,12 +545,14 @@ var AdsFriendlyContent = (() => {
     const message = toast.querySelector(".adsfriendly-dom-message");
     const hideButton = toast.querySelector(".adsfriendly-dom-hide");
     const allowButton = toast.querySelector(".adsfriendly-dom-allow");
-    toast.querySelector(".adsfriendly-dom-scope").textContent = "ELEMENT";
+    const isSavedRuleSummary = active.candidate.isSavedRuleSummary === true;
+    toast.querySelector(".adsfriendly-dom-scope").textContent = isSavedRuleSummary ? "PAGE" : "ELEMENT";
     if (active.state === "hidden") {
-      message.textContent = `${label} hidden`;
-      message.title = "Hidden by your saved rule";
+      const hiddenCount = active.candidate.hiddenCount || 1;
+      message.textContent = isSavedRuleSummary ? `${hiddenCount} element${hiddenCount === 1 ? "" : "s"} hidden` : `${label} hidden`;
+      message.title = isSavedRuleSummary ? `Hidden by ${active.candidate.savedRuleCount || 1} saved rule${active.candidate.savedRuleCount === 1 ? "" : "s"}` : "Hidden by your saved rule";
       hideButton.hidden = true;
-      allowButton.textContent = "Show";
+      allowButton.textContent = isSavedRuleSummary ? "Show all" : "Show";
       clearHighlight();
     } else {
       const confidence = Math.round(active.candidate.decision.confidence * 100);
@@ -710,7 +713,10 @@ var AdsFriendlyContent = (() => {
   }
   function scheduleHide() {
     pauseHide();
-    if (active) hideTimer = setTimeout(hideDomToast, TOAST_TIMEOUT_MS);
+    if (active) {
+      const timeout = active.state === "hidden" ? HIDDEN_TOAST_TIMEOUT_MS : TOAST_TIMEOUT_MS;
+      hideTimer = setTimeout(hideDomToast, timeout);
+    }
   }
   function pauseHide() {
     if (hideTimer) clearTimeout(hideTimer);
@@ -1146,8 +1152,11 @@ var AdsFriendlyContent = (() => {
 
   // src/dom/rule-blocker.js
   var PROTECTED_SELECTOR2 = 'nav, header, [role="navigation"], form, [data-testid*="login" i]';
-  var notifiedCustomSelectors = /* @__PURE__ */ new Set();
   var customRuleSnapshots = /* @__PURE__ */ new Map();
+  var savedRuleApplications = /* @__PURE__ */ new Map();
+  var suppressedCustomSelectors = /* @__PURE__ */ new Set();
+  var initialCustomSelectors = null;
+  var savedRuleSummaryShown = false;
   async function blockAdsOnPage() {
     const hostname = location.hostname;
     let customSelectors = [];
@@ -1163,6 +1172,11 @@ var AdsFriendlyContent = (() => {
     } catch (error) {
       if (isExtensionContextInvalidated(error)) throw error;
     }
+    if (!initialCustomSelectors) {
+      initialCustomSelectors = new Set(
+        customSelectors.map((rule) => typeof rule === "string" ? rule : rule.selector).filter(Boolean)
+      );
+    }
     const isBlacklisted = (el) => resetHistory.oldRules.some((oldRule) => {
       if (typeof oldRule === "string") return false;
       const f = oldRule.fingerprint;
@@ -1176,7 +1190,7 @@ var AdsFriendlyContent = (() => {
     });
     customSelectors.forEach((rule) => {
       const selector = typeof rule === "string" ? rule : rule.selector;
-      if (!selector || DANGEROUS_SELECTOR_TAGS.includes(selector.toLowerCase().trim()))
+      if (!selector || suppressedCustomSelectors.has(selector) || DANGEROUS_SELECTOR_TAGS.includes(selector.toLowerCase().trim()))
         return;
       const snapshots = customRuleSnapshots.get(selector) || /* @__PURE__ */ new Map();
       const matched = [];
@@ -1190,25 +1204,10 @@ var AdsFriendlyContent = (() => {
         blockedCount++;
       });
       customRuleSnapshots.set(selector, snapshots);
-      if (matched.length && !notifiedCustomSelectors.has(selector)) {
-        notifiedCustomSelectors.add(selector);
-        const element = matched[0];
-        showDomHiddenToast(
-          {
-            target: element,
-            selector,
-            features: { tag: element.tagName.toLowerCase() },
-            decision: {
-              confidence: typeof rule === "string" ? 0.8 : rule.confidence || 0.8,
-              reasons: ["saved_user_rule"]
-            }
-          },
-          {
-            onShow: () => restoreSavedRule(selector, rule, snapshots)
-          }
-        );
-      }
+      if (matched.length && initialCustomSelectors.has(selector))
+        savedRuleApplications.set(selector, { rule, snapshots });
     });
+    showSavedRuleSummary();
     STATIC_AD_SELECTORS.forEach((selector) => hide(selector, true));
     if (blockedCount > 0) {
       try {
@@ -1230,25 +1229,59 @@ var AdsFriendlyContent = (() => {
       );
     }
   }
-  async function restoreSavedRule(selector, rule, snapshots) {
-    snapshots.forEach(
-      (snapshot, element) => restoreInlineVisibility(element, snapshot)
+  function showSavedRuleSummary() {
+    if (savedRuleSummaryShown || !savedRuleApplications.size) return;
+    savedRuleSummaryShown = true;
+    const applications = [...savedRuleApplications.entries()];
+    const hiddenElements = /* @__PURE__ */ new Set();
+    applications.forEach(
+      ([, { snapshots }]) => snapshots.forEach((_, element) => hiddenElements.add(element))
     );
-    customRuleSnapshots.delete(selector);
+    const target = hiddenElements.values().next().value;
+    if (!target) return;
+    showDomHiddenToast(
+      {
+        target,
+        hiddenCount: hiddenElements.size,
+        savedRuleCount: applications.length,
+        isSavedRuleSummary: true,
+        features: { tag: "page" },
+        decision: {
+          confidence: 1,
+          reasons: ["saved_user_rules"]
+        }
+      },
+      {
+        onShow: restoreSavedRules
+      }
+    );
+  }
+  async function restoreSavedRules() {
+    const applications = [...savedRuleApplications.entries()];
+    const selectors2 = new Set(applications.map(([selector]) => selector));
+    selectors2.forEach((selector) => suppressedCustomSelectors.add(selector));
+    applications.forEach(([selector, { snapshots }]) => {
+      snapshots.forEach(
+        (snapshot, element) => restoreInlineVisibility(element, snapshot)
+      );
+      customRuleSnapshots.delete(selector);
+    });
+    savedRuleApplications.clear();
     const { userCustomRules = {} } = await chrome.storage.local.get("userCustomRules");
     const rules = userCustomRules[location.hostname] || [];
     const remaining = rules.filter(
-      (entry) => typeof entry === "string" ? entry !== selector : entry.selector !== selector
+      (entry) => !selectors2.has(typeof entry === "string" ? entry : entry.selector)
     );
     if (remaining.length) userCustomRules[location.hostname] = remaining;
     else delete userCustomRules[location.hostname];
     await chrome.storage.local.set({ userCustomRules });
-    if (typeof rule !== "string" && rule.fingerprint) {
-      chrome.runtime.sendMessage({
+    const fingerprints = applications.map(([, { rule }]) => typeof rule === "string" ? null : rule.fingerprint).filter(Boolean);
+    fingerprints.forEach(
+      (fingerprint) => chrome.runtime.sendMessage({
         type: "NEGATIVE_LEARNING",
-        fingerprint: rule.fingerprint
-      });
-    }
+        fingerprint
+      })
+    );
     chrome.runtime.sendMessage({
       type: "RECORD_TELEMETRY",
       event: {
@@ -1263,14 +1296,18 @@ var AdsFriendlyContent = (() => {
           url: location.href.split("#")[0]
         },
         timestamp: Date.now(),
-        context: { selector, surface: "saved_rule_toast" },
-        evidence: {
-          fingerprint: typeof rule === "string" ? null : rule.fingerprint
+        context: {
+          selectors: [...selectors2],
+          hidden_count: new Set(
+            applications.flatMap(([, { snapshots }]) => [...snapshots.keys()])
+          ).size,
+          surface: "saved_rule_summary_toast"
         },
+        evidence: { fingerprints },
         feedback: {
           user_action: "show",
           correction: "false_positive",
-          surface: "saved_rule_toast"
+          surface: "saved_rule_summary_toast"
         },
         action: "allow",
         outcome: "user_show"
