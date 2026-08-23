@@ -291,7 +291,11 @@ async function isAllowedReverseRedirect(candidate) {
     return true;
 
   const path = await getTrustedPath(original.hostname, redirected.hostname);
-  return !!path && (path.isManual || path.visits >= 3);
+  return (
+    !isPromotionalIntent(candidate.sourceTabId) &&
+    !!path &&
+    (path.isManual || path.visits >= 3)
+  );
 }
 
 function getRecentSourceUrl(sourceTabId) {
@@ -348,6 +352,7 @@ async function evaluateNewTab({ sourceTabId, tabId, url }) {
       trustWindow,
     );
     const path = await getTrustedPath(sourceUrl.hostname, targetDomain);
+    const promotionalIntent = isPromotionalIntent(sourceTabId);
     const decision = decideNewTabNavigation({
       sameSite,
       trustedInitiator: isTrustedInitiator(sourceUrl.hostname),
@@ -356,6 +361,7 @@ async function evaluateNewTab({ sourceTabId, tabId, url }) {
       blacklisted: isBlacklistedTarget(targetDomain, blacklist),
       intentMatched,
       trustedPath: !!path && (path.isManual || path.visits >= 3),
+      promotionalIntent,
     });
 
     if (decision === NEW_TAB_DECISIONS.ALLOW) {
@@ -394,14 +400,7 @@ function hasMatchingIntent(sourceTabId, targetDomain, trustWindow) {
   const click = runtimeState.lastTrustedClick;
   if (click.tabId !== sourceTabId) return false;
   const intent = parseUrl(click.intentUrl);
-  const classification = classifyNavigationIntent({
-    intentUrl: click.intentUrl,
-    sourceUrl: click.sourceUrl,
-    evidence: click.intentKind === "promotional" ? "promo" : "",
-  });
-  if (click.intentKind === "promotional" || classification.likelyAd) {
-    return false;
-  }
+  if (isPromotionalIntent(sourceTabId)) return false;
   const timeSinceClick = Date.now() - click.timestamp;
   return (
     timeSinceClick >= 0 &&
@@ -410,6 +409,17 @@ function hasMatchingIntent(sourceTabId, targetDomain, trustWindow) {
     (sameHostnameOrSubdomain(targetDomain, intent.hostname) ||
       sameHostnameOrSubdomain(intent.hostname, targetDomain))
   );
+}
+
+function isPromotionalIntent(sourceTabId) {
+  const click = runtimeState.lastTrustedClick;
+  if (click.tabId !== sourceTabId) return false;
+  const classification = classifyNavigationIntent({
+    intentUrl: click.intentUrl,
+    sourceUrl: click.sourceUrl,
+    evidence: click.intentKind === "promotional" ? "promo" : "",
+  });
+  return click.intentKind === "promotional" || classification.likelyAd;
 }
 
 function delay(ms) {

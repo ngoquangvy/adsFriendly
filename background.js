@@ -738,9 +738,10 @@ var AdsFriendlyBackground = (() => {
     whitelisted = false,
     blacklisted = false,
     intentMatched = false,
-    trustedPath = false
+    trustedPath = false,
+    promotionalIntent = false
   } = {}) {
-    if (sameSite || trustedInitiator || trustedTarget || whitelisted || intentMatched || trustedPath)
+    if (sameSite || trustedInitiator || trustedTarget || whitelisted || !promotionalIntent && intentMatched || !promotionalIntent && trustedPath)
       return NEW_TAB_DECISIONS.ALLOW;
     if (blacklisted) return NEW_TAB_DECISIONS.CLOSE;
     return NEW_TAB_DECISIONS.VERIFY;
@@ -1047,7 +1048,7 @@ var AdsFriendlyBackground = (() => {
     ))
       return true;
     const path = await getTrustedPath(original.hostname, redirected.hostname);
-    return !!path && (path.isManual || path.visits >= 3);
+    return !isPromotionalIntent(candidate.sourceTabId) && !!path && (path.isManual || path.visits >= 3);
   }
   function getRecentSourceUrl(sourceTabId) {
     const click = runtimeState.lastTrustedClick;
@@ -1088,6 +1089,7 @@ var AdsFriendlyBackground = (() => {
         trustWindow
       );
       const path = await getTrustedPath(sourceUrl.hostname, targetDomain);
+      const promotionalIntent = isPromotionalIntent(sourceTabId);
       const decision = decideNewTabNavigation({
         sameSite,
         trustedInitiator: isTrustedInitiator(sourceUrl.hostname),
@@ -1095,7 +1097,8 @@ var AdsFriendlyBackground = (() => {
         whitelisted: whitelist.includes(targetDomain),
         blacklisted: isBlacklistedTarget(targetDomain, blacklist),
         intentMatched,
-        trustedPath: !!path && (path.isManual || path.visits >= 3)
+        trustedPath: !!path && (path.isManual || path.visits >= 3),
+        promotionalIntent
       });
       if (decision === NEW_TAB_DECISIONS.ALLOW) {
         shouldFinalize = true;
@@ -1130,16 +1133,19 @@ var AdsFriendlyBackground = (() => {
     const click = runtimeState.lastTrustedClick;
     if (click.tabId !== sourceTabId) return false;
     const intent = parseUrl(click.intentUrl);
+    if (isPromotionalIntent(sourceTabId)) return false;
+    const timeSinceClick = Date.now() - click.timestamp;
+    return timeSinceClick >= 0 && timeSinceClick < trustWindow && !!intent && (sameHostnameOrSubdomain(targetDomain, intent.hostname) || sameHostnameOrSubdomain(intent.hostname, targetDomain));
+  }
+  function isPromotionalIntent(sourceTabId) {
+    const click = runtimeState.lastTrustedClick;
+    if (click.tabId !== sourceTabId) return false;
     const classification = classifyNavigationIntent({
       intentUrl: click.intentUrl,
       sourceUrl: click.sourceUrl,
       evidence: click.intentKind === "promotional" ? "promo" : ""
     });
-    if (click.intentKind === "promotional" || classification.likelyAd) {
-      return false;
-    }
-    const timeSinceClick = Date.now() - click.timestamp;
-    return timeSinceClick >= 0 && timeSinceClick < trustWindow && !!intent && (sameHostnameOrSubdomain(targetDomain, intent.hostname) || sameHostnameOrSubdomain(intent.hostname, targetDomain));
+    return click.intentKind === "promotional" || classification.likelyAd;
   }
   function delay(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));

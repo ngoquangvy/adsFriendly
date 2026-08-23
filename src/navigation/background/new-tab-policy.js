@@ -12,14 +12,15 @@ export function decideNewTabNavigation({
   blacklisted = false,
   intentMatched = false,
   trustedPath = false,
+  promotionalIntent = false,
 } = {}) {
   if (
     sameSite ||
     trustedInitiator ||
     trustedTarget ||
     whitelisted ||
-    intentMatched ||
-    trustedPath
+    (!promotionalIntent && intentMatched) ||
+    (!promotionalIntent && trustedPath)
   )
     return NEW_TAB_DECISIONS.ALLOW;
   if (blacklisted) return NEW_TAB_DECISIONS.CLOSE;

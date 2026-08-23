@@ -60,6 +60,13 @@ test("untrusted cross-site tabs require user verification", () => {
     decideNewTabNavigation({ blacklisted: true }),
     NEW_TAB_DECISIONS.CLOSE,
   );
+  assert.equal(
+    decideNewTabNavigation({
+      trustedPath: true,
+      promotionalIntent: true,
+    }),
+    NEW_TAB_DECISIONS.VERIFY,
+  );
   assert.equal(shouldKeepTrackingNewTab({ sameSite: true }), true);
   assert.equal(shouldKeepTrackingNewTab({ sameSite: false }), false);
 });
