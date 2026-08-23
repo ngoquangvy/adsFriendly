@@ -118,8 +118,7 @@ export async function replaceSettingsWithPackage(
   const oldPathKeys = Object.keys(current).filter((key) =>
     key.startsWith("p:"),
   );
-  if (oldPathKeys.length) await storage.remove(oldPathKeys);
-  await storage.set({
+  const updates = {
     ...packageToStorage(settingsPackage),
     [SETTINGS_PACKAGE_STATE_KEY]: {
       schema_version: "adsfriendly.settings-package-state.v1",
@@ -128,7 +127,15 @@ export async function replaceSettingsWithPackage(
       package: settingsPackage.metadata,
       installed_at: Date.now(),
     },
-  });
+  };
+  await storage.set(updates);
+  const saved = await storage.get(Object.keys(updates));
+  for (const [key, expected] of Object.entries(updates)) {
+    if (JSON.stringify(saved[key]) !== JSON.stringify(expected))
+      throw new Error(`Could not verify imported setting: ${key}.`);
+  }
+  const obsoletePathKeys = oldPathKeys.filter((key) => !(key in updates));
+  if (obsoletePathKeys.length) await storage.remove(obsoletePathKeys);
   return settingsPackage;
 }
 

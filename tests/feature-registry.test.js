@@ -20,10 +20,10 @@ test("catalog rejects unknown features and capabilities", () => {
     () => getFeatureDefinition("content.not-registered"),
     /Register it in feature-catalog\.js/,
   );
-  const policy = createFeaturePolicy(
-    "content.dom-candidate-collector",
-    () => ({ enabled: true, protectionMode: "assist" }),
-  );
+  const policy = createFeaturePolicy("content.dom-candidate-collector", () => ({
+    enabled: true,
+    protectionMode: "assist",
+  }));
   assert.throws(
     () => policy.can(CAPABILITIES.VIDEO_AUTO_ACTION),
     /undeclared capability/,
@@ -69,7 +69,10 @@ test("legacy settings migrate deterministically", () => {
     migrateLegacySettings({ friendlyMode: false }).protectionMode,
     "auto",
   );
-  assert.equal(normalizeSettings({ protectionMode: "invalid" }).protectionMode, "safe");
+  assert.equal(
+    normalizeSettings({ protectionMode: "invalid" }).protectionMode,
+    "safe",
+  );
 });
 
 test("controller starts and stops catalog features when mode changes", async () => {
@@ -92,14 +95,30 @@ test("controller starts and stops catalog features when mode changes", async () 
   });
 
   await controller.start();
-  assert(controller.snapshot().activeFeatures.includes("content.dom-candidate-collector"));
-  assert(!controller.snapshot().activeFeatures.includes("content.dom-learned-blocker"));
+  assert(
+    controller
+      .snapshot()
+      .activeFeatures.includes("content.dom-candidate-collector"),
+  );
+  assert(
+    !controller
+      .snapshot()
+      .activeFeatures.includes("content.dom-learned-blocker"),
+  );
 
   await controller.updateSettings({ enabled: true, protectionMode: "auto" });
-  assert(controller.snapshot().activeFeatures.includes("content.dom-learned-blocker"));
+  assert(
+    controller
+      .snapshot()
+      .activeFeatures.includes("content.dom-learned-blocker"),
+  );
 
   await controller.updateSettings({ enabled: true, protectionMode: "safe" });
-  assert(!controller.snapshot().activeFeatures.includes("content.dom-candidate-collector"));
+  assert(
+    !controller
+      .snapshot()
+      .activeFeatures.includes("content.dom-candidate-collector"),
+  );
   assert(events.includes("stop:content.dom-candidate-collector"));
 });
 
@@ -121,6 +140,34 @@ test("controller invokes synchronous feature factories during startup", async ()
   assert(started.includes("background.message-router"));
   assert(started.includes("background.navigation-guard"));
   await startup;
+});
+
+test("disabled protection keeps only background settings infrastructure alive", async () => {
+  const implementations = Object.fromEntries(
+    getFeaturesForContext("background").map((feature) => [
+      feature.id,
+      () => {},
+    ]),
+  );
+  const controller = createMainController({
+    context: "background",
+    implementations,
+    initialSettings: { enabled: false, protectionMode: "safe" },
+    watchSettings: false,
+  });
+  await controller.start();
+  const active = controller.snapshot().activeFeatures;
+  assert(active.includes("background.message-router"));
+  assert(active.includes("background.memory-cleanup"));
+  assert(!active.includes("background.navigation-guard"));
+
+  const policy = createFeaturePolicy("background.message-router", () => ({
+    enabled: false,
+    protectionMode: "safe",
+  }));
+  assert.equal(policy.can(CAPABILITIES.CORE_MESSAGING), true);
+  assert.equal(policy.can(CAPABILITIES.CORE_MAINTENANCE), true);
+  assert.equal(policy.can(CAPABILITIES.LEARNING_FEEDBACK), false);
 });
 
 test("controller requires an implementation for every catalog feature", () => {
@@ -150,5 +197,8 @@ test("feature overrides cannot reference an unregistered feature", async () => {
     },
     watchSettings: false,
   });
-  await assert.rejects(controller.start(), /Register it in feature-catalog\.js/);
+  await assert.rejects(
+    controller.start(),
+    /Register it in feature-catalog\.js/,
+  );
 });

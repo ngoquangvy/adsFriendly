@@ -137,6 +137,14 @@ function showSavedRuleSummary() {
 async function restoreSavedRules() {
   const applications = [...savedRuleApplications.entries()];
   const selectors = new Set(applications.map(([selector]) => selector));
+  const response = await chrome.runtime.sendMessage({
+    type: "RESTORE_CUSTOM_RULES",
+    hostname: location.hostname,
+    selectors: [...selectors],
+  });
+  if (response?.status !== "saved")
+    throw new Error(response?.error || "Could not restore hidden elements.");
+
   selectors.forEach((selector) => suppressedCustomSelectors.add(selector));
   applications.forEach(([selector, { snapshots }]) => {
     snapshots.forEach((snapshot, element) =>
@@ -145,17 +153,6 @@ async function restoreSavedRules() {
     customRuleSnapshots.delete(selector);
   });
   savedRuleApplications.clear();
-
-  const { userCustomRules = {} } =
-    await chrome.storage.local.get("userCustomRules");
-  const rules = userCustomRules[location.hostname] || [];
-  const remaining = rules.filter(
-    (entry) =>
-      !selectors.has(typeof entry === "string" ? entry : entry.selector),
-  );
-  if (remaining.length) userCustomRules[location.hostname] = remaining;
-  else delete userCustomRules[location.hostname];
-  await chrome.storage.local.set({ userCustomRules });
 
   const fingerprints = applications
     .map(([, { rule }]) => (typeof rule === "string" ? null : rule.fingerprint))

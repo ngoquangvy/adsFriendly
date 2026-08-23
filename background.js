@@ -235,6 +235,47 @@ var AdsFriendlyBackground = (() => {
           return { status: "saved", hostname: host, ruleCount: remaining.length };
         });
       },
+      restoreCustomRules(hostname, selectors = null) {
+        return serial(async () => {
+          const host = normalizeHostname(hostname);
+          const selectorSet = normalizeSelectorSet(selectors);
+          if (!host || !selectorSet.size)
+            throw new Error("No valid custom rules to restore.");
+          const { userCustomRules = {} } = await storage.get("userCustomRules");
+          const existing = Array.isArray(userCustomRules[host]) ? userCustomRules[host] : [];
+          const restored = existing.filter(
+            (rule) => selectorSet.has(selectorOf(rule))
+          );
+          const remaining = existing.filter(
+            (rule) => !selectorSet.has(selectorOf(rule))
+          );
+          if (remaining.length) userCustomRules[host] = remaining;
+          else delete userCustomRules[host];
+          await setAndVerify(storage, { userCustomRules });
+          return {
+            status: "saved",
+            hostname: host,
+            restoredCount: restored.length,
+            ruleCount: remaining.length
+          };
+        });
+      },
+      resetCustomRules(hostname) {
+        return serial(async () => {
+          const host = normalizeHostname(hostname);
+          if (!host) throw new Error("Invalid hostname for site reset.");
+          const { userCustomRules = {}, siteResetHistory = {} } = await storage.get(["userCustomRules", "siteResetHistory"]);
+          const removed = Array.isArray(userCustomRules[host]) ? userCustomRules[host] : [];
+          delete userCustomRules[host];
+          siteResetHistory[host] = { oldRules: removed, timestamp: Date.now() };
+          await setAndVerify(storage, { userCustomRules, siteResetHistory });
+          return {
+            status: "saved",
+            hostname: host,
+            restoredCount: removed.length
+          };
+        });
+      },
       saveDomainDecision(action, domain) {
         return serial(async () => {
           const hostname = normalizeHostname(domain);
@@ -263,6 +304,19 @@ var AdsFriendlyBackground = (() => {
             blacklist: nextBlacklist
           });
           return { status: "saved", action, domain: hostname };
+        });
+      },
+      removeDomainDecision(listName, domain) {
+        return serial(async () => {
+          const hostname = normalizeHostname(domain);
+          if (!hostname || !["whitelist", "blacklist"].includes(listName))
+            throw new Error("Invalid domain removal.");
+          const current = await storage.get(listName);
+          const next = (current[listName] || []).filter(
+            (entry) => normalizeHostname(entry) !== hostname
+          );
+          await setAndVerify(storage, { [listName]: next });
+          return { status: "saved", listName, domain: hostname };
         });
       }
     });
@@ -297,6 +351,12 @@ var AdsFriendlyBackground = (() => {
   }
   function normalizeRules(rules) {
     return (Array.isArray(rules) ? rules : [rules]).filter((rule) => rule && typeof rule === "object").filter((rule) => selectorOf(rule));
+  }
+  function normalizeSelectorSet(selectors) {
+    if (selectors == null) return /* @__PURE__ */ new Set();
+    return new Set(
+      (Array.isArray(selectors) ? selectors : [selectors]).map((value) => String(value || "").trim()).filter(Boolean)
+    );
   }
   function selectorOf(rule) {
     return typeof rule === "string" ? rule.trim() : String(rule?.selector || "").trim();
@@ -1464,8 +1524,12 @@ var AdsFriendlyBackground = (() => {
     REPORT_AD_DENSITY: CAPABILITIES.CORE_MAINTENANCE,
     RECORD_TELEMETRY: CAPABILITIES.TELEMETRY_QUEUE,
     FLUSH_TELEMETRY: CAPABILITIES.TELEMETRY_QUEUE,
-    UPSERT_CUSTOM_RULES: CAPABILITIES.LEARNING_FEEDBACK,
-    REMOVE_CUSTOM_RULES: CAPABILITIES.LEARNING_FEEDBACK,
+    UPSERT_CUSTOM_RULES: CAPABILITIES.CORE_MAINTENANCE,
+    REMOVE_CUSTOM_RULES: CAPABILITIES.CORE_MAINTENANCE,
+    RESTORE_CUSTOM_RULES: CAPABILITIES.CORE_MAINTENANCE,
+    RESET_CUSTOM_RULES: CAPABILITIES.CORE_MAINTENANCE,
+    SAVE_DOMAIN_DECISION: CAPABILITIES.CORE_MAINTENANCE,
+    REMOVE_DOMAIN_DECISION: CAPABILITIES.CORE_MAINTENANCE,
     GET_STORAGE_HEALTH: CAPABILITIES.CORE_MAINTENANCE,
     RECORD_DOM_SAMPLE: CAPABILITIES.LEARNING_FEEDBACK
   });
@@ -1514,6 +1578,23 @@ var AdsFriendlyBackground = (() => {
       return getSettingsMutationStore().removeCustomRules(
         message.hostname,
         message.selectors
+      );
+    if (message.type === "RESTORE_CUSTOM_RULES")
+      return getSettingsMutationStore().restoreCustomRules(
+        message.hostname,
+        message.selectors
+      );
+    if (message.type === "RESET_CUSTOM_RULES")
+      return getSettingsMutationStore().resetCustomRules(message.hostname);
+    if (message.type === "SAVE_DOMAIN_DECISION")
+      return getSettingsMutationStore().saveDomainDecision(
+        message.action,
+        message.domain
+      );
+    if (message.type === "REMOVE_DOMAIN_DECISION")
+      return getSettingsMutationStore().removeDomainDecision(
+        message.listName,
+        message.domain
       );
     if (message.type === "GET_STORAGE_HEALTH") return getStorageHealth();
     if (message.type === "RECORD_DOM_SAMPLE") {
@@ -1771,8 +1852,7 @@ var AdsFriendlyBackground = (() => {
     const oldPathKeys = Object.keys(current).filter(
       (key) => key.startsWith("p:")
     );
-    if (oldPathKeys.length) await storage.remove(oldPathKeys);
-    await storage.set({
+    const updates = {
       ...packageToStorage(settingsPackage),
       [SETTINGS_PACKAGE_STATE_KEY]: {
         schema_version: "adsfriendly.settings-package-state.v1",
@@ -1781,7 +1861,15 @@ var AdsFriendlyBackground = (() => {
         package: settingsPackage.metadata,
         installed_at: Date.now()
       }
-    });
+    };
+    await storage.set(updates);
+    const saved = await storage.get(Object.keys(updates));
+    for (const [key, expected] of Object.entries(updates)) {
+      if (JSON.stringify(saved[key]) !== JSON.stringify(expected))
+        throw new Error(`Could not verify imported setting: ${key}.`);
+    }
+    const obsoletePathKeys = oldPathKeys.filter((key) => !(key in updates));
+    if (obsoletePathKeys.length) await storage.remove(obsoletePathKeys);
     return settingsPackage;
   }
   function hasMeaningfulExistingSettings(snapshot = {}) {
@@ -1971,7 +2059,10 @@ var AdsFriendlyBackground = (() => {
         if (watchSettings) {
           unsubscribe = settingsSubscriber((nextSettings) => {
             controller2.updateSettings(nextSettings).catch(
-              (error) => logger.error(`[MainController:${context}] reconcile failed`, error)
+              (error) => logger.error(
+                `[MainController:${context}] reconcile failed`,
+                error
+              )
             );
           });
         }
@@ -1987,7 +2078,10 @@ var AdsFriendlyBackground = (() => {
       snapshot() {
         return {
           context,
-          settings: { ...settings, featureOverrides: { ...settings.featureOverrides } },
+          settings: {
+            ...settings,
+            featureOverrides: { ...settings.featureOverrides }
+          },
           activeFeatures: [...lifecycles.entries()].filter(([, lifecycle]) => lifecycle.active).map(([featureId]) => featureId)
         };
       },
@@ -2045,7 +2139,10 @@ var AdsFriendlyBackground = (() => {
       try {
         await lifecycle.cleanup();
       } catch (error) {
-        logger.error(`[MainController:${context}] failed to stop ${featureId}`, error);
+        logger.error(
+          `[MainController:${context}] failed to stop ${featureId}`,
+          error
+        );
       }
       lifecycle.active = false;
     }
@@ -2071,8 +2168,14 @@ var AdsFriendlyBackground = (() => {
       can(capability) {
         assertAllowed(capability);
         const settings = readSettings();
-        if (!settings.enabled) return false;
-        return getCapabilitiesForMode(settings.protectionMode).includes(capability);
+        if (!settings.enabled)
+          return [
+            CAPABILITIES.CORE_MESSAGING,
+            CAPABILITIES.CORE_MAINTENANCE
+          ].includes(capability);
+        return getCapabilitiesForMode(settings.protectionMode).includes(
+          capability
+        );
       },
       require(capability) {
         if (!this.can(capability)) {
@@ -2087,7 +2190,12 @@ var AdsFriendlyBackground = (() => {
   }
   function shouldStartFeature(definition, settings) {
     const override = settings.featureOverrides?.[definition.id];
-    if (override === false || !settings.enabled) return false;
+    if (override === false) return false;
+    if ([CAPABILITIES.CORE_MESSAGING, CAPABILITIES.CORE_MAINTENANCE].includes(
+      definition.startCapability
+    ))
+      return true;
+    if (!settings.enabled) return false;
     return getCapabilitiesForMode(settings.protectionMode).includes(
       definition.startCapability
     );

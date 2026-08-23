@@ -34,8 +34,12 @@ const MESSAGE_CAPABILITIES = Object.freeze({
   REPORT_AD_DENSITY: CAPABILITIES.CORE_MAINTENANCE,
   RECORD_TELEMETRY: CAPABILITIES.TELEMETRY_QUEUE,
   FLUSH_TELEMETRY: CAPABILITIES.TELEMETRY_QUEUE,
-  UPSERT_CUSTOM_RULES: CAPABILITIES.LEARNING_FEEDBACK,
-  REMOVE_CUSTOM_RULES: CAPABILITIES.LEARNING_FEEDBACK,
+  UPSERT_CUSTOM_RULES: CAPABILITIES.CORE_MAINTENANCE,
+  REMOVE_CUSTOM_RULES: CAPABILITIES.CORE_MAINTENANCE,
+  RESTORE_CUSTOM_RULES: CAPABILITIES.CORE_MAINTENANCE,
+  RESET_CUSTOM_RULES: CAPABILITIES.CORE_MAINTENANCE,
+  SAVE_DOMAIN_DECISION: CAPABILITIES.CORE_MAINTENANCE,
+  REMOVE_DOMAIN_DECISION: CAPABILITIES.CORE_MAINTENANCE,
   GET_STORAGE_HEALTH: CAPABILITIES.CORE_MAINTENANCE,
   RECORD_DOM_SAMPLE: CAPABILITIES.LEARNING_FEEDBACK,
 });
@@ -89,6 +93,23 @@ async function route(message, sender) {
     return getSettingsMutationStore().removeCustomRules(
       message.hostname,
       message.selectors,
+    );
+  if (message.type === "RESTORE_CUSTOM_RULES")
+    return getSettingsMutationStore().restoreCustomRules(
+      message.hostname,
+      message.selectors,
+    );
+  if (message.type === "RESET_CUSTOM_RULES")
+    return getSettingsMutationStore().resetCustomRules(message.hostname);
+  if (message.type === "SAVE_DOMAIN_DECISION")
+    return getSettingsMutationStore().saveDomainDecision(
+      message.action,
+      message.domain,
+    );
+  if (message.type === "REMOVE_DOMAIN_DECISION")
+    return getSettingsMutationStore().removeDomainDecision(
+      message.listName,
+      message.domain,
     );
   if (message.type === "GET_STORAGE_HEALTH") return getStorageHealth();
   if (message.type === "RECORD_DOM_SAMPLE") {

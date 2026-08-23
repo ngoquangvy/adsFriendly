@@ -151,11 +151,11 @@ function allowCandidate(candidate) {
 }
 
 async function restoreCandidate(candidate) {
-  restoreInlineVisibility(candidate.target, candidate.previousInlineVisibility);
   if (candidate.selector) {
-    allowedSelectors.add(candidate.selector);
     await removeCustomRule(candidate.selector);
+    allowedSelectors.add(candidate.selector);
   }
+  restoreInlineVisibility(candidate.target, candidate.previousInlineVisibility);
   if (activePolicy?.can(CAPABILITIES.LEARNING_FEEDBACK))
     recordDomSample(candidate, "user_show", "content");
 }
@@ -190,7 +190,7 @@ async function persistCustomRule(candidate, outcome) {
 
 async function removeCustomRule(selector) {
   const response = await chrome.runtime.sendMessage({
-    type: "REMOVE_CUSTOM_RULES",
+    type: "RESTORE_CUSTOM_RULES",
     hostname: location.hostname,
     selectors: [selector],
   });

@@ -69,6 +69,55 @@ export function createSettingsMutationStore(storage) {
       });
     },
 
+    restoreCustomRules(hostname, selectors = null) {
+      return serial(async () => {
+        const host = normalizeHostname(hostname);
+        const selectorSet = normalizeSelectorSet(selectors);
+        if (!host || !selectorSet.size)
+          throw new Error("No valid custom rules to restore.");
+        const { userCustomRules = {} } = await storage.get("userCustomRules");
+        const existing = Array.isArray(userCustomRules[host])
+          ? userCustomRules[host]
+          : [];
+        const restored = existing.filter((rule) =>
+          selectorSet.has(selectorOf(rule)),
+        );
+        const remaining = existing.filter(
+          (rule) => !selectorSet.has(selectorOf(rule)),
+        );
+        if (remaining.length) userCustomRules[host] = remaining;
+        else delete userCustomRules[host];
+
+        await setAndVerify(storage, { userCustomRules });
+        return {
+          status: "saved",
+          hostname: host,
+          restoredCount: restored.length,
+          ruleCount: remaining.length,
+        };
+      });
+    },
+
+    resetCustomRules(hostname) {
+      return serial(async () => {
+        const host = normalizeHostname(hostname);
+        if (!host) throw new Error("Invalid hostname for site reset.");
+        const { userCustomRules = {}, siteResetHistory = {} } =
+          await storage.get(["userCustomRules", "siteResetHistory"]);
+        const removed = Array.isArray(userCustomRules[host])
+          ? userCustomRules[host]
+          : [];
+        delete userCustomRules[host];
+        siteResetHistory[host] = { oldRules: removed, timestamp: Date.now() };
+        await setAndVerify(storage, { userCustomRules, siteResetHistory });
+        return {
+          status: "saved",
+          hostname: host,
+          restoredCount: removed.length,
+        };
+      });
+    },
+
     saveDomainDecision(action, domain) {
       return serial(async () => {
         const hostname = normalizeHostname(domain);
@@ -97,6 +146,20 @@ export function createSettingsMutationStore(storage) {
           blacklist: nextBlacklist,
         });
         return { status: "saved", action, domain: hostname };
+      });
+    },
+
+    removeDomainDecision(listName, domain) {
+      return serial(async () => {
+        const hostname = normalizeHostname(domain);
+        if (!hostname || !["whitelist", "blacklist"].includes(listName))
+          throw new Error("Invalid domain removal.");
+        const current = await storage.get(listName);
+        const next = (current[listName] || []).filter(
+          (entry) => normalizeHostname(entry) !== hostname,
+        );
+        await setAndVerify(storage, { [listName]: next });
+        return { status: "saved", listName, domain: hostname };
       });
     },
   });
@@ -138,6 +201,15 @@ function normalizeRules(rules) {
   return (Array.isArray(rules) ? rules : [rules])
     .filter((rule) => rule && typeof rule === "object")
     .filter((rule) => selectorOf(rule));
+}
+
+function normalizeSelectorSet(selectors) {
+  if (selectors == null) return new Set();
+  return new Set(
+    (Array.isArray(selectors) ? selectors : [selectors])
+      .map((value) => String(value || "").trim())
+      .filter(Boolean),
+  );
 }
 
 function selectorOf(rule) {

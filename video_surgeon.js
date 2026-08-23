@@ -435,7 +435,10 @@ var AdsFriendlyVideo = (() => {
         if (watchSettings) {
           unsubscribe = settingsSubscriber((nextSettings) => {
             controller2.updateSettings(nextSettings).catch(
-              (error) => logger.error(`[MainController:${context}] reconcile failed`, error)
+              (error) => logger.error(
+                `[MainController:${context}] reconcile failed`,
+                error
+              )
             );
           });
         }
@@ -451,7 +454,10 @@ var AdsFriendlyVideo = (() => {
       snapshot() {
         return {
           context,
-          settings: { ...settings, featureOverrides: { ...settings.featureOverrides } },
+          settings: {
+            ...settings,
+            featureOverrides: { ...settings.featureOverrides }
+          },
           activeFeatures: [...lifecycles.entries()].filter(([, lifecycle]) => lifecycle.active).map(([featureId]) => featureId)
         };
       },
@@ -509,7 +515,10 @@ var AdsFriendlyVideo = (() => {
       try {
         await lifecycle.cleanup();
       } catch (error) {
-        logger.error(`[MainController:${context}] failed to stop ${featureId}`, error);
+        logger.error(
+          `[MainController:${context}] failed to stop ${featureId}`,
+          error
+        );
       }
       lifecycle.active = false;
     }
@@ -535,8 +544,14 @@ var AdsFriendlyVideo = (() => {
       can(capability) {
         assertAllowed(capability);
         const settings = readSettings();
-        if (!settings.enabled) return false;
-        return getCapabilitiesForMode(settings.protectionMode).includes(capability);
+        if (!settings.enabled)
+          return [
+            CAPABILITIES.CORE_MESSAGING,
+            CAPABILITIES.CORE_MAINTENANCE
+          ].includes(capability);
+        return getCapabilitiesForMode(settings.protectionMode).includes(
+          capability
+        );
       },
       require(capability) {
         if (!this.can(capability)) {
@@ -551,7 +566,12 @@ var AdsFriendlyVideo = (() => {
   }
   function shouldStartFeature(definition, settings) {
     const override = settings.featureOverrides?.[definition.id];
-    if (override === false || !settings.enabled) return false;
+    if (override === false) return false;
+    if ([CAPABILITIES.CORE_MESSAGING, CAPABILITIES.CORE_MAINTENANCE].includes(
+      definition.startCapability
+    ))
+      return true;
+    if (!settings.enabled) return false;
     return getCapabilitiesForMode(settings.protectionMode).includes(
       definition.startCapability
     );

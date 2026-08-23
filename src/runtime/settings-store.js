@@ -48,11 +48,17 @@ export async function saveSettings(
   storage = chrome.storage.local,
 ) {
   const settings = normalizeSettings(nextSettings);
-  await storage.set({
+  const updates = {
     [SETTINGS_KEY]: settings,
     isEnabled: settings.enabled,
     friendlyMode: settings.protectionMode === PROTECTION_MODES.SAFE,
-  });
+  };
+  await storage.set(updates);
+  const saved = await storage.get(Object.keys(updates));
+  for (const [key, expected] of Object.entries(updates)) {
+    if (JSON.stringify(saved[key]) !== JSON.stringify(expected))
+      throw new Error(`Could not verify saved setting: ${key}.`);
+  }
   return settings;
 }
 

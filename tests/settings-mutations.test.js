@@ -38,6 +38,46 @@ test("surfaces a shared-storage quota failure to the caller", async () => {
   );
 });
 
+test("restore removes only the requested personal rule and verifies storage", async () => {
+  const storage = createStorage({
+    userCustomRules: {
+      "example.test": [
+        { selector: "#first", fingerprint: { tag: "div" } },
+        { selector: ".second", fingerprint: { tag: "aside" } },
+      ],
+    },
+  });
+  const store = createSettingsMutationStore(storage);
+  const result = await store.restoreCustomRules("example.test", [".second"]);
+  const snapshot = await storage.get(["userCustomRules", "siteResetHistory"]);
+  assert.equal(result.restoredCount, 1);
+  assert.deepEqual(
+    snapshot.userCustomRules["example.test"].map((rule) => rule.selector),
+    ["#first"],
+  );
+  assert.equal(snapshot.siteResetHistory, undefined);
+});
+
+test("site reset remains distinct and records correction history", async () => {
+  const rule = { selector: "#ad", fingerprint: { tag: "div", id: "ad" } };
+  const storage = createStorage({
+    userCustomRules: { "example.test": [rule] },
+    siteResetHistory: {},
+  });
+  const store = createSettingsMutationStore(storage);
+  await store.resetCustomRules("example.test");
+  const snapshot = await storage.get(["userCustomRules", "siteResetHistory"]);
+  assert.equal(snapshot.userCustomRules["example.test"], undefined);
+  assert.deepEqual(snapshot.siteResetHistory["example.test"].oldRules, [rule]);
+});
+
+test("removes a domain through the serialized settings store", async () => {
+  const storage = createStorage({ blacklist: ["||ads.example^"] });
+  const store = createSettingsMutationStore(storage);
+  await store.removeDomainDecision("blacklist", "ads.example");
+  assert.deepEqual((await storage.get("blacklist")).blacklist, []);
+});
+
 function createStorage(initial = {}, delayMs = 0, setError = null) {
   const data = structuredClone(initial);
   return {

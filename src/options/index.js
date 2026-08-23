@@ -22,6 +22,13 @@ let currentSnapshot = {};
 let storageRefreshTimer = null;
 
 initialize().catch((error) => showPackageStatus(error.message, true));
+window.addEventListener("unhandledrejection", (event) => {
+  showPackageStatus(
+    event.reason?.message || String(event.reason || "Settings action failed."),
+    true,
+  );
+  event.preventDefault();
+});
 
 async function initialize() {
   bindStaticActions();
@@ -228,30 +235,13 @@ async function addDomain(type) {
     alert("Enter a valid hostname, for example: example.com");
     return;
   }
-  const { whitelist = [], blacklist = [] } = await chrome.storage.local.get([
-    "whitelist",
-    "blacklist",
-  ]);
-  if (type === "whitelist") {
-    const nextWhitelist = [...new Set([...whitelist, hostname])];
-    const nextBlacklist = blacklist.filter(
-      (value) => normalizeHostname(value) !== hostname,
-    );
-    await chrome.storage.local.set({
-      whitelist: nextWhitelist,
-      blacklist: nextBlacklist,
-    });
-  } else {
-    const rule = `||${hostname}^`;
-    const nextBlacklist = [...new Set([...blacklist, rule])];
-    const nextWhitelist = whitelist.filter(
-      (value) => normalizeHostname(value) !== hostname,
-    );
-    await chrome.storage.local.set({
-      whitelist: nextWhitelist,
-      blacklist: nextBlacklist,
-    });
-  }
+  const response = await chrome.runtime.sendMessage({
+    type: "SAVE_DOMAIN_DECISION",
+    action: type === "whitelist" ? "WHITELIST" : "BLACKLIST",
+    domain: hostname,
+  });
+  if (response?.status !== "saved")
+    throw new Error(response?.error || "Could not save domain.");
   input.value = "";
   await loadPage();
 }
@@ -274,10 +264,14 @@ function renderDomainList(list, element, type) {
     .join("");
   element.querySelectorAll(".btn-delete").forEach((button) => {
     button.onclick = async () => {
-      const current = await chrome.storage.local.get(type);
-      const updated = [...(current[type] || [])];
-      updated.splice(Number(button.dataset.index), 1);
-      await chrome.storage.local.set({ [type]: updated });
+      const domain = list[Number(button.dataset.index)];
+      const response = await chrome.runtime.sendMessage({
+        type: "REMOVE_DOMAIN_DECISION",
+        listName: type,
+        domain,
+      });
+      if (response?.status !== "saved")
+        throw new Error(response?.error || "Could not remove domain.");
       await loadPage();
     };
   });
@@ -338,10 +332,18 @@ function renderCustomRules() {
   });
   container.querySelectorAll(".btn-delete-rule-item").forEach((button) => {
     button.onclick = async () => {
-      const rules = structuredClone(currentSnapshot.userCustomRules || {});
-      rules[button.dataset.host].splice(Number(button.dataset.index), 1);
-      if (!rules[button.dataset.host].length) delete rules[button.dataset.host];
-      await chrome.storage.local.set({ userCustomRules: rules });
+      const rule =
+        currentSnapshot.userCustomRules?.[button.dataset.host]?.[
+          Number(button.dataset.index)
+        ];
+      const selector = typeof rule === "string" ? rule : rule?.selector;
+      const response = await chrome.runtime.sendMessage({
+        type: "REMOVE_CUSTOM_RULES",
+        hostname: button.dataset.host,
+        selectors: [selector],
+      });
+      if (response?.status !== "saved")
+        throw new Error(response?.error || "Could not delete rule.");
       await loadPage();
     };
   });
@@ -350,17 +352,12 @@ function renderCustomRules() {
       const hostname = button.dataset.host;
       if (!confirm(`Remove all packaged and personal rules for ${hostname}?`))
         return;
-      const rules = structuredClone(currentSnapshot.userCustomRules || {});
-      const removed = rules[hostname] || [];
-      delete rules[hostname];
-      const siteResetHistory = structuredClone(
-        currentSnapshot.siteResetHistory || {},
-      );
-      siteResetHistory[hostname] = { oldRules: removed, timestamp: Date.now() };
-      await chrome.storage.local.set({
-        userCustomRules: rules,
-        siteResetHistory,
+      const response = await chrome.runtime.sendMessage({
+        type: "RESET_CUSTOM_RULES",
+        hostname,
       });
+      if (response?.status !== "saved")
+        throw new Error(response?.error || "Could not reset site rules.");
       await loadPage();
     };
   });

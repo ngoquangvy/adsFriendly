@@ -199,11 +199,17 @@ var AdsFriendlyOptions = (() => {
   }
   async function saveSettings(nextSettings, storage = chrome.storage.local) {
     const settings = normalizeSettings(nextSettings);
-    await storage.set({
+    const updates = {
       [SETTINGS_KEY]: settings,
       isEnabled: settings.enabled,
       friendlyMode: settings.protectionMode === PROTECTION_MODES.SAFE
-    });
+    };
+    await storage.set(updates);
+    const saved = await storage.get(Object.keys(updates));
+    for (const [key, expected] of Object.entries(updates)) {
+      if (JSON.stringify(saved[key]) !== JSON.stringify(expected))
+        throw new Error(`Could not verify saved setting: ${key}.`);
+    }
     return settings;
   }
 
@@ -308,8 +314,7 @@ var AdsFriendlyOptions = (() => {
     const oldPathKeys = Object.keys(current).filter(
       (key) => key.startsWith("p:")
     );
-    if (oldPathKeys.length) await storage.remove(oldPathKeys);
-    await storage.set({
+    const updates = {
       ...packageToStorage(settingsPackage),
       [SETTINGS_PACKAGE_STATE_KEY]: {
         schema_version: "adsfriendly.settings-package-state.v1",
@@ -318,7 +323,15 @@ var AdsFriendlyOptions = (() => {
         package: settingsPackage.metadata,
         installed_at: Date.now()
       }
-    });
+    };
+    await storage.set(updates);
+    const saved = await storage.get(Object.keys(updates));
+    for (const [key, expected] of Object.entries(updates)) {
+      if (JSON.stringify(saved[key]) !== JSON.stringify(expected))
+        throw new Error(`Could not verify imported setting: ${key}.`);
+    }
+    const obsoletePathKeys = oldPathKeys.filter((key) => !(key in updates));
+    if (obsoletePathKeys.length) await storage.remove(obsoletePathKeys);
     return settingsPackage;
   }
   function summarizeSettingsPackage(packageInput) {
@@ -538,6 +551,13 @@ var AdsFriendlyOptions = (() => {
   var currentSnapshot = {};
   var storageRefreshTimer = null;
   initialize().catch((error) => showPackageStatus(error.message, true));
+  window.addEventListener("unhandledrejection", (event) => {
+    showPackageStatus(
+      event.reason?.message || String(event.reason || "Settings action failed."),
+      true
+    );
+    event.preventDefault();
+  });
   async function initialize() {
     bindStaticActions();
     chrome.storage.onChanged.addListener(handleStorageChange);
@@ -723,30 +743,13 @@ This replaces the current shareable settings. Diagnostics and training samples a
       alert("Enter a valid hostname, for example: example.com");
       return;
     }
-    const { whitelist = [], blacklist = [] } = await chrome.storage.local.get([
-      "whitelist",
-      "blacklist"
-    ]);
-    if (type === "whitelist") {
-      const nextWhitelist = [.../* @__PURE__ */ new Set([...whitelist, hostname])];
-      const nextBlacklist = blacklist.filter(
-        (value) => normalizeHostname2(value) !== hostname
-      );
-      await chrome.storage.local.set({
-        whitelist: nextWhitelist,
-        blacklist: nextBlacklist
-      });
-    } else {
-      const rule = `||${hostname}^`;
-      const nextBlacklist = [.../* @__PURE__ */ new Set([...blacklist, rule])];
-      const nextWhitelist = whitelist.filter(
-        (value) => normalizeHostname2(value) !== hostname
-      );
-      await chrome.storage.local.set({
-        whitelist: nextWhitelist,
-        blacklist: nextBlacklist
-      });
-    }
+    const response = await chrome.runtime.sendMessage({
+      type: "SAVE_DOMAIN_DECISION",
+      action: type === "whitelist" ? "WHITELIST" : "BLACKLIST",
+      domain: hostname
+    });
+    if (response?.status !== "saved")
+      throw new Error(response?.error || "Could not save domain.");
     input.value = "";
     await loadPage();
   }
@@ -766,10 +769,14 @@ This replaces the current shareable settings. Diagnostics and training samples a
     ).join("");
     element.querySelectorAll(".btn-delete").forEach((button) => {
       button.onclick = async () => {
-        const current = await chrome.storage.local.get(type);
-        const updated = [...current[type] || []];
-        updated.splice(Number(button.dataset.index), 1);
-        await chrome.storage.local.set({ [type]: updated });
+        const domain = list[Number(button.dataset.index)];
+        const response = await chrome.runtime.sendMessage({
+          type: "REMOVE_DOMAIN_DECISION",
+          listName: type,
+          domain
+        });
+        if (response?.status !== "saved")
+          throw new Error(response?.error || "Could not remove domain.");
         await loadPage();
       };
     });
@@ -819,10 +826,15 @@ This replaces the current shareable settings. Diagnostics and training samples a
     });
     container.querySelectorAll(".btn-delete-rule-item").forEach((button) => {
       button.onclick = async () => {
-        const rules = structuredClone(currentSnapshot.userCustomRules || {});
-        rules[button.dataset.host].splice(Number(button.dataset.index), 1);
-        if (!rules[button.dataset.host].length) delete rules[button.dataset.host];
-        await chrome.storage.local.set({ userCustomRules: rules });
+        const rule = currentSnapshot.userCustomRules?.[button.dataset.host]?.[Number(button.dataset.index)];
+        const selector = typeof rule === "string" ? rule : rule?.selector;
+        const response = await chrome.runtime.sendMessage({
+          type: "REMOVE_CUSTOM_RULES",
+          hostname: button.dataset.host,
+          selectors: [selector]
+        });
+        if (response?.status !== "saved")
+          throw new Error(response?.error || "Could not delete rule.");
         await loadPage();
       };
     });
@@ -831,17 +843,12 @@ This replaces the current shareable settings. Diagnostics and training samples a
         const hostname = button.dataset.host;
         if (!confirm(`Remove all packaged and personal rules for ${hostname}?`))
           return;
-        const rules = structuredClone(currentSnapshot.userCustomRules || {});
-        const removed = rules[hostname] || [];
-        delete rules[hostname];
-        const siteResetHistory = structuredClone(
-          currentSnapshot.siteResetHistory || {}
-        );
-        siteResetHistory[hostname] = { oldRules: removed, timestamp: Date.now() };
-        await chrome.storage.local.set({
-          userCustomRules: rules,
-          siteResetHistory
+        const response = await chrome.runtime.sendMessage({
+          type: "RESET_CUSTOM_RULES",
+          hostname
         });
+        if (response?.status !== "saved")
+          throw new Error(response?.error || "Could not reset site rules.");
         await loadPage();
       };
     });

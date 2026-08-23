@@ -630,12 +630,28 @@ var AdsFriendlyContent = (() => {
       message.title = active.error?.message || "Could not save this rule";
       hideButton.hidden = true;
       allowButton.textContent = "Show";
+      allowButton.disabled = false;
+      clearHighlight();
+    } else if (active.state === "restoring") {
+      message.textContent = `${label} restoring\u2026`;
+      message.title = "Waiting for settings storage confirmation";
+      hideButton.hidden = true;
+      allowButton.textContent = "Restoring\u2026";
+      allowButton.disabled = true;
+      clearHighlight();
+    } else if (active.state === "restore-error") {
+      message.textContent = "Restore failed \xB7 saved rule kept";
+      message.title = active.error?.message || "Could not restore this rule";
+      hideButton.hidden = true;
+      allowButton.textContent = "Retry";
+      allowButton.disabled = false;
       clearHighlight();
     } else if (active.state === "saving") {
       message.textContent = `${label} hidden \xB7 saving\u2026`;
       message.title = "Waiting for settings storage confirmation";
       hideButton.hidden = true;
       allowButton.textContent = "Show";
+      allowButton.disabled = false;
       clearHighlight();
     } else if (active.state === "hidden") {
       const hiddenCount = active.candidate.hiddenCount || 1;
@@ -643,6 +659,7 @@ var AdsFriendlyContent = (() => {
       message.title = isSavedRuleSummary ? `Hidden by ${active.candidate.savedRuleCount || 1} saved rule${active.candidate.savedRuleCount === 1 ? "" : "s"}` : "Hidden by your saved rule";
       hideButton.hidden = true;
       allowButton.textContent = isSavedRuleSummary ? "Show all" : "Show";
+      allowButton.disabled = false;
       clearHighlight();
     } else {
       const confidence = Math.round(active.candidate.decision.confidence * 100);
@@ -651,6 +668,7 @@ var AdsFriendlyContent = (() => {
       hideButton.hidden = false;
       hideButton.textContent = "Hide";
       allowButton.textContent = "Keep";
+      allowButton.disabled = false;
       highlightCandidate(active.candidate);
     }
     toast.classList.remove("adsfriendly-dom-hidden");
@@ -745,23 +763,44 @@ var AdsFriendlyContent = (() => {
       current.pendingHide = Promise.resolve(
         current.handlers?.onHide?.(current.candidate)
       ).then(() => {
-        current.state = "hidden";
-        if (active === current) renderActiveToast();
+        if (current.state === "saving") {
+          current.state = "hidden";
+          if (active === current) renderActiveToast();
+        }
         return true;
       }).catch((error) => {
-        current.error = error;
-        current.state = "error";
-        if (active === current) renderActiveToast();
+        if (current.state === "saving") {
+          current.error = error;
+          current.state = "error";
+          if (active === current) renderActiveToast();
+        }
         return false;
       });
     };
     toast.querySelector(".adsfriendly-dom-allow").onclick = () => {
       if (!active) return;
       const current = active;
-      const handler = ["saving", "hidden", "error"].includes(current.state) ? current.handlers?.onShow : current.handlers?.onAllow;
-      Promise.resolve(current.pendingHide).then(() => handler?.(current.candidate)).catch(() => {
+      if (current.state === "restoring") return;
+      const isRestore = ["saving", "hidden", "error", "restore-error"].includes(
+        current.state
+      );
+      const handler = isRestore ? current.handlers?.onShow : current.handlers?.onAllow;
+      if (!isRestore) {
+        Promise.resolve(handler?.(current.candidate)).catch(() => {
+        });
+        hideDomToast();
+        return;
+      }
+      current.state = "restoring";
+      current.error = null;
+      renderActiveToast();
+      Promise.resolve(current.pendingHide).then(() => handler?.(current.candidate)).then(() => {
+        if (active === current) hideDomToast();
+      }).catch((error) => {
+        current.error = error;
+        current.state = "restore-error";
+        if (active === current) renderActiveToast();
       });
-      hideDomToast();
     };
     toast.querySelector(".adsfriendly-dom-close").onclick = hideDomToast;
     toast.addEventListener("mouseenter", pauseHide);
@@ -834,6 +873,7 @@ var AdsFriendlyContent = (() => {
   function scheduleHide() {
     pauseHide();
     if (active) {
+      if (active.state === "restoring") return;
       const timeout = active.state === "hidden" ? HIDDEN_TOAST_TIMEOUT_MS : TOAST_TIMEOUT_MS;
       hideTimer = setTimeout(hideDomToast, timeout);
     }
@@ -1162,11 +1202,11 @@ var AdsFriendlyContent = (() => {
       recordDomSample(candidate, "user_allow", "content");
   }
   async function restoreCandidate(candidate) {
-    restoreInlineVisibility(candidate.target, candidate.previousInlineVisibility);
     if (candidate.selector) {
-      allowedSelectors.add(candidate.selector);
       await removeCustomRule(candidate.selector);
+      allowedSelectors.add(candidate.selector);
     }
+    restoreInlineVisibility(candidate.target, candidate.previousInlineVisibility);
     if (activePolicy?.can(CAPABILITIES.LEARNING_FEEDBACK))
       recordDomSample(candidate, "user_show", "content");
   }
@@ -1199,7 +1239,7 @@ var AdsFriendlyContent = (() => {
   }
   async function removeCustomRule(selector) {
     const response = await chrome.runtime.sendMessage({
-      type: "REMOVE_CUSTOM_RULES",
+      type: "RESTORE_CUSTOM_RULES",
       hostname: location.hostname,
       selectors: [selector]
     });
@@ -1396,6 +1436,13 @@ var AdsFriendlyContent = (() => {
   async function restoreSavedRules() {
     const applications = [...savedRuleApplications.entries()];
     const selectors2 = new Set(applications.map(([selector]) => selector));
+    const response = await chrome.runtime.sendMessage({
+      type: "RESTORE_CUSTOM_RULES",
+      hostname: location.hostname,
+      selectors: [...selectors2]
+    });
+    if (response?.status !== "saved")
+      throw new Error(response?.error || "Could not restore hidden elements.");
     selectors2.forEach((selector) => suppressedCustomSelectors.add(selector));
     applications.forEach(([selector, { snapshots }]) => {
       snapshots.forEach(
@@ -1404,14 +1451,6 @@ var AdsFriendlyContent = (() => {
       customRuleSnapshots.delete(selector);
     });
     savedRuleApplications.clear();
-    const { userCustomRules = {} } = await chrome.storage.local.get("userCustomRules");
-    const rules = userCustomRules[location.hostname] || [];
-    const remaining = rules.filter(
-      (entry) => !selectors2.has(typeof entry === "string" ? entry : entry.selector)
-    );
-    if (remaining.length) userCustomRules[location.hostname] = remaining;
-    else delete userCustomRules[location.hostname];
-    await chrome.storage.local.set({ userCustomRules });
     const fingerprints = applications.map(([, { rule }]) => typeof rule === "string" ? null : rule.fingerprint).filter(Boolean);
     fingerprints.forEach(
       (fingerprint) => chrome.runtime.sendMessage({
@@ -1840,7 +1879,10 @@ var AdsFriendlyContent = (() => {
         if (watchSettings) {
           unsubscribe = settingsSubscriber((nextSettings) => {
             controller2.updateSettings(nextSettings).catch(
-              (error) => logger.error(`[MainController:${context}] reconcile failed`, error)
+              (error) => logger.error(
+                `[MainController:${context}] reconcile failed`,
+                error
+              )
             );
           });
         }
@@ -1856,7 +1898,10 @@ var AdsFriendlyContent = (() => {
       snapshot() {
         return {
           context,
-          settings: { ...settings, featureOverrides: { ...settings.featureOverrides } },
+          settings: {
+            ...settings,
+            featureOverrides: { ...settings.featureOverrides }
+          },
           activeFeatures: [...lifecycles.entries()].filter(([, lifecycle]) => lifecycle.active).map(([featureId]) => featureId)
         };
       },
@@ -1914,7 +1959,10 @@ var AdsFriendlyContent = (() => {
       try {
         await lifecycle.cleanup();
       } catch (error) {
-        logger.error(`[MainController:${context}] failed to stop ${featureId}`, error);
+        logger.error(
+          `[MainController:${context}] failed to stop ${featureId}`,
+          error
+        );
       }
       lifecycle.active = false;
     }
@@ -1940,8 +1988,14 @@ var AdsFriendlyContent = (() => {
       can(capability) {
         assertAllowed(capability);
         const settings = readSettings();
-        if (!settings.enabled) return false;
-        return getCapabilitiesForMode(settings.protectionMode).includes(capability);
+        if (!settings.enabled)
+          return [
+            CAPABILITIES.CORE_MESSAGING,
+            CAPABILITIES.CORE_MAINTENANCE
+          ].includes(capability);
+        return getCapabilitiesForMode(settings.protectionMode).includes(
+          capability
+        );
       },
       require(capability) {
         if (!this.can(capability)) {
@@ -1956,7 +2010,12 @@ var AdsFriendlyContent = (() => {
   }
   function shouldStartFeature(definition, settings) {
     const override = settings.featureOverrides?.[definition.id];
-    if (override === false || !settings.enabled) return false;
+    if (override === false) return false;
+    if ([CAPABILITIES.CORE_MESSAGING, CAPABILITIES.CORE_MAINTENANCE].includes(
+      definition.startCapability
+    ))
+      return true;
+    if (!settings.enabled) return false;
     return getCapabilitiesForMode(settings.protectionMode).includes(
       definition.startCapability
     );

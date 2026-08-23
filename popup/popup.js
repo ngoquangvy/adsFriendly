@@ -206,11 +206,17 @@ var AdsFriendlyPopup = (() => {
   }
   async function saveSettings(nextSettings, storage = chrome.storage.local) {
     const settings2 = normalizeSettings(nextSettings);
-    await storage.set({
+    const updates = {
       [SETTINGS_KEY]: settings2,
       isEnabled: settings2.enabled,
       friendlyMode: settings2.protectionMode === PROTECTION_MODES.SAFE
-    });
+    };
+    await storage.set(updates);
+    const saved = await storage.get(Object.keys(updates));
+    for (const [key, expected] of Object.entries(updates)) {
+      if (JSON.stringify(saved[key]) !== JSON.stringify(expected))
+        throw new Error(`Could not verify saved setting: ${key}.`);
+    }
     return settings2;
   }
 
@@ -252,7 +258,10 @@ var AdsFriendlyPopup = (() => {
       alert("Manual picker is disabled by the current protection policy.");
       return;
     }
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const [tab] = await chrome.tabs.query({
+      active: true,
+      currentWindow: true
+    });
     if (!tab) return;
     try {
       await chrome.tabs.sendMessage(tab.id, { type: "START_PICKER" });
@@ -262,34 +271,70 @@ var AdsFriendlyPopup = (() => {
     }
   });
   document.getElementById("reset-rules-btn").addEventListener("click", async () => {
-    const tab = await getActiveHttpTab();
-    if (!tab) return;
-    const hostname = new URL(tab.url).hostname;
-    const { userCustomRules = {} } = await chrome.storage.local.get("userCustomRules");
-    if (!userCustomRules[hostname]) return;
-    delete userCustomRules[hostname];
-    await chrome.storage.local.set({ userCustomRules });
-    await chrome.tabs.reload(tab.id);
-    window.close();
+    const button = document.getElementById("reset-rules-btn");
+    await runRuleButtonAction(button, "Resetting\u2026", async () => {
+      const tab = await getActiveHttpTab();
+      if (!tab) return false;
+      const hostname = new URL(tab.url).hostname;
+      const { userCustomRules = {} } = await chrome.storage.local.get("userCustomRules");
+      const selectors = (userCustomRules[hostname] || []).map((rule) => typeof rule === "string" ? rule : rule?.selector).filter(Boolean);
+      if (!selectors.length) return false;
+      const response = await chrome.runtime.sendMessage({
+        type: "REMOVE_CUSTOM_RULES",
+        hostname,
+        selectors
+      });
+      if (response?.status !== "saved")
+        throw new Error(response?.error || "Could not remove site rules.");
+      await chrome.tabs.reload(tab.id);
+      window.close();
+    });
   });
   document.getElementById("undo-btn").addEventListener("click", async () => {
-    const tab = await getActiveHttpTab();
-    if (!tab) return;
-    const hostname = new URL(tab.url).hostname;
-    const { userCustomRules = {} } = await chrome.storage.local.get("userCustomRules");
-    const rules = userCustomRules[hostname];
-    if (!rules?.length) return;
-    const undoneRule = rules.pop();
-    await chrome.storage.local.set({ userCustomRules });
-    if (undoneRule?.fingerprint) {
-      await chrome.runtime.sendMessage({
-        type: "NEGATIVE_LEARNING",
-        fingerprint: undoneRule.fingerprint
+    const button = document.getElementById("undo-btn");
+    await runRuleButtonAction(button, "Restoring\u2026", async () => {
+      const tab = await getActiveHttpTab();
+      if (!tab) return false;
+      const hostname = new URL(tab.url).hostname;
+      const { userCustomRules = {} } = await chrome.storage.local.get("userCustomRules");
+      const rules = userCustomRules[hostname];
+      if (!rules?.length) return false;
+      const undoneRule = rules.at(-1);
+      const selector = typeof undoneRule === "string" ? undoneRule : undoneRule?.selector;
+      const response = await chrome.runtime.sendMessage({
+        type: "RESTORE_CUSTOM_RULES",
+        hostname,
+        selectors: [selector]
       });
-    }
-    await chrome.tabs.reload(tab.id);
-    window.close();
+      if (response?.status !== "saved")
+        throw new Error(response?.error || "Could not restore the last rule.");
+      if (undoneRule?.fingerprint) {
+        await chrome.runtime.sendMessage({
+          type: "NEGATIVE_LEARNING",
+          fingerprint: undoneRule.fingerprint
+        });
+      }
+      await chrome.tabs.reload(tab.id);
+      window.close();
+    });
   });
+  async function runRuleButtonAction(button, workingText, action) {
+    button.dataset.originalHtml ||= button.innerHTML;
+    button.disabled = true;
+    button.textContent = workingText;
+    button.title = "";
+    try {
+      const completed = await action();
+      if (completed === false) {
+        button.disabled = false;
+        button.innerHTML = button.dataset.originalHtml;
+      }
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = "Failed \xB7 Retry";
+      button.title = error?.message || String(error);
+    }
+  }
   setInterval(updateBlockedCount, 1e3);
   async function initialize() {
     settings = await loadSettings();

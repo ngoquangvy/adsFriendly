@@ -106,6 +106,30 @@ test("replaces managed settings without deleting diagnostics", async () => {
   assert.equal(summarizeSettingsPackage(examplePackage).ruleCount, 1);
 });
 
+test("failed package write does not delete existing trusted paths", async () => {
+  const storage = createStorage({
+    "p:old.example>target.example": {
+      source: "old.example",
+      target: "target.example",
+    },
+  });
+  const failingStorage = {
+    get: storage.get,
+    remove: storage.remove,
+    async set() {
+      throw new Error("storage unavailable");
+    },
+  };
+  await assert.rejects(
+    replaceSettingsWithPackage(examplePackage, failingStorage, "test"),
+    /storage unavailable/,
+  );
+  assert.equal(
+    (await storage.get(null))["p:old.example>target.example"].source,
+    "old.example",
+  );
+});
+
 test("bundled package preserves existing user settings", async () => {
   const storage = createStorage({ whitelist: ["mine.example"] });
   const result = await initializeBundledSettingsPackage(
