@@ -1,18 +1,20 @@
-const QUEUE_KEY = "afsTelemetryQueue";
+import {
+  deleteTelemetryEvents,
+  enqueueTelemetryEvent,
+  listTelemetryBatch,
+} from "../storage/training-store.js";
+
 const ENABLED_KEY = "afsTelemetryEnabled";
 const ENDPOINT_KEY = "afsTelemetryEndpoint";
 const CLIENT_ID_KEY = "adsFriendlyClientId";
 const DEFAULT_ENDPOINT = "http://127.0.0.1:3000/api/ingest";
-const MAX_QUEUE = 1000;
 const BATCH_SIZE = 50;
 
 let flushInFlight = false;
 
 export async function recordTelemetry(raw = {}) {
   const event = await buildEvent(raw);
-  const { [QUEUE_KEY]: queue = [] } = await chrome.storage.local.get(QUEUE_KEY);
-  queue.push(event);
-  await chrome.storage.local.set({ [QUEUE_KEY]: queue.slice(-MAX_QUEUE) });
+  await enqueueTelemetryEvent(event);
   flushTelemetry();
   return event;
 }
@@ -24,8 +26,8 @@ export async function flushTelemetry() {
     const {
       [ENABLED_KEY]: enabled = true,
       [ENDPOINT_KEY]: endpoint = DEFAULT_ENDPOINT,
-      [QUEUE_KEY]: queue = [],
-    } = await chrome.storage.local.get([ENABLED_KEY, ENDPOINT_KEY, QUEUE_KEY]);
+    } = await chrome.storage.local.get([ENABLED_KEY, ENDPOINT_KEY]);
+    const queue = await listTelemetryBatch(BATCH_SIZE);
     if (enabled === false || !queue.length) return { status: "skipped" };
 
     const batch = queue.slice(0, BATCH_SIZE);
@@ -38,8 +40,8 @@ export async function flushTelemetry() {
       return { status: "server_error", statusCode: response.status };
     }
 
-    await chrome.storage.local.set({ [QUEUE_KEY]: queue.slice(batch.length) });
-    if (queue.length > batch.length) setTimeout(flushTelemetry, 100);
+    await deleteTelemetryEvents(batch.map((event) => event.sample_id));
+    if (queue.length === BATCH_SIZE) setTimeout(flushTelemetry, 100);
     return { status: "flushed", count: batch.length };
   } catch (error) {
     return { status: "offline", error: error.message };

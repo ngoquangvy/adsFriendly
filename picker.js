@@ -94,6 +94,11 @@ var AdsFriendlyPicker = (() => {
     feature("background.telemetry-flush", "background", C.TELEMETRY_QUEUE),
     feature("background.memory-cleanup", "background", C.CORE_MAINTENANCE),
     feature("background.pattern-seed", "background", C.LEARNING_SEED),
+    feature(
+      "background.training-store-migration",
+      "background",
+      C.CORE_MAINTENANCE
+    ),
     feature("background.settings-package-seed", "background", C.CORE_MAINTENANCE),
     feature("content.spy-injector", "content", C.MEDIA_OBSERVE),
     feature("content.youtube-cleaner", "content", C.DOM_STATIC_RULES),
@@ -395,6 +400,19 @@ var AdsFriendlyPicker = (() => {
         );
       }
     }
+  }
+
+  // src/dom/features.js
+  function buildDynamicAdIdSelector(element) {
+    if (!element?.tagName || !element.id) return null;
+    const match = element.id.match(
+      /^((?:ad|ads|adv|advert|banner|promo|sponsor|popup)[-_])(?=[a-z0-9]*[a-z])(?=[a-z0-9]*\d)[a-z0-9]{5,}$/i
+    );
+    if (!match) return null;
+    return `${element.tagName.toLowerCase()}[id^="${cssAttributeValue(match[1])}"]`;
+  }
+  function cssAttributeValue(value) {
+    return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
   }
 
   // src/picker/index.js
@@ -727,6 +745,7 @@ Reason: ${reasons.join(", ")}`,
         const { userCustomRules = {}, siteResetHistory = {} } = await chrome.storage.local.get(["userCustomRules", "siteResetHistory"]);
         if (!userCustomRules[hostname]) userCustomRules[hostname] = [];
         let addedCount = 0;
+        const rulesToSave = [];
         const resetData = siteResetHistory[hostname];
         const isCorrectionLoop = !!resetData;
         selectedItems.forEach((item) => {
@@ -780,13 +799,27 @@ Reason: ${reasons.join(", ")}`,
           if (existingIndex > -1)
             userCustomRules[hostname][existingIndex] = ruleObject;
           else userCustomRules[hostname].push(ruleObject);
-          item.element.style.opacity = "0";
-          item.element.style.pointerEvents = "none";
+          rulesToSave.push(ruleObject);
           addedCount++;
         });
         if (addedCount > 0) {
-          await chrome.storage.local.set({ userCustomRules });
-          chrome.runtime.sendMessage({ type: "SYNC_LEARNING" });
+          try {
+            const response = await chrome.runtime.sendMessage({
+              type: "UPSERT_CUSTOM_RULES",
+              hostname,
+              rules: rulesToSave
+            });
+            if (response?.status !== "saved")
+              throw new Error(response?.error || "Could not save selected rules.");
+            selectedItems.forEach((item) => {
+              item.element.style.opacity = "0";
+              item.element.style.pointerEvents = "none";
+            });
+            await chrome.runtime.sendMessage({ type: "SYNC_LEARNING" });
+          } catch (error) {
+            updatePanelUI(`Save failed: ${error.message}`);
+            return;
+          }
         }
         stopPicker();
       };
@@ -807,6 +840,8 @@ Reason: ${reasons.join(", ")}`,
         ];
         const isSafeId = (id) => id && !GENERIC_CLASSES.some((gc) => id.includes(gc)) && !/[0-9]{5,}/.test(id);
         const isSafeClass = (cls) => cls && typeof cls === "string" && cls.split(/\s+/).some((c) => c && !GENERIC_CLASSES.includes(c) && !/[0-9]{5,}/.test(c));
+        const dynamicAdIdSelector = buildDynamicAdIdSelector(el);
+        if (dynamicAdIdSelector) return dynamicAdIdSelector;
         if (tag === "a" && el.href && el.href.includes("javascript:")) {
           if (isSafeId(el.id)) return `#${el.id}`;
           if (el.parentElement && isSafeId(el.parentElement.id))

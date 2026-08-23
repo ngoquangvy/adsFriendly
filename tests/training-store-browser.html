@@ -1,0 +1,83 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>AdsFriendly training store browser test</title>
+<pre id="result">running</pre>
+<script type="module">
+  import {
+    addDomTrainingSample,
+    clearAllTrainingData,
+    deleteTelemetryEvents,
+    enqueueTelemetryEvent,
+    listDomTrainingSamples,
+    listTelemetryBatch,
+    migrateLegacyTrainingStorage,
+  } from "../src/storage/training-store.js";
+
+  const result = document.getElementById("result");
+  try {
+    await clearAllTrainingData();
+    await addDomTrainingSample({
+      sample_id: "dom-test-1",
+      timestamp: 100,
+      label: "ad",
+    });
+    await addDomTrainingSample({
+      sample_id: "dom-test-2",
+      timestamp: 200,
+      label: "content",
+    });
+    await enqueueTelemetryEvent({
+      sample_id: "tel-test-1",
+      timestamp: 50,
+      label: "ad",
+    });
+    const newest = await listDomTrainingSamples(10);
+    const telemetry = await listTelemetryBatch(10);
+    await deleteTelemetryEvents(["tel-test-1"]);
+    const telemetryAfterDelete = await listTelemetryBatch(10);
+    const legacyData = {
+      domTrainingSamples: [
+        { sample_id: "legacy-dom", timestamp: 300, label: "ad" },
+      ],
+      afsTelemetryQueue: [
+        { sample_id: "legacy-tel", timestamp: 75, label: "ad" },
+      ],
+    };
+    const removedLegacyKeys = [];
+    await migrateLegacyTrainingStorage({
+      async get() {
+        return structuredClone(legacyData);
+      },
+      async remove(keys) {
+        removedLegacyKeys.push(...keys);
+      },
+    });
+    const afterMigration = await listDomTrainingSamples(10);
+    const telemetryAfterMigration = await listTelemetryBatch(10);
+    const passed =
+      newest.map((item) => item.sample_id).join(",") ===
+        "dom-test-2,dom-test-1" &&
+      telemetry[0]?.sample_id === "tel-test-1" &&
+      telemetryAfterDelete.length === 0 &&
+      afterMigration[0]?.sample_id === "legacy-dom" &&
+      telemetryAfterMigration[0]?.sample_id === "legacy-tel" &&
+      removedLegacyKeys.sort().join(",") ===
+        "afsTelemetryQueue,domTrainingSamples";
+    result.textContent = JSON.stringify(
+      {
+        passed,
+        newest: newest.map((item) => item.sample_id),
+        telemetry: telemetry.map((item) => item.sample_id),
+        telemetryAfterDelete: telemetryAfterDelete.length,
+        migratedDom: afterMigration[0]?.sample_id,
+        migratedTelemetry: telemetryAfterMigration[0]?.sample_id,
+        removedLegacyKeys,
+      },
+      null,
+      2,
+    );
+    await clearAllTrainingData();
+  } catch (error) {
+    result.textContent = JSON.stringify({ passed: false, error: error.stack });
+  }
+</script>

@@ -177,6 +177,143 @@ var AdsFriendlyBackground = (() => {
     );
   }
 
+  // src/background/settings-mutations.js
+  var MAX_RULES_PER_SITE = 250;
+  var defaultStore = null;
+  function getSettingsMutationStore(storage = chrome.storage.local) {
+    if (!defaultStore) defaultStore = createSettingsMutationStore(storage);
+    return defaultStore;
+  }
+  function createSettingsMutationStore(storage) {
+    let mutationTail = Promise.resolve();
+    const serial = (operation) => {
+      const result = mutationTail.then(operation, operation);
+      mutationTail = result.catch(() => {
+      });
+      return result;
+    };
+    return Object.freeze({
+      upsertCustomRules(hostname, incomingRules) {
+        return serial(async () => {
+          const host = normalizeHostname(hostname);
+          const additions = normalizeRules(incomingRules);
+          if (!host || !additions.length)
+            throw new Error("No valid custom rules to save.");
+          const { userCustomRules = {} } = await storage.get("userCustomRules");
+          const existing = Array.isArray(userCustomRules[host]) ? userCustomRules[host] : [];
+          const bySelector = new Map(
+            existing.filter((rule) => selectorOf(rule)).map((rule) => [selectorOf(rule), rule])
+          );
+          additions.forEach((rule) => bySelector.set(selectorOf(rule), rule));
+          userCustomRules[host] = [...bySelector.values()].slice(
+            -MAX_RULES_PER_SITE
+          );
+          await setAndVerify(storage, { userCustomRules });
+          return {
+            status: "saved",
+            hostname: host,
+            ruleCount: userCustomRules[host].length
+          };
+        });
+      },
+      removeCustomRules(hostname, selectors) {
+        return serial(async () => {
+          const host = normalizeHostname(hostname);
+          const selectorSet = new Set(
+            (Array.isArray(selectors) ? selectors : [selectors]).map((value) => String(value || "").trim()).filter(Boolean)
+          );
+          if (!host || !selectorSet.size)
+            throw new Error("No valid custom rules to remove.");
+          const { userCustomRules = {} } = await storage.get("userCustomRules");
+          const existing = Array.isArray(userCustomRules[host]) ? userCustomRules[host] : [];
+          const remaining = existing.filter(
+            (rule) => !selectorSet.has(selectorOf(rule))
+          );
+          if (remaining.length) userCustomRules[host] = remaining;
+          else delete userCustomRules[host];
+          await setAndVerify(storage, { userCustomRules });
+          return { status: "saved", hostname: host, ruleCount: remaining.length };
+        });
+      },
+      saveDomainDecision(action, domain) {
+        return serial(async () => {
+          const hostname = normalizeHostname(domain);
+          if (!hostname) throw new Error("Invalid domain decision.");
+          const { whitelist = [], blacklist = [] } = await storage.get([
+            "whitelist",
+            "blacklist"
+          ]);
+          let nextWhitelist = [...whitelist];
+          let nextBlacklist = [...blacklist];
+          if (action === "WHITELIST") {
+            nextWhitelist = [.../* @__PURE__ */ new Set([...nextWhitelist, hostname])];
+            nextBlacklist = nextBlacklist.filter(
+              (entry) => normalizeHostname(entry) !== hostname
+            );
+          } else if (action === "BLACKLIST") {
+            nextBlacklist = [.../* @__PURE__ */ new Set([...nextBlacklist, `||${hostname}^`])];
+            nextWhitelist = nextWhitelist.filter(
+              (entry) => normalizeHostname(entry) !== hostname
+            );
+          } else {
+            throw new Error(`Unsupported domain action: ${String(action)}`);
+          }
+          await setAndVerify(storage, {
+            whitelist: nextWhitelist,
+            blacklist: nextBlacklist
+          });
+          return { status: "saved", action, domain: hostname };
+        });
+      }
+    });
+  }
+  async function getStorageHealth(storage = chrome.storage.local) {
+    const bytesInUse = typeof storage.getBytesInUse === "function" ? await storage.getBytesInUse(null) : null;
+    let unlimited = false;
+    try {
+      unlimited = await chrome.permissions.contains({
+        permissions: ["unlimitedStorage"]
+      });
+    } catch {
+    }
+    return { status: "ok", bytesInUse, unlimited };
+  }
+  async function setAndVerify(storage, updates) {
+    try {
+      await storage.set(updates);
+      const saved = await storage.get(Object.keys(updates));
+      for (const [key, expected] of Object.entries(updates)) {
+        if (JSON.stringify(saved[key]) !== JSON.stringify(expected)) {
+          throw new Error(`Storage verification failed for ${key}.`);
+        }
+      }
+    } catch (error) {
+      const message = String(error?.message || error);
+      if (/quota|bytes|storage/i.test(message)) {
+        throw new Error(`Settings storage is full: ${message}`);
+      }
+      throw error;
+    }
+  }
+  function normalizeRules(rules) {
+    return (Array.isArray(rules) ? rules : [rules]).filter((rule) => rule && typeof rule === "object").filter((rule) => selectorOf(rule));
+  }
+  function selectorOf(rule) {
+    return typeof rule === "string" ? rule.trim() : String(rule?.selector || "").trim();
+  }
+  function normalizeHostname(value) {
+    const raw = String(value || "").trim().replace(/^\|\|/, "").replace(/\^$/, "");
+    if (!raw) return "";
+    try {
+      const hostname = new URL(
+        raw.includes("://") ? raw : `https://${raw}`
+      ).hostname.toLowerCase();
+      return /^[a-z0-9.-]+$/.test(hostname) ? hostname : "";
+    } catch {
+      return "";
+    }
+  }
+
   // src/navigation/background/trusted-paths.js
   async function syncTrustedPath(source, target, isManual = false) {
     if (!source || !target || source === target) return;
@@ -203,35 +340,8 @@ var AdsFriendlyBackground = (() => {
   }
   async function handleUserDecision(message) {
     const { action, domain } = message;
-    if (action === "WHITELIST") {
-      const { whitelist = [], blacklist = [] } = await chrome.storage.local.get([
-        "whitelist",
-        "blacklist"
-      ]);
-      if (!whitelist.includes(domain)) {
-        whitelist.push(domain);
-      }
-      await chrome.storage.local.set({
-        whitelist,
-        blacklist: blacklist.filter(
-          (entry) => String(entry || "").replace(/^\|\|/, "").replace(/\^$/, "") !== domain
-        )
-      });
-    }
-    if (action === "BLACKLIST") {
-      const { blacklist = [], whitelist = [] } = await chrome.storage.local.get([
-        "blacklist",
-        "whitelist"
-      ]);
-      const rule = `||${domain}^`;
-      if (!blacklist.includes(rule)) {
-        blacklist.push(rule);
-      }
-      await chrome.storage.local.set({
-        blacklist,
-        whitelist: whitelist.filter((entry) => entry !== domain)
-      });
-    }
+    if (!["WHITELIST", "BLACKLIST"].includes(action)) return;
+    return getSettingsMutationStore().saveDomainDecision(action, domain);
   }
 
   // src/background/reputation.js
@@ -263,20 +373,150 @@ var AdsFriendlyBackground = (() => {
     if (changed) await chrome.storage.local.set({ siteResetHistory });
   }
 
+  // src/storage/training-store.js
+  var DATABASE_NAME = "adsfriendly-training";
+  var DATABASE_VERSION = 1;
+  var DOM_STORE = "domSamples";
+  var TELEMETRY_STORE = "telemetryQueue";
+  var LEGACY_DOM_KEY = "domTrainingSamples";
+  var LEGACY_TELEMETRY_KEY = "afsTelemetryQueue";
+  var MAX_DOM_SAMPLES = 5e3;
+  var MAX_TELEMETRY_EVENTS = 5e3;
+  var databasePromise = null;
+  async function addDomTrainingSample(sample) {
+    return putCapped(DOM_STORE, ensureIdentity(sample), MAX_DOM_SAMPLES);
+  }
+  async function enqueueTelemetryEvent(event) {
+    return putCapped(
+      TELEMETRY_STORE,
+      ensureIdentity(event),
+      MAX_TELEMETRY_EVENTS
+    );
+  }
+  async function listTelemetryBatch(limit = 50) {
+    return listOldest(TELEMETRY_STORE, limit);
+  }
+  async function deleteTelemetryEvents(sampleIds) {
+    if (!sampleIds?.length) return;
+    const db = await openDatabase();
+    const transaction = db.transaction(TELEMETRY_STORE, "readwrite");
+    const store = transaction.objectStore(TELEMETRY_STORE);
+    sampleIds.forEach((sampleId) => store.delete(sampleId));
+    await transactionDone(transaction);
+  }
+  async function migrateLegacyTrainingStorage(storage = chrome.storage.local) {
+    const legacy = await storage.get([LEGACY_DOM_KEY, LEGACY_TELEMETRY_KEY]);
+    const domSamples = Array.isArray(legacy[LEGACY_DOM_KEY]) ? legacy[LEGACY_DOM_KEY] : [];
+    const telemetryEvents = Array.isArray(legacy[LEGACY_TELEMETRY_KEY]) ? legacy[LEGACY_TELEMETRY_KEY] : [];
+    for (const sample of domSamples.slice(-MAX_DOM_SAMPLES))
+      await addDomTrainingSample(sample);
+    for (const event of telemetryEvents.slice(-MAX_TELEMETRY_EVENTS))
+      await enqueueTelemetryEvent(event);
+    if (domSamples.length || telemetryEvents.length)
+      await storage.remove([LEGACY_DOM_KEY, LEGACY_TELEMETRY_KEY]);
+    return {
+      status: "migrated",
+      domSamples: domSamples.length,
+      telemetryEvents: telemetryEvents.length
+    };
+  }
+  async function putCapped(storeName, value, maximum) {
+    const db = await openDatabase();
+    const transaction = db.transaction(storeName, "readwrite");
+    const store = transaction.objectStore(storeName);
+    store.put(value);
+    const count = await requestResult(store.count());
+    let remainingToDelete = Math.max(0, count - maximum);
+    if (remainingToDelete > 0) {
+      await new Promise((resolve, reject) => {
+        const request = store.index("timestamp").openCursor();
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+          const cursor = request.result;
+          if (!cursor || remainingToDelete <= 0) return resolve();
+          cursor.delete();
+          remainingToDelete--;
+          cursor.continue();
+        };
+      });
+    }
+    await transactionDone(transaction);
+    return value;
+  }
+  async function listOldest(storeName, limit) {
+    return listByDirection(storeName, limit, "next");
+  }
+  async function listByDirection(storeName, limit, direction) {
+    const db = await openDatabase();
+    const transaction = db.transaction(storeName, "readonly");
+    const index = transaction.objectStore(storeName).index("timestamp");
+    const values = [];
+    await new Promise((resolve, reject) => {
+      const request = index.openCursor(null, direction);
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor || values.length >= limit) return resolve();
+        values.push(cursor.value);
+        cursor.continue();
+      };
+    });
+    await transactionDone(transaction);
+    return values;
+  }
+  function openDatabase() {
+    if (databasePromise) return databasePromise;
+    databasePromise = new Promise((resolve, reject) => {
+      const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
+      request.onerror = () => reject(request.error);
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        for (const storeName of [DOM_STORE, TELEMETRY_STORE]) {
+          if (db.objectStoreNames.contains(storeName)) continue;
+          const store = db.createObjectStore(storeName, {
+            keyPath: "sample_id"
+          });
+          store.createIndex("timestamp", "timestamp");
+        }
+      };
+      request.onsuccess = () => resolve(request.result);
+    });
+    return databasePromise;
+  }
+  function ensureIdentity(value = {}) {
+    return {
+      ...value,
+      sample_id: value.sample_id || randomId(),
+      timestamp: Number(value.timestamp) || Date.now()
+    };
+  }
+  function requestResult(request) {
+    return new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+  }
+  function transactionDone(transaction) {
+    return new Promise((resolve, reject) => {
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error);
+    });
+  }
+  function randomId() {
+    return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+
   // src/background/telemetry.js
-  var QUEUE_KEY = "afsTelemetryQueue";
   var ENABLED_KEY = "afsTelemetryEnabled";
   var ENDPOINT_KEY = "afsTelemetryEndpoint";
   var CLIENT_ID_KEY = "adsFriendlyClientId";
   var DEFAULT_ENDPOINT = "http://127.0.0.1:3000/api/ingest";
-  var MAX_QUEUE = 1e3;
   var BATCH_SIZE = 50;
   var flushInFlight = false;
   async function recordTelemetry(raw = {}) {
     const event = await buildEvent(raw);
-    const { [QUEUE_KEY]: queue = [] } = await chrome.storage.local.get(QUEUE_KEY);
-    queue.push(event);
-    await chrome.storage.local.set({ [QUEUE_KEY]: queue.slice(-MAX_QUEUE) });
+    await enqueueTelemetryEvent(event);
     flushTelemetry();
     return event;
   }
@@ -286,9 +526,9 @@ var AdsFriendlyBackground = (() => {
     try {
       const {
         [ENABLED_KEY]: enabled = true,
-        [ENDPOINT_KEY]: endpoint = DEFAULT_ENDPOINT,
-        [QUEUE_KEY]: queue = []
-      } = await chrome.storage.local.get([ENABLED_KEY, ENDPOINT_KEY, QUEUE_KEY]);
+        [ENDPOINT_KEY]: endpoint = DEFAULT_ENDPOINT
+      } = await chrome.storage.local.get([ENABLED_KEY, ENDPOINT_KEY]);
+      const queue = await listTelemetryBatch(BATCH_SIZE);
       if (enabled === false || !queue.length) return { status: "skipped" };
       const batch = queue.slice(0, BATCH_SIZE);
       const response = await fetch(endpoint, {
@@ -299,8 +539,8 @@ var AdsFriendlyBackground = (() => {
       if (!response.ok && response.status !== 207) {
         return { status: "server_error", statusCode: response.status };
       }
-      await chrome.storage.local.set({ [QUEUE_KEY]: queue.slice(batch.length) });
-      if (queue.length > batch.length) setTimeout(flushTelemetry, 100);
+      await deleteTelemetryEvents(batch.map((event) => event.sample_id));
+      if (queue.length === BATCH_SIZE) setTimeout(flushTelemetry, 100);
       return { status: "flushed", count: batch.length };
     } catch (error) {
       return { status: "offline", error: error.message };
@@ -325,7 +565,7 @@ var AdsFriendlyBackground = (() => {
     const labelSource = raw.label_source || "heuristic_weak";
     return {
       schema_version: raw.schema_version || "dataset.v1",
-      sample_id: raw.sample_id || randomId(),
+      sample_id: raw.sample_id || randomId2(),
       unit: raw.unit || "unknown",
       label: raw.label || "unknown",
       label_source: labelSource,
@@ -357,7 +597,7 @@ var AdsFriendlyBackground = (() => {
   async function getClientId() {
     const result = await chrome.storage.local.get(CLIENT_ID_KEY);
     if (result[CLIENT_ID_KEY]) return result[CLIENT_ID_KEY];
-    const clientId = randomId();
+    const clientId = randomId2();
     await chrome.storage.local.set({ [CLIENT_ID_KEY]: clientId });
     return clientId;
   }
@@ -399,7 +639,7 @@ var AdsFriendlyBackground = (() => {
       return "";
     }
   }
-  function randomId() {
+  function randomId2() {
     return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   }
 
@@ -498,6 +738,11 @@ var AdsFriendlyBackground = (() => {
     feature("background.telemetry-flush", "background", C.TELEMETRY_QUEUE),
     feature("background.memory-cleanup", "background", C.CORE_MAINTENANCE),
     feature("background.pattern-seed", "background", C.LEARNING_SEED),
+    feature(
+      "background.training-store-migration",
+      "background",
+      C.CORE_MAINTENANCE
+    ),
     feature("background.settings-package-seed", "background", C.CORE_MAINTENANCE),
     feature("content.spy-injector", "content", C.MEDIA_OBSERVE),
     feature("content.youtube-cleaner", "content", C.DOM_STATIC_RULES),
@@ -1218,7 +1463,11 @@ var AdsFriendlyBackground = (() => {
     SYNC_VIDEO_LEARNING: CAPABILITIES.LEARNING_FEEDBACK,
     REPORT_AD_DENSITY: CAPABILITIES.CORE_MAINTENANCE,
     RECORD_TELEMETRY: CAPABILITIES.TELEMETRY_QUEUE,
-    FLUSH_TELEMETRY: CAPABILITIES.TELEMETRY_QUEUE
+    FLUSH_TELEMETRY: CAPABILITIES.TELEMETRY_QUEUE,
+    UPSERT_CUSTOM_RULES: CAPABILITIES.LEARNING_FEEDBACK,
+    REMOVE_CUSTOM_RULES: CAPABILITIES.LEARNING_FEEDBACK,
+    GET_STORAGE_HEALTH: CAPABILITIES.CORE_MAINTENANCE,
+    RECORD_DOM_SAMPLE: CAPABILITIES.LEARNING_FEEDBACK
   });
   function registerMessageRouter(policy) {
     const onMessage = (message, sender, sendResponse) => {
@@ -1256,6 +1505,21 @@ var AdsFriendlyBackground = (() => {
       return { status: delivered ? "delivered" : "ready" };
     }
     if (message.type === "SYNC_LEARNING") return synthesizeGlobalPatterns();
+    if (message.type === "UPSERT_CUSTOM_RULES")
+      return getSettingsMutationStore().upsertCustomRules(
+        message.hostname,
+        message.rules
+      );
+    if (message.type === "REMOVE_CUSTOM_RULES")
+      return getSettingsMutationStore().removeCustomRules(
+        message.hostname,
+        message.selectors
+      );
+    if (message.type === "GET_STORAGE_HEALTH") return getStorageHealth();
+    if (message.type === "RECORD_DOM_SAMPLE") {
+      await addDomTrainingSample(message.sample);
+      return { status: "saved" };
+    }
     if (message.type === "NEGATIVE_LEARNING")
       return handleNegativeLearning(message.fingerprint);
     if (message.type === "USER_DECISION") return handleUserDecision(message);
@@ -1263,7 +1527,7 @@ var AdsFriendlyBackground = (() => {
       return syncTrustedPath(message.source, message.target, true);
     if (message.type === "RESTORE_GRAY_NAVIGATION") {
       await syncTrustedPath(message.source, message.target, true);
-      await recordTelemetry({
+      await recordTelemetryBestEffort({
         unit: "navigation",
         label: "false_positive",
         label_source: "user_restore",
@@ -1288,7 +1552,8 @@ var AdsFriendlyBackground = (() => {
       return;
     }
     if (message.type === "BLOCK_GRAY_NAVIGATION") {
-      await recordTelemetry({
+      await handleUserDecision({ action: "BLACKLIST", domain: message.target });
+      await recordTelemetryBestEffort({
         unit: "navigation",
         label: "ad",
         label_source: "user_block",
@@ -1308,11 +1573,11 @@ var AdsFriendlyBackground = (() => {
           surface: "navigation_toast"
         }
       });
-      return handleUserDecision({ action: "BLACKLIST", domain: message.target });
+      return { status: "saved" };
     }
     if (message.type === "KEEP_REVIEWED_TAB") {
       await syncTrustedPath(message.source, message.target, true);
-      await recordTelemetry({
+      await recordTelemetryBestEffort({
         unit: "navigation",
         label: "false_positive",
         label_source: "user_keep",
@@ -1336,7 +1601,8 @@ var AdsFriendlyBackground = (() => {
       return;
     }
     if (message.type === "BLOCK_REVIEWED_TAB") {
-      await recordTelemetry({
+      await handleUserDecision({ action: "BLACKLIST", domain: message.target });
+      await recordTelemetryBestEffort({
         unit: "navigation",
         label: "ad",
         label_source: "user_block",
@@ -1356,7 +1622,6 @@ var AdsFriendlyBackground = (() => {
           surface: "navigation_toast"
         }
       });
-      await handleUserDecision({ action: "BLACKLIST", domain: message.target });
       if (Number.isInteger(message.tabId)) {
         try {
           await chrome.tabs.remove(message.tabId);
@@ -1376,6 +1641,14 @@ var AdsFriendlyBackground = (() => {
     if (message.type === "TOGGLE_STATUS")
       console.log("Protection status:", message.isEnabled);
     return { status: "ignored" };
+  }
+  async function recordTelemetryBestEffort(event) {
+    try {
+      return await recordTelemetry(event);
+    } catch (error) {
+      console.warn("[AdsFriendly] Telemetry skipped:", error.message);
+      return { status: "skipped", error: error.message };
+    }
   }
 
   // src/runtime/settings-store.js
@@ -1423,7 +1696,7 @@ var AdsFriendlyBackground = (() => {
   var SETTINGS_PACKAGE_STATE_KEY = "settingsPackageState";
   var BUNDLED_SETTINGS_PACKAGE_PATH = "packages/default-settings-package.json";
   var MAX_RULES = 5e3;
-  var MAX_RULES_PER_SITE = 250;
+  var MAX_RULES_PER_SITE2 = 250;
   var MAX_SELECTOR_LENGTH = 500;
   var DANGEROUS_SELECTORS = /* @__PURE__ */ new Set([
     "*",
@@ -1530,7 +1803,7 @@ var AdsFriendlyBackground = (() => {
     if (!Array.isArray(values)) return [];
     return [
       ...new Set(
-        values.map(normalizeHostname).filter(Boolean).map((hostname) => blacklist ? `||${hostname}^` : hostname)
+        values.map(normalizeHostname2).filter(Boolean).map((hostname) => blacklist ? `||${hostname}^` : hostname)
       )
     ].slice(0, 2e3);
   }
@@ -1538,9 +1811,9 @@ var AdsFriendlyBackground = (() => {
     if (!value || typeof value !== "object" || Array.isArray(value)) return {};
     const result = {};
     for (const [rawHostname, rawRules] of Object.entries(value)) {
-      const hostname = normalizeHostname(rawHostname);
+      const hostname = normalizeHostname2(rawHostname);
       if (!hostname || !Array.isArray(rawRules)) continue;
-      const rules = rawRules.slice(0, MAX_RULES_PER_SITE).map(normalizeRule).filter(Boolean);
+      const rules = rawRules.slice(0, MAX_RULES_PER_SITE2).map(normalizeRule).filter(Boolean);
       if (rules.length) result[hostname] = dedupeRules(rules);
     }
     return result;
@@ -1567,8 +1840,8 @@ var AdsFriendlyBackground = (() => {
       className: cleanText(fingerprint.className, 300) || null,
       alt: cleanText(fingerprint.alt, 300) || null,
       title: cleanText(fingerprint.title, 300) || null,
-      linkDomain: normalizeHostname(fingerprint.linkDomain) || null,
-      srcHost: normalizeHostname(fingerprint.srcHost) || null,
+      linkDomain: normalizeHostname2(fingerprint.linkDomain) || null,
+      srcHost: normalizeHostname2(fingerprint.srcHost) || null,
       idTokens: normalizeTokens(fingerprint.idTokens),
       classTokens: normalizeTokens(fingerprint.classTokens)
     };
@@ -1577,8 +1850,8 @@ var AdsFriendlyBackground = (() => {
     if (!Array.isArray(paths)) return [];
     const byKey = /* @__PURE__ */ new Map();
     for (const raw of paths.slice(0, 2e3)) {
-      const source = normalizeHostname(raw?.source);
-      const target = normalizeHostname(raw?.target);
+      const source = normalizeHostname2(raw?.source);
+      const target = normalizeHostname2(raw?.target);
       if (!source || !target || source === target) continue;
       byKey.set(`${source}>${target}`, {
         source,
@@ -1590,7 +1863,7 @@ var AdsFriendlyBackground = (() => {
     }
     return [...byKey.values()];
   }
-  function normalizeHostname(value) {
+  function normalizeHostname2(value) {
     const raw = String(value || "").trim().replace(/^\|\|/, "").replace(/\^$/, "");
     if (!raw) return "";
     try {
@@ -1864,7 +2137,8 @@ var AdsFriendlyBackground = (() => {
         seedBaselinePatterns();
         return () => chrome.runtime.onInstalled.removeListener(seedBaselinePatterns);
       },
-      "background.settings-package-seed": () => initializeBundledSettingsPackage()
+      "background.settings-package-seed": () => initializeBundledSettingsPackage(),
+      "background.training-store-migration": () => migrateLegacyTrainingStorage()
     }
   });
   controller.start().then(() => loadSettings()).then((settings) => controller.updateSettings(settings)).catch(

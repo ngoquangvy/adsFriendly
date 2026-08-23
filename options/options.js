@@ -94,6 +94,11 @@ var AdsFriendlyOptions = (() => {
     feature("background.telemetry-flush", "background", C.TELEMETRY_QUEUE),
     feature("background.memory-cleanup", "background", C.CORE_MAINTENANCE),
     feature("background.pattern-seed", "background", C.LEARNING_SEED),
+    feature(
+      "background.training-store-migration",
+      "background",
+      C.CORE_MAINTENANCE
+    ),
     feature("background.settings-package-seed", "background", C.CORE_MAINTENANCE),
     feature("content.spy-injector", "content", C.MEDIA_OBSERVE),
     feature("content.youtube-cleaner", "content", C.DOM_STATIC_RULES),
@@ -455,6 +460,75 @@ var AdsFriendlyOptions = (() => {
     return Math.max(min, Math.min(max, number));
   }
 
+  // src/storage/training-store.js
+  var DATABASE_NAME = "adsfriendly-training";
+  var DATABASE_VERSION = 1;
+  var DOM_STORE = "domSamples";
+  var TELEMETRY_STORE = "telemetryQueue";
+  var databasePromise = null;
+  async function listDomTrainingSamples(limit = 5e3) {
+    return listNewest(DOM_STORE, limit);
+  }
+  async function clearDomTrainingSamples() {
+    return clearStore(DOM_STORE);
+  }
+  async function clearAllTrainingData() {
+    await Promise.all([clearStore(DOM_STORE), clearStore(TELEMETRY_STORE)]);
+  }
+  async function listNewest(storeName, limit) {
+    return listByDirection(storeName, limit, "prev");
+  }
+  async function listByDirection(storeName, limit, direction) {
+    const db = await openDatabase();
+    const transaction = db.transaction(storeName, "readonly");
+    const index = transaction.objectStore(storeName).index("timestamp");
+    const values = [];
+    await new Promise((resolve, reject) => {
+      const request = index.openCursor(null, direction);
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor || values.length >= limit) return resolve();
+        values.push(cursor.value);
+        cursor.continue();
+      };
+    });
+    await transactionDone(transaction);
+    return values;
+  }
+  async function clearStore(storeName) {
+    const db = await openDatabase();
+    const transaction = db.transaction(storeName, "readwrite");
+    transaction.objectStore(storeName).clear();
+    await transactionDone(transaction);
+  }
+  function openDatabase() {
+    if (databasePromise) return databasePromise;
+    databasePromise = new Promise((resolve, reject) => {
+      const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
+      request.onerror = () => reject(request.error);
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        for (const storeName of [DOM_STORE, TELEMETRY_STORE]) {
+          if (db.objectStoreNames.contains(storeName)) continue;
+          const store = db.createObjectStore(storeName, {
+            keyPath: "sample_id"
+          });
+          store.createIndex("timestamp", "timestamp");
+        }
+      };
+      request.onsuccess = () => resolve(request.result);
+    });
+    return databasePromise;
+  }
+  function transactionDone(transaction) {
+    return new Promise((resolve, reject) => {
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error);
+    });
+  }
+
   // src/options/index.js
   var $ = (id) => document.getElementById(id);
   var whitelistEl = $("whitelist-list");
@@ -519,12 +593,29 @@ var AdsFriendlyOptions = (() => {
     $("settings-enabled").checked = settings.enabled;
     $("settings-mode").value = settings.protectionMode;
     renderPackageStatus();
+    renderStorageHealth();
     renderDomainList(currentSnapshot.whitelist || [], whitelistEl, "whitelist");
     renderDomainList(currentSnapshot.blacklist || [], blacklistEl, "blacklist");
     renderCustomRules();
     renderNavigationLogs(currentSnapshot.blockedLogs || []);
     renderLearnedPaths();
     renderDomSamples();
+  }
+  async function renderStorageHealth() {
+    const element = $("storage-health");
+    try {
+      const health = await chrome.runtime.sendMessage({
+        type: "GET_STORAGE_HEALTH"
+      });
+      if (health?.status !== "ok")
+        throw new Error(health?.error || "Storage health check failed.");
+      const size = Number.isFinite(health.bytesInUse) ? `${(health.bytesInUse / 1048576).toFixed(2)} MiB settings` : "settings storage ready";
+      element.textContent = `${size} \xB7 training database separate \xB7 ${health.unlimited ? "large-dataset storage enabled" : "storage limit active"}`;
+      element.style.color = health.unlimited ? "#22c55e" : "#f59e0b";
+    } catch (error) {
+      element.textContent = `Storage unavailable \xB7 ${error.message}`;
+      element.style.color = "#f87171";
+    }
   }
   function renderPackageStatus() {
     const settingsPackage = createSettingsPackage(currentSnapshot, {
@@ -796,7 +887,7 @@ This replaces the current shareable settings. Diagnostics and training samples a
   }
   async function renderDomSamples() {
     if (!domSamplesEl) return;
-    const { domTrainingSamples = [] } = await chrome.storage.local.get("domTrainingSamples");
+    const domTrainingSamples = await listDomTrainingSamples(80);
     if (!domTrainingSamples.length) {
       domSamplesEl.innerHTML = '<div class="empty-msg">No DOM samples yet.</div>';
       return;
@@ -829,7 +920,7 @@ This replaces the current shareable settings. Diagnostics and training samples a
     }).join("");
   }
   async function exportDomSamples() {
-    const { domTrainingSamples = [] } = await chrome.storage.local.get("domTrainingSamples");
+    const domTrainingSamples = await listDomTrainingSamples(5e3);
     if (!domTrainingSamples.length) return alert("No DOM samples to export yet.");
     downloadText(
       "adsfriendly-dom-samples.jsonl",
@@ -839,7 +930,7 @@ This replaces the current shareable settings. Diagnostics and training samples a
   }
   async function clearDomSamples() {
     if (!confirm("Clear all local DOM training samples?")) return;
-    await chrome.storage.local.set({ domTrainingSamples: [] });
+    await clearDomTrainingSamples();
     await renderDomSamples();
   }
   async function factoryReset() {
@@ -850,6 +941,7 @@ This replaces the current shareable settings. Diagnostics and training samples a
     }
     const bundled = await loadBundledPackage();
     await chrome.storage.local.clear();
+    await clearAllTrainingData();
     await replaceSettingsWithPackage(bundled, chrome.storage.local, "bundled");
     await chrome.storage.local.set({ blockedCount: 0 });
     await chrome.action.setBadgeText({ text: "" });

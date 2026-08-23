@@ -7,6 +7,11 @@ import {
   replaceSettingsWithPackage,
   summarizeSettingsPackage,
 } from "../settings-package/schema.js";
+import {
+  clearAllTrainingData,
+  clearDomTrainingSamples,
+  listDomTrainingSamples,
+} from "../storage/training-store.js";
 
 const $ = (id) => document.getElementById(id);
 const whitelistEl = $("whitelist-list");
@@ -77,12 +82,36 @@ async function loadPage() {
   $("settings-mode").value = settings.protectionMode;
 
   renderPackageStatus();
+  renderStorageHealth();
   renderDomainList(currentSnapshot.whitelist || [], whitelistEl, "whitelist");
   renderDomainList(currentSnapshot.blacklist || [], blacklistEl, "blacklist");
   renderCustomRules();
   renderNavigationLogs(currentSnapshot.blockedLogs || []);
   renderLearnedPaths();
   renderDomSamples();
+}
+
+async function renderStorageHealth() {
+  const element = $("storage-health");
+  try {
+    const health = await chrome.runtime.sendMessage({
+      type: "GET_STORAGE_HEALTH",
+    });
+    if (health?.status !== "ok")
+      throw new Error(health?.error || "Storage health check failed.");
+    const size = Number.isFinite(health.bytesInUse)
+      ? `${(health.bytesInUse / 1048576).toFixed(2)} MiB settings`
+      : "settings storage ready";
+    element.textContent = `${size} · training database separate · ${
+      health.unlimited
+        ? "large-dataset storage enabled"
+        : "storage limit active"
+    }`;
+    element.style.color = health.unlimited ? "#22c55e" : "#f59e0b";
+  } catch (error) {
+    element.textContent = `Storage unavailable · ${error.message}`;
+    element.style.color = "#f87171";
+  }
 }
 
 function renderPackageStatus() {
@@ -389,8 +418,7 @@ function renderNavigationLogs(logs) {
 
 async function renderDomSamples() {
   if (!domSamplesEl) return;
-  const { domTrainingSamples = [] } =
-    await chrome.storage.local.get("domTrainingSamples");
+  const domTrainingSamples = await listDomTrainingSamples(80);
   if (!domTrainingSamples.length) {
     domSamplesEl.innerHTML = '<div class="empty-msg">No DOM samples yet.</div>';
     return;
@@ -438,8 +466,7 @@ async function renderDomSamples() {
 }
 
 async function exportDomSamples() {
-  const { domTrainingSamples = [] } =
-    await chrome.storage.local.get("domTrainingSamples");
+  const domTrainingSamples = await listDomTrainingSamples(5000);
   if (!domTrainingSamples.length) return alert("No DOM samples to export yet.");
   downloadText(
     "adsfriendly-dom-samples.jsonl",
@@ -450,7 +477,7 @@ async function exportDomSamples() {
 
 async function clearDomSamples() {
   if (!confirm("Clear all local DOM training samples?")) return;
-  await chrome.storage.local.set({ domTrainingSamples: [] });
+  await clearDomTrainingSamples();
   await renderDomSamples();
 }
 
@@ -464,6 +491,7 @@ async function factoryReset() {
   }
   const bundled = await loadBundledPackage();
   await chrome.storage.local.clear();
+  await clearAllTrainingData();
   await replaceSettingsWithPackage(bundled, chrome.storage.local, "bundled");
   await chrome.storage.local.set({ blockedCount: 0 });
   await chrome.action.setBadgeText({ text: "" });

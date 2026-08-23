@@ -19,6 +19,7 @@ Run `pnpm build` before packaging or loading the extension.
 - `src/main-world/`: code injected into the page context: fetch/XHR capture, manifest detection, timer control.
 - `src/video/`: video-specific observation, scoring, playback actions, skip handling, and bridge messages.
 - `src/dataset/`: label schema and sample builders for future AI training data. This is intentionally separate from runtime rule caches.
+- `src/storage/`: physical persistence boundaries. Settings stay in Chrome local storage; training samples and telemetry queues live in IndexedDB.
 - `src/shared/`: small cross-context helpers and constants.
 - `server/`: local telemetry intake server, JSONL storage, and dataset inspection dashboard.
 
@@ -31,6 +32,7 @@ Runtime rules and AI training samples must stay separate:
 - User feedback is strong label data; heuristic detections are weak labels.
 - Telemetry upload should stay opt-in. Sanitize URLs and identifiers before sending samples to `server/`.
 - Settings Packages are editable configuration snapshots. They contain protection settings, site lists, manual element rules, and trusted workflows, but never telemetry, history, counters, identifiers, or training samples.
+- The separation is physical as well as logical: large training arrays cannot consume the settings bucket and prevent Hide, Magic Wand, whitelist, or blacklist writes.
 
 ## Settings Packages
 

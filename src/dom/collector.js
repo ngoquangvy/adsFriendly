@@ -154,11 +154,7 @@ async function restoreCandidate(candidate) {
 }
 
 async function persistCustomRule(candidate, outcome) {
-  const { userCustomRules = {} } =
-    await chrome.storage.local.get("userCustomRules");
-  const rules = userCustomRules[location.hostname] || [];
-  if (rules.some((rule) => rule.selector === candidate.selector)) return;
-  rules.push({
+  const rule = {
     selector: candidate.selector,
     fingerprint: {
       tag: candidate.features.tag,
@@ -175,28 +171,33 @@ async function persistCustomRule(candidate, outcome) {
     timesZapped: 1,
     confidence: candidate.decision.confidence,
     source: outcome,
+  };
+  const response = await chrome.runtime.sendMessage({
+    type: "UPSERT_CUSTOM_RULES",
+    hostname: location.hostname,
+    rules: [rule],
   });
-  userCustomRules[location.hostname] = rules;
-  await chrome.storage.local.set({ userCustomRules });
-  chrome.runtime.sendMessage({ type: "SYNC_LEARNING" });
+  assertSaved(response);
+  await chrome.runtime.sendMessage({ type: "SYNC_LEARNING" });
 }
 
 async function removeCustomRule(selector) {
-  const { userCustomRules = {} } =
-    await chrome.storage.local.get("userCustomRules");
-  const rules = userCustomRules[location.hostname] || [];
-  const remaining = rules.filter((rule) => rule.selector !== selector);
-  if (remaining.length === rules.length) return;
-  if (remaining.length) userCustomRules[location.hostname] = remaining;
-  else delete userCustomRules[location.hostname];
-  await chrome.storage.local.set({ userCustomRules });
-  chrome.runtime.sendMessage({ type: "SYNC_LEARNING" });
+  const response = await chrome.runtime.sendMessage({
+    type: "REMOVE_CUSTOM_RULES",
+    hostname: location.hostname,
+    selectors: [selector],
+  });
+  assertSaved(response);
+  await chrome.runtime.sendMessage({ type: "SYNC_LEARNING" });
+}
+
+function assertSaved(response) {
+  if (response?.status !== "saved")
+    throw new Error(response?.error || "AdsFriendly could not save settings.");
 }
 
 async function recordDomSample(candidate, outcome, label) {
   try {
-    const { domTrainingSamples = [] } =
-      await chrome.storage.local.get("domTrainingSamples");
     const sample = {
       schema_version: "dataset.v1",
       sample_id: randomId(),
@@ -231,11 +232,11 @@ async function recordDomSample(candidate, outcome, label) {
       action: ["user_allow", "user_show"].includes(outcome) ? "allow" : "hide",
       outcome,
     };
-    domTrainingSamples.push(sample);
-    await chrome.storage.local.set({
-      domTrainingSamples: domTrainingSamples.slice(-500),
+    await chrome.runtime.sendMessage({ type: "RECORD_DOM_SAMPLE", sample });
+    await chrome.runtime.sendMessage({
+      type: "RECORD_TELEMETRY",
+      event: sample,
     });
-    chrome.runtime.sendMessage({ type: "RECORD_TELEMETRY", event: sample });
   } catch {}
 }
 

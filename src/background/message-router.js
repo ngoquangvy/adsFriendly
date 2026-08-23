@@ -12,6 +12,11 @@ import { updateSiteReputation } from "./reputation.js";
 import { flushTelemetry, recordTelemetry } from "./telemetry.js";
 import { CAPABILITIES } from "../runtime/feature-catalog.js";
 import { deliverPendingNavigationReview } from "../navigation/background/guard.js";
+import {
+  getSettingsMutationStore,
+  getStorageHealth,
+} from "./settings-mutations.js";
+import { addDomTrainingSample } from "../storage/training-store.js";
 
 const MESSAGE_CAPABILITIES = Object.freeze({
   TRUSTED_CLICK: CAPABILITIES.NAVIGATION_INTENT,
@@ -29,6 +34,10 @@ const MESSAGE_CAPABILITIES = Object.freeze({
   REPORT_AD_DENSITY: CAPABILITIES.CORE_MAINTENANCE,
   RECORD_TELEMETRY: CAPABILITIES.TELEMETRY_QUEUE,
   FLUSH_TELEMETRY: CAPABILITIES.TELEMETRY_QUEUE,
+  UPSERT_CUSTOM_RULES: CAPABILITIES.LEARNING_FEEDBACK,
+  REMOVE_CUSTOM_RULES: CAPABILITIES.LEARNING_FEEDBACK,
+  GET_STORAGE_HEALTH: CAPABILITIES.CORE_MAINTENANCE,
+  RECORD_DOM_SAMPLE: CAPABILITIES.LEARNING_FEEDBACK,
 });
 
 export function registerMessageRouter(policy) {
@@ -71,6 +80,21 @@ async function route(message, sender) {
     return { status: delivered ? "delivered" : "ready" };
   }
   if (message.type === "SYNC_LEARNING") return synthesizeGlobalPatterns();
+  if (message.type === "UPSERT_CUSTOM_RULES")
+    return getSettingsMutationStore().upsertCustomRules(
+      message.hostname,
+      message.rules,
+    );
+  if (message.type === "REMOVE_CUSTOM_RULES")
+    return getSettingsMutationStore().removeCustomRules(
+      message.hostname,
+      message.selectors,
+    );
+  if (message.type === "GET_STORAGE_HEALTH") return getStorageHealth();
+  if (message.type === "RECORD_DOM_SAMPLE") {
+    await addDomTrainingSample(message.sample);
+    return { status: "saved" };
+  }
   if (message.type === "NEGATIVE_LEARNING")
     return handleNegativeLearning(message.fingerprint);
   if (message.type === "USER_DECISION") return handleUserDecision(message);
@@ -78,7 +102,7 @@ async function route(message, sender) {
     return syncTrustedPath(message.source, message.target, true);
   if (message.type === "RESTORE_GRAY_NAVIGATION") {
     await syncTrustedPath(message.source, message.target, true);
-    await recordTelemetry({
+    await recordTelemetryBestEffort({
       unit: "navigation",
       label: "false_positive",
       label_source: "user_restore",
@@ -103,7 +127,8 @@ async function route(message, sender) {
     return;
   }
   if (message.type === "BLOCK_GRAY_NAVIGATION") {
-    await recordTelemetry({
+    await handleUserDecision({ action: "BLACKLIST", domain: message.target });
+    await recordTelemetryBestEffort({
       unit: "navigation",
       label: "ad",
       label_source: "user_block",
@@ -123,11 +148,11 @@ async function route(message, sender) {
         surface: "navigation_toast",
       },
     });
-    return handleUserDecision({ action: "BLACKLIST", domain: message.target });
+    return { status: "saved" };
   }
   if (message.type === "KEEP_REVIEWED_TAB") {
     await syncTrustedPath(message.source, message.target, true);
-    await recordTelemetry({
+    await recordTelemetryBestEffort({
       unit: "navigation",
       label: "false_positive",
       label_source: "user_keep",
@@ -151,7 +176,8 @@ async function route(message, sender) {
     return;
   }
   if (message.type === "BLOCK_REVIEWED_TAB") {
-    await recordTelemetry({
+    await handleUserDecision({ action: "BLACKLIST", domain: message.target });
+    await recordTelemetryBestEffort({
       unit: "navigation",
       label: "ad",
       label_source: "user_block",
@@ -171,7 +197,6 @@ async function route(message, sender) {
         surface: "navigation_toast",
       },
     });
-    await handleUserDecision({ action: "BLACKLIST", domain: message.target });
     if (Number.isInteger(message.tabId)) {
       try {
         await chrome.tabs.remove(message.tabId);
@@ -190,4 +215,13 @@ async function route(message, sender) {
   if (message.type === "TOGGLE_STATUS")
     console.log("Protection status:", message.isEnabled);
   return { status: "ignored" };
+}
+
+async function recordTelemetryBestEffort(event) {
+  try {
+    return await recordTelemetry(event);
+  } catch (error) {
+    console.warn("[AdsFriendly] Telemetry skipped:", error.message);
+    return { status: "skipped", error: error.message };
+  }
 }

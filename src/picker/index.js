@@ -1,5 +1,6 @@
 import { createMainController } from "../runtime/main-controller.js";
 import { CAPABILITIES } from "../runtime/feature-catalog.js";
+import { buildDynamicAdIdSelector } from "../dom/features.js";
 
 function startPickerController(policy) {
   (function () {
@@ -414,6 +415,7 @@ function startPickerController(policy) {
     if (!userCustomRules[hostname]) userCustomRules[hostname] = [];
 
     let addedCount = 0;
+    const rulesToSave = [];
     const resetData = siteResetHistory[hostname];
     // Persistent check: If a reset exists, we learn from it regardless of time
     // (The 30-day limit is handled by the background cleanup task)
@@ -482,14 +484,28 @@ function startPickerController(policy) {
         userCustomRules[hostname][existingIndex] = ruleObject;
       else userCustomRules[hostname].push(ruleObject);
 
-      item.element.style.opacity = "0";
-      item.element.style.pointerEvents = "none";
+      rulesToSave.push(ruleObject);
       addedCount++;
     });
 
     if (addedCount > 0) {
-      await chrome.storage.local.set({ userCustomRules });
-      chrome.runtime.sendMessage({ type: "SYNC_LEARNING" });
+      try {
+        const response = await chrome.runtime.sendMessage({
+          type: "UPSERT_CUSTOM_RULES",
+          hostname,
+          rules: rulesToSave,
+        });
+        if (response?.status !== "saved")
+          throw new Error(response?.error || "Could not save selected rules.");
+        selectedItems.forEach((item) => {
+          item.element.style.opacity = "0";
+          item.element.style.pointerEvents = "none";
+        });
+        await chrome.runtime.sendMessage({ type: "SYNC_LEARNING" });
+      } catch (error) {
+        updatePanelUI(`Save failed: ${error.message}`);
+        return;
+      }
     }
 
     stopPicker();
@@ -521,6 +537,9 @@ function startPickerController(policy) {
       cls
         .split(/\s+/)
         .some((c) => c && !GENERIC_CLASSES.includes(c) && !/[0-9]{5,}/.test(c));
+
+    const dynamicAdIdSelector = buildDynamicAdIdSelector(el);
+    if (dynamicAdIdSelector) return dynamicAdIdSelector;
 
     // 0. Specialized Ad-Close Button Intelligence (NEW)
     if (tag === "a" && el.href && el.href.includes("javascript:")) {

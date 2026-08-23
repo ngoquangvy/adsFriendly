@@ -363,6 +363,8 @@ var AdsFriendlyContent = (() => {
   function buildDomSelector(element) {
     if (!element?.tagName) return null;
     const tag = element.tagName.toLowerCase();
+    const dynamicAdIdSelector = buildDynamicAdIdSelector(element);
+    if (dynamicAdIdSelector) return dynamicAdIdSelector;
     if (element.id && AD_TOKEN_RE.test(element.id))
       return `#${cssEscape(element.id)}`;
     const className = typeof element.className === "string" ? element.className.split(/\s+/).find((token) => AD_TOKEN_RE.test(token)) : "";
@@ -380,6 +382,14 @@ var AdsFriendlyContent = (() => {
     const labelledSelector = buildLabelSelector(element, tag);
     if (labelledSelector) return labelledSelector;
     return buildStructuralSelector(element);
+  }
+  function buildDynamicAdIdSelector(element) {
+    if (!element?.tagName || !element.id) return null;
+    const match = element.id.match(
+      /^((?:ad|ads|adv|advert|banner|promo|sponsor|popup)[-_])(?=[a-z0-9]*[a-z])(?=[a-z0-9]*\d)[a-z0-9]{5,}$/i
+    );
+    if (!match) return null;
+    return `${element.tagName.toLowerCase()}[id^="${cssAttributeValue(match[1])}"]`;
   }
   function tokensHaveAdSignal(tokens) {
     return tokens.some((token) => AD_TOKEN_RE.test(token));
@@ -887,6 +897,11 @@ var AdsFriendlyContent = (() => {
     feature("background.telemetry-flush", "background", C.TELEMETRY_QUEUE),
     feature("background.memory-cleanup", "background", C.CORE_MAINTENANCE),
     feature("background.pattern-seed", "background", C.LEARNING_SEED),
+    feature(
+      "background.training-store-migration",
+      "background",
+      C.CORE_MAINTENANCE
+    ),
     feature("background.settings-package-seed", "background", C.CORE_MAINTENANCE),
     feature("content.spy-injector", "content", C.MEDIA_OBSERVE),
     feature("content.youtube-cleaner", "content", C.DOM_STATIC_RULES),
@@ -1104,10 +1119,7 @@ var AdsFriendlyContent = (() => {
       recordDomSample(candidate, "user_show", "content");
   }
   async function persistCustomRule(candidate, outcome) {
-    const { userCustomRules = {} } = await chrome.storage.local.get("userCustomRules");
-    const rules = userCustomRules[location.hostname] || [];
-    if (rules.some((rule) => rule.selector === candidate.selector)) return;
-    rules.push({
+    const rule = {
       selector: candidate.selector,
       fingerprint: {
         tag: candidate.features.tag,
@@ -1124,24 +1136,30 @@ var AdsFriendlyContent = (() => {
       timesZapped: 1,
       confidence: candidate.decision.confidence,
       source: outcome
+    };
+    const response = await chrome.runtime.sendMessage({
+      type: "UPSERT_CUSTOM_RULES",
+      hostname: location.hostname,
+      rules: [rule]
     });
-    userCustomRules[location.hostname] = rules;
-    await chrome.storage.local.set({ userCustomRules });
-    chrome.runtime.sendMessage({ type: "SYNC_LEARNING" });
+    assertSaved(response);
+    await chrome.runtime.sendMessage({ type: "SYNC_LEARNING" });
   }
   async function removeCustomRule(selector) {
-    const { userCustomRules = {} } = await chrome.storage.local.get("userCustomRules");
-    const rules = userCustomRules[location.hostname] || [];
-    const remaining = rules.filter((rule) => rule.selector !== selector);
-    if (remaining.length === rules.length) return;
-    if (remaining.length) userCustomRules[location.hostname] = remaining;
-    else delete userCustomRules[location.hostname];
-    await chrome.storage.local.set({ userCustomRules });
-    chrome.runtime.sendMessage({ type: "SYNC_LEARNING" });
+    const response = await chrome.runtime.sendMessage({
+      type: "REMOVE_CUSTOM_RULES",
+      hostname: location.hostname,
+      selectors: [selector]
+    });
+    assertSaved(response);
+    await chrome.runtime.sendMessage({ type: "SYNC_LEARNING" });
+  }
+  function assertSaved(response) {
+    if (response?.status !== "saved")
+      throw new Error(response?.error || "AdsFriendly could not save settings.");
   }
   async function recordDomSample(candidate, outcome, label) {
     try {
-      const { domTrainingSamples = [] } = await chrome.storage.local.get("domTrainingSamples");
       const sample = {
         schema_version: "dataset.v1",
         sample_id: randomId(),
@@ -1172,11 +1190,11 @@ var AdsFriendlyContent = (() => {
         action: ["user_allow", "user_show"].includes(outcome) ? "allow" : "hide",
         outcome
       };
-      domTrainingSamples.push(sample);
-      await chrome.storage.local.set({
-        domTrainingSamples: domTrainingSamples.slice(-500)
+      await chrome.runtime.sendMessage({ type: "RECORD_DOM_SAMPLE", sample });
+      await chrome.runtime.sendMessage({
+        type: "RECORD_TELEMETRY",
+        event: sample
       });
-      chrome.runtime.sendMessage({ type: "RECORD_TELEMETRY", event: sample });
     } catch {
     }
   }
@@ -1615,22 +1633,8 @@ var AdsFriendlyContent = (() => {
       color: #94a3b8;
     }
   `;
-    toast.querySelector(".adsfriendly-toast-primary").onclick = () => {
-      if (!pendingNavigation?.url) return;
-      chrome.runtime.sendMessage({
-        type: "KEEP_REVIEWED_TAB",
-        ...pendingNavigation
-      });
-      hideNavigationToast();
-    };
-    toast.querySelector(".adsfriendly-toast-block").onclick = () => {
-      if (!pendingNavigation?.url) return;
-      chrome.runtime.sendMessage({
-        type: "BLOCK_REVIEWED_TAB",
-        ...pendingNavigation
-      });
-      hideNavigationToast();
-    };
+    toast.querySelector(".adsfriendly-toast-primary").onclick = () => submitNavigationDecision("KEEP_REVIEWED_TAB");
+    toast.querySelector(".adsfriendly-toast-block").onclick = () => submitNavigationDecision("BLOCK_REVIEWED_TAB");
     toast.querySelector(".adsfriendly-toast-close").onclick = hideNavigationToast;
     toast.addEventListener("mouseenter", pauseHide2);
     toast.addEventListener("mouseleave", scheduleHide2);
@@ -1639,6 +1643,28 @@ var AdsFriendlyContent = (() => {
     (document.head || document.documentElement).appendChild(style);
     (document.body || document.documentElement).appendChild(toast);
     return toast;
+  }
+  async function submitNavigationDecision(type) {
+    if (!pendingNavigation?.url) return;
+    const toast = ensureToast2();
+    const message = toast.querySelector(".adsfriendly-toast-message");
+    const buttons = toast.querySelectorAll("button");
+    buttons.forEach((button) => button.disabled = true);
+    message.textContent = "Saving decision\u2026";
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type,
+        ...pendingNavigation
+      });
+      if (!["ok", "saved"].includes(response?.status))
+        throw new Error(response?.error || "Could not save this decision.");
+      hideNavigationToast();
+    } catch (error) {
+      message.textContent = "Could not save \xB7 storage unavailable";
+      message.title = error.message;
+      buttons.forEach((button) => button.disabled = false);
+      scheduleHide2();
+    }
   }
   function scheduleHide2() {
     pauseHide2();

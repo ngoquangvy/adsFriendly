@@ -24,6 +24,15 @@ are included the next time the user exports a package.
 - Feedback messages and timestamps.
 - Runtime reputation caches and learned global heuristics.
 
+## Storage Separation
+
+Settings Packages and personal protection rules use `chrome.storage.local`.
+DOM training samples and the telemetry upload queue use the extension's
+IndexedDB database (`adsfriendly-training`). On upgrade, legacy training arrays
+are migrated out of settings storage and then removed from that shared bucket.
+This prevents a large dataset from blocking user actions such as Hide, Magic
+Wand, whitelist, or blacklist.
+
 ## Bundled Default
 
 The editable default lives at `packages/default-settings-package.json`. It is

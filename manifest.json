@@ -1,22 +1,21 @@
 {
   "manifest_version": 3,
   "name": "AdsFriendly",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Friendly protection against pop-unders, intrusive ad tabs, and disruptive ad behavior.",
   "permissions": [
     "declarativeNetRequest",
     "webNavigation",
     "tabs",
     "storage",
+    "unlimitedStorage",
     "scripting"
   ],
   "options_ui": {
     "page": "options/options.html",
     "open_in_tab": true
   },
-  "host_permissions": [
-    "<all_urls>"
-  ],
+  "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js"
   },

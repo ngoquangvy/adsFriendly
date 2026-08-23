@@ -6,6 +6,7 @@ import { startTelemetryFlush } from "./telemetry.js";
 import { initializeBundledSettingsPackage } from "./settings-package-seed.js";
 import { createMainController } from "../runtime/main-controller.js";
 import { DEFAULT_SETTINGS, loadSettings } from "../runtime/settings-store.js";
+import { migrateLegacyTrainingStorage } from "../storage/training-store.js";
 
 const controller = createMainController({
   context: "background",
@@ -28,6 +29,7 @@ const controller = createMainController({
     },
     "background.settings-package-seed": () =>
       initializeBundledSettingsPackage(),
+    "background.training-store-migration": () => migrateLegacyTrainingStorage(),
   },
 });
 

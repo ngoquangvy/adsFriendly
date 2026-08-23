@@ -96,6 +96,11 @@ export const FEATURE_CATALOG = Object.freeze([
   feature("background.telemetry-flush", "background", C.TELEMETRY_QUEUE),
   feature("background.memory-cleanup", "background", C.CORE_MAINTENANCE),
   feature("background.pattern-seed", "background", C.LEARNING_SEED),
+  feature(
+    "background.training-store-migration",
+    "background",
+    C.CORE_MAINTENANCE,
+  ),
   feature("background.settings-package-seed", "background", C.CORE_MAINTENANCE),
 
   feature("content.spy-injector", "content", C.MEDIA_OBSERVE),

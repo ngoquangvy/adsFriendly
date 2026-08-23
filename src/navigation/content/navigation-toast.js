@@ -105,23 +105,11 @@ function ensureToast() {
     }
   `;
 
-  toast.querySelector(".adsfriendly-toast-primary").onclick = () => {
-    if (!pendingNavigation?.url) return;
-    chrome.runtime.sendMessage({
-      type: "KEEP_REVIEWED_TAB",
-      ...pendingNavigation,
-    });
-    hideNavigationToast();
-  };
+  toast.querySelector(".adsfriendly-toast-primary").onclick = () =>
+    submitNavigationDecision("KEEP_REVIEWED_TAB");
 
-  toast.querySelector(".adsfriendly-toast-block").onclick = () => {
-    if (!pendingNavigation?.url) return;
-    chrome.runtime.sendMessage({
-      type: "BLOCK_REVIEWED_TAB",
-      ...pendingNavigation,
-    });
-    hideNavigationToast();
-  };
+  toast.querySelector(".adsfriendly-toast-block").onclick = () =>
+    submitNavigationDecision("BLOCK_REVIEWED_TAB");
 
   toast.querySelector(".adsfriendly-toast-close").onclick = hideNavigationToast;
   toast.addEventListener("mouseenter", pauseHide);
@@ -132,6 +120,29 @@ function ensureToast() {
   (document.head || document.documentElement).appendChild(style);
   (document.body || document.documentElement).appendChild(toast);
   return toast;
+}
+
+async function submitNavigationDecision(type) {
+  if (!pendingNavigation?.url) return;
+  const toast = ensureToast();
+  const message = toast.querySelector(".adsfriendly-toast-message");
+  const buttons = toast.querySelectorAll("button");
+  buttons.forEach((button) => (button.disabled = true));
+  message.textContent = "Saving decision…";
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type,
+      ...pendingNavigation,
+    });
+    if (!["ok", "saved"].includes(response?.status))
+      throw new Error(response?.error || "Could not save this decision.");
+    hideNavigationToast();
+  } catch (error) {
+    message.textContent = "Could not save · storage unavailable";
+    message.title = error.message;
+    buttons.forEach((button) => (button.disabled = false));
+    scheduleHide();
+  }
 }
 
 function scheduleHide() {

@@ -103,6 +103,8 @@ export function getSmallestSafeDomTarget(element, features) {
 export function buildDomSelector(element) {
   if (!element?.tagName) return null;
   const tag = element.tagName.toLowerCase();
+  const dynamicAdIdSelector = buildDynamicAdIdSelector(element);
+  if (dynamicAdIdSelector) return dynamicAdIdSelector;
   if (element.id && AD_TOKEN_RE.test(element.id))
     return `#${cssEscape(element.id)}`;
   const className =
@@ -129,6 +131,15 @@ export function buildDomSelector(element) {
   const labelledSelector = buildLabelSelector(element, tag);
   if (labelledSelector) return labelledSelector;
   return buildStructuralSelector(element);
+}
+
+export function buildDynamicAdIdSelector(element) {
+  if (!element?.tagName || !element.id) return null;
+  const match = element.id.match(
+    /^((?:ad|ads|adv|advert|banner|promo|sponsor|popup)[-_])(?=[a-z0-9]*[a-z])(?=[a-z0-9]*\d)[a-z0-9]{5,}$/i,
+  );
+  if (!match) return null;
+  return `${element.tagName.toLowerCase()}[id^="${cssAttributeValue(match[1])}"]`;
 }
 
 export function tokensHaveAdSignal(tokens) {

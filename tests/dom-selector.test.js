@@ -27,6 +27,13 @@ test("builds a durable host selector for an unlabelled ad link", () => {
   assert.equal(buildDomSelector(link), 'a[href*="//hitclub.voting"]');
 });
 
+test("generalizes randomized ad ids seen on live pages", () => {
+  const firstLoad = element("div", { id: "ad-1zqzstb" });
+  const secondLoad = element("div", { id: "ad-j50v72g" });
+  assert.equal(buildDomSelector(firstLoad), 'div[id^="ad-"]');
+  assert.equal(buildDomSelector(secondLoad), 'div[id^="ad-"]');
+});
+
 test("uses a resource host or accessible label before structure", () => {
   const image = element("img", {
     src: "https://cdn.example/banner-123.jpg",
@@ -46,9 +53,6 @@ test("falls back to a narrow structural selector", () => {
   const section = element("section", {}, body);
   const first = element("div", {}, section);
   const second = element("div", {}, section);
-  assert.equal(
-    buildDomSelector(second),
-    "section > div:nth-of-type(2)",
-  );
+  assert.equal(buildDomSelector(second), "section > div:nth-of-type(2)");
   assert.notEqual(buildDomSelector(first), "div");
 });
