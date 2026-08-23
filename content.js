@@ -608,14 +608,20 @@ var AdsFriendlyContent = (() => {
     const isSavedRuleSummary = active.candidate.isSavedRuleSummary === true;
     toast.querySelector(".adsfriendly-dom-scope").textContent = isSavedRuleSummary ? "PAGE" : "ELEMENT";
     if (active.state === "error") {
-      message.textContent = "Hidden once \xB7 not saved";
+      message.textContent = saveFailureMessage(active.error);
       message.title = active.error?.message || "Could not save this rule";
+      hideButton.hidden = true;
+      allowButton.textContent = "Show";
+      clearHighlight();
+    } else if (active.state === "saving") {
+      message.textContent = `${label} hidden \xB7 saving\u2026`;
+      message.title = "Waiting for settings storage confirmation";
       hideButton.hidden = true;
       allowButton.textContent = "Show";
       clearHighlight();
     } else if (active.state === "hidden") {
       const hiddenCount = active.candidate.hiddenCount || 1;
-      message.textContent = isSavedRuleSummary ? `${hiddenCount} element${hiddenCount === 1 ? "" : "s"} hidden` : `${label} hidden`;
+      message.textContent = isSavedRuleSummary ? `${hiddenCount} element${hiddenCount === 1 ? "" : "s"} hidden` : `${label} hidden \xB7 saved`;
       message.title = isSavedRuleSummary ? `Hidden by ${active.candidate.savedRuleCount || 1} saved rule${active.candidate.savedRuleCount === 1 ? "" : "s"}` : "Hidden by your saved rule";
       hideButton.hidden = true;
       allowButton.textContent = isSavedRuleSummary ? "Show all" : "Show";
@@ -715,12 +721,16 @@ var AdsFriendlyContent = (() => {
     toast.querySelector(".adsfriendly-dom-hide").onclick = () => {
       if (!active || active.state !== "review") return;
       const current = active;
-      current.state = "hidden";
+      current.state = "saving";
       clearHighlight();
       renderActiveToast();
       current.pendingHide = Promise.resolve(
         current.handlers?.onHide?.(current.candidate)
-      ).catch((error) => {
+      ).then(() => {
+        current.state = "hidden";
+        if (active === current) renderActiveToast();
+        return true;
+      }).catch((error) => {
         current.error = error;
         current.state = "error";
         if (active === current) renderActiveToast();
@@ -730,7 +740,7 @@ var AdsFriendlyContent = (() => {
     toast.querySelector(".adsfriendly-dom-allow").onclick = () => {
       if (!active) return;
       const current = active;
-      const handler = current.state === "hidden" ? current.handlers?.onShow : current.handlers?.onAllow;
+      const handler = ["saving", "hidden", "error"].includes(current.state) ? current.handlers?.onShow : current.handlers?.onAllow;
       Promise.resolve(current.pendingHide).then(() => handler?.(current.candidate)).catch(() => {
       });
       hideDomToast();
@@ -743,6 +753,16 @@ var AdsFriendlyContent = (() => {
     (document.head || document.documentElement).appendChild(style);
     (document.body || document.documentElement).appendChild(toast);
     return toast;
+  }
+  function saveFailureMessage(error) {
+    const message = String(error?.message || error || "").toLowerCase();
+    if (/quota|storage is full|bytes/.test(message))
+      return "Hidden once \xB7 storage full";
+    if (/invalidated|receiving end|message port|could not establish/.test(message))
+      return "Hidden once \xB7 reload extension";
+    if (/ignored|outdated|could not save settings/.test(message))
+      return "Hidden once \xB7 background outdated";
+    return "Hidden once \xB7 save failed";
   }
   function highlightCandidate(candidate) {
     clearHighlight();
