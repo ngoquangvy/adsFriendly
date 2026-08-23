@@ -204,19 +204,33 @@ var AdsFriendlyBackground = (() => {
   async function handleUserDecision(message) {
     const { action, domain } = message;
     if (action === "WHITELIST") {
-      const { whitelist = [] } = await chrome.storage.local.get(["whitelist"]);
+      const { whitelist = [], blacklist = [] } = await chrome.storage.local.get([
+        "whitelist",
+        "blacklist"
+      ]);
       if (!whitelist.includes(domain)) {
         whitelist.push(domain);
-        await chrome.storage.local.set({ whitelist });
       }
+      await chrome.storage.local.set({
+        whitelist,
+        blacklist: blacklist.filter(
+          (entry) => String(entry || "").replace(/^\|\|/, "").replace(/\^$/, "") !== domain
+        )
+      });
     }
     if (action === "BLACKLIST") {
-      const { blacklist = [] } = await chrome.storage.local.get(["blacklist"]);
+      const { blacklist = [], whitelist = [] } = await chrome.storage.local.get([
+        "blacklist",
+        "whitelist"
+      ]);
       const rule = `||${domain}^`;
       if (!blacklist.includes(rule)) {
         blacklist.push(rule);
-        await chrome.storage.local.set({ blacklist });
       }
+      await chrome.storage.local.set({
+        blacklist,
+        whitelist: whitelist.filter((entry) => entry !== domain)
+      });
     }
   }
 
@@ -484,6 +498,7 @@ var AdsFriendlyBackground = (() => {
     feature("background.telemetry-flush", "background", C.TELEMETRY_QUEUE),
     feature("background.memory-cleanup", "background", C.CORE_MAINTENANCE),
     feature("background.pattern-seed", "background", C.LEARNING_SEED),
+    feature("background.settings-package-seed", "background", C.CORE_MAINTENANCE),
     feature("content.spy-injector", "content", C.MEDIA_OBSERVE),
     feature("content.youtube-cleaner", "content", C.DOM_STATIC_RULES),
     feature("content.navigation-intent", "content", C.NAVIGATION_INTENT),
@@ -1403,6 +1418,259 @@ var AdsFriendlyBackground = (() => {
     return () => chrome.storage.onChanged.removeListener(onChanged);
   }
 
+  // src/settings-package/schema.js
+  var SETTINGS_PACKAGE_SCHEMA = "adsfriendly.settings-package.v1";
+  var SETTINGS_PACKAGE_STATE_KEY = "settingsPackageState";
+  var BUNDLED_SETTINGS_PACKAGE_PATH = "packages/default-settings-package.json";
+  var MAX_RULES = 5e3;
+  var MAX_RULES_PER_SITE = 250;
+  var MAX_SELECTOR_LENGTH = 500;
+  var DANGEROUS_SELECTORS = /* @__PURE__ */ new Set([
+    "*",
+    "html",
+    "body",
+    "head",
+    "header",
+    "nav",
+    "main",
+    "form",
+    "div",
+    "span",
+    "p",
+    "a",
+    "li",
+    "ul",
+    "img",
+    "section",
+    "iframe",
+    "video"
+  ]);
+  function normalizeSettingsPackage(input) {
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      throw new Error("Settings package must be a JSON object.");
+    }
+    if (input.schema_version !== SETTINGS_PACKAGE_SCHEMA) {
+      throw new Error(
+        `Unsupported package schema: ${String(input.schema_version || "missing")}`
+      );
+    }
+    const metadata = normalizeMetadata(input.metadata);
+    const rawSettings = input.settings || {};
+    const customRules = normalizeCustomRules(rawSettings.custom_rules);
+    const totalRules = Object.values(customRules).reduce(
+      (count, rules) => count + rules.length,
+      0
+    );
+    if (totalRules > MAX_RULES) {
+      throw new Error(`Package exceeds the ${MAX_RULES} rule limit.`);
+    }
+    return {
+      schema_version: SETTINGS_PACKAGE_SCHEMA,
+      metadata,
+      settings: {
+        app: normalizeSettings(rawSettings.app),
+        whitelist: normalizeDomainList(rawSettings.whitelist, false),
+        blacklist: normalizeDomainList(rawSettings.blacklist, true),
+        custom_rules: customRules,
+        trusted_paths: normalizeTrustedPaths(rawSettings.trusted_paths)
+      }
+    };
+  }
+  function packageToStorage(packageInput) {
+    const settingsPackage = normalizeSettingsPackage(packageInput);
+    const appSettings = settingsPackage.settings.app;
+    const updates = {
+      appSettings,
+      isEnabled: appSettings.enabled,
+      friendlyMode: appSettings.protectionMode === "safe",
+      whitelist: settingsPackage.settings.whitelist,
+      blacklist: settingsPackage.settings.blacklist,
+      userCustomRules: settingsPackage.settings.custom_rules
+    };
+    for (const path of settingsPackage.settings.trusted_paths) {
+      updates[`p:${path.source}>${path.target}`] = path;
+    }
+    return updates;
+  }
+  async function replaceSettingsWithPackage(packageInput, storage = chrome.storage.local, source = "imported") {
+    const settingsPackage = normalizeSettingsPackage(packageInput);
+    const current = await storage.get(null);
+    const oldPathKeys = Object.keys(current).filter(
+      (key) => key.startsWith("p:")
+    );
+    if (oldPathKeys.length) await storage.remove(oldPathKeys);
+    await storage.set({
+      ...packageToStorage(settingsPackage),
+      [SETTINGS_PACKAGE_STATE_KEY]: {
+        schema_version: "adsfriendly.settings-package-state.v1",
+        initialized: true,
+        source,
+        package: settingsPackage.metadata,
+        installed_at: Date.now()
+      }
+    });
+    return settingsPackage;
+  }
+  function hasMeaningfulExistingSettings(snapshot = {}) {
+    const settings = normalizeSettings(snapshot.appSettings);
+    const settingsDiffer = settings.enabled !== DEFAULT_SETTINGS.enabled || settings.protectionMode !== DEFAULT_SETTINGS.protectionMode || Object.keys(settings.featureOverrides).length > 0;
+    return settingsDiffer || (snapshot.whitelist?.length || 0) > 0 || (snapshot.blacklist?.length || 0) > 0 || Object.keys(snapshot.userCustomRules || {}).length > 0 || Object.keys(snapshot).some((key) => key.startsWith("p:"));
+  }
+  function normalizeMetadata(metadata = {}) {
+    return {
+      id: cleanText(metadata.id || `package.${Date.now()}`, 120),
+      name: cleanText(metadata.name || "AdsFriendly Settings", 120),
+      author: cleanText(metadata.author || "Unknown", 120),
+      version: cleanText(metadata.version || "1.0.0", 40),
+      description: cleanText(metadata.description || "", 500),
+      created_at: cleanText(metadata.created_at || (/* @__PURE__ */ new Date()).toISOString(), 80)
+    };
+  }
+  function normalizeDomainList(values, blacklist) {
+    if (!Array.isArray(values)) return [];
+    return [
+      ...new Set(
+        values.map(normalizeHostname).filter(Boolean).map((hostname) => blacklist ? `||${hostname}^` : hostname)
+      )
+    ].slice(0, 2e3);
+  }
+  function normalizeCustomRules(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    const result = {};
+    for (const [rawHostname, rawRules] of Object.entries(value)) {
+      const hostname = normalizeHostname(rawHostname);
+      if (!hostname || !Array.isArray(rawRules)) continue;
+      const rules = rawRules.slice(0, MAX_RULES_PER_SITE).map(normalizeRule).filter(Boolean);
+      if (rules.length) result[hostname] = dedupeRules(rules);
+    }
+    return result;
+  }
+  function normalizeRule(rule) {
+    const rawSelector = typeof rule === "string" ? rule : rule?.selector;
+    const selector = cleanText(rawSelector, MAX_SELECTOR_LENGTH);
+    if (!isSafeSelector(selector)) return null;
+    if (typeof rule === "string") return selector;
+    const normalized = {
+      selector,
+      fingerprint: normalizeFingerprint(rule.fingerprint),
+      confidence: clampNumber(rule.confidence, 0, 1, 0.8),
+      source: cleanText(rule.source || "package", 80)
+    };
+    if (rule.isCorrection === true) normalized.isCorrection = true;
+    return normalized;
+  }
+  function normalizeFingerprint(fingerprint) {
+    if (!fingerprint || typeof fingerprint !== "object") return null;
+    return {
+      tag: cleanText(fingerprint.tag, 30) || null,
+      id: cleanText(fingerprint.id, 160) || null,
+      className: cleanText(fingerprint.className, 300) || null,
+      alt: cleanText(fingerprint.alt, 300) || null,
+      title: cleanText(fingerprint.title, 300) || null,
+      linkDomain: normalizeHostname(fingerprint.linkDomain) || null,
+      srcHost: normalizeHostname(fingerprint.srcHost) || null,
+      idTokens: normalizeTokens(fingerprint.idTokens),
+      classTokens: normalizeTokens(fingerprint.classTokens)
+    };
+  }
+  function normalizeTrustedPaths(paths) {
+    if (!Array.isArray(paths)) return [];
+    const byKey = /* @__PURE__ */ new Map();
+    for (const raw of paths.slice(0, 2e3)) {
+      const source = normalizeHostname(raw?.source);
+      const target = normalizeHostname(raw?.target);
+      if (!source || !target || source === target) continue;
+      byKey.set(`${source}>${target}`, {
+        source,
+        target,
+        visits: Math.max(0, Math.min(999999, Number(raw.visits) || 0)),
+        isManual: raw.isManual === true,
+        lastUpdated: Number(raw.lastUpdated) || Date.now()
+      });
+    }
+    return [...byKey.values()];
+  }
+  function normalizeHostname(value) {
+    const raw = String(value || "").trim().replace(/^\|\|/, "").replace(/\^$/, "");
+    if (!raw) return "";
+    try {
+      const parsed = new URL(raw.includes("://") ? raw : `https://${raw}`);
+      const hostname = parsed.hostname.toLowerCase();
+      return /^[a-z0-9.-]+$/.test(hostname) ? hostname.slice(0, 253) : "";
+    } catch {
+      return "";
+    }
+  }
+  function isSafeSelector(selector) {
+    if (!selector || selector.length > MAX_SELECTOR_LENGTH) return false;
+    const normalized = selector.toLowerCase().trim();
+    if (DANGEROUS_SELECTORS.has(normalized)) return false;
+    if (normalized.includes(":has(")) return false;
+    try {
+      if (typeof document !== "undefined") document.querySelector(selector);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  function dedupeRules(rules) {
+    const seen = /* @__PURE__ */ new Set();
+    return rules.filter((rule) => {
+      const selector = typeof rule === "string" ? rule : rule.selector;
+      if (seen.has(selector)) return false;
+      seen.add(selector);
+      return true;
+    });
+  }
+  function normalizeTokens(values) {
+    if (!Array.isArray(values)) return [];
+    return [
+      ...new Set(
+        values.map((value) => cleanText(value, 80).toLowerCase()).filter(Boolean)
+      )
+    ].slice(0, 40);
+  }
+  function cleanText(value, maxLength) {
+    return String(value || "").trim().slice(0, maxLength);
+  }
+  function clampNumber(value, min, max, fallback) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return fallback;
+    return Math.max(min, Math.min(max, number));
+  }
+
+  // src/background/settings-package-seed.js
+  async function initializeBundledSettingsPackage(storage = chrome.storage.local, fetchPackage = loadBundledSettingsPackage) {
+    const snapshot = await storage.get(null);
+    if (snapshot[SETTINGS_PACKAGE_STATE_KEY]?.initialized) {
+      return { status: "already_initialized" };
+    }
+    if (hasMeaningfulExistingSettings(snapshot)) {
+      await storage.set({
+        [SETTINGS_PACKAGE_STATE_KEY]: {
+          schema_version: "adsfriendly.settings-package-state.v1",
+          initialized: true,
+          source: "existing_settings",
+          package: null,
+          installed_at: Date.now()
+        }
+      });
+      return { status: "preserved_existing_settings" };
+    }
+    const settingsPackage = await fetchPackage();
+    await replaceSettingsWithPackage(settingsPackage, storage, "bundled");
+    return { status: "installed_bundled_package" };
+  }
+  async function loadBundledSettingsPackage() {
+    const response = await fetch(
+      chrome.runtime.getURL(BUNDLED_SETTINGS_PACKAGE_PATH)
+    );
+    if (!response.ok) {
+      throw new Error(`Could not load bundled settings (${response.status}).`);
+    }
+    return normalizeSettingsPackage(await response.json());
+  }
+
   // src/runtime/main-controller.js
   function createMainController({
     context,
@@ -1595,7 +1863,8 @@ var AdsFriendlyBackground = (() => {
         chrome.runtime.onInstalled.addListener(seedBaselinePatterns);
         seedBaselinePatterns();
         return () => chrome.runtime.onInstalled.removeListener(seedBaselinePatterns);
-      }
+      },
+      "background.settings-package-seed": () => initializeBundledSettingsPackage()
     }
   });
   controller.start().then(() => loadSettings()).then((settings) => controller.updateSettings(settings)).catch(

@@ -140,6 +140,54 @@
         font-size: 0.78rem;
       }
 
+      .package-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.75rem;
+      }
+
+      .field-label {
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+        color: #94a3b8;
+        font-size: 0.75rem;
+      }
+
+      .field-input,
+      .field-select {
+        box-sizing: border-box;
+        width: 100%;
+        padding: 0.65rem 0.75rem;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 8px;
+        background: rgba(15, 23, 42, 0.8);
+        color: #f8fafc;
+        font: inherit;
+      }
+
+      .inline-add {
+        display: flex;
+        gap: 0.5rem;
+        margin-top: 0.75rem;
+      }
+
+      .package-status {
+        margin-top: 0.9rem;
+        padding: 0.65rem 0.75rem;
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.04);
+        color: #94a3b8;
+        font-size: 0.78rem;
+      }
+
+      @media (max-width: 680px) {
+        .grid,
+        .package-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+
       .sample-row {
         align-items: flex-start;
         flex-direction: column;
@@ -169,6 +217,98 @@
         <p style="color: #94a3b8">Manage your trusted and blocked domains</p>
       </header>
 
+      <section class="config-section" style="margin-bottom: 2rem">
+        <div class="card" style="border-left: 4px solid #22c55e">
+          <div style="display: flex; justify-content: space-between; gap: 1rem">
+            <div>
+              <h2 style="color: #22c55e; margin-bottom: 0.45rem">
+                Settings Package
+              </h2>
+              <p style="color: #94a3b8; font-size: 0.82rem; margin: 0 0 1rem">
+                Export or install an editable snapshot of protection settings,
+                site lists, Magic Wand rules, and trusted workflows.
+              </p>
+            </div>
+            <span
+              id="package-source"
+              class="sample-chip"
+              style="height: fit-content"
+              >LOCAL</span
+            >
+          </div>
+
+          <div class="package-grid">
+            <label class="field-label">
+              Package name
+              <input
+                id="package-name"
+                class="field-input"
+                value="My AdsFriendly Settings"
+                maxlength="120"
+              />
+            </label>
+            <label class="field-label">
+              Author
+              <input
+                id="package-author"
+                class="field-input"
+                value="AdsFriendly User"
+                maxlength="120"
+              />
+            </label>
+            <label class="field-label">
+              Protection mode
+              <select id="settings-mode" class="field-select">
+                <option value="safe">Safe</option>
+                <option value="assist">Assist</option>
+                <option value="auto">Auto</option>
+              </select>
+            </label>
+            <label
+              class="field-label"
+              style="justify-content: flex-end; padding-bottom: 0.65rem"
+            >
+              <span>
+                <input id="settings-enabled" type="checkbox" checked />
+                General protection enabled
+              </span>
+            </label>
+          </div>
+
+          <div
+            style="
+              display: flex;
+              gap: 0.55rem;
+              flex-wrap: wrap;
+              margin-top: 1rem;
+            "
+          >
+            <button class="btn-secondary" id="btn-package-export">
+              Export package
+            </button>
+            <button class="btn-secondary" id="btn-package-import">
+              Import package
+            </button>
+            <button class="btn-secondary" id="btn-package-default">
+              Restore bundled default
+            </button>
+            <input
+              id="package-file-input"
+              type="file"
+              accept="application/json,.json,.afsettings"
+              hidden
+            />
+          </div>
+          <div id="package-status" class="package-status">
+            Loading current settings…
+          </div>
+          <p style="color: #64748b; font-size: 0.72rem; margin: 0.7rem 0 0">
+            Training samples, block history, telemetry, counters, and private
+            identifiers are never included.
+          </p>
+        </div>
+      </section>
+
       <div class="grid">
         <!-- Whitelist -->
         <div class="card">
@@ -180,6 +320,14 @@
           </h2>
           <div id="whitelist-list" class="list-container">
             <div class="empty-msg">No sites added yet</div>
+          </div>
+          <div class="inline-add">
+            <input
+              id="whitelist-input"
+              class="field-input"
+              placeholder="example.com"
+            />
+            <button class="btn-secondary" id="btn-whitelist-add">Add</button>
           </div>
         </div>
 
@@ -196,6 +344,14 @@
           <div id="blacklist-list" class="list-container">
             <div class="empty-msg">No sites added yet</div>
           </div>
+          <div class="inline-add">
+            <input
+              id="blacklist-input"
+              class="field-input"
+              placeholder="ads.example.com"
+            />
+            <button class="btn-secondary" id="btn-blacklist-add">Add</button>
+          </div>
         </div>
       </div>
 
@@ -208,11 +364,11 @@
                 d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"
               />
             </svg>
-            Rule Inspector (Learned by AI)
+            Magic Wand &amp; Hidden Element Rules
           </h2>
           <p style="color: #94a3b8; font-size: 0.85rem; margin-bottom: 1.5rem">
-            See exactly what technical selectors the extension is using to
-            protect your experience.
+            These editable rules are included when you export a Settings
+            Package.
           </p>
           <div id="custom-rules-container">
             <p style="color: #475569; font-style: italic">

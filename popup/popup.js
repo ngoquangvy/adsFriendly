@@ -94,6 +94,7 @@ var AdsFriendlyPopup = (() => {
     feature("background.telemetry-flush", "background", C.TELEMETRY_QUEUE),
     feature("background.memory-cleanup", "background", C.CORE_MAINTENANCE),
     feature("background.pattern-seed", "background", C.LEARNING_SEED),
+    feature("background.settings-package-seed", "background", C.CORE_MAINTENANCE),
     feature("content.spy-injector", "content", C.MEDIA_OBSERVE),
     feature("content.youtube-cleaner", "content", C.DOM_STATIC_RULES),
     feature("content.navigation-intent", "content", C.NAVIGATION_INTENT),

@@ -30,6 +30,19 @@ Runtime rules and AI training samples must stay separate:
 - Dataset samples should be append-only evidence records with labels, source of label, action, and outcome.
 - User feedback is strong label data; heuristic detections are weak labels.
 - Telemetry upload should stay opt-in. Sanitize URLs and identifiers before sending samples to `server/`.
+- Settings Packages are editable configuration snapshots. They contain protection settings, site lists, manual element rules, and trusted workflows, but never telemetry, history, counters, identifiers, or training samples.
+
+## Settings Packages
+
+`packages/default-settings-package.json` is installed once for a new user. An
+existing user's settings are never overwritten during extension upgrades.
+Imported packages replace only the shareable configuration keys and preserve
+diagnostics and datasets. Package contents are normalized through
+`src/settings-package/schema.js` before being stored.
+
+To publish a curated default, export the desired state from AdsFriendly
+Settings, review the JSON, replace `packages/default-settings-package.json`,
+then run the unit tests and build.
 
 ## Known Follow-up
 

@@ -3,11 +3,9 @@ import { registerNavigationGuard } from "../navigation/background/guard.js";
 import { cleanupStaleMemory } from "./reputation.js";
 import { seedBaselinePatterns } from "./pattern-learning.js";
 import { startTelemetryFlush } from "./telemetry.js";
+import { initializeBundledSettingsPackage } from "./settings-package-seed.js";
 import { createMainController } from "../runtime/main-controller.js";
-import {
-  DEFAULT_SETTINGS,
-  loadSettings,
-} from "../runtime/settings-store.js";
+import { DEFAULT_SETTINGS, loadSettings } from "../runtime/settings-store.js";
 
 const controller = createMainController({
   context: "background",
@@ -25,8 +23,11 @@ const controller = createMainController({
     "background.pattern-seed": () => {
       chrome.runtime.onInstalled.addListener(seedBaselinePatterns);
       seedBaselinePatterns();
-      return () => chrome.runtime.onInstalled.removeListener(seedBaselinePatterns);
+      return () =>
+        chrome.runtime.onInstalled.removeListener(seedBaselinePatterns);
     },
+    "background.settings-package-seed": () =>
+      initializeBundledSettingsPackage(),
   },
 });
 

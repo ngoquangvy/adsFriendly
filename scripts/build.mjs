@@ -8,8 +8,10 @@ const entries = [
   ["src/video/index.js", "video_surgeon.js", "AdsFriendlyVideo"],
   ["src/main-world/index.js", "injected_spy.js", "AdsFriendlyMainWorld"],
   ["src/popup/index.js", "popup/popup.js", "AdsFriendlyPopup"],
+  ["src/options/index.js", "options/options.js", "AdsFriendlyOptions"],
 ];
 const manifest = JSON.parse(await readFile("manifest.json", "utf8"));
+await access("packages/default-settings-package.json");
 const scripts =
   manifest.content_scripts?.flatMap((item) => item.js || []) || [];
 const resources =

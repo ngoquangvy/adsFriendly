@@ -24,18 +24,35 @@ export async function getTrustedPath(source, target) {
 export async function handleUserDecision(message) {
   const { action, domain } = message;
   if (action === "WHITELIST") {
-    const { whitelist = [] } = await chrome.storage.local.get(["whitelist"]);
+    const { whitelist = [], blacklist = [] } = await chrome.storage.local.get([
+      "whitelist",
+      "blacklist",
+    ]);
     if (!whitelist.includes(domain)) {
       whitelist.push(domain);
-      await chrome.storage.local.set({ whitelist });
     }
+    await chrome.storage.local.set({
+      whitelist,
+      blacklist: blacklist.filter(
+        (entry) =>
+          String(entry || "")
+            .replace(/^\|\|/, "")
+            .replace(/\^$/, "") !== domain,
+      ),
+    });
   }
   if (action === "BLACKLIST") {
-    const { blacklist = [] } = await chrome.storage.local.get(["blacklist"]);
+    const { blacklist = [], whitelist = [] } = await chrome.storage.local.get([
+      "blacklist",
+      "whitelist",
+    ]);
     const rule = `||${domain}^`;
     if (!blacklist.includes(rule)) {
       blacklist.push(rule);
-      await chrome.storage.local.set({ blacklist });
     }
+    await chrome.storage.local.set({
+      blacklist,
+      whitelist: whitelist.filter((entry) => entry !== domain),
+    });
   }
 }
