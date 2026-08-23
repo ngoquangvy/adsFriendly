@@ -1430,6 +1430,8 @@ var AdsFriendlyContent = (() => {
       showNavigationToast();
     };
     chrome.runtime.onMessage.addListener(onMessage);
+    chrome.runtime.sendMessage({ type: "NAVIGATION_TOAST_READY" }).catch(() => {
+    });
     return () => chrome.runtime.onMessage.removeListener(onMessage);
   }
   function showNavigationToast() {

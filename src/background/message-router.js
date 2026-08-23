@@ -11,6 +11,7 @@ import {
 import { updateSiteReputation } from "./reputation.js";
 import { flushTelemetry, recordTelemetry } from "./telemetry.js";
 import { CAPABILITIES } from "../runtime/feature-catalog.js";
+import { deliverPendingNavigationReview } from "../navigation/background/guard.js";
 
 const MESSAGE_CAPABILITIES = Object.freeze({
   TRUSTED_CLICK: CAPABILITIES.NAVIGATION_INTENT,
@@ -22,6 +23,7 @@ const MESSAGE_CAPABILITIES = Object.freeze({
   BLOCK_GRAY_NAVIGATION: CAPABILITIES.NAVIGATION_FEEDBACK,
   KEEP_REVIEWED_TAB: CAPABILITIES.NAVIGATION_FEEDBACK,
   BLOCK_REVIEWED_TAB: CAPABILITIES.NAVIGATION_FEEDBACK,
+  NAVIGATION_TOAST_READY: CAPABILITIES.NAVIGATION_FEEDBACK,
   LEARN_VIDEO_AD: CAPABILITIES.LEARNING_FEEDBACK,
   SYNC_VIDEO_LEARNING: CAPABILITIES.LEARNING_FEEDBACK,
   REPORT_AD_DENSITY: CAPABILITIES.CORE_MAINTENANCE,
@@ -62,6 +64,11 @@ async function route(message, sender) {
       tabId: sender?.tab?.id || null,
     };
     return;
+  }
+  if (message.type === "NAVIGATION_TOAST_READY") {
+    if (!sender?.tab?.id) return { status: "ignored" };
+    const delivered = await deliverPendingNavigationReview(sender.tab.id);
+    return { status: delivered ? "delivered" : "ready" };
   }
   if (message.type === "SYNC_LEARNING") return synthesizeGlobalPatterns();
   if (message.type === "NEGATIVE_LEARNING")

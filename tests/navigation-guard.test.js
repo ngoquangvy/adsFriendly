@@ -63,7 +63,7 @@ test("untrusted cross-site tabs require user verification", () => {
   assert.equal(decideNewTabNavigation(), NEW_TAB_DECISIONS.VERIFY);
   assert.equal(
     decideNewTabNavigation({ intentMatched: true }),
-    NEW_TAB_DECISIONS.ALLOW,
+    NEW_TAB_DECISIONS.VERIFY,
   );
   assert.equal(
     decideNewTabNavigation({ whitelisted: true }),
@@ -71,6 +71,10 @@ test("untrusted cross-site tabs require user verification", () => {
   );
   assert.equal(
     decideNewTabNavigation({ blacklisted: true }),
+    NEW_TAB_DECISIONS.CLOSE,
+  );
+  assert.equal(
+    decideNewTabNavigation({ blacklisted: true, whitelisted: true }),
     NEW_TAB_DECISIONS.CLOSE,
   );
   assert.equal(
@@ -84,11 +88,19 @@ test("untrusted cross-site tabs require user verification", () => {
   assert.equal(shouldKeepTrackingNewTab({ sameSite: false }), false);
 });
 
-test("uses a toast for weak evidence and a full page for strong evidence", () => {
+test("maps weak, medium, and strong evidence to three review levels", () => {
   assert.equal(chooseNewTabReviewSurface(), NEW_TAB_REVIEW_SURFACES.TOAST);
   assert.equal(
     chooseNewTabReviewSurface({ promotionalIntent: true }),
     NEW_TAB_REVIEW_SURFACES.FULL_PAGE,
+  );
+  assert.equal(
+    chooseNewTabReviewSurface({
+      promotionalIntent: true,
+      intentReasons: ["strong_tracking_parameter"],
+      targetReasons: ["promotional_element_or_destination"],
+    }),
+    NEW_TAB_REVIEW_SURFACES.CLOSE,
   );
   assert.equal(
     chooseNewTabReviewSurface({ targetLikelyAd: true }),

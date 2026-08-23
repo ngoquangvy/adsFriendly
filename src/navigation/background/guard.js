@@ -53,6 +53,7 @@ const pendingTabs = new Map();
 const handledTabs = new Map();
 const reverseCandidatesBySource = new Map();
 const reverseCandidatesByClone = new Map();
+const pendingReviewToasts = new Map();
 let navigationPolicy = null;
 
 export function registerNavigationGuard(policy) {
@@ -143,6 +144,7 @@ export function registerNavigationGuard(policy) {
     pendingTabs.clear();
     reverseCandidatesBySource.clear();
     reverseCandidatesByClone.clear();
+    pendingReviewToasts.clear();
     navigationPolicy = null;
   };
 }
@@ -345,27 +347,27 @@ async function evaluateNewTab({ sourceTabId, tabId, url }) {
     if (shouldKeepTrackingNewTab({ sameSite })) return;
 
     const trustWindow = await getDynamicTrustWindow(sourceUrl.hostname);
-    let intentMatched = hasMatchingIntent(
+    const path = await getTrustedPath(sourceUrl.hostname, targetDomain);
+    // The click message and the content script on a newly opened tab can arrive
+    // slightly after the navigation event.
+    await delay(180);
+    const intentClassification = getRecentIntentClassification(
       sourceTabId,
-      targetDomain,
       trustWindow,
     );
-    const path = await getTrustedPath(sourceUrl.hostname, targetDomain);
-    const promotionalIntent = isPromotionalIntent(sourceTabId);
+    const promotionalIntent = intentClassification.likelyAd;
     const decision = decideNewTabNavigation({
       sameSite,
       trustedInitiator: isTrustedInitiator(sourceUrl.hostname),
       trustedTarget: isTrustedTarget(targetDomain),
       whitelisted: whitelist.includes(targetDomain),
       blacklisted: isBlacklistedTarget(targetDomain, blacklist),
-      intentMatched,
       trustedPath: !!path && (path.isManual || path.visits >= 3),
       promotionalIntent,
     });
 
     if (decision === NEW_TAB_DECISIONS.ALLOW) {
       shouldFinalize = true;
-      if (intentMatched) syncTrustedPath(sourceUrl.hostname, targetDomain);
       return;
     }
     if (decision === NEW_TAB_DECISIONS.CLOSE) {
@@ -374,29 +376,26 @@ async function evaluateNewTab({ sourceTabId, tabId, url }) {
       return closeTabQuietly(tabId);
     }
 
-    // Give the trusted-click message a moment to arrive before quarantining.
-    await delay(180);
-    intentMatched = hasMatchingIntent(sourceTabId, targetDomain, trustWindow);
-    if (intentMatched) {
-      shouldFinalize = true;
-      syncTrustedPath(sourceUrl.hostname, targetDomain);
-      return;
-    }
     const targetClassification = classifyNavigationIntent({
       intentUrl: url,
       sourceUrl: capturedSourceUrl,
     });
     const reviewSurface = chooseNewTabReviewSurface({
-      promotionalIntent: promotionalIntent || isPromotionalIntent(sourceTabId),
+      promotionalIntent,
       targetLikelyAd: targetClassification.likelyAd,
+      intentReasons: intentClassification.reasons,
+      targetReasons: targetClassification.reasons,
     });
     shouldFinalize = true;
+    if (reviewSurface === NEW_TAB_REVIEW_SURFACES.CLOSE) {
+      await logBlockedNavigationIfAllowed(url, sourceUrl.hostname);
+      return closeTabQuietly(tabId);
+    }
     if (reviewSurface === NEW_TAB_REVIEW_SURFACES.FULL_PAGE) {
       return redirectToBlockedPage(tabId, url, sourceUrl.hostname);
     }
 
     const toastShown = await showNavigationReviewToast({
-      sourceTabId,
       tabId,
       url,
       source: sourceUrl.hostname,
@@ -430,13 +429,7 @@ function hasMatchingIntent(sourceTabId, targetDomain, trustWindow) {
   );
 }
 
-async function showNavigationReviewToast({
-  sourceTabId,
-  tabId,
-  url,
-  source,
-  target,
-}) {
+async function showNavigationReviewToast({ tabId, url, source, target }) {
   if (!navigationPolicy?.can(CAPABILITIES.NAVIGATION_FEEDBACK)) return false;
   const message = {
     type: "SHOW_GRAY_NAVIGATION",
@@ -445,30 +438,69 @@ async function showNavigationReviewToast({
     source,
     target,
   };
+  pendingReviewToasts.set(tabId, {
+    message,
+    expiresAt: Date.now() + 10000,
+    delivered: false,
+  });
+  setTimeout(() => {
+    const pending = pendingReviewToasts.get(tabId);
+    if (pending?.message === message) pendingReviewToasts.delete(tabId);
+  }, 10500);
 
-  for (const destinationTabId of [tabId, sourceTabId]) {
-    if (!destinationTabId) continue;
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      try {
-        await chrome.tabs.sendMessage(destinationTabId, message);
-        return true;
-      } catch {
-        if (attempt === 0) await delay(180);
-      }
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    if (await deliverPendingNavigationReview(tabId)) {
+      pendingReviewToasts.delete(tabId);
+      return true;
     }
+    if (attempt < 5) await delay(220);
   }
-  return false;
+  // The content controller announces readiness after startup. Keeping this
+  // queued avoids incorrectly escalating weak evidence to the full block page.
+  return pendingReviewToasts.has(tabId);
+}
+
+export async function deliverPendingNavigationReview(tabId) {
+  const pending = pendingReviewToasts.get(tabId);
+  if (!pending) return false;
+  if (pending.delivered) return true;
+  if (Date.now() >= pending.expiresAt) {
+    pendingReviewToasts.delete(tabId);
+    return false;
+  }
+  try {
+    await chrome.tabs.sendMessage(tabId, pending.message);
+    pending.delivered = true;
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function isPromotionalIntent(sourceTabId) {
+  return getRecentIntentClassification(sourceTabId).likelyAd;
+}
+
+function getRecentIntentClassification(sourceTabId, windowMs = 2500) {
   const click = runtimeState.lastTrustedClick;
-  if (click.tabId !== sourceTabId) return false;
+  if (
+    click.tabId !== sourceTabId ||
+    Date.now() - click.timestamp < 0 ||
+    Date.now() - click.timestamp >= windowMs
+  )
+    return { likelyAd: false, reasons: [] };
   const classification = classifyNavigationIntent({
     intentUrl: click.intentUrl,
     sourceUrl: click.sourceUrl,
     evidence: click.intentKind === "promotional" ? "promo" : "",
   });
-  return click.intentKind === "promotional" || classification.likelyAd;
+  const reasons = [
+    ...new Set([...(click.intentReasons || []), ...classification.reasons]),
+  ];
+  return {
+    likelyAd: click.intentKind === "promotional" || classification.likelyAd,
+    reasons,
+  };
 }
 
 function delay(ms) {

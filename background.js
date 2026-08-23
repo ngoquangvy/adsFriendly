@@ -571,176 +571,6 @@ var AdsFriendlyBackground = (() => {
     }
   }
 
-  // src/background/message-router.js
-  var MESSAGE_CAPABILITIES = Object.freeze({
-    TRUSTED_CLICK: CAPABILITIES.NAVIGATION_INTENT,
-    SYNC_LEARNING: CAPABILITIES.LEARNING_FEEDBACK,
-    NEGATIVE_LEARNING: CAPABILITIES.LEARNING_FEEDBACK,
-    USER_DECISION: CAPABILITIES.NAVIGATION_FEEDBACK,
-    PATH_RESTORED: CAPABILITIES.NAVIGATION_FEEDBACK,
-    RESTORE_GRAY_NAVIGATION: CAPABILITIES.NAVIGATION_FEEDBACK,
-    BLOCK_GRAY_NAVIGATION: CAPABILITIES.NAVIGATION_FEEDBACK,
-    KEEP_REVIEWED_TAB: CAPABILITIES.NAVIGATION_FEEDBACK,
-    BLOCK_REVIEWED_TAB: CAPABILITIES.NAVIGATION_FEEDBACK,
-    LEARN_VIDEO_AD: CAPABILITIES.LEARNING_FEEDBACK,
-    SYNC_VIDEO_LEARNING: CAPABILITIES.LEARNING_FEEDBACK,
-    REPORT_AD_DENSITY: CAPABILITIES.CORE_MAINTENANCE,
-    RECORD_TELEMETRY: CAPABILITIES.TELEMETRY_QUEUE,
-    FLUSH_TELEMETRY: CAPABILITIES.TELEMETRY_QUEUE
-  });
-  function registerMessageRouter(policy) {
-    const onMessage = (message, sender, sendResponse) => {
-      if (!policy.can(CAPABILITIES.CORE_MESSAGING)) {
-        sendResponse({ status: "disabled" });
-        return false;
-      }
-      const capability = MESSAGE_CAPABILITIES[message?.type];
-      if (capability && !policy.can(capability)) {
-        sendResponse({ status: "capability_disabled" });
-        return false;
-      }
-      route(message, sender).then((r) => sendResponse(r || { status: "ok" })).catch((err) => sendResponse({ status: "error", error: err.message }));
-      return true;
-    };
-    chrome.runtime.onMessage.addListener(onMessage);
-    return () => chrome.runtime.onMessage.removeListener(onMessage);
-  }
-  async function route(message, sender) {
-    if (!message) return { status: "ignored" };
-    if (message.type === "TRUSTED_CLICK") {
-      runtimeState.lastTrustedClick = {
-        timestamp: Date.now(),
-        intentUrl: message.intentUrl,
-        sourceUrl: message.sourceUrl || sender?.tab?.url || null,
-        intentKind: message.intentKind || "navigation",
-        intentReasons: Array.isArray(message.intentReasons) ? message.intentReasons : [],
-        tabId: sender?.tab?.id || null
-      };
-      return;
-    }
-    if (message.type === "SYNC_LEARNING") return synthesizeGlobalPatterns();
-    if (message.type === "NEGATIVE_LEARNING")
-      return handleNegativeLearning(message.fingerprint);
-    if (message.type === "USER_DECISION") return handleUserDecision(message);
-    if (message.type === "PATH_RESTORED")
-      return syncTrustedPath(message.source, message.target, true);
-    if (message.type === "RESTORE_GRAY_NAVIGATION") {
-      await syncTrustedPath(message.source, message.target, true);
-      await recordTelemetry({
-        unit: "navigation",
-        label: "false_positive",
-        label_source: "user_restore",
-        label_strength: "strong",
-        ad_type: "popunder",
-        targetUrl: message.url,
-        sourceUrl: `https://${message.source}/`,
-        action: "restore",
-        outcome: "user_opened_gray_navigation",
-        context: {
-          source_host: message.source,
-          target_host: message.target,
-          surface: "navigation_toast"
-        },
-        feedback: {
-          user_action: "restore",
-          correction: "false_positive",
-          surface: "navigation_toast"
-        }
-      });
-      await chrome.tabs.create({ url: message.url, active: true });
-      return;
-    }
-    if (message.type === "BLOCK_GRAY_NAVIGATION") {
-      await recordTelemetry({
-        unit: "navigation",
-        label: "ad",
-        label_source: "user_block",
-        label_strength: "strong",
-        ad_type: "popunder",
-        targetUrl: message.url,
-        sourceUrl: `https://${message.source}/`,
-        action: "block",
-        outcome: "user_blocked_gray_navigation",
-        context: {
-          source_host: message.source,
-          target_host: message.target,
-          surface: "navigation_toast"
-        },
-        feedback: {
-          user_action: "block",
-          surface: "navigation_toast"
-        }
-      });
-      return handleUserDecision({ action: "BLACKLIST", domain: message.target });
-    }
-    if (message.type === "KEEP_REVIEWED_TAB") {
-      await syncTrustedPath(message.source, message.target, true);
-      await recordTelemetry({
-        unit: "navigation",
-        label: "false_positive",
-        label_source: "user_keep",
-        label_strength: "strong",
-        ad_type: "popunder",
-        targetUrl: message.url,
-        sourceUrl: `https://${message.source}/`,
-        action: "allow",
-        outcome: "user_kept_reviewed_tab",
-        context: {
-          source_host: message.source,
-          target_host: message.target,
-          surface: "navigation_toast"
-        },
-        feedback: {
-          user_action: "keep",
-          correction: "false_positive",
-          surface: "navigation_toast"
-        }
-      });
-      return;
-    }
-    if (message.type === "BLOCK_REVIEWED_TAB") {
-      await recordTelemetry({
-        unit: "navigation",
-        label: "ad",
-        label_source: "user_block",
-        label_strength: "strong",
-        ad_type: "popunder",
-        targetUrl: message.url,
-        sourceUrl: `https://${message.source}/`,
-        action: "block",
-        outcome: "user_blocked_reviewed_tab",
-        context: {
-          source_host: message.source,
-          target_host: message.target,
-          surface: "navigation_toast"
-        },
-        feedback: {
-          user_action: "block",
-          surface: "navigation_toast"
-        }
-      });
-      await handleUserDecision({ action: "BLACKLIST", domain: message.target });
-      if (Number.isInteger(message.tabId)) {
-        try {
-          await chrome.tabs.remove(message.tabId);
-        } catch {
-        }
-      }
-      return;
-    }
-    if (message.type === "LEARN_VIDEO_AD") return handleLearnVideoAd(message);
-    if (message.type === "SYNC_VIDEO_LEARNING")
-      return handleVideoLearning(message);
-    if (message.type === "REPORT_AD_DENSITY")
-      return updateSiteReputation(message.hostname, message.count);
-    if (message.type === "RECORD_TELEMETRY")
-      return recordTelemetry(message.event || message);
-    if (message.type === "FLUSH_TELEMETRY") return flushTelemetry();
-    if (message.type === "TOGGLE_STATUS")
-      console.log("Protection status:", message.isEnabled);
-    return { status: "ignored" };
-  }
-
   // src/shared/url.js
   function parseUrl(value, base) {
     try {
@@ -798,7 +628,8 @@ var AdsFriendlyBackground = (() => {
   });
   var NEW_TAB_REVIEW_SURFACES = Object.freeze({
     FULL_PAGE: "full_page",
-    TOAST: "toast"
+    TOAST: "toast",
+    CLOSE: "close"
   });
   function decideNewTabNavigation({
     sameSite = false,
@@ -806,13 +637,12 @@ var AdsFriendlyBackground = (() => {
     trustedTarget = false,
     whitelisted = false,
     blacklisted = false,
-    intentMatched = false,
     trustedPath = false,
     promotionalIntent = false
   } = {}) {
-    if (sameSite || trustedInitiator || trustedTarget || whitelisted || !promotionalIntent && intentMatched || !promotionalIntent && trustedPath)
-      return NEW_TAB_DECISIONS.ALLOW;
     if (blacklisted) return NEW_TAB_DECISIONS.CLOSE;
+    if (sameSite || trustedInitiator || trustedTarget || whitelisted || !promotionalIntent && trustedPath)
+      return NEW_TAB_DECISIONS.ALLOW;
     return NEW_TAB_DECISIONS.VERIFY;
   }
   function shouldKeepTrackingNewTab({ sameSite = false } = {}) {
@@ -820,8 +650,16 @@ var AdsFriendlyBackground = (() => {
   }
   function chooseNewTabReviewSurface({
     promotionalIntent = false,
-    targetLikelyAd = false
+    targetLikelyAd = false,
+    intentReasons = [],
+    targetReasons = []
   } = {}) {
+    const reasons = /* @__PURE__ */ new Set([...intentReasons, ...targetReasons]);
+    const strongTracking = reasons.has("strong_tracking_parameter");
+    const corroboratingSignal = reasons.has("multiple_campaign_parameters") || reasons.has("promotional_element_or_destination");
+    if (strongTracking && corroboratingSignal) {
+      return NEW_TAB_REVIEW_SURFACES.CLOSE;
+    }
     return promotionalIntent || targetLikelyAd ? NEW_TAB_REVIEW_SURFACES.FULL_PAGE : NEW_TAB_REVIEW_SURFACES.TOAST;
   }
 
@@ -932,6 +770,7 @@ var AdsFriendlyBackground = (() => {
   var handledTabs = /* @__PURE__ */ new Map();
   var reverseCandidatesBySource = /* @__PURE__ */ new Map();
   var reverseCandidatesByClone = /* @__PURE__ */ new Map();
+  var pendingReviewToasts = /* @__PURE__ */ new Map();
   var navigationPolicy = null;
   function registerNavigationGuard(policy) {
     navigationPolicy = policy;
@@ -1015,6 +854,7 @@ var AdsFriendlyBackground = (() => {
       pendingTabs.clear();
       reverseCandidatesBySource.clear();
       reverseCandidatesByClone.clear();
+      pendingReviewToasts.clear();
       navigationPolicy = null;
     };
   }
@@ -1161,26 +1001,24 @@ var AdsFriendlyBackground = (() => {
       const sameSite = sameHostnameOrSubdomain(sourceUrl.hostname, targetDomain) || sameHostnameOrSubdomain(targetDomain, sourceUrl.hostname);
       if (shouldKeepTrackingNewTab({ sameSite })) return;
       const trustWindow = await getDynamicTrustWindow(sourceUrl.hostname);
-      let intentMatched = hasMatchingIntent(
+      const path = await getTrustedPath(sourceUrl.hostname, targetDomain);
+      await delay(180);
+      const intentClassification = getRecentIntentClassification(
         sourceTabId,
-        targetDomain,
         trustWindow
       );
-      const path = await getTrustedPath(sourceUrl.hostname, targetDomain);
-      const promotionalIntent = isPromotionalIntent(sourceTabId);
+      const promotionalIntent = intentClassification.likelyAd;
       const decision = decideNewTabNavigation({
         sameSite,
         trustedInitiator: isTrustedInitiator(sourceUrl.hostname),
         trustedTarget: isTrustedTarget(targetDomain),
         whitelisted: whitelist.includes(targetDomain),
         blacklisted: isBlacklistedTarget(targetDomain, blacklist),
-        intentMatched,
         trustedPath: !!path && (path.isManual || path.visits >= 3),
         promotionalIntent
       });
       if (decision === NEW_TAB_DECISIONS.ALLOW) {
         shouldFinalize = true;
-        if (intentMatched) syncTrustedPath(sourceUrl.hostname, targetDomain);
         return;
       }
       if (decision === NEW_TAB_DECISIONS.CLOSE) {
@@ -1188,27 +1026,25 @@ var AdsFriendlyBackground = (() => {
         await logBlockedNavigationIfAllowed(url, sourceUrl.hostname);
         return closeTabQuietly(tabId);
       }
-      await delay(180);
-      intentMatched = hasMatchingIntent(sourceTabId, targetDomain, trustWindow);
-      if (intentMatched) {
-        shouldFinalize = true;
-        syncTrustedPath(sourceUrl.hostname, targetDomain);
-        return;
-      }
       const targetClassification = classifyNavigationIntent({
         intentUrl: url,
         sourceUrl: capturedSourceUrl
       });
       const reviewSurface = chooseNewTabReviewSurface({
-        promotionalIntent: promotionalIntent || isPromotionalIntent(sourceTabId),
-        targetLikelyAd: targetClassification.likelyAd
+        promotionalIntent,
+        targetLikelyAd: targetClassification.likelyAd,
+        intentReasons: intentClassification.reasons,
+        targetReasons: targetClassification.reasons
       });
       shouldFinalize = true;
+      if (reviewSurface === NEW_TAB_REVIEW_SURFACES.CLOSE) {
+        await logBlockedNavigationIfAllowed(url, sourceUrl.hostname);
+        return closeTabQuietly(tabId);
+      }
       if (reviewSurface === NEW_TAB_REVIEW_SURFACES.FULL_PAGE) {
         return redirectToBlockedPage(tabId, url, sourceUrl.hostname);
       }
       const toastShown = await showNavigationReviewToast({
-        sourceTabId,
         tabId,
         url,
         source: sourceUrl.hostname,
@@ -1234,13 +1070,7 @@ var AdsFriendlyBackground = (() => {
     const timeSinceClick = Date.now() - click.timestamp;
     return timeSinceClick >= 0 && timeSinceClick < trustWindow && !!intent && (sameHostnameOrSubdomain(targetDomain, intent.hostname) || sameHostnameOrSubdomain(intent.hostname, targetDomain));
   }
-  async function showNavigationReviewToast({
-    sourceTabId,
-    tabId,
-    url,
-    source,
-    target
-  }) {
+  async function showNavigationReviewToast({ tabId, url, source, target }) {
     if (!navigationPolicy?.can(CAPABILITIES.NAVIGATION_FEEDBACK)) return false;
     const message = {
       type: "SHOW_GRAY_NAVIGATION",
@@ -1249,28 +1079,59 @@ var AdsFriendlyBackground = (() => {
       source,
       target
     };
-    for (const destinationTabId of [tabId, sourceTabId]) {
-      if (!destinationTabId) continue;
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        try {
-          await chrome.tabs.sendMessage(destinationTabId, message);
-          return true;
-        } catch {
-          if (attempt === 0) await delay(180);
-        }
+    pendingReviewToasts.set(tabId, {
+      message,
+      expiresAt: Date.now() + 1e4,
+      delivered: false
+    });
+    setTimeout(() => {
+      const pending = pendingReviewToasts.get(tabId);
+      if (pending?.message === message) pendingReviewToasts.delete(tabId);
+    }, 10500);
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      if (await deliverPendingNavigationReview(tabId)) {
+        pendingReviewToasts.delete(tabId);
+        return true;
       }
+      if (attempt < 5) await delay(220);
     }
-    return false;
+    return pendingReviewToasts.has(tabId);
+  }
+  async function deliverPendingNavigationReview(tabId) {
+    const pending = pendingReviewToasts.get(tabId);
+    if (!pending) return false;
+    if (pending.delivered) return true;
+    if (Date.now() >= pending.expiresAt) {
+      pendingReviewToasts.delete(tabId);
+      return false;
+    }
+    try {
+      await chrome.tabs.sendMessage(tabId, pending.message);
+      pending.delivered = true;
+      return true;
+    } catch {
+      return false;
+    }
   }
   function isPromotionalIntent(sourceTabId) {
+    return getRecentIntentClassification(sourceTabId).likelyAd;
+  }
+  function getRecentIntentClassification(sourceTabId, windowMs = 2500) {
     const click = runtimeState.lastTrustedClick;
-    if (click.tabId !== sourceTabId) return false;
+    if (click.tabId !== sourceTabId || Date.now() - click.timestamp < 0 || Date.now() - click.timestamp >= windowMs)
+      return { likelyAd: false, reasons: [] };
     const classification = classifyNavigationIntent({
       intentUrl: click.intentUrl,
       sourceUrl: click.sourceUrl,
       evidence: click.intentKind === "promotional" ? "promo" : ""
     });
-    return click.intentKind === "promotional" || classification.likelyAd;
+    const reasons = [
+      .../* @__PURE__ */ new Set([...click.intentReasons || [], ...classification.reasons])
+    ];
+    return {
+      likelyAd: click.intentKind === "promotional" || classification.likelyAd,
+      reasons
+    };
   }
   function delay(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -1324,6 +1185,182 @@ var AdsFriendlyBackground = (() => {
     return /^(.+\.)?google\.(com|[a-z]{2}|com\.[a-z]{2}|co\.[a-z]{2})$/.test(
       hostname.toLowerCase()
     );
+  }
+
+  // src/background/message-router.js
+  var MESSAGE_CAPABILITIES = Object.freeze({
+    TRUSTED_CLICK: CAPABILITIES.NAVIGATION_INTENT,
+    SYNC_LEARNING: CAPABILITIES.LEARNING_FEEDBACK,
+    NEGATIVE_LEARNING: CAPABILITIES.LEARNING_FEEDBACK,
+    USER_DECISION: CAPABILITIES.NAVIGATION_FEEDBACK,
+    PATH_RESTORED: CAPABILITIES.NAVIGATION_FEEDBACK,
+    RESTORE_GRAY_NAVIGATION: CAPABILITIES.NAVIGATION_FEEDBACK,
+    BLOCK_GRAY_NAVIGATION: CAPABILITIES.NAVIGATION_FEEDBACK,
+    KEEP_REVIEWED_TAB: CAPABILITIES.NAVIGATION_FEEDBACK,
+    BLOCK_REVIEWED_TAB: CAPABILITIES.NAVIGATION_FEEDBACK,
+    NAVIGATION_TOAST_READY: CAPABILITIES.NAVIGATION_FEEDBACK,
+    LEARN_VIDEO_AD: CAPABILITIES.LEARNING_FEEDBACK,
+    SYNC_VIDEO_LEARNING: CAPABILITIES.LEARNING_FEEDBACK,
+    REPORT_AD_DENSITY: CAPABILITIES.CORE_MAINTENANCE,
+    RECORD_TELEMETRY: CAPABILITIES.TELEMETRY_QUEUE,
+    FLUSH_TELEMETRY: CAPABILITIES.TELEMETRY_QUEUE
+  });
+  function registerMessageRouter(policy) {
+    const onMessage = (message, sender, sendResponse) => {
+      if (!policy.can(CAPABILITIES.CORE_MESSAGING)) {
+        sendResponse({ status: "disabled" });
+        return false;
+      }
+      const capability = MESSAGE_CAPABILITIES[message?.type];
+      if (capability && !policy.can(capability)) {
+        sendResponse({ status: "capability_disabled" });
+        return false;
+      }
+      route(message, sender).then((r) => sendResponse(r || { status: "ok" })).catch((err) => sendResponse({ status: "error", error: err.message }));
+      return true;
+    };
+    chrome.runtime.onMessage.addListener(onMessage);
+    return () => chrome.runtime.onMessage.removeListener(onMessage);
+  }
+  async function route(message, sender) {
+    if (!message) return { status: "ignored" };
+    if (message.type === "TRUSTED_CLICK") {
+      runtimeState.lastTrustedClick = {
+        timestamp: Date.now(),
+        intentUrl: message.intentUrl,
+        sourceUrl: message.sourceUrl || sender?.tab?.url || null,
+        intentKind: message.intentKind || "navigation",
+        intentReasons: Array.isArray(message.intentReasons) ? message.intentReasons : [],
+        tabId: sender?.tab?.id || null
+      };
+      return;
+    }
+    if (message.type === "NAVIGATION_TOAST_READY") {
+      if (!sender?.tab?.id) return { status: "ignored" };
+      const delivered = await deliverPendingNavigationReview(sender.tab.id);
+      return { status: delivered ? "delivered" : "ready" };
+    }
+    if (message.type === "SYNC_LEARNING") return synthesizeGlobalPatterns();
+    if (message.type === "NEGATIVE_LEARNING")
+      return handleNegativeLearning(message.fingerprint);
+    if (message.type === "USER_DECISION") return handleUserDecision(message);
+    if (message.type === "PATH_RESTORED")
+      return syncTrustedPath(message.source, message.target, true);
+    if (message.type === "RESTORE_GRAY_NAVIGATION") {
+      await syncTrustedPath(message.source, message.target, true);
+      await recordTelemetry({
+        unit: "navigation",
+        label: "false_positive",
+        label_source: "user_restore",
+        label_strength: "strong",
+        ad_type: "popunder",
+        targetUrl: message.url,
+        sourceUrl: `https://${message.source}/`,
+        action: "restore",
+        outcome: "user_opened_gray_navigation",
+        context: {
+          source_host: message.source,
+          target_host: message.target,
+          surface: "navigation_toast"
+        },
+        feedback: {
+          user_action: "restore",
+          correction: "false_positive",
+          surface: "navigation_toast"
+        }
+      });
+      await chrome.tabs.create({ url: message.url, active: true });
+      return;
+    }
+    if (message.type === "BLOCK_GRAY_NAVIGATION") {
+      await recordTelemetry({
+        unit: "navigation",
+        label: "ad",
+        label_source: "user_block",
+        label_strength: "strong",
+        ad_type: "popunder",
+        targetUrl: message.url,
+        sourceUrl: `https://${message.source}/`,
+        action: "block",
+        outcome: "user_blocked_gray_navigation",
+        context: {
+          source_host: message.source,
+          target_host: message.target,
+          surface: "navigation_toast"
+        },
+        feedback: {
+          user_action: "block",
+          surface: "navigation_toast"
+        }
+      });
+      return handleUserDecision({ action: "BLACKLIST", domain: message.target });
+    }
+    if (message.type === "KEEP_REVIEWED_TAB") {
+      await syncTrustedPath(message.source, message.target, true);
+      await recordTelemetry({
+        unit: "navigation",
+        label: "false_positive",
+        label_source: "user_keep",
+        label_strength: "strong",
+        ad_type: "popunder",
+        targetUrl: message.url,
+        sourceUrl: `https://${message.source}/`,
+        action: "allow",
+        outcome: "user_kept_reviewed_tab",
+        context: {
+          source_host: message.source,
+          target_host: message.target,
+          surface: "navigation_toast"
+        },
+        feedback: {
+          user_action: "keep",
+          correction: "false_positive",
+          surface: "navigation_toast"
+        }
+      });
+      return;
+    }
+    if (message.type === "BLOCK_REVIEWED_TAB") {
+      await recordTelemetry({
+        unit: "navigation",
+        label: "ad",
+        label_source: "user_block",
+        label_strength: "strong",
+        ad_type: "popunder",
+        targetUrl: message.url,
+        sourceUrl: `https://${message.source}/`,
+        action: "block",
+        outcome: "user_blocked_reviewed_tab",
+        context: {
+          source_host: message.source,
+          target_host: message.target,
+          surface: "navigation_toast"
+        },
+        feedback: {
+          user_action: "block",
+          surface: "navigation_toast"
+        }
+      });
+      await handleUserDecision({ action: "BLACKLIST", domain: message.target });
+      if (Number.isInteger(message.tabId)) {
+        try {
+          await chrome.tabs.remove(message.tabId);
+        } catch {
+        }
+      }
+      return;
+    }
+    if (message.type === "LEARN_VIDEO_AD") return handleLearnVideoAd(message);
+    if (message.type === "SYNC_VIDEO_LEARNING")
+      return handleVideoLearning(message);
+    if (message.type === "REPORT_AD_DENSITY")
+      return updateSiteReputation(message.hostname, message.count);
+    if (message.type === "RECORD_TELEMETRY")
+      return recordTelemetry(message.event || message);
+    if (message.type === "FLUSH_TELEMETRY") return flushTelemetry();
+    if (message.type === "TOGGLE_STATUS")
+      console.log("Protection status:", message.isEnabled);
+    return { status: "ignored" };
   }
 
   // src/runtime/settings-store.js
