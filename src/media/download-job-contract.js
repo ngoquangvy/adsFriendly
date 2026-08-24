@@ -3,33 +3,47 @@ export const DOWNLOAD_JOB_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 export function normalizeMediaDownloadJob(value = {}) {
   const candidate = value.candidate;
-  if (!candidate || candidate.kind !== "hls") {
-    throw new Error("[MediaDownload] Only HLS candidates are supported.");
+  if (!candidate || !["direct", "hls"].includes(candidate.kind)) {
+    throw new Error("[MediaDownload] Direct or HLS candidate required.");
   }
+  const shared = {
+    id: requiredString(candidate.id, "candidate.id"),
+    pageUrl: requiredHttpUrl(candidate.pageUrl, "candidate.pageUrl"),
+    kind: candidate.kind,
+    title: optionalString(candidate.title),
+    mimeType: optionalString(candidate.mimeType),
+    drm: candidate.drm || "none",
+  };
   return {
     id: requiredString(value.id, "id"),
     createdAt: finiteNumber(value.createdAt, "createdAt"),
     sourceTabId: nonNegativeInteger(value.sourceTabId, "sourceTabId"),
-    candidate: {
-      id: requiredString(candidate.id, "candidate.id"),
-      pageUrl: requiredString(candidate.pageUrl, "candidate.pageUrl"),
-      manifestUrl: requiredHttpUrl(
-        candidate.manifestUrl,
-        "candidate.manifestUrl",
-      ),
-      kind: "hls",
-      title: optionalString(candidate.title),
-      probeStatus: candidate.probeStatus,
-      playlistType: candidate.playlistType,
-      streamType: candidate.streamType,
-      drm: candidate.drm || "none",
-      encryptionMethods: stringArray(candidate.encryptionMethods),
-      variants: objectArray(candidate.variants),
-      audioTracks: objectArray(candidate.audioTracks),
-      subtitles: objectArray(candidate.subtitles),
-      duration: optionalFiniteNumber(candidate.duration),
-      segmentCount: optionalNonNegativeInteger(candidate.segmentCount),
-    },
+    candidate:
+      candidate.kind === "direct"
+        ? {
+            ...shared,
+            sourceUrl: requiredHttpUrl(
+              candidate.sourceUrl,
+              "candidate.sourceUrl",
+            ),
+          }
+        : {
+            ...shared,
+            manifestUrl: requiredHttpUrl(
+              candidate.manifestUrl,
+              "candidate.manifestUrl",
+            ),
+            probeStatus: candidate.probeStatus,
+            playlistType: candidate.playlistType,
+            streamType: candidate.streamType,
+            drm: candidate.drm || "none",
+            encryptionMethods: stringArray(candidate.encryptionMethods),
+            variants: objectArray(candidate.variants),
+            audioTracks: objectArray(candidate.audioTracks),
+            subtitles: objectArray(candidate.subtitles),
+            duration: optionalFiniteNumber(candidate.duration),
+            segmentCount: optionalNonNegativeInteger(candidate.segmentCount),
+          },
   };
 }
 
@@ -38,8 +52,21 @@ export function downloadJobKey(jobId) {
 }
 
 export function getMediaDownloadAvailability(candidate = {}) {
+  if (candidate.kind === "direct") {
+    try {
+      requiredHttpUrl(candidate.sourceUrl, "candidate.sourceUrl");
+    } catch {
+      return { supported: false, reason: "Direct media URL is not ready." };
+    }
+    if (candidate.drm === "suspected" || candidate.drm === "confirmed")
+      return { supported: false, reason: "DRM-protected stream." };
+    return { supported: true, reason: null };
+  }
   if (candidate.kind !== "hls")
-    return { supported: false, reason: "Only HLS is supported for now." };
+    return {
+      supported: false,
+      reason: "This media type is not supported yet.",
+    };
   if (candidate.probeStatus !== "ready")
     return { supported: false, reason: "Manifest is not ready." };
   if (candidate.drm === "suspected" || candidate.drm === "confirmed")

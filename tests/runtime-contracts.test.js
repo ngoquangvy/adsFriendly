@@ -50,6 +50,10 @@ test("media download job creation is registered as a user action", () => {
   const action = getActionDefinition(ACTIONS.MEDIA_DOWNLOAD_CREATE);
   assert.equal(action.featureId, "background.media-download-jobs");
   assert.equal(action.capability, CAPABILITIES.MEDIA_NATIVE_DOWNLOAD);
+  assert.equal(
+    getActionDefinition(ACTIONS.MEDIA_DOWNLOAD_CANCEL).capability,
+    CAPABILITIES.MEDIA_NATIVE_DOWNLOAD,
+  );
 });
 
 test("action broker requires handlers for all actions owned by a feature", () => {

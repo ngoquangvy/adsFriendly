@@ -5,6 +5,7 @@ import {
 } from "./feature-catalog.js";
 
 export const ACTIONS = Object.freeze({
+  MEDIA_DOWNLOAD_CANCEL: "media.download.cancel",
   MEDIA_DOWNLOAD_CREATE: "media.download.create",
   VIDEO_ACCELERATE_AUTOMATIC: "video.accelerate.automatic",
   VIDEO_ACCELERATE_USER: "video.accelerate.user",
@@ -16,6 +17,11 @@ const A = ACTIONS;
 const C = CAPABILITIES;
 
 export const ACTION_CATALOG = Object.freeze({
+  [A.MEDIA_DOWNLOAD_CANCEL]: action(
+    A.MEDIA_DOWNLOAD_CANCEL,
+    "background.media-download-jobs",
+    C.MEDIA_NATIVE_DOWNLOAD,
+  ),
   [A.MEDIA_DOWNLOAD_CREATE]: action(
     A.MEDIA_DOWNLOAD_CREATE,
     "background.media-download-jobs",

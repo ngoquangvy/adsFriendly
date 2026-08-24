@@ -16,7 +16,10 @@ import {
 } from "../src/media/probe-gate.js";
 import { createHlsDownloadPlan } from "../src/media/hls-download-plan.js";
 import { downloadResourcesInParallel } from "../src/media/parallel-downloader.js";
-import { getMediaDownloadAvailability } from "../src/media/download-job-contract.js";
+import {
+  getMediaDownloadAvailability,
+  normalizeMediaDownloadJob,
+} from "../src/media/download-job-contract.js";
 import {
   createMediaCatalogViewSignature,
   selectVisibleMediaItems,
@@ -358,6 +361,31 @@ test("download availability blocks DRM and live HLS before job creation", () => 
     getMediaDownloadAvailability({ ...base, streamType: "live" }).reason,
     /Live/,
   );
+});
+
+test("direct downloads require a valid HTTP source and normalize independently of HLS", () => {
+  const candidate = {
+    id: "direct-1",
+    kind: "direct",
+    pageUrl: "https://video.example/watch",
+    sourceUrl: "https://cdn.example/movie.mp4",
+    title: "Movie",
+    mimeType: "video/mp4",
+  };
+  assert.equal(getMediaDownloadAvailability(candidate).supported, true);
+  assert.equal(
+    getMediaDownloadAvailability({ ...candidate, sourceUrl: "blob:test" })
+      .supported,
+    false,
+  );
+  const job = normalizeMediaDownloadJob({
+    id: "job-1",
+    createdAt: 1,
+    sourceTabId: 7,
+    candidate,
+  });
+  assert.equal(job.candidate.kind, "direct");
+  assert.equal(job.candidate.sourceUrl, candidate.sourceUrl);
 });
 
 test("media popup signature ignores heartbeat timestamps but detects visible changes", () => {

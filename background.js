@@ -2333,6 +2333,7 @@ var AdsFriendlyBackground = (() => {
 
   // src/runtime/action-catalog.js
   var ACTIONS = Object.freeze({
+    MEDIA_DOWNLOAD_CANCEL: "media.download.cancel",
     MEDIA_DOWNLOAD_CREATE: "media.download.create",
     VIDEO_ACCELERATE_AUTOMATIC: "video.accelerate.automatic",
     VIDEO_ACCELERATE_USER: "video.accelerate.user",
@@ -2342,6 +2343,11 @@ var AdsFriendlyBackground = (() => {
   var A = ACTIONS;
   var C3 = CAPABILITIES;
   var ACTION_CATALOG = Object.freeze({
+    [A.MEDIA_DOWNLOAD_CANCEL]: action(
+      A.MEDIA_DOWNLOAD_CANCEL,
+      "background.media-download-jobs",
+      C3.MEDIA_NATIVE_DOWNLOAD
+    ),
     [A.MEDIA_DOWNLOAD_CREATE]: action(
       A.MEDIA_DOWNLOAD_CREATE,
       "background.media-download-jobs",
@@ -2471,9 +2477,67 @@ var AdsFriendlyBackground = (() => {
   // src/media/download-job-contract.js
   var DOWNLOAD_JOB_PREFIX = "adsfriendly.mediaDownloadJob.";
   var DOWNLOAD_JOB_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
+  function normalizeMediaDownloadJob(value = {}) {
+    const candidate = value.candidate;
+    if (!candidate || !["direct", "hls"].includes(candidate.kind)) {
+      throw new Error("[MediaDownload] Direct or HLS candidate required.");
+    }
+    const shared = {
+      id: requiredString2(candidate.id, "candidate.id"),
+      pageUrl: requiredHttpUrl(candidate.pageUrl, "candidate.pageUrl"),
+      kind: candidate.kind,
+      title: optionalString2(candidate.title),
+      mimeType: optionalString2(candidate.mimeType),
+      drm: candidate.drm || "none"
+    };
+    return {
+      id: requiredString2(value.id, "id"),
+      createdAt: finiteNumber(value.createdAt, "createdAt"),
+      sourceTabId: nonNegativeInteger(value.sourceTabId, "sourceTabId"),
+      candidate: candidate.kind === "direct" ? {
+        ...shared,
+        sourceUrl: requiredHttpUrl(
+          candidate.sourceUrl,
+          "candidate.sourceUrl"
+        )
+      } : {
+        ...shared,
+        manifestUrl: requiredHttpUrl(
+          candidate.manifestUrl,
+          "candidate.manifestUrl"
+        ),
+        probeStatus: candidate.probeStatus,
+        playlistType: candidate.playlistType,
+        streamType: candidate.streamType,
+        drm: candidate.drm || "none",
+        encryptionMethods: stringArray(candidate.encryptionMethods),
+        variants: objectArray(candidate.variants),
+        audioTracks: objectArray(candidate.audioTracks),
+        subtitles: objectArray(candidate.subtitles),
+        duration: optionalFiniteNumber2(candidate.duration),
+        segmentCount: optionalNonNegativeInteger2(candidate.segmentCount)
+      }
+    };
+  }
+  function downloadJobKey(jobId) {
+    return `${DOWNLOAD_JOB_PREFIX}${requiredString2(jobId, "jobId")}`;
+  }
   function getMediaDownloadAvailability(candidate = {}) {
+    if (candidate.kind === "direct") {
+      try {
+        requiredHttpUrl(candidate.sourceUrl, "candidate.sourceUrl");
+      } catch {
+        return { supported: false, reason: "Direct media URL is not ready." };
+      }
+      if (candidate.drm === "suspected" || candidate.drm === "confirmed")
+        return { supported: false, reason: "DRM-protected stream." };
+      return { supported: true, reason: null };
+    }
     if (candidate.kind !== "hls")
-      return { supported: false, reason: "Only HLS is supported for now." };
+      return {
+        supported: false,
+        reason: "This media type is not supported yet."
+      };
     if (candidate.probeStatus !== "ready")
       return { supported: false, reason: "Manifest is not ready." };
     if (candidate.drm === "suspected" || candidate.drm === "confirmed")
@@ -2488,6 +2552,49 @@ var AdsFriendlyBackground = (() => {
       return { supported: false, reason: "Unknown HLS playlist type." };
     return { supported: true, reason: null };
   }
+  function requiredString2(value, field) {
+    if (typeof value !== "string" || !value.trim())
+      throw new Error(`[MediaDownload] ${field} is required.`);
+    return value;
+  }
+  function requiredHttpUrl(value, field) {
+    const url = requiredString2(value, field);
+    try {
+      if (!["http:", "https:"].includes(new URL(url).protocol)) throw new Error();
+    } catch {
+      throw new Error(`[MediaDownload] ${field} must be an HTTP(S) URL.`);
+    }
+    return url;
+  }
+  function finiteNumber(value, field) {
+    const number = Number(value);
+    if (!Number.isFinite(number))
+      throw new Error(`[MediaDownload] ${field} must be finite.`);
+    return number;
+  }
+  function nonNegativeInteger(value, field) {
+    const number = Number(value);
+    if (!Number.isInteger(number) || number < 0)
+      throw new Error(`[MediaDownload] ${field} must be non-negative.`);
+    return number;
+  }
+  function optionalString2(value) {
+    return typeof value === "string" && value ? value : null;
+  }
+  function optionalFiniteNumber2(value) {
+    if (value === null || value === void 0) return null;
+    return finiteNumber(value, "optional number");
+  }
+  function optionalNonNegativeInteger2(value) {
+    if (value === null || value === void 0) return null;
+    return nonNegativeInteger(value, "optional integer");
+  }
+  function stringArray(value) {
+    return Array.isArray(value) ? value.filter((item) => typeof item === "string").slice(0, 20) : [];
+  }
+  function objectArray(value) {
+    return Array.isArray(value) ? value.filter((item) => item && typeof item === "object").slice(0, 100).map((item) => ({ ...item })) : [];
+  }
 
   // src/media/helper-contract.js
   var MEDIA_HELPER_PROTOCOL_VERSION = 1;
@@ -2501,11 +2608,14 @@ var AdsFriendlyBackground = (() => {
   var MEDIA_HELPER_EVENTS = Object.freeze({
     READY: "helper.ready",
     CAPABILITIES: "helper.capabilities",
+    DOWNLOAD_STARTED: "download.started",
     DOWNLOAD_PROGRESS: "download.progress",
     DOWNLOAD_COMPLETED: "download.completed",
+    DOWNLOAD_CANCELLED: "download.cancelled",
     ERROR: "helper.error"
   });
   var MEDIA_HELPER_CAPABILITIES = Object.freeze({
+    DIRECT_HTTP_DOWNLOAD: "download.direct_http",
     HLS_VOD_DOWNLOAD: "download.hls_vod",
     FFMPEG_MUX: "mux.ffmpeg"
   });
@@ -2542,6 +2652,7 @@ var AdsFriendlyBackground = (() => {
   var cachedStatus = null;
   var cachedAt = 0;
   var statusPromise = null;
+  var activePorts = /* @__PURE__ */ new Map();
   var MEDIA_HELPER_STATES = Object.freeze({
     PERMISSION_REQUIRED: "permission_required",
     NOT_INSTALLED: "not_installed",
@@ -2603,6 +2714,7 @@ var AdsFriendlyBackground = (() => {
       return helperStatus(MEDIA_HELPER_STATES.READY, {
         helperVersion: stringOrNull(response.payload.helperVersion),
         capabilities,
+        canDownloadDirect: capabilities[MEDIA_HELPER_CAPABILITIES.DIRECT_HTTP_DOWNLOAD] === true,
         canDownloadHls: capabilities[MEDIA_HELPER_CAPABILITIES.HLS_VOD_DOWNLOAD] === true,
         canMuxWithFfmpeg: capabilities[MEDIA_HELPER_CAPABILITIES.FFMPEG_MUX] === true
       });
@@ -2612,6 +2724,140 @@ var AdsFriendlyBackground = (() => {
         error: message
       });
     }
+  }
+  async function startMediaHelperDownload(rawJob, { connections = 8 } = {}) {
+    if (!await hasNativeMessagingPermission()) {
+      throw new Error("Native Messaging permission is required.");
+    }
+    const job = normalizeMediaDownloadJob(rawJob);
+    if (activePorts.has(job.id))
+      throw new Error("Download job is already active.");
+    const requestId = randomId4();
+    const port = chrome.runtime.connectNative(MEDIA_HELPER_HOST_NAME);
+    const state = {
+      id: job.id,
+      mediaId: job.candidate.id,
+      kind: job.candidate.kind,
+      title: job.candidate.title,
+      sourceTabId: job.sourceTabId,
+      createdAt: job.createdAt,
+      updatedAt: Date.now(),
+      status: "starting",
+      progress: null,
+      outputPath: null,
+      error: null
+    };
+    activePorts.set(job.id, {
+      port,
+      requestId,
+      terminal: false,
+      queue: Promise.resolve()
+    });
+    await persistJobState(state);
+    port.onMessage.addListener((rawEvent) => {
+      const connection = activePorts.get(job.id);
+      if (!connection) return;
+      connection.queue = connection.queue.then(
+        () => handleJobEvent(job.id, requestId, rawEvent)
+      );
+    });
+    port.onDisconnect.addListener(() => {
+      const connection = activePorts.get(job.id);
+      if (!connection) return;
+      const message = chrome.runtime.lastError?.message || "Media Helper disconnected.";
+      void connection.queue.finally(async () => {
+        activePorts.delete(job.id);
+        if (!connection.terminal) {
+          await updateJobState(job.id, { status: "failed", error: message });
+        }
+      }).catch(() => {
+      });
+    });
+    port.postMessage({
+      type: MEDIA_HELPER_REQUESTS.DOWNLOAD_START,
+      requestId,
+      protocolVersion: MEDIA_HELPER_PROTOCOL_VERSION,
+      payload: {
+        jobId: job.id,
+        connections,
+        candidate: job.candidate
+      }
+    });
+    return { status: "started", jobId: job.id };
+  }
+  async function cancelMediaHelperDownload(jobId) {
+    const connection = activePorts.get(jobId);
+    if (!connection) return { status: "not_running" };
+    connection.port.postMessage({
+      type: MEDIA_HELPER_REQUESTS.DOWNLOAD_CANCEL,
+      requestId: connection.requestId,
+      protocolVersion: MEDIA_HELPER_PROTOCOL_VERSION,
+      payload: { jobId }
+    });
+    await updateJobState(jobId, { status: "cancelling" });
+    return { status: "cancelling", jobId };
+  }
+  async function listMediaHelperDownloads() {
+    const snapshot = await chrome.storage.session.get(null);
+    return Object.entries(snapshot).filter(([key]) => key.startsWith(DOWNLOAD_JOB_PREFIX)).map(([, value]) => value).filter((value) => value && typeof value === "object").sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  }
+  async function handleJobEvent(jobId, requestId, rawEvent) {
+    try {
+      const event2 = normalizeHelperEvent(rawEvent);
+      if (event2.requestId !== requestId) return;
+      if (event2.type === MEDIA_HELPER_EVENTS.DOWNLOAD_STARTED) {
+        await updateJobState(jobId, { status: "probing" });
+        return;
+      }
+      if (event2.type === MEDIA_HELPER_EVENTS.DOWNLOAD_PROGRESS) {
+        await updateJobState(jobId, {
+          status: event2.payload.phase || "downloading",
+          progress: { ...event2.payload }
+        });
+        return;
+      }
+      if (event2.type === MEDIA_HELPER_EVENTS.DOWNLOAD_COMPLETED) {
+        markTerminal(jobId);
+        await updateJobState(jobId, {
+          status: "completed",
+          progress: { ...event2.payload, phase: "completed" },
+          outputPath: event2.payload.outputPath || null
+        });
+        activePorts.get(jobId)?.port.disconnect();
+        return;
+      }
+      if (event2.type === MEDIA_HELPER_EVENTS.DOWNLOAD_CANCELLED) {
+        markTerminal(jobId);
+        await updateJobState(jobId, { status: "cancelled" });
+        activePorts.get(jobId)?.port.disconnect();
+        return;
+      }
+      if (event2.type === MEDIA_HELPER_EVENTS.ERROR) {
+        markTerminal(jobId);
+        await updateJobState(jobId, {
+          status: "failed",
+          error: event2.payload.message || "Media Helper download failed."
+        });
+        activePorts.get(jobId)?.port.disconnect();
+      }
+    } catch (error) {
+      markTerminal(jobId);
+      await updateJobState(jobId, { status: "failed", error: messageOf(error) });
+      activePorts.get(jobId)?.port.disconnect();
+    }
+  }
+  function markTerminal(jobId) {
+    const connection = activePorts.get(jobId);
+    if (connection) connection.terminal = true;
+  }
+  async function persistJobState(state) {
+    await chrome.storage.session.set({ [downloadJobKey(state.id)]: state });
+  }
+  async function updateJobState(jobId, changes) {
+    const key = downloadJobKey(jobId);
+    const current = (await chrome.storage.session.get(key))[key];
+    if (!current) return;
+    await persistJobState({ ...current, ...changes, updatedAt: Date.now() });
   }
   function classifyNativeMessagingError(message = "") {
     if (/host.*not found|specified native messaging host not found|not registered/i.test(
@@ -2638,6 +2884,7 @@ var AdsFriendlyBackground = (() => {
     return {
       status,
       installed: status === MEDIA_HELPER_STATES.READY,
+      canDownloadDirect: false,
       canDownloadHls: false,
       canMuxWithFfmpeg: false,
       helperVersion: null,
@@ -2682,6 +2929,7 @@ var AdsFriendlyBackground = (() => {
       featureId: "background.media-download-jobs",
       policy,
       handlers: {
+        [ACTIONS.MEDIA_DOWNLOAD_CANCEL]: cancelJob,
         [ACTIONS.MEDIA_DOWNLOAD_CREATE]: createJob
       }
     });
@@ -2692,6 +2940,13 @@ var AdsFriendlyBackground = (() => {
   async function requestMediaDownloadJob(payload) {
     if (!broker) return { status: "download_disabled" };
     return broker.execute(ACTIONS.MEDIA_DOWNLOAD_CREATE, payload);
+  }
+  async function requestMediaDownloadCancel(payload) {
+    if (!broker) return { status: "download_disabled" };
+    return broker.execute(ACTIONS.MEDIA_DOWNLOAD_CANCEL, payload);
+  }
+  async function listMediaDownloadJobs() {
+    return { status: "ok", items: await listMediaHelperDownloads() };
   }
   async function createJob({ tabId, mediaId } = {}) {
     if (!Number.isInteger(tabId) || tabId < 0) return { status: "invalid_tab" };
@@ -2711,18 +2966,25 @@ var AdsFriendlyBackground = (() => {
         reason: "Media Helper must be installed and available to download video."
       };
     }
-    if (!helper.canDownloadHls) {
+    const capabilityReady = candidate.kind === "direct" ? helper.canDownloadDirect : helper.canDownloadHls;
+    if (!capabilityReady) {
       return {
         status: "helper_not_ready",
         helper,
-        reason: "This Media Helper build does not execute HLS downloads yet."
+        reason: candidate.kind === "direct" ? "This Media Helper build cannot download direct media yet." : "This Media Helper build does not execute HLS downloads yet."
       };
     }
-    return {
-      status: "helper_not_ready",
-      helper,
-      reason: "Native download job execution is the next implementation slice."
-    };
+    const job = normalizeMediaDownloadJob({
+      id: randomId5(),
+      createdAt: Date.now(),
+      sourceTabId: tabId,
+      candidate
+    });
+    return startMediaHelperDownload(job, { connections: 8 });
+  }
+  async function cancelJob({ jobId } = {}) {
+    if (typeof jobId !== "string" || !jobId) return { status: "invalid_job" };
+    return cancelMediaHelperDownload(jobId);
   }
   async function removeStaleJobs() {
     const snapshot = await chrome.storage.session.get(null);
@@ -2731,6 +2993,9 @@ var AdsFriendlyBackground = (() => {
       ([key, value]) => key.startsWith(DOWNLOAD_JOB_PREFIX) && (!Number.isFinite(value?.createdAt) || value.createdAt < cutoff)
     ).map(([key]) => key);
     if (staleKeys.length) await chrome.storage.session.remove(staleKeys);
+  }
+  function randomId5() {
+    return globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   }
 
   // src/background/message-router.js
@@ -2762,7 +3027,9 @@ var AdsFriendlyBackground = (() => {
     MEDIA_PROBED: CAPABILITIES.MEDIA_CATALOG,
     GET_MEDIA_CATALOG: CAPABILITIES.MEDIA_CATALOG,
     GET_MEDIA_HELPER_STATUS: CAPABILITIES.MEDIA_DOWNLOAD,
-    CREATE_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD
+    CREATE_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
+    CANCEL_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
+    GET_MEDIA_DOWNLOAD_JOBS: CAPABILITIES.MEDIA_DOWNLOAD
   });
   function registerMessageRouter(policy) {
     const onMessage = (message, sender, sendResponse) => {
@@ -2876,6 +3143,10 @@ var AdsFriendlyBackground = (() => {
         tabId: message.tabId,
         mediaId: message.mediaId
       });
+    if (message.type === "CANCEL_MEDIA_DOWNLOAD_JOB")
+      return requestMediaDownloadCancel({ jobId: message.jobId });
+    if (message.type === "GET_MEDIA_DOWNLOAD_JOBS")
+      return listMediaDownloadJobs();
     if (message.type === "NEGATIVE_LEARNING")
       return handleNegativeLearning(message.fingerprint);
     if (message.type === "USER_DECISION") return handleUserDecision(message);

@@ -1,11 +1,16 @@
 {
   "name": "@adsfriendly/media-helper",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Optional native media backend for the AdsFriendly ecosystem",
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",
-    "check": "node scripts/build.mjs --check"
+    "check": "node scripts/build.mjs --check",
+    "package:windows": "node scripts/package-windows.mjs",
+    "register:windows": "node scripts/register-windows.mjs"
+  },
+  "devDependencies": {
+    "postject": "1.0.0-alpha.6"
   }
 }

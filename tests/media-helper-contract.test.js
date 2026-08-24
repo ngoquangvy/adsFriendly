@@ -13,10 +13,12 @@ import {
 } from "../src/runtime/feature-catalog.js";
 import {
   MEDIA_HELPER_EVENTS,
+  MEDIA_HELPER_CAPABILITIES,
   MEDIA_HELPER_PROTOCOL_VERSION,
   MEDIA_HELPER_REQUESTS,
   createHelperEvent,
   normalizeHelperEvent,
+  normalizeHelperDownloadPayload,
   normalizeHelperRequest,
 } from "../src/media/helper-contract.js";
 import {
@@ -107,6 +109,31 @@ test("media helper messages are versioned and normalized", () => {
   assert.equal(normalizeHelperEvent(event).type, MEDIA_HELPER_EVENTS.READY);
 });
 
+test("direct helper download payload is normalized at the protocol boundary", () => {
+  const payload = normalizeHelperDownloadPayload({
+    jobId: "direct-1",
+    connections: 12,
+    candidate: {
+      id: "media-1",
+      kind: "direct",
+      pageUrl: "https://video.example/watch",
+      sourceUrl: "https://cdn.example/movie.mp4",
+      title: "Movie",
+      mimeType: "video/mp4",
+    },
+  });
+  assert.equal(payload.connections, 12);
+  assert.equal(payload.candidate.sourceUrl, "https://cdn.example/movie.mp4");
+  assert.throws(
+    () =>
+      normalizeHelperDownloadPayload({
+        ...payload,
+        candidate: { ...payload.candidate, sourceUrl: "file:///movie.mp4" },
+      }),
+    /HTTP\(S\)/,
+  );
+});
+
 test("native host errors distinguish a missing helper from a broken helper", () => {
   assert.equal(
     classifyNativeMessagingError("Specified native messaging host not found."),
@@ -148,6 +175,7 @@ test("helper status exposes only declared download capabilities", async () => {
         createHelperEvent(MEDIA_HELPER_EVENTS.READY, request.requestId, {
           helperVersion: "0.1.0",
           capabilities: {
+            [MEDIA_HELPER_CAPABILITIES.DIRECT_HTTP_DOWNLOAD]: true,
             "download.hls_vod": false,
             "mux.ffmpeg": true,
             ignored: { nested: true },
@@ -158,9 +186,11 @@ test("helper status exposes only declared download capabilities", async () => {
   try {
     const status = await getMediaHelperStatus({ force: true });
     assert.equal(status.status, MEDIA_HELPER_STATES.READY);
+    assert.equal(status.canDownloadDirect, true);
     assert.equal(status.canDownloadHls, false);
     assert.equal(status.canMuxWithFfmpeg, true);
     assert.deepEqual(status.capabilities, {
+      "download.direct_http": true,
       "download.hls_vod": false,
       "mux.ffmpeg": true,
     });

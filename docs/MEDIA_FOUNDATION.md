@@ -93,15 +93,16 @@ training labels or video-ad classifications.
 ## Optional helper boundary
 
 `src/media/helper-contract.js` is the versioned, language-neutral protocol
-contract shared by the extension and `packages/media-helper/`. The current
-helper slice implements Native Messaging framing, a handshake, and FFmpeg
-capability inspection. The background bridge validates and caches that status.
-The helper deliberately reports HLS execution as unavailable until the native
-job runner is implemented.
+contract shared by the extension and `packages/media-helper/`. Helper 0.2 adds
+an adapter registry and a Direct HTTP MP4/WebM adapter with parallel byte-range
+requests, progress, cancellation, and resume metadata. The background bridge
+keeps transient job status in `chrome.storage.session`; these records remain
+separate from Settings packages and training data. The helper deliberately
+reports HLS execution as unavailable until its native adapter is implemented.
 
 The extension declares `nativeMessaging` as an optional permission and asks for
 it only after a user initiates Media Helper setup. The extension sends only
 bounded job metadata and receives status/progress events. Media bytes never
-travel through Native Messaging; the helper will
-stream them directly to disk. The helper is optional for the `media-tools`
+travel through Native Messaging; the helper streams them directly to disk. The
+helper is optional for the `media-tools`
 product and is never a dependency of the `ad-protection` product.

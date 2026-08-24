@@ -4,9 +4,15 @@ import {
   DOWNLOAD_JOB_MAX_AGE_MS,
   DOWNLOAD_JOB_PREFIX,
   getMediaDownloadAvailability,
+  normalizeMediaDownloadJob,
 } from "../media/download-job-contract.js";
 import { listDiscoveredMedia } from "./media-catalog.js";
-import { getMediaHelperStatus } from "./media-helper-bridge.js";
+import {
+  cancelMediaHelperDownload,
+  getMediaHelperStatus,
+  listMediaHelperDownloads,
+  startMediaHelperDownload,
+} from "./media-helper-bridge.js";
 
 let broker = null;
 
@@ -16,6 +22,7 @@ export async function startMediaDownloadJobStore(policy) {
     featureId: "background.media-download-jobs",
     policy,
     handlers: {
+      [ACTIONS.MEDIA_DOWNLOAD_CANCEL]: cancelJob,
       [ACTIONS.MEDIA_DOWNLOAD_CREATE]: createJob,
     },
   });
@@ -27,6 +34,15 @@ export async function startMediaDownloadJobStore(policy) {
 export async function requestMediaDownloadJob(payload) {
   if (!broker) return { status: "download_disabled" };
   return broker.execute(ACTIONS.MEDIA_DOWNLOAD_CREATE, payload);
+}
+
+export async function requestMediaDownloadCancel(payload) {
+  if (!broker) return { status: "download_disabled" };
+  return broker.execute(ACTIONS.MEDIA_DOWNLOAD_CANCEL, payload);
+}
+
+export async function listMediaDownloadJobs() {
+  return { status: "ok", items: await listMediaHelperDownloads() };
 }
 
 async function createJob({ tabId, mediaId } = {}) {
@@ -47,18 +63,32 @@ async function createJob({ tabId, mediaId } = {}) {
       reason: "Media Helper must be installed and available to download video.",
     };
   }
-  if (!helper.canDownloadHls) {
+  const capabilityReady =
+    candidate.kind === "direct"
+      ? helper.canDownloadDirect
+      : helper.canDownloadHls;
+  if (!capabilityReady) {
     return {
       status: "helper_not_ready",
       helper,
-      reason: "This Media Helper build does not execute HLS downloads yet.",
+      reason:
+        candidate.kind === "direct"
+          ? "This Media Helper build cannot download direct media yet."
+          : "This Media Helper build does not execute HLS downloads yet.",
     };
   }
-  return {
-    status: "helper_not_ready",
-    helper,
-    reason: "Native download job execution is the next implementation slice.",
-  };
+  const job = normalizeMediaDownloadJob({
+    id: randomId(),
+    createdAt: Date.now(),
+    sourceTabId: tabId,
+    candidate,
+  });
+  return startMediaHelperDownload(job, { connections: 8 });
+}
+
+async function cancelJob({ jobId } = {}) {
+  if (typeof jobId !== "string" || !jobId) return { status: "invalid_job" };
+  return cancelMediaHelperDownload(jobId);
 }
 
 async function removeStaleJobs() {
@@ -72,4 +102,10 @@ async function removeStaleJobs() {
     )
     .map(([key]) => key);
   if (staleKeys.length) await chrome.storage.session.remove(staleKeys);
+}
+
+function randomId() {
+  return globalThis.crypto?.randomUUID
+    ? globalThis.crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }

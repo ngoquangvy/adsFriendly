@@ -12,10 +12,17 @@ import {
   NativeMessageReader,
   encodeNativeMessage,
 } from "./native-messaging.js";
+import { DownloadAdapterRegistry } from "./adapter-registry.js";
+import { directHttpAdapter } from "./direct-http-adapter.js";
+import { DownloadJobManager } from "./job-manager.js";
 
-const HELPER_VERSION = "0.1.0";
+const HELPER_VERSION = "0.2.0";
 const callerOrigin = process.argv[2] || null;
 const reader = new NativeMessageReader();
+const adapters = new DownloadAdapterRegistry([directHttpAdapter]);
+const jobs = new DownloadJobManager(adapters);
+
+process.stdin.on("end", () => jobs.cancelAll());
 
 process.stdin.on("data", (chunk: Buffer) => {
   try {
@@ -67,12 +74,30 @@ async function handleMessage(rawMessage: unknown): Promise<void> {
       );
       return;
     }
+    if (request.type === MEDIA_HELPER_REQUESTS.DOWNLOAD_START) {
+      await jobs.start(request.payload, (type, payload) => {
+        writeMessage(createHelperEvent(type, requestId, payload));
+      });
+      return;
+    }
+    if (request.type === MEDIA_HELPER_REQUESTS.DOWNLOAD_CANCEL) {
+      const jobId = request.payload?.jobId;
+      if (typeof jobId !== "string" || !jobId) {
+        throw new Error("DOWNLOAD_CANCEL requires payload.jobId.");
+      }
+      if (!jobs.cancel(jobId)) {
+        writeError(
+          requestId,
+          "job_not_found",
+          new Error("Download job not found."),
+        );
+      }
+      return;
+    }
     writeError(
       requestId,
       "not_implemented",
-      new Error(
-        "Download execution will be added after the helper handshake is integrated.",
-      ),
+      new Error(`Unsupported Media Helper request: ${request.type}.`),
     );
   } catch (error) {
     writeError(requestId, "invalid_request", error);
@@ -82,6 +107,7 @@ async function handleMessage(rawMessage: unknown): Promise<void> {
 async function inspectCapabilities() {
   const ffmpeg = await detectExecutable("ffmpeg", ["-version"]);
   return {
+    [MEDIA_HELPER_CAPABILITIES.DIRECT_HTTP_DOWNLOAD]: true,
     [MEDIA_HELPER_CAPABILITIES.HLS_VOD_DOWNLOAD]: false,
     [MEDIA_HELPER_CAPABILITIES.FFMPEG_MUX]: ffmpeg.available,
     ffmpeg,

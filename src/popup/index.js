@@ -3,7 +3,10 @@ import {
   CAPABILITIES,
   getCapabilitiesForMode,
 } from "../runtime/feature-catalog.js";
-import { getMediaDownloadAvailability } from "../media/download-job-contract.js";
+import {
+  DOWNLOAD_JOB_PREFIX,
+  getMediaDownloadAvailability,
+} from "../media/download-job-contract.js";
 import {
   createMediaCatalogViewSignature,
   selectVisibleMediaItems,
@@ -17,6 +20,7 @@ const modeDescription = document.getElementById("mode-description");
 const mediaCount = document.getElementById("media-count");
 const mediaStatus = document.getElementById("media-status");
 const mediaList = document.getElementById("media-list");
+const mediaJobList = document.getElementById("media-job-list");
 
 const MODE_DESCRIPTIONS = Object.freeze({
   safe: "Verified rules; no predictive DOM actions",
@@ -26,7 +30,11 @@ const MODE_DESCRIPTIONS = Object.freeze({
 
 let settings = null;
 let mediaRefreshInFlight = false;
-let mediaHelperStatus = { status: "checking", canDownloadHls: false };
+let mediaHelperStatus = {
+  status: "checking",
+  canDownloadDirect: false,
+  canDownloadHls: false,
+};
 let activeMediaTabId = null;
 let mediaRenderSignature = null;
 let scheduledMediaRefresh = null;
@@ -170,6 +178,7 @@ async function render() {
   modeSelect.value = settings.protectionMode;
   await updateBlockedCount();
   await renderMode();
+  await updateMediaJobs();
   const tab = await getActiveHttpTab();
   await renderMediaCatalog(tab);
   if (!tab) return;
@@ -279,7 +288,11 @@ function setText(element, value) {
 }
 
 function onMediaStorageChanged(changes, areaName) {
-  if (areaName !== "session" || !Number.isInteger(activeMediaTabId)) return;
+  if (areaName !== "session") return;
+  if (Object.keys(changes).some((key) => key.startsWith(DOWNLOAD_JOB_PREFIX))) {
+    void updateMediaJobs();
+  }
+  if (!Number.isInteger(activeMediaTabId)) return;
   const key = mediaCatalogSessionKey(activeMediaTabId);
   if (!(key in changes)) return;
   clearTimeout(scheduledMediaRefresh);
@@ -307,7 +320,7 @@ function createMediaItem(item, tab, helper) {
   details.textContent = mediaDetails(item);
   copy.append(name, details);
   row.append(kind, copy);
-  if (item.kind === "hls")
+  if (["direct", "hls"].includes(item.kind))
     row.append(createMediaDownloadButton(item, tab, helper));
   return row;
 }
@@ -316,13 +329,13 @@ function createMediaDownloadButton(item, tab, helper) {
   const availability = getMediaDownloadAvailability(item);
   const button = document.createElement("button");
   button.className = "media-download";
-  const presentation = downloadButtonPresentation(availability, helper);
+  const presentation = downloadButtonPresentation(availability, helper, item);
   button.disabled = presentation.disabled;
   button.textContent = presentation.label;
   button.title = presentation.title;
   button.addEventListener("click", async () => {
     button.disabled = true;
-    if (helper.status !== "ready" || !helper.canDownloadHls) {
+    if (helper.status !== "ready" || !helperCanDownload(item, helper)) {
       await setupMediaHelper(button, helper);
       return;
     }
@@ -340,6 +353,7 @@ function createMediaDownloadButton(item, tab, helper) {
             "Could not start the helper download job.",
         );
       button.textContent = "Started";
+      await updateMediaJobs();
     } catch (error) {
       button.disabled = false;
       button.textContent = "Retry";
@@ -349,7 +363,7 @@ function createMediaDownloadButton(item, tab, helper) {
   return button;
 }
 
-function downloadButtonPresentation(availability, helper) {
+function downloadButtonPresentation(availability, helper, item) {
   if (!availability.supported) {
     return {
       disabled: true,
@@ -371,11 +385,11 @@ function downloadButtonPresentation(availability, helper) {
       title: "Media Helper is required for video downloads.",
     };
   }
-  if (helper.status === "ready" && !helper.canDownloadHls) {
+  if (helper.status === "ready" && !helperCanDownload(item, helper)) {
     return {
       disabled: true,
       label: "Helper update",
-      title: "The installed Media Helper does not support HLS downloads yet.",
+      title: `The installed Media Helper does not support ${item.kind.toUpperCase()} downloads yet.`,
     };
   }
   if (helper.status !== "ready") {
@@ -390,6 +404,12 @@ function downloadButtonPresentation(availability, helper) {
     label: "Download",
     title: "Download with AdsFriendly Media Helper.",
   };
+}
+
+function helperCanDownload(item, helper) {
+  return item.kind === "direct"
+    ? helper.canDownloadDirect === true
+    : helper.canDownloadHls === true;
 }
 
 async function setupMediaHelper(button, helper) {
@@ -407,7 +427,7 @@ async function setupMediaHelper(button, helper) {
       }
     } else if (helper.status === "not_installed") {
       alert(
-        "AdsFriendly Media Helper is not installed. The installer will be added after the native downloader is implemented.",
+        "AdsFriendly Media Helper is not installed or registered. Install the Windows helper, then reopen this popup.",
       );
       button.disabled = false;
       button.textContent = "Install";
@@ -432,6 +452,7 @@ async function readMediaHelperStatus(force = false) {
     ? response
     : {
         status: "unavailable",
+        canDownloadDirect: false,
         canDownloadHls: false,
         error: response?.error || "Could not read Media Helper status.",
       };
@@ -442,13 +463,117 @@ function helperSummary(helper) {
     return "Media found · set up Media Helper to download.";
   if (helper.status === "not_installed")
     return "Media found · Media Helper is not installed.";
-  if (helper.status === "ready" && helper.canDownloadHls)
+  if (
+    helper.status === "ready" &&
+    (helper.canDownloadDirect || helper.canDownloadHls)
+  )
     return `Media Helper ${helper.helperVersion || ""} ready.`.trim();
   if (helper.status === "ready")
     return "Media Helper connected · downloader update required.";
   if (helper.status === "incompatible")
     return "Media Helper version is incompatible.";
   return "Media found · Media Helper is unavailable.";
+}
+
+async function updateMediaJobs() {
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "GET_MEDIA_DOWNLOAD_JOBS",
+    });
+    renderMediaJobs(Array.isArray(response?.items) ? response.items : []);
+  } catch (error) {
+    console.debug("[AdsFriendly Popup] Download jobs unavailable", error);
+  }
+}
+
+function renderMediaJobs(items) {
+  const visible = items.slice(0, 4);
+  const existing = new Map(
+    [...mediaJobList.children].map((row) => [row.dataset.jobId, row]),
+  );
+  const visibleIds = new Set();
+  for (const item of visible) {
+    visibleIds.add(item.id);
+    const row = existing.get(item.id) || createMediaJobItem();
+    updateMediaJobItem(row, item);
+    mediaJobList.append(row);
+  }
+  for (const [jobId, row] of existing) {
+    if (!visibleIds.has(jobId)) row.remove();
+  }
+  mediaJobList.hidden = visible.length === 0;
+}
+
+function createMediaJobItem() {
+  const row = document.createElement("div");
+  row.className = "media-job";
+  const copy = document.createElement("div");
+  copy.className = "media-job-copy";
+  const label = document.createElement("span");
+  label.className = "media-name media-job-label";
+  const detail = document.createElement("span");
+  detail.className = "media-details media-job-detail";
+  copy.append(label, detail);
+  row.append(copy);
+  return row;
+}
+
+function updateMediaJobItem(row, job) {
+  row.dataset.jobId = job.id;
+  setText(
+    row.querySelector(".media-job-label"),
+    job.title || String(job.kind || "media").toUpperCase(),
+  );
+  setText(row.querySelector(".media-job-detail"), mediaJobDetails(job));
+  let cancel = row.querySelector(".media-cancel");
+  if (
+    ["starting", "probing", "downloading", "finalizing"].includes(job.status)
+  ) {
+    if (!cancel) {
+      cancel = document.createElement("button");
+      cancel.className = "media-download media-cancel";
+      cancel.textContent = "Cancel";
+      cancel.addEventListener("click", async () => {
+        cancel.disabled = true;
+        cancel.textContent = "Stopping…";
+        await chrome.runtime.sendMessage({
+          type: "CANCEL_MEDIA_DOWNLOAD_JOB",
+          jobId: cancel.dataset.jobId,
+        });
+        await updateMediaJobs();
+      });
+      row.append(cancel);
+    }
+    cancel.dataset.jobId = job.id;
+  } else {
+    cancel?.remove();
+  }
+}
+
+function mediaJobDetails(job) {
+  if (job.status === "completed")
+    return `Completed · ${job.outputPath || "saved"}`;
+  if (job.status === "failed")
+    return `Failed · ${job.error || "unknown error"}`;
+  if (job.status === "cancelled")
+    return "Cancelled · resume available on retry";
+  if (job.status === "cancelling") return "Stopping…";
+  const downloaded = job.progress?.downloadedBytes;
+  const total = job.progress?.totalBytes;
+  if (Number.isFinite(downloaded) && Number.isFinite(total) && total > 0) {
+    const percent = Math.min(100, Math.round((downloaded / total) * 100));
+    const speed = Number.isFinite(job.progress?.bytesPerSecond)
+      ? ` · ${formatBytes(job.progress.bytesPerSecond)}/s`
+      : "";
+    return `${percent}% · ${formatBytes(downloaded)} / ${formatBytes(total)}${speed}`;
+  }
+  return `${job.status || "starting"}…`;
+}
+
+function formatBytes(bytes) {
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+  return `${Math.max(0, Math.round(bytes / 1024))} KB`;
 }
 
 function downloadUnavailableLabel(reason = "") {

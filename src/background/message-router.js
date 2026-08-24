@@ -22,7 +22,11 @@ import {
   recordDiscoveredMedia,
   recordMediaProbe,
 } from "./media-catalog.js";
-import { requestMediaDownloadJob } from "./media-download-jobs.js";
+import {
+  listMediaDownloadJobs,
+  requestMediaDownloadCancel,
+  requestMediaDownloadJob,
+} from "./media-download-jobs.js";
 import { getMediaHelperStatus } from "./media-helper-bridge.js";
 
 const MESSAGE_CAPABILITIES = Object.freeze({
@@ -54,6 +58,8 @@ const MESSAGE_CAPABILITIES = Object.freeze({
   GET_MEDIA_CATALOG: CAPABILITIES.MEDIA_CATALOG,
   GET_MEDIA_HELPER_STATUS: CAPABILITIES.MEDIA_DOWNLOAD,
   CREATE_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
+  CANCEL_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
+  GET_MEDIA_DOWNLOAD_JOBS: CAPABILITIES.MEDIA_DOWNLOAD,
 });
 
 export function registerMessageRouter(policy) {
@@ -172,6 +178,10 @@ async function route(message, sender) {
       tabId: message.tabId,
       mediaId: message.mediaId,
     });
+  if (message.type === "CANCEL_MEDIA_DOWNLOAD_JOB")
+    return requestMediaDownloadCancel({ jobId: message.jobId });
+  if (message.type === "GET_MEDIA_DOWNLOAD_JOBS")
+    return listMediaDownloadJobs();
   if (message.type === "NEGATIVE_LEARNING")
     return handleNegativeLearning(message.fingerprint);
   if (message.type === "USER_DECISION") return handleUserDecision(message);
