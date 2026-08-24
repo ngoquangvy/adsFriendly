@@ -8,6 +8,10 @@ import {
   summarizeSettingsPackage,
 } from "../src/settings-package/schema.js";
 import { initializeBundledSettingsPackage } from "../src/background/settings-package-seed.js";
+import {
+  getResponsiveLayout,
+  ruleMatchesResponsiveLayout,
+} from "../src/dom/layout-context.js";
 
 const examplePackage = {
   schema_version: SETTINGS_PACKAGE_SCHEMA,
@@ -31,6 +35,7 @@ const examplePackage = {
           selector: "div.promo-banner",
           fingerprint: { tag: "div", classTokens: ["promo-banner"] },
           confidence: 0.93,
+          layout: "wide",
         },
       ],
     },
@@ -51,6 +56,7 @@ test("normalizes a shareable settings package", () => {
   assert.deepEqual(result.settings.whitelist, ["docs.example"]);
   assert.deepEqual(result.settings.blacklist, ["||ads.example^"]);
   assert.equal(result.settings.custom_rules["video.example"].length, 1);
+  assert.equal(result.settings.custom_rules["video.example"][0].layout, "wide");
   assert.equal(result.settings.trusted_paths[0].isManual, true);
 });
 
@@ -154,6 +160,15 @@ test("bundled package initializes a fresh installation once", async () => {
   assert.equal(second.status, "already_initialized");
   assert.deepEqual(snapshot.whitelist, ["docs.example"]);
   assert.equal(snapshot.settingsPackageState.source, "bundled");
+});
+
+test("responsive DOM rules do not leak from desktop into mobile layouts", () => {
+  assert.equal(getResponsiveLayout(390), "compact");
+  assert.equal(getResponsiveLayout(1280), "wide");
+  assert.equal(ruleMatchesResponsiveLayout({ layout: "wide" }, "compact"), false);
+  assert.equal(ruleMatchesResponsiveLayout({ layout: "compact" }, "compact"), true);
+  assert.equal(ruleMatchesResponsiveLayout({ layout: "any" }, "compact"), true);
+  assert.equal(ruleMatchesResponsiveLayout(".legacy-rule", "compact"), true);
 });
 
 function createStorage(initial = {}) {

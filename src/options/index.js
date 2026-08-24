@@ -297,10 +297,13 @@ function renderCustomRules() {
             typeof rule === "object" && rule.fingerprint
               ? JSON.stringify(rule.fingerprint)
               : "Simple selector";
+          const layout =
+            typeof rule === "object" ? rule.layout || "any" : "any";
           return `
             <div style="display:flex; justify-content:space-between; gap:0.75rem; padding:8px 0; border-top:1px solid rgba(255,255,255,0.05); font-size:0.75rem;">
               <div style="min-width:0">
                 <code style="word-break:break-all; color:#93c5fd">${safeText(selector)}</code>
+                <span class="sample-chip" style="margin-left:6px">${safeText(layout.toUpperCase())}</span>
                 <div style="color:#64748b; margin-top:3px; word-break:break-all">${safeText(fingerprint)}</div>
               </div>
               <button class="btn-delete-rule-item btn-delete" data-host="${safeText(hostname)}" data-index="${index}" title="Delete rule">Delete</button>

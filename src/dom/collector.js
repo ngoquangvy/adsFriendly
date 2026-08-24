@@ -12,6 +12,7 @@ import {
 } from "./features.js";
 import { showDomCandidateToast } from "./toast.js";
 import { CAPABILITIES } from "../runtime/feature-catalog.js";
+import { getResponsiveLayout } from "./layout-context.js";
 
 const observed = new WeakSet();
 const allowedSelectors = new Set();
@@ -178,6 +179,7 @@ async function persistCustomRule(candidate, outcome) {
     timesZapped: 1,
     confidence: candidate.decision.confidence,
     source: outcome,
+    layout: getResponsiveLayout(),
   };
   const response = await chrome.runtime.sendMessage({
     type: "UPSERT_CUSTOM_RULES",

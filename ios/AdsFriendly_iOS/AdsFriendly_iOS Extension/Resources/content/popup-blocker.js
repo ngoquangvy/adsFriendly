@@ -31,9 +31,6 @@
         if (!rules) return;
         userAllowedPopupHosts = rules.allowed || {};
         userBlockedPopupHosts = rules.blocked || {};
-        if (isUserAllowedPopup(window.location.href) && typeof notifyAllowed === 'function') {
-          notifyAllowed(window.location.href);
-        }
       });
     } catch(e) {}
   }
@@ -92,13 +89,9 @@
   }
 
   function onPopupEvent(url, userInitiated) {
-    if (userInitiated) {
-      try {
-        api.runtime.sendMessage({
-          action: "trusted_popup",
-          url: url || ""
-        });
-      } catch(e) {}
+    if (typeof isProtectionEnabled === 'function' && !isProtectionEnabled()) {
+      document.documentElement.setAttribute('__afs_allow__', 'yes');
+      return;
     }
     if (isBlankUrl(url)) {
       if (userInitiated || isTrustedInitiatorPage()) {
@@ -116,10 +109,10 @@
         action: "block",
         outcome: "prevented_window_open"
       });
-      notifyBlocked(url);
+      notifyBlocked(url, true);
       return;
     }
-    if (userInitiated || isTrustedInitiatorPage() || !isCrossOrigin(url) || isWhitelisted(url) || isUserAllowedPopup(url) || matchesTrustedIntent(url)) {
+    if (isTrustedInitiatorPage() || !isCrossOrigin(url) || isWhitelisted(url) || isUserAllowedPopup(url) || matchesTrustedIntent(url)) {
       document.documentElement.setAttribute('__afs_allow__', 'yes');
       log("Cho phep popup:", url);
       return;
@@ -133,7 +126,7 @@
       action: "block",
       outcome: "prevented_window_open"
     });
-    notifyBlocked(url);
+    notifyBlocked(url, false);
   }
 
   window.addEventListener('__AFS_popup__', function(e) {
@@ -176,7 +169,7 @@
   api.runtime.onMessage.addListener(function(message) {
     if (message.action === "popup_blocked") {
       log("Background da chan tab:", message.url);
-      notifyBlocked(message.url);
+      notifyBlocked(message.url, isUserBlockedPopup(message.url));
     } else if (message.action === "popup_rules_updated") {
       refreshPopupRules();
     }

@@ -10,6 +10,7 @@ const IOS_RESOURCES = new URL(
 await testAdTokenMatching();
 await testBackgroundNewTabPolicy();
 await testMainWorldPopupPolicy();
+await testIosDecisionUiContract();
 
 console.log("iOS navigation policy checks passed.");
 
@@ -235,4 +236,35 @@ async function testMainWorldPopupPolicy() {
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function testIosDecisionUiContract() {
+  const [manifestSource, background, ui, popupBlocker, bannerDetector, canonicalPackage, iosPackage] =
+    await Promise.all([
+      readFile(new URL("manifest.json", IOS_RESOURCES), "utf8"),
+      readFile(new URL("background.js", IOS_RESOURCES), "utf8"),
+      readFile(new URL("content/ui.js", IOS_RESOURCES), "utf8"),
+      readFile(new URL("content/popup-blocker.js", IOS_RESOURCES), "utf8"),
+      readFile(new URL("content/banner-detector.js", IOS_RESOURCES), "utf8"),
+      readFile(new URL("../packages/default-settings-package.json", import.meta.url), "utf8"),
+      readFile(new URL("packages/default-settings-package.json", IOS_RESOURCES), "utf8"),
+    ]);
+  const manifest = JSON.parse(manifestSource);
+  assert.ok(manifest.background.scripts.includes("utils/settings-package.js"));
+  assert.ok(manifest.background.scripts.includes("background/settings-package.js"));
+  assert.ok(manifest.content_scripts[0].js.includes("content/dom-rules.js"));
+  assert.equal("options_ui" in manifest, false, "mobile keeps settings intentionally small");
+  assert.equal(background.includes('request.action === "restore_tabs"'), false);
+  assert.equal(background.includes('request.action === "open_tabs"'), false);
+  assert.ok(background.includes('request.action === "open_once"'));
+  assert.ok(ui.includes('action: "allow_popups"'));
+  assert.ok(ui.includes('action: "block_popups"'));
+  assert.ok(ui.includes('action: "open_once"'));
+  assert.ok(popupBlocker.includes("notifyBlocked(url, true)"));
+  assert.ok(popupBlocker.includes("notifyBlocked(url, false)"));
+  assert.ok(ui.includes("notifyBannerCandidate"));
+  assert.ok(ui.includes("Suspected ad banner"));
+  assert.ok(bannerDetector.includes('saveDomDecision(selector, "hide")'));
+  assert.ok(bannerDetector.includes('saveDomDecision(selector, "show")'));
+  assert.deepEqual(JSON.parse(iosPackage), JSON.parse(canonicalPackage));
 }

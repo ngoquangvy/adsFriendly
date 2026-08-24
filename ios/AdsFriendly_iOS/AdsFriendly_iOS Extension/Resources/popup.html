@@ -1,17 +1,37 @@
-<!DOCTYPE html>
-<html>
+<!doctype html>
+<html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-  <h3>AdsFriendly</h3>
-  <p>Popup protection is active.</p>
-  <label class="row">
-    <input id="telemetry-toggle" type="checkbox">
-    <span>Share anonymous learning logs</span>
-  </label>
-  <p class="note">Off by default. No device ID, no fingerprinting.</p>
+  <header>
+    <div class="brand-mark">A</div>
+    <div class="brand-copy">
+      <strong>AdsFriendly</strong>
+      <span id="site-host">Current website</span>
+    </div>
+    <label class="switch" aria-label="General protection">
+      <input id="protection-toggle" type="checkbox" checked>
+      <span></span>
+    </label>
+  </header>
+  <section class="status-card">
+    <div><span class="eyebrow">SITE STATUS</span><strong id="site-status">Protected</strong></div>
+    <span id="status-dot" class="status-dot"></span>
+  </section>
+  <section class="counts">
+    <div><strong id="site-count">0</strong><span>On this site</span></div>
+    <div><strong id="total-count">0</strong><span>Total blocked</span></div>
+  </section>
+  <section class="policy" aria-label="Remembered action for this website">
+    <button data-policy="default">Default</button>
+    <button data-policy="allow">Allow</button>
+    <button data-policy="block">Block</button>
+  </section>
+  <p id="hint">Unknown popup sources ask once before being remembered.</p>
+  <p id="error" role="alert" hidden></p>
   <script src="popup.js"></script>
 </body>
 </html>

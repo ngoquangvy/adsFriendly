@@ -9,6 +9,20 @@ function isWhitelisted(url) {
   } catch(e) { return false; }
 }
 
+function isProtectionEnabled() {
+  return !AF_CONFIG.appSettings || AF_CONFIG.appSettings.enabled !== false;
+}
+
+function getProtectionMode() {
+  return (AF_CONFIG.appSettings && AF_CONFIG.appSettings.protectionMode) || "safe";
+}
+
+function getResponsiveLayout() {
+  var screenWidth = typeof screen !== "undefined" && screen.width ? screen.width : 1024;
+  return Math.min(window.innerWidth || 1024, screenWidth) <= 767
+    ? "compact" : "wide";
+}
+
 function normalizeHost(hostname) {
   return (hostname || '').toLowerCase().replace(/\.$/, '');
 }

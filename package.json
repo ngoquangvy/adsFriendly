@@ -16,6 +16,8 @@
     "test:e2e:live": "node scripts/e2e-live-sites.mjs",
     "test:e2e:nav": "node scripts/e2e-nav-safety.mjs",
     "test:ios-nav": "node scripts/test-ios-navigation-policy.mjs",
+    "ios:settings:sync": "node scripts/sync-ios-settings-package.mjs",
+    "ios:settings:check": "node scripts/sync-ios-settings-package.mjs --check",
     "server": "npm --prefix server start",
     "server:test": "npm --prefix server test"
   },

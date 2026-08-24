@@ -1,5 +1,13 @@
 var AF_CONFIG = {
   debug: true,
+  appSettings: {
+    enabled: true,
+    protectionMode: "safe",
+    featureOverrides: {}
+  },
+  blacklist: [],
+  customRules: {},
+  allowedDomSelectors: {},
 
   whitelist: [
     "google.com", "accounts.google.com",
@@ -86,4 +94,35 @@ var AF_CONFIG = {
     overlayPosition: ["fixed", "sticky", "absolute"],
     suspiciousAttributes: ["style", "class"]
   }
+};
+
+AF_CONFIG.baseWhitelist = AF_CONFIG.whitelist.slice();
+
+AF_CONFIG.ready = new Promise(function(resolve) {
+  var afApi = (typeof browser !== "undefined") ? browser : chrome;
+  if (!afApi.storage || !afApi.storage.local) {
+    resolve(AF_CONFIG);
+    return;
+  }
+  afApi.storage.local.get(["appSettings", "whitelist", "blacklist", "userCustomRules", "afsAllowedDomSelectors"], function(result) {
+    result = result || {};
+    if (result.appSettings) AF_CONFIG.appSettings = Object.assign({}, AF_CONFIG.appSettings, result.appSettings);
+    if (Array.isArray(result.whitelist)) AF_CONFIG.whitelist = AF_CONFIG.baseWhitelist.concat(result.whitelist);
+    AF_CONFIG.blacklist = result.blacklist || [];
+    AF_CONFIG.customRules = result.userCustomRules || {};
+    AF_CONFIG.allowedDomSelectors = result.afsAllowedDomSelectors || {};
+    resolve(AF_CONFIG);
+  });
+  afApi.storage.onChanged.addListener(function(changes, areaName) {
+    if (areaName !== "local") return;
+    if (changes.appSettings) AF_CONFIG.appSettings = Object.assign({ enabled: true, protectionMode: "safe", featureOverrides: {} }, changes.appSettings.newValue || {});
+    if (changes.whitelist) AF_CONFIG.whitelist = AF_CONFIG.baseWhitelist.concat(changes.whitelist.newValue || []);
+    if (changes.blacklist) AF_CONFIG.blacklist = changes.blacklist.newValue || [];
+    if (changes.userCustomRules) AF_CONFIG.customRules = changes.userCustomRules.newValue || {};
+    if (changes.afsAllowedDomSelectors) AF_CONFIG.allowedDomSelectors = changes.afsAllowedDomSelectors.newValue || {};
+  });
+});
+
+AF_CONFIG.whenReady = function(callback) {
+  AF_CONFIG.ready.then(callback).catch(function() {});
 };

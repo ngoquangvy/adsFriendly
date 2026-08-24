@@ -15,6 +15,8 @@
   ],
   "background": {
     "scripts": [
+      "utils/settings-package.js",
+      "background/settings-package.js",
       "background/whitelist.js",
       "background/telemetry.js",
       "background/neutralize.js",
@@ -29,6 +31,7 @@
         "utils/config.js",
         "utils/helpers.js",
         "content/telemetry.js",
+        "content/dom-rules.js",
         "content/ui.js",
         "content/injector.js",
         "content/popup-blocker.js",

@@ -19,6 +19,15 @@
         }
       });
     }
+    if (typeof bgRecordBlock === "function") {
+      if (openerTabId) {
+        bgApi.tabs.get(openerTabId, function(sourceTab) {
+          bgRecordBlock(sourceTab && sourceTab.url ? sourceTab.url : url, "popup", 1);
+        });
+      } else {
+        bgRecordBlock(url, "popup", 1);
+      }
+    }
     bgApi.tabs.update(tabId, { url: 'about:blank' }, function() {
       if (bgApi.runtime.lastError) {
         console.log("[AdsFriendly BG] update to blank FAILED:", bgApi.runtime.lastError.message);

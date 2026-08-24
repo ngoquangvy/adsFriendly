@@ -19,6 +19,9 @@ jobs:
       - name: Show Xcode version
         run: xcodebuild -version
 
+      - name: Sync Settings Package
+        run: node scripts/sync-ios-settings-package.mjs
+
       - name: Build unsigned IPA for device
         run: |
           cd ios/AdsFriendly_iOS

@@ -4,6 +4,15 @@
   var lastActiveTabId = null;
   var trustedClicksByTab = {};
   var lastTrustedClickTime = 0;
+  var openOnceUntilByHost = {};
+
+  window.bgAllowPopupOnce = function(url) {
+    try { openOnceUntilByHost[new URL(url).hostname.toLowerCase()] = Date.now() + 5000; } catch(e) {}
+  };
+
+  function isAllowedOnce(url) {
+    try { return (openOnceUntilByHost[new URL(url).hostname.toLowerCase()] || 0) > Date.now(); } catch(e) { return false; }
+  }
 
   bgApi.tabs.query({ active: true, lastFocusedWindow: true }, function(tabs) {
     if (tabs && tabs[0]) {
@@ -178,7 +187,9 @@
   }
 
   function shouldAllowNavigation(sourceTabId, sourceUrl, targetUrl) {
+    if (typeof bgIsProtectionEnabled === "function" && !bgIsProtectionEnabled()) return true;
     if (!targetUrl || targetUrl === "" || targetUrl.indexOf("about:") === 0) return true;
+    if (isAllowedOnce(targetUrl)) return true;
     if (bgIsUserBlockedPopup(targetUrl)) return false;
     if (bgIsUserAllowedPopup(targetUrl)) return true;
     if (bgIsTrustedInitiator(sourceUrl)) return true;
@@ -189,6 +200,7 @@
   }
 
   function shouldBlockNavigation(sourceTabId, sourceUrl, targetUrl) {
+    if (typeof bgIsProtectionEnabled === "function" && !bgIsProtectionEnabled()) return false;
     if (!targetUrl || targetUrl === "" || targetUrl.indexOf("about:") === 0) return false;
     if (bgIsUserBlockedPopup(targetUrl)) return true;
     if (shouldAllowNavigation(sourceTabId, sourceUrl, targetUrl)) return false;

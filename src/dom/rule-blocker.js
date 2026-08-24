@@ -9,6 +9,10 @@ import {
 } from "./actions.js";
 import { showDomHiddenToast } from "./toast.js";
 import { isExtensionContextInvalidated } from "../shared/extension-context.js";
+import {
+  getResponsiveLayout,
+  ruleMatchesResponsiveLayout,
+} from "./layout-context.js";
 const PROTECTED_SELECTOR =
   'nav, header, [role="navigation"], form, [data-testid*="login" i]';
 const customRuleSnapshots = new Map();
@@ -28,6 +32,9 @@ export async function blockAdsOnPage() {
       "siteResetHistory",
     ]);
     customSelectors = result.userCustomRules?.[hostname] || [];
+    customSelectors = customSelectors.filter((rule) =>
+      ruleMatchesResponsiveLayout(rule, getResponsiveLayout()),
+    );
     resetHistory = result.siteResetHistory?.[hostname] || resetHistory;
   } catch (error) {
     if (isExtensionContextInvalidated(error)) throw error;

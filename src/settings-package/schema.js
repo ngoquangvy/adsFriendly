@@ -31,6 +31,7 @@ const DANGEROUS_SELECTORS = new Set([
   "iframe",
   "video",
 ]);
+const VALID_RULE_LAYOUTS = new Set(["any", "compact", "wide"]);
 
 export function createSettingsPackage(storageSnapshot = {}, metadata = {}) {
   const trustedPaths = Object.entries(storageSnapshot)
@@ -219,6 +220,7 @@ function normalizeRule(rule) {
     fingerprint: normalizeFingerprint(rule.fingerprint),
     confidence: clampNumber(rule.confidence, 0, 1, 0.8),
     source: cleanText(rule.source || "package", 80),
+    layout: VALID_RULE_LAYOUTS.has(rule.layout) ? rule.layout : "any",
   };
   if (rule.isCorrection === true) normalized.isCorrection = true;
   return normalized;

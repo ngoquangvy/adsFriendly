@@ -22,6 +22,7 @@
 
   function processNewNode(node) {
     if (node.nodeType !== 1) return;
+    if (!isProtectionEnabled() || isWhitelisted(window.location.href)) return;
     if (isTrustedInitiatorPage()) return;
 
     var links = node.tagName === 'A' ? [node] : (node.querySelectorAll ? node.querySelectorAll('a[target="_blank"]') : []);

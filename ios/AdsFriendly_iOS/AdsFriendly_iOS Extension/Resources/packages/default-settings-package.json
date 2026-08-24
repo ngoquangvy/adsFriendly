@@ -1,0 +1,22 @@
+{
+  "schema_version": "adsfriendly.settings-package.v1",
+  "metadata": {
+    "id": "adsfriendly.default",
+    "name": "AdsFriendly Default Settings",
+    "author": "AdsFriendly",
+    "version": "1.0.0",
+    "description": "Editable default settings bundled with AdsFriendly.",
+    "created_at": "2026-08-23T00:00:00.000Z"
+  },
+  "settings": {
+    "app": {
+      "enabled": true,
+      "protectionMode": "safe",
+      "featureOverrides": {}
+    },
+    "whitelist": [],
+    "blacklist": [],
+    "custom_rules": {},
+    "trusted_paths": []
+  }
+}

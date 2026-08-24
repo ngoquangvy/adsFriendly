@@ -32,6 +32,8 @@
   var bgApi = (typeof browser !== 'undefined') ? browser : chrome;
   var bgUserAllowedPopupHosts = {};
   var bgUserBlockedPopupHosts = {};
+  var bgConfiguredWhitelist = [];
+  var bgConfiguredBlacklist = [];
 
   function normalizeHost(hostname) {
     return (hostname || '').toLowerCase().replace(/\.$/, '');
@@ -51,7 +53,7 @@
   window.bgIsWhitelisted = function(url) {
     try {
       var hostname = new URL(url).hostname;
-      return bgWhitelist.some(function(d) {
+      return bgWhitelist.concat(bgConfiguredWhitelist).some(function(d) {
         return hostMatchesDomain(hostname, d);
       }) || isGoogleHost(hostname);
     } catch(e) { return false; }
@@ -81,20 +83,34 @@
   window.bgGetPopupHostKey = popupHostKey;
 
   window.bgGetPopupRules = function() {
+    var allowed = Object.assign({}, bgUserAllowedPopupHosts);
+    var blocked = Object.assign({}, bgUserBlockedPopupHosts);
+    bgConfiguredWhitelist.forEach(function(entry) {
+      var host = normalizeHost(String(entry || '').replace(/^\|\|/, '').replace(/\^$/, ''));
+      if (host) allowed[host] = allowed[host] || { source: "settings_package" };
+    });
+    bgConfiguredBlacklist.forEach(function(entry) {
+      var host = normalizeHost(String(entry || '').replace(/^\|\|/, '').replace(/\^$/, ''));
+      if (host) blocked[host] = blocked[host] || { source: "settings_package" };
+    });
     return {
-      allowed: bgUserAllowedPopupHosts,
-      blocked: bgUserBlockedPopupHosts
+      allowed: allowed,
+      blocked: blocked
     };
   };
 
   window.bgIsUserAllowedPopup = function(url) {
     var key = popupHostKey(url);
-    return !!(key && bgUserAllowedPopupHosts[key]);
+    return !!(key && (bgUserAllowedPopupHosts[key] || bgConfiguredWhitelist.some(function(entry) {
+      return hostMatchesDomain(key, entry);
+    })));
   };
 
   window.bgIsUserBlockedPopup = function(url) {
     var key = popupHostKey(url);
-    return !!(key && bgUserBlockedPopupHosts[key]);
+    return !!(key && (bgUserBlockedPopupHosts[key] || bgConfiguredBlacklist.some(function(entry) {
+      return hostMatchesDomain(key, String(entry || '').replace(/^\|\|/, '').replace(/\^$/, ''));
+    })));
   };
 
   window.bgRememberAllowedPopup = function(url, callback) {
@@ -162,9 +178,18 @@
   };
 
   if (bgApi.storage && bgApi.storage.local) {
-    bgApi.storage.local.get(["afsAllowedPopupHosts", "afsBlockedPopupHosts"], function(result) {
+    bgApi.storage.local.get(["afsAllowedPopupHosts", "afsBlockedPopupHosts", "whitelist", "blacklist"], function(result) {
       bgUserAllowedPopupHosts = result.afsAllowedPopupHosts || {};
       bgUserBlockedPopupHosts = result.afsBlockedPopupHosts || {};
+      bgConfiguredWhitelist = result.whitelist || [];
+      bgConfiguredBlacklist = result.blacklist || [];
+    });
+    bgApi.storage.onChanged.addListener(function(changes, areaName) {
+      if (areaName !== "local") return;
+      if (changes.afsAllowedPopupHosts) bgUserAllowedPopupHosts = changes.afsAllowedPopupHosts.newValue || {};
+      if (changes.afsBlockedPopupHosts) bgUserBlockedPopupHosts = changes.afsBlockedPopupHosts.newValue || {};
+      if (changes.whitelist) bgConfiguredWhitelist = changes.whitelist.newValue || [];
+      if (changes.blacklist) bgConfiguredBlacklist = changes.blacklist.newValue || [];
     });
   }
 

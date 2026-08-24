@@ -1,6 +1,7 @@
 import { createMainController } from "../runtime/main-controller.js";
 import { CAPABILITIES } from "../runtime/feature-catalog.js";
 import { buildDynamicAdIdSelector } from "../dom/features.js";
+import { getResponsiveLayout } from "../dom/layout-context.js";
 
 function startPickerController(policy) {
   (function () {
@@ -465,6 +466,7 @@ function startPickerController(policy) {
         timesZapped: 1,
         confidence: isCorrectionLoop ? 1.0 : 0.8,
         isCorrection: isCorrectionLoop,
+        layout: getResponsiveLayout(),
       };
 
       if (isCorrectionLoop) {
