@@ -10,7 +10,7 @@ import {
   parseHlsAttributeList,
   parseHlsManifest,
 } from "../src/media/hls-parser.js";
-import { createHlsProbeAlternatives } from "../src/media/hls-probe-adapters.js";
+import { createHlsProbeAttempts } from "../src/media/hls-probe-adapters.js";
 import {
   createMediaProbeGate,
   isUsableMediaProbe,
@@ -233,24 +233,53 @@ test("empty HLS envelopes remain unknown instead of being mislabeled live", () =
   );
 });
 
-test("encrypted HLS envelopes register a bounded clear playlist alternative", () => {
+test("encrypted HLS envelopes register bounded query mutation attempts", () => {
   const encrypted = `#EXTM3U
 #ENC-AESGCM;iv=1234
 #EXT-X-B65:0-138
 encrypted-payload`;
   assert.deepEqual(
-    createHlsProbeAlternatives(
-      "https://embed.example/token?d=1&session=abc",
+    createHlsProbeAttempts(
+      "https://embed.example/token?d=2&mode=encrypted&sessionId=abc",
       encrypted,
     ),
-    ["https://embed.example/token?session=abc"],
+    [
+      {
+        url: "https://embed.example/token?mode=encrypted&sessionId=abc",
+        adapterId: "aesgcm-b65-query-mutation",
+        strategy: "remove_query_parameter",
+        removedQueryKey: "d",
+        evidence: ["enc_aesgcm", "ext_x_b65"],
+      },
+      {
+        url: "https://embed.example/token?d=2&sessionId=abc",
+        adapterId: "aesgcm-b65-query-mutation",
+        strategy: "remove_query_parameter",
+        removedQueryKey: "mode",
+        evidence: ["enc_aesgcm", "ext_x_b65"],
+      },
+    ],
   );
   assert.deepEqual(
-    createHlsProbeAlternatives(
+    createHlsProbeAttempts(
       "https://embed.example/token?d=1",
       "#EXTM3U\n#EXTINF:4,\nsegment.ts",
     ),
     [],
+  );
+  assert.deepEqual(
+    createHlsProbeAttempts(
+      "https://embed.example/token?access_token=secret&video_id=42",
+      encrypted,
+    ),
+    [],
+  );
+  assert.equal(
+    createHlsProbeAttempts(
+      "https://embed.example/token?d=2&mode=x&format=y&output=z",
+      encrypted,
+    ).length,
+    3,
   );
 });
 

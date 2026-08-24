@@ -114,10 +114,23 @@ test("registered media probe events normalize manifest metadata", () => {
     status: "ready",
     playlistType: "master",
     variants: [{ id: "720p", bandwidth: 2_000_000 }],
+    resolutionAttempt: {
+      adapterId: "aesgcm-b65-query-mutation",
+      strategy: "remove_query_parameter",
+      removedQueryKey: "d",
+      evidence: ["enc_aesgcm", "ext_x_b65"],
+      queryValue: "must-not-survive-normalization",
+    },
   });
   assert.equal(event.type, EVENTS.MEDIA_PROBED);
   assert.equal(event.payload.status, "ready");
   assert.equal(event.payload.variants[0].bandwidth, 2_000_000);
+  assert.deepEqual(event.payload.resolutionAttempt, {
+    adapterId: "aesgcm-b65-query-mutation",
+    strategy: "remove_query_parameter",
+    removedQueryKey: "d",
+    evidence: ["enc_aesgcm", "ext_x_b65"],
+  });
 });
 
 test("event registry rejects unknown or malformed media events", () => {

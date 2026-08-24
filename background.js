@@ -1797,6 +1797,7 @@ var AdsFriendlyBackground = (() => {
       ),
       revisionId: optionalString(value.revisionId),
       requestContexts: normalizeRequestContexts(value.requestContexts),
+      resolutionAttempt: normalizeMediaResolutionAttempt(value.resolutionAttempt),
       encryptionMethods: normalizeStrings(value.encryptionMethods)
     };
     if (!candidate.sourceUrl && !candidate.manifestUrl) {
@@ -1854,12 +1855,28 @@ var AdsFriendlyBackground = (() => {
       ),
       revisionId: optionalString(value.revisionId),
       requestContext: normalizeMediaRequestContext(value.requestContext),
+      resolutionAttempt: normalizeMediaResolutionAttempt(value.resolutionAttempt),
       encryptionMethods: normalizeStrings(value.encryptionMethods),
       drm: enumValue(
         value.drm || DRM_STATES.NONE,
         Object.values(DRM_STATES),
         "drm"
       )
+    };
+  }
+  function normalizeMediaResolutionAttempt(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const strategy = optionalEnumValue(
+      value.strategy,
+      ["remove_query_parameter"],
+      "resolutionAttempt.strategy"
+    );
+    if (!strategy) return null;
+    return {
+      adapterId: optionalString(value.adapterId)?.slice(0, 100) || null,
+      strategy,
+      removedQueryKey: optionalString(value.removedQueryKey)?.slice(0, 100) || null,
+      evidence: normalizeStrings(value.evidence).slice(0, 20)
     };
   }
   function normalizeMediaRequestContext(value) {
@@ -2386,6 +2403,7 @@ var AdsFriendlyBackground = (() => {
       mediaSequence: item.mediaSequence,
       discontinuitySequence: item.discontinuitySequence,
       revisionId: item.revisionId,
+      resolutionAttempt: item.resolutionAttempt,
       encryptionMethods: item.encryptionMethods
     };
   }
@@ -2409,6 +2427,7 @@ var AdsFriendlyBackground = (() => {
       mediaSequence: probe.mediaSequence,
       discontinuitySequence: probe.discontinuitySequence,
       revisionId: probe.revisionId,
+      resolutionAttempt: probe.resolutionAttempt,
       encryptionMethods: probe.encryptionMethods
     };
   }
@@ -2474,6 +2493,10 @@ var AdsFriendlyBackground = (() => {
       requestContexts: (item.requestContexts || []).map((context) => ({
         ...context
       })),
+      resolutionAttempt: item.resolutionAttempt ? {
+        ...item.resolutionAttempt,
+        evidence: [...item.resolutionAttempt.evidence || []]
+      } : null,
       parentManifestIds: [...resolution?.parents || []],
       childManifestIds: [...resolution?.children || []],
       resolutionStatus: resolution?.resolutionStatus || null,

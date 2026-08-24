@@ -99,6 +99,7 @@ var AdsFriendlyMainWorld = (() => {
       ),
       revisionId: optionalString(value.revisionId),
       requestContexts: normalizeRequestContexts(value.requestContexts),
+      resolutionAttempt: normalizeMediaResolutionAttempt(value.resolutionAttempt),
       encryptionMethods: normalizeStrings(value.encryptionMethods)
     };
     if (!candidate.sourceUrl && !candidate.manifestUrl) {
@@ -156,12 +157,28 @@ var AdsFriendlyMainWorld = (() => {
       ),
       revisionId: optionalString(value.revisionId),
       requestContext: normalizeMediaRequestContext(value.requestContext),
+      resolutionAttempt: normalizeMediaResolutionAttempt(value.resolutionAttempt),
       encryptionMethods: normalizeStrings(value.encryptionMethods),
       drm: enumValue(
         value.drm || DRM_STATES.NONE,
         Object.values(DRM_STATES),
         "drm"
       )
+    };
+  }
+  function normalizeMediaResolutionAttempt(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const strategy = optionalEnumValue(
+      value.strategy,
+      ["remove_query_parameter"],
+      "resolutionAttempt.strategy"
+    );
+    if (!strategy) return null;
+    return {
+      adapterId: optionalString(value.adapterId)?.slice(0, 100) || null,
+      strategy,
+      removedQueryKey: optionalString(value.removedQueryKey)?.slice(0, 100) || null,
+      evidence: normalizeStrings(value.evidence).slice(0, 20)
     };
   }
   function normalizeMediaRequestContext(value) {
@@ -660,22 +677,61 @@ var AdsFriendlyMainWorld = (() => {
   }
 
   // src/media/hls-probe-adapters.js
+  var MAX_PROBE_ATTEMPTS = 3;
+  var PROTECTED_QUERY_KEYS = Object.freeze([
+    "access_token",
+    "auth",
+    "authorization",
+    "expires",
+    "expiry",
+    "hash",
+    "id",
+    "jwt",
+    "key",
+    "policy",
+    "session",
+    "session_id",
+    "sig",
+    "signature",
+    "token"
+  ]);
+  var CONTROL_QUERY_KEYS = Object.freeze([
+    "d",
+    "decrypt",
+    "encrypted",
+    "encryption",
+    "enc",
+    "mode",
+    "format",
+    "output",
+    "response",
+    "type"
+  ]);
   var HLS_PROBE_ADAPTERS = Object.freeze([
     Object.freeze({
-      id: "aesgcm-b65-clear-variant",
+      id: "aesgcm-b65-query-mutation",
+      evidence: Object.freeze(["enc_aesgcm", "ext_x_b65"]),
       matches(body) {
         const source = normalizeBody(body);
         return source.startsWith("#EXTM3U") && source.includes("#ENC-AESGCM;") && source.includes("#EXT-X-B65:");
       },
-      alternatives(manifestUrl) {
-        const url = new URL(manifestUrl);
-        if (url.searchParams.get("d") !== "1") return [];
-        url.searchParams.delete("d");
-        return [url.href];
+      attempts(manifestUrl) {
+        const sourceUrl = new URL(manifestUrl);
+        return mutationKeys(sourceUrl).map((removedQueryKey) => {
+          const url = new URL(sourceUrl.href);
+          url.searchParams.delete(removedQueryKey);
+          return {
+            url: url.href,
+            adapterId: this.id,
+            strategy: "remove_query_parameter",
+            removedQueryKey,
+            evidence: [...this.evidence]
+          };
+        });
       }
     })
   ]);
-  function createHlsProbeAlternatives(manifestUrl, body) {
+  function createHlsProbeAttempts(manifestUrl, body) {
     let url;
     try {
       url = new URL(manifestUrl);
@@ -683,16 +739,32 @@ var AdsFriendlyMainWorld = (() => {
       return [];
     }
     if (!["http:", "https:"].includes(url.protocol)) return [];
-    const alternatives = [];
+    const attempts = [];
     for (const adapter of HLS_PROBE_ADAPTERS) {
       if (!adapter.matches(body)) continue;
-      for (const value of adapter.alternatives(url.href)) {
-        if (value !== url.href && !alternatives.includes(value)) {
-          alternatives.push(value);
+      for (const attempt of adapter.attempts(url.href)) {
+        if (attempt.url !== url.href && !attempts.some((item) => item.url === attempt.url)) {
+          attempts.push(attempt);
         }
       }
     }
-    return alternatives.slice(0, 3);
+    return attempts.slice(0, MAX_PROBE_ATTEMPTS);
+  }
+  function mutationKeys(url) {
+    const keys = [...new Set(url.searchParams.keys())].filter(
+      (key) => key && !isProtectedQueryKey(key)
+    );
+    return keys.sort((left, right) => queryKeyRank(left) - queryKeyRank(right));
+  }
+  function isProtectedQueryKey(key) {
+    const normalized = key.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase().replace(/[^a-z0-9]+/g, "_");
+    return PROTECTED_QUERY_KEYS.some(
+      (protectedKey) => normalized === protectedKey || normalized.endsWith(`_${protectedKey}`)
+    );
+  }
+  function queryKeyRank(key) {
+    const preferred = CONTROL_QUERY_KEYS.indexOf(key.toLowerCase());
+    return preferred === -1 ? CONTROL_QUERY_KEYS.length : preferred;
   }
   function normalizeBody(body) {
     return typeof body === "string" ? body.replace(/^\uFEFF/, "").trimStart() : "";
@@ -1269,8 +1341,14 @@ var AdsFriendlyMainWorld = (() => {
   function installNetworkCapture(policy) {
     const originalFetch = window.fetch;
     const probeGate = createMediaProbeGate();
-    const inspect = (manifestUrl, body, candidate, requestContext2 = null) => {
-      const probe = inspectManifest(manifestUrl, body, candidate, requestContext2);
+    const inspect = (manifestUrl, body, candidate, requestContext2 = null, resolutionAttempt = null) => {
+      const probe = inspectManifest(
+        manifestUrl,
+        body,
+        candidate,
+        requestContext2,
+        resolutionAttempt
+      );
       if (isUsableMediaProbe(probe)) probeGate.remember(manifestUrl, "ready");
       else probeGate.release(manifestUrl);
       return probe;
@@ -1383,20 +1461,17 @@ var AdsFriendlyMainWorld = (() => {
           createFallbackRequestContext(manifestUrl, finalUrl)
         );
         if (isUsableMediaProbe(primaryProbe)) return primaryProbe;
-        for (const alternativeUrl of createHlsProbeAlternatives(
-          finalUrl,
-          body
-        )) {
+        for (const attempt of createHlsProbeAttempts(finalUrl, body)) {
           const alternativeResponse = await originalFetch.call(
             window,
-            alternativeUrl,
+            attempt.url,
             {
               credentials: "same-origin",
               cache: "default"
             }
           );
           if (!alternativeResponse.ok) continue;
-          const alternativeFinalUrl = alternativeResponse.url || alternativeUrl;
+          const alternativeFinalUrl = alternativeResponse.url || attempt.url;
           const alternativeCandidate = reportMediaSource(
             alternativeFinalUrl,
             alternativeResponse.headers.get("content-type")
@@ -1405,7 +1480,8 @@ var AdsFriendlyMainWorld = (() => {
             alternativeFinalUrl,
             await alternativeResponse.text(),
             alternativeCandidate,
-            createFallbackRequestContext(manifestUrl, alternativeFinalUrl)
+            createFallbackRequestContext(manifestUrl, alternativeFinalUrl),
+            attempt
           );
           if (isUsableMediaProbe(alternativeProbe)) {
             probeGate.remember(manifestUrl, "ready");
@@ -1440,7 +1516,7 @@ var AdsFriendlyMainWorld = (() => {
     });
     return candidate;
   }
-  function inspectManifest(manifestUrl, body, candidate, requestContext2 = null) {
+  function inspectManifest(manifestUrl, body, candidate, requestContext2 = null, resolutionAttempt = null) {
     analyzeManifest(manifestUrl, body);
     let hlsCandidate = candidate;
     if (hlsCandidate?.kind !== MEDIA_KINDS.HLS && typeof body === "string" && body.replace(/^\uFEFF/, "").trimStart().startsWith("#EXTM3U")) {
@@ -1459,7 +1535,8 @@ var AdsFriendlyMainWorld = (() => {
         manifestUrl: hlsCandidate.manifestUrl,
         kind: MEDIA_KINDS.HLS,
         ...probe,
-        requestContext: requestContext2
+        requestContext: requestContext2,
+        resolutionAttempt
       })
     });
     return probe;

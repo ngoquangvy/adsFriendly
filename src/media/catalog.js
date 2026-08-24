@@ -159,6 +159,7 @@ function probeFields(item) {
     mediaSequence: item.mediaSequence,
     discontinuitySequence: item.discontinuitySequence,
     revisionId: item.revisionId,
+    resolutionAttempt: item.resolutionAttempt,
     encryptionMethods: item.encryptionMethods,
   };
 }
@@ -183,6 +184,7 @@ function probeFieldsFromProbe(probe) {
     mediaSequence: probe.mediaSequence,
     discontinuitySequence: probe.discontinuitySequence,
     revisionId: probe.revisionId,
+    resolutionAttempt: probe.resolutionAttempt,
     encryptionMethods: probe.encryptionMethods,
   };
 }
@@ -258,6 +260,12 @@ function cloneItem(item, resolution = null) {
     requestContexts: (item.requestContexts || []).map((context) => ({
       ...context,
     })),
+    resolutionAttempt: item.resolutionAttempt
+      ? {
+          ...item.resolutionAttempt,
+          evidence: [...(item.resolutionAttempt.evidence || [])],
+        }
+      : null,
     parentManifestIds: [...(resolution?.parents || [])],
     childManifestIds: [...(resolution?.children || [])],
     resolutionStatus: resolution?.resolutionStatus || null,

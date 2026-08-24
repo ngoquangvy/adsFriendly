@@ -3,7 +3,7 @@ import { notifyContentScript } from "./bridge.js";
 import { createMediaCandidateFromSource } from "../media/detection.js";
 import { MEDIA_DETECTION_SOURCES, MEDIA_KINDS } from "../media/contracts.js";
 import { parseHlsManifest } from "../media/hls-parser.js";
-import { createHlsProbeAlternatives } from "../media/hls-probe-adapters.js";
+import { createHlsProbeAttempts } from "../media/hls-probe-adapters.js";
 import {
   createMediaProbeGate,
   isUsableMediaProbe,
@@ -14,8 +14,20 @@ import { CAPABILITIES } from "../runtime/feature-catalog.js";
 export function installNetworkCapture(policy) {
   const originalFetch = window.fetch;
   const probeGate = createMediaProbeGate();
-  const inspect = (manifestUrl, body, candidate, requestContext = null) => {
-    const probe = inspectManifest(manifestUrl, body, candidate, requestContext);
+  const inspect = (
+    manifestUrl,
+    body,
+    candidate,
+    requestContext = null,
+    resolutionAttempt = null,
+  ) => {
+    const probe = inspectManifest(
+      manifestUrl,
+      body,
+      candidate,
+      requestContext,
+      resolutionAttempt,
+    );
     if (isUsableMediaProbe(probe)) probeGate.remember(manifestUrl, "ready");
     else probeGate.release(manifestUrl);
     return probe;
@@ -149,20 +161,17 @@ function installFallbackProbe({ policy, originalFetch, probeGate, inspect }) {
         );
         if (isUsableMediaProbe(primaryProbe)) return primaryProbe;
 
-        for (const alternativeUrl of createHlsProbeAlternatives(
-          finalUrl,
-          body,
-        )) {
+        for (const attempt of createHlsProbeAttempts(finalUrl, body)) {
           const alternativeResponse = await originalFetch.call(
             window,
-            alternativeUrl,
+            attempt.url,
             {
               credentials: "same-origin",
               cache: "default",
             },
           );
           if (!alternativeResponse.ok) continue;
-          const alternativeFinalUrl = alternativeResponse.url || alternativeUrl;
+          const alternativeFinalUrl = alternativeResponse.url || attempt.url;
           const alternativeCandidate =
             reportMediaSource(
               alternativeFinalUrl,
@@ -173,7 +182,10 @@ function installFallbackProbe({ policy, originalFetch, probeGate, inspect }) {
             await alternativeResponse.text(),
             alternativeCandidate,
             createFallbackRequestContext(manifestUrl, alternativeFinalUrl),
+            attempt,
           );
+          // TRAINING_BACKLOG: MEDIA_RESOLUTION_STRATEGY
+          // Keep this session evidence structured; it is not a label by itself.
           if (isUsableMediaProbe(alternativeProbe)) {
             probeGate.remember(manifestUrl, "ready");
             return alternativeProbe;
@@ -210,7 +222,13 @@ function reportMediaSource(sourceUrl, mimeType) {
   return candidate;
 }
 
-function inspectManifest(manifestUrl, body, candidate, requestContext = null) {
+function inspectManifest(
+  manifestUrl,
+  body,
+  candidate,
+  requestContext = null,
+  resolutionAttempt = null,
+) {
   analyzeManifest(manifestUrl, body);
   let hlsCandidate = candidate;
   if (
@@ -237,6 +255,7 @@ function inspectManifest(manifestUrl, body, candidate, requestContext = null) {
       kind: MEDIA_KINDS.HLS,
       ...probe,
       requestContext,
+      resolutionAttempt,
     }),
   });
   return probe;

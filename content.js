@@ -2323,6 +2323,7 @@ var AdsFriendlyContent = (() => {
       ),
       revisionId: optionalString(value.revisionId),
       requestContexts: normalizeRequestContexts(value.requestContexts),
+      resolutionAttempt: normalizeMediaResolutionAttempt(value.resolutionAttempt),
       encryptionMethods: normalizeStrings(value.encryptionMethods)
     };
     if (!candidate.sourceUrl && !candidate.manifestUrl) {
@@ -2380,12 +2381,28 @@ var AdsFriendlyContent = (() => {
       ),
       revisionId: optionalString(value.revisionId),
       requestContext: normalizeMediaRequestContext(value.requestContext),
+      resolutionAttempt: normalizeMediaResolutionAttempt(value.resolutionAttempt),
       encryptionMethods: normalizeStrings(value.encryptionMethods),
       drm: enumValue(
         value.drm || DRM_STATES.NONE,
         Object.values(DRM_STATES),
         "drm"
       )
+    };
+  }
+  function normalizeMediaResolutionAttempt(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const strategy = optionalEnumValue(
+      value.strategy,
+      ["remove_query_parameter"],
+      "resolutionAttempt.strategy"
+    );
+    if (!strategy) return null;
+    return {
+      adapterId: optionalString(value.adapterId)?.slice(0, 100) || null,
+      strategy,
+      removedQueryKey: optionalString(value.removedQueryKey)?.slice(0, 100) || null,
+      evidence: normalizeStrings(value.evidence).slice(0, 20)
     };
   }
   function normalizeMediaRequestContext(value) {
