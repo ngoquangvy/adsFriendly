@@ -185,7 +185,6 @@ var AdsFriendlyVideo = (() => {
       C.CORE_MAINTENANCE
     ),
     feature("background.settings-package-seed", "background", C.CORE_MAINTENANCE),
-    feature("content.spy-injector", "content", C.MEDIA_OBSERVE),
     feature("content.media-observer", "content", C.MEDIA_OBSERVE, [
       C.MEDIA_CATALOG
     ]),

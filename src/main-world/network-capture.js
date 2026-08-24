@@ -3,19 +3,35 @@ import { notifyContentScript } from "./bridge.js";
 import { createMediaCandidateFromSource } from "../media/detection.js";
 import { MEDIA_DETECTION_SOURCES, MEDIA_KINDS } from "../media/contracts.js";
 import { parseHlsManifest } from "../media/hls-parser.js";
+import { createMediaProbeGate } from "../media/probe-gate.js";
 import { EVENTS, createRegisteredEvent } from "../runtime/event-catalog.js";
 import { CAPABILITIES } from "../runtime/feature-catalog.js";
 
 export function installNetworkCapture(policy) {
-  const stopFetchCapture = installFetchCapture(policy);
-  const stopXhrCapture = installXhrCapture(policy);
+  const originalFetch = window.fetch;
+  const probeGate = createMediaProbeGate();
+  const inspect = (manifestUrl, body, candidate) => {
+    const probe = inspectManifest(manifestUrl, body, candidate);
+    if (probe) probeGate.remember(manifestUrl, probe.status);
+    return probe;
+  };
+  const stopFetchCapture = installFetchCapture(policy, inspect);
+  const stopXhrCapture = installXhrCapture(policy, inspect);
+  const stopFallbackProbe = installFallbackProbe({
+    policy,
+    originalFetch,
+    probeGate,
+    inspect,
+  });
   return () => {
     stopFetchCapture();
     stopXhrCapture();
+    stopFallbackProbe();
+    probeGate.clear();
   };
 }
 
-function installFetchCapture(policy) {
+function installFetchCapture(policy, inspect) {
   const originalFetch = window.fetch;
   const fetchWrapper = async function (...args) {
     const url = requestUrl(args[0]);
@@ -28,7 +44,7 @@ function installFetchCapture(policy) {
       response
         .clone()
         .text()
-        .then((body) => inspectManifest(finalUrl, body, candidate))
+        .then((body) => inspect(finalUrl, body, candidate))
         .catch(() => {});
     }
     return response;
@@ -39,7 +55,7 @@ function installFetchCapture(policy) {
   };
 }
 
-function installXhrCapture(policy) {
+function installXhrCapture(policy, inspect) {
   const originalOpen = XMLHttpRequest.prototype.open;
   const originalSend = XMLHttpRequest.prototype.send;
   const openWrapper = function (method, url, ...rest) {
@@ -57,7 +73,7 @@ function installXhrCapture(policy) {
       if (!isManifestLike(url) && candidate?.kind !== MEDIA_KINDS.HLS) return;
       try {
         if (typeof this.responseText === "string")
-          inspectManifest(url, this.responseText, candidate);
+          inspect(url, this.responseText, candidate);
       } catch {}
     });
     return originalSend.apply(this, args);
@@ -69,6 +85,50 @@ function installXhrCapture(policy) {
       XMLHttpRequest.prototype.open = originalOpen;
     if (XMLHttpRequest.prototype.send === sendWrapper)
       XMLHttpRequest.prototype.send = originalSend;
+  };
+}
+
+function installFallbackProbe({ policy, originalFetch, probeGate, inspect }) {
+  let stopped = false;
+  const onProbeRequest = (messageEvent) => {
+    if (
+      stopped ||
+      messageEvent.source !== window ||
+      messageEvent.data?.source !== "adsfriendly-content" ||
+      messageEvent.data?.type !== "PROBE_HLS_MANIFEST" ||
+      !policy.can(CAPABILITIES.MEDIA_OBSERVE)
+    )
+      return;
+    const manifestUrl = probeGate.claim(messageEvent.data.manifestUrl);
+    if (!manifestUrl) return;
+    const candidate = createMediaCandidateFromSource({
+      pageUrl: location.href,
+      sourceUrl: manifestUrl,
+      mimeType: "application/vnd.apple.mpegurl",
+      title: document.title || null,
+      detectedBy: MEDIA_DETECTION_SOURCES.NETWORK,
+    });
+    originalFetch
+      .call(window, manifestUrl, {
+        credentials: "same-origin",
+        cache: "default",
+      })
+      .then((response) => {
+        if (!response.ok)
+          throw new Error(`manifest_http_${response.status || "error"}`);
+        return response.text();
+      })
+      .then((body) => inspect(manifestUrl, body, candidate))
+      .catch((error) => {
+        if (probeGate.state(manifestUrl) !== "pending") return;
+        probeGate.remember(manifestUrl, "failed");
+        reportProbeFailure(manifestUrl, candidate, probeErrorCode(error));
+      });
+  };
+  window.addEventListener("message", onProbeRequest);
+  return () => {
+    stopped = true;
+    window.removeEventListener("message", onProbeRequest);
   };
 }
 
@@ -104,7 +164,7 @@ function inspectManifest(manifestUrl, body, candidate) {
       "application/vnd.apple.mpegurl",
     );
   }
-  if (hlsCandidate?.kind !== MEDIA_KINDS.HLS) return;
+  if (hlsCandidate?.kind !== MEDIA_KINDS.HLS) return null;
   const probe = parseHlsManifest(manifestUrl, body);
   notifyContentScript({
     type: "REGISTERED_EVENT",
@@ -116,6 +176,28 @@ function inspectManifest(manifestUrl, body, candidate) {
       ...probe,
     }),
   });
+  return probe;
+}
+
+function reportProbeFailure(manifestUrl, candidate, error) {
+  if (candidate?.kind !== MEDIA_KINDS.HLS) return;
+  notifyContentScript({
+    type: "REGISTERED_EVENT",
+    event: createRegisteredEvent(EVENTS.MEDIA_PROBED, {
+      mediaId: candidate.id,
+      pageUrl: location.href,
+      manifestUrl,
+      kind: MEDIA_KINDS.HLS,
+      status: "failed",
+      error,
+    }),
+  });
+}
+
+function probeErrorCode(error) {
+  const message = error?.message || "";
+  const httpMatch = /manifest_http_\d+/.exec(message);
+  return httpMatch?.[0] || "fallback_fetch_blocked";
 }
 
 function requestUrl(input) {

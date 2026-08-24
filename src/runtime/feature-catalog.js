@@ -105,7 +105,6 @@ export const FEATURE_CATALOG = Object.freeze([
   ),
   feature("background.settings-package-seed", "background", C.CORE_MAINTENANCE),
 
-  feature("content.spy-injector", "content", C.MEDIA_OBSERVE),
   feature("content.media-observer", "content", C.MEDIA_OBSERVE, [
     C.MEDIA_CATALOG,
   ]),

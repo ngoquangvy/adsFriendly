@@ -9,6 +9,17 @@ if (window.top !== window) {
     },
   });
 
+  controller.onChange(({ settings }) => {
+    window.postMessage(
+      {
+        source: "adsfriendly-content",
+        type: "PROTECTION_SETTINGS_CHANGED",
+        settings,
+      },
+      "*",
+    );
+  });
+
   controller
     .start()
     .catch((error) =>

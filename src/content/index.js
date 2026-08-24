@@ -1,4 +1,3 @@
-import { injectSpy } from "./spy-injector.js";
 import { startIntentTracker } from "../navigation/content/intent-tracker.js";
 import { startDomCandidateCollector } from "../dom/collector.js";
 import {
@@ -13,8 +12,6 @@ import { startMediaObserver } from "./media-observer.js";
 const controller = createMainController({
   context: "content",
   implementations: {
-    "content.spy-injector": ({ controller: main }) =>
-      injectSpy(main.snapshot().settings),
     "content.media-observer": () => startMediaObserver(),
     "content.youtube-cleaner": () => startYouTubeCleaner(),
     "content.navigation-intent": () => startIntentTracker(),

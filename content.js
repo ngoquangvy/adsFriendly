@@ -1,18 +1,4 @@
 var AdsFriendlyContent = (() => {
-  // src/content/spy-injector.js
-  function injectSpy(settings = {}) {
-    try {
-      const script = document.createElement("script");
-      script.src = chrome.runtime.getURL("injected_spy.js");
-      script.dataset.protectionMode = settings.protectionMode || "safe";
-      script.dataset.protectionEnabled = String(settings.enabled !== false);
-      (document.head || document.documentElement).appendChild(script);
-      script.onload = () => script.remove();
-    } catch (error) {
-      console.error("[AdsFriendly] Injection failed:", error);
-    }
-  }
-
   // src/shared/url.js
   function parseUrl(value, base) {
     try {
@@ -993,7 +979,6 @@ var AdsFriendlyContent = (() => {
       C.CORE_MAINTENANCE
     ),
     feature("background.settings-package-seed", "background", C.CORE_MAINTENANCE),
-    feature("content.spy-injector", "content", C.MEDIA_OBSERVE),
     feature("content.media-observer", "content", C.MEDIA_OBSERVE, [
       C.MEDIA_CATALOG
     ]),
@@ -2462,6 +2447,8 @@ var AdsFriendlyContent = (() => {
     const pending = /* @__PURE__ */ new Set();
     const retryCounts = /* @__PURE__ */ new Map();
     const retryTimers = /* @__PURE__ */ new Set();
+    const probeTimers = /* @__PURE__ */ new Set();
+    const requestedProbes = /* @__PURE__ */ new Set();
     const videoListeners = /* @__PURE__ */ new Map();
     const mutationObserver = new MutationObserver((mutations) => {
       for (const mutation of mutations) {
@@ -2509,6 +2496,9 @@ var AdsFriendlyContent = (() => {
       retryCounts.clear();
       retryTimers.forEach(clearTimeout);
       retryTimers.clear();
+      probeTimers.forEach(clearTimeout);
+      probeTimers.clear();
+      requestedProbes.clear();
     };
     function scanElement(element) {
       if (stopped || !element) return;
@@ -2560,6 +2550,8 @@ var AdsFriendlyContent = (() => {
         if (response?.status === "recorded") {
           reported.add(reportKey);
           retryCounts.delete(reportKey);
+          if (event2.type === EVENTS.MEDIA_DISCOVERED)
+            scheduleManifestProbe(event2.payload);
           return;
         }
         if (["catalog_disabled", "capability_disabled"].includes(response?.status)) {
@@ -2577,6 +2569,27 @@ var AdsFriendlyContent = (() => {
         if (!isExtensionContextInvalidated(error))
           console.debug("[AdsFriendly Media] Catalog unavailable", error);
       });
+    }
+    function scheduleManifestProbe(candidate) {
+      if (candidate.kind !== "hls" || !candidate.manifestUrl || requestedProbes.has(candidate.id))
+        return;
+      requestedProbes.add(candidate.id);
+      for (const delay of [150, 750, 2e3]) {
+        const timerId = setTimeout(() => {
+          probeTimers.delete(timerId);
+          if (stopped) return;
+          window.postMessage(
+            {
+              source: "adsfriendly-content",
+              type: "PROBE_HLS_MANIFEST",
+              mediaId: candidate.id,
+              manifestUrl: candidate.manifestUrl
+            },
+            "*"
+          );
+        }, delay);
+        probeTimers.add(timerId);
+      }
     }
   }
   function startPerformanceObserver(onEntry) {
@@ -2596,7 +2609,6 @@ var AdsFriendlyContent = (() => {
   var controller = createMainController({
     context: "content",
     implementations: {
-      "content.spy-injector": ({ controller: main }) => injectSpy(main.snapshot().settings),
       "content.media-observer": () => startMediaObserver(),
       "content.youtube-cleaner": () => startYouTubeCleaner(),
       "content.navigation-intent": () => startIntentTracker(),

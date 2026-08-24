@@ -49,6 +49,15 @@ subtitle tracks; media playlists expose VOD/live state, duration, segment count,
 encryption methods, and suspected DRM. Full manifest bodies, signed URLs outside
 the per-tab session catalog, and segment lists are not persisted.
 
+Network capture is installed at `document_start` in Chrome's MAIN world for both
+the top page and video iframes, so page CSP does not block it. When a
+manifest URL is discovered through DOM or Resource Timing after its response was
+missed, the content observer asks the same page context to fetch that HTTP(S)
+manifest once from the browser cache/network. The fallback inherits the page's
+origin, referrer, and same-origin cookies; a bounded gate prevents repeated
+requests. A blocked fallback is reported explicitly instead of remaining in an
+indefinite “reading qualities” state.
+
 Blob sources (including the common YouTube player case) remain discovery-only:
 the blob URL does not reveal the underlying adaptive streams. DASH probing and
 download output are separate later slices. None of these probe results are

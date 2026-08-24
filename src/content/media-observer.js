@@ -13,6 +13,8 @@ export function startMediaObserver() {
   const pending = new Set();
   const retryCounts = new Map();
   const retryTimers = new Set();
+  const probeTimers = new Set();
+  const requestedProbes = new Set();
   const videoListeners = new Map();
   const mutationObserver = new MutationObserver((mutations) => {
     for (const mutation of mutations) {
@@ -70,6 +72,9 @@ export function startMediaObserver() {
     retryCounts.clear();
     retryTimers.forEach(clearTimeout);
     retryTimers.clear();
+    probeTimers.forEach(clearTimeout);
+    probeTimers.clear();
+    requestedProbes.clear();
   };
 
   function scanElement(element) {
@@ -138,6 +143,8 @@ export function startMediaObserver() {
         if (response?.status === "recorded") {
           reported.add(reportKey);
           retryCounts.delete(reportKey);
+          if (event.type === EVENTS.MEDIA_DISCOVERED)
+            scheduleManifestProbe(event.payload);
           return;
         }
         if (
@@ -158,6 +165,32 @@ export function startMediaObserver() {
         if (!isExtensionContextInvalidated(error))
           console.debug("[AdsFriendly Media] Catalog unavailable", error);
       });
+  }
+
+  function scheduleManifestProbe(candidate) {
+    if (
+      candidate.kind !== "hls" ||
+      !candidate.manifestUrl ||
+      requestedProbes.has(candidate.id)
+    )
+      return;
+    requestedProbes.add(candidate.id);
+    for (const delay of [150, 750, 2_000]) {
+      const timerId = setTimeout(() => {
+        probeTimers.delete(timerId);
+        if (stopped) return;
+        window.postMessage(
+          {
+            source: "adsfriendly-content",
+            type: "PROBE_HLS_MANIFEST",
+            mediaId: candidate.id,
+            manifestUrl: candidate.manifestUrl,
+          },
+          "*",
+        );
+      }, delay);
+      probeTimers.add(timerId);
+    }
   }
 }
 

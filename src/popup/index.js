@@ -262,7 +262,10 @@ function mediaDetails(item) {
   if (item.kind === "dash") return "DASH found · parser comes next";
   if (item.kind !== "hls") return "Media source found";
 
-  if (item.probeStatus === "failed") return "HLS · manifest parse failed";
+  if (item.probeStatus === "failed")
+    return item.probeError === "fallback_fetch_blocked"
+      ? "HLS · page/CORS blocked manifest reading"
+      : "HLS · manifest request or parse failed";
   if (item.probeStatus === "unsupported")
     return "HLS · manifest format not supported";
   if (item.probeStatus !== "ready")

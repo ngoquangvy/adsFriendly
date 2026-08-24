@@ -379,6 +379,8 @@ var AdsFriendlyMediaFrame = (() => {
     const pending = /* @__PURE__ */ new Set();
     const retryCounts = /* @__PURE__ */ new Map();
     const retryTimers = /* @__PURE__ */ new Set();
+    const probeTimers = /* @__PURE__ */ new Set();
+    const requestedProbes = /* @__PURE__ */ new Set();
     const videoListeners = /* @__PURE__ */ new Map();
     const mutationObserver = new MutationObserver((mutations) => {
       for (const mutation of mutations) {
@@ -426,6 +428,9 @@ var AdsFriendlyMediaFrame = (() => {
       retryCounts.clear();
       retryTimers.forEach(clearTimeout);
       retryTimers.clear();
+      probeTimers.forEach(clearTimeout);
+      probeTimers.clear();
+      requestedProbes.clear();
     };
     function scanElement(element) {
       if (stopped || !element) return;
@@ -477,6 +482,8 @@ var AdsFriendlyMediaFrame = (() => {
         if (response?.status === "recorded") {
           reported.add(reportKey);
           retryCounts.delete(reportKey);
+          if (event2.type === EVENTS.MEDIA_DISCOVERED)
+            scheduleManifestProbe(event2.payload);
           return;
         }
         if (["catalog_disabled", "capability_disabled"].includes(response?.status)) {
@@ -494,6 +501,27 @@ var AdsFriendlyMediaFrame = (() => {
         if (!isExtensionContextInvalidated(error))
           console.debug("[AdsFriendly Media] Catalog unavailable", error);
       });
+    }
+    function scheduleManifestProbe(candidate) {
+      if (candidate.kind !== "hls" || !candidate.manifestUrl || requestedProbes.has(candidate.id))
+        return;
+      requestedProbes.add(candidate.id);
+      for (const delay of [150, 750, 2e3]) {
+        const timerId = setTimeout(() => {
+          probeTimers.delete(timerId);
+          if (stopped) return;
+          window.postMessage(
+            {
+              source: "adsfriendly-content",
+              type: "PROBE_HLS_MANIFEST",
+              mediaId: candidate.id,
+              manifestUrl: candidate.manifestUrl
+            },
+            "*"
+          );
+        }, delay);
+        probeTimers.add(timerId);
+      }
     }
   }
   function startPerformanceObserver(onEntry) {
@@ -610,7 +638,6 @@ var AdsFriendlyMediaFrame = (() => {
       C.CORE_MAINTENANCE
     ),
     feature("background.settings-package-seed", "background", C.CORE_MAINTENANCE),
-    feature("content.spy-injector", "content", C.MEDIA_OBSERVE),
     feature("content.media-observer", "content", C.MEDIA_OBSERVE, [
       C.MEDIA_CATALOG
     ]),
@@ -979,6 +1006,16 @@ var AdsFriendlyMediaFrame = (() => {
       implementations: {
         "media-frame.observer": () => startMediaObserver()
       }
+    });
+    controller.onChange(({ settings }) => {
+      window.postMessage(
+        {
+          source: "adsfriendly-content",
+          type: "PROTECTION_SETTINGS_CHANGED",
+          settings
+        },
+        "*"
+      );
     });
     controller.start().catch(
       (error) => console.error("[AdsFriendly Media Frame] MainController failed", error)

@@ -9,6 +9,10 @@ import {
   parseHlsAttributeList,
   parseHlsManifest,
 } from "../src/media/hls-parser.js";
+import {
+  createMediaProbeGate,
+  normalizeHttpMediaUrl,
+} from "../src/media/probe-gate.js";
 import { EVENTS, createRegisteredEvent } from "../src/runtime/event-catalog.js";
 
 test("classifies direct, HLS, DASH, and blob media without treating segments as videos", () => {
@@ -200,4 +204,19 @@ test("catalog applies a manifest probe even if discovery arrives late", () => {
   assert.equal(preserved.probeStatus, "ready");
   assert.equal(preserved.variants[0].resolution.height, 1080);
   assert.deepEqual(preserved.detectionSources, ["network", "dom"]);
+});
+
+test("fallback probe gate accepts HTTP manifests once and stays bounded", () => {
+  const gate = createMediaProbeGate({ maximumRemembered: 2 });
+  assert.equal(
+    gate.claim("https://cdn.example/master.m3u8"),
+    "https://cdn.example/master.m3u8",
+  );
+  assert.equal(gate.claim("https://cdn.example/master.m3u8"), null);
+  gate.remember("https://cdn.example/one.m3u8", "ready");
+  gate.remember("https://cdn.example/two.m3u8", "ready");
+  assert.equal(gate.state("https://cdn.example/master.m3u8"), null);
+  assert.equal(gate.state("https://cdn.example/two.m3u8"), "ready");
+  assert.equal(normalizeHttpMediaUrl("blob:https://video.example/id"), null);
+  assert.equal(normalizeHttpMediaUrl("javascript:alert(1)"), null);
 });

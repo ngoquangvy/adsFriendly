@@ -44,6 +44,17 @@ for (const required of [
   if (!scripts.includes(required) && !resources.includes(required))
     throw new Error(`manifest missing ${required}`);
 }
+const mainWorldCapture = manifest.content_scripts?.find((item) =>
+  item.js?.includes("injected_spy.js"),
+);
+if (
+  mainWorldCapture?.world !== "MAIN" ||
+  mainWorldCapture?.run_at !== "document_start" ||
+  mainWorldCapture?.all_frames !== true
+)
+  throw new Error(
+    "injected_spy.js must run in MAIN world at document_start for all frames",
+  );
 if (manifest.background?.service_worker !== "background.js")
   throw new Error("manifest missing background.js service worker");
 for (const [entry, outfile, globalName] of entries) {

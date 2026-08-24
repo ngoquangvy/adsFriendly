@@ -100,7 +100,6 @@ var AdsFriendlyPopup = (() => {
       C.CORE_MAINTENANCE
     ),
     feature("background.settings-package-seed", "background", C.CORE_MAINTENANCE),
-    feature("content.spy-injector", "content", C.MEDIA_OBSERVE),
     feature("content.media-observer", "content", C.MEDIA_OBSERVE, [
       C.MEDIA_CATALOG
     ]),
@@ -484,7 +483,8 @@ var AdsFriendlyPopup = (() => {
     if (item.kind === "direct") return "Direct video file";
     if (item.kind === "dash") return "DASH found \xB7 parser comes next";
     if (item.kind !== "hls") return "Media source found";
-    if (item.probeStatus === "failed") return "HLS \xB7 manifest parse failed";
+    if (item.probeStatus === "failed")
+      return item.probeError === "fallback_fetch_blocked" ? "HLS \xB7 page/CORS blocked manifest reading" : "HLS \xB7 manifest request or parse failed";
     if (item.probeStatus === "unsupported")
       return "HLS \xB7 manifest format not supported";
     if (item.probeStatus !== "ready")
