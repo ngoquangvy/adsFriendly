@@ -208,6 +208,63 @@ test("HLS attribute parsing preserves quoted commas", () => {
   );
 });
 
+test("empty HLS envelopes remain unknown instead of being mislabeled live", () => {
+  const result = parseHlsManifest(
+    "https://embed.example/token",
+    "#EXTM3U\n#EXT-X-VERSION:7\n",
+  );
+  assert.equal(result.status, "ready");
+  assert.equal(result.playlistType, "unknown");
+  assert.equal(result.streamType, "unknown");
+  assert.equal(result.segmentCount, null);
+  assert.match(
+    getMediaDownloadAvailability({
+      kind: "hls",
+      probeStatus: "ready",
+      drm: "none",
+      encryptionMethods: [],
+      ...result,
+    }).reason,
+    /not exposed/,
+  );
+});
+
+test("parses low-latency HLS parts without inventing full segments", () => {
+  const result = parseHlsManifest(
+    "https://cdn.example/live/token",
+    `#EXTM3U
+#EXT-X-VERSION:9
+#EXT-X-TARGETDURATION:4
+#EXT-X-MEDIA-SEQUENCE:120
+#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES,PART-HOLD-BACK=1.5
+#EXT-X-PART-INF:PART-TARGET=0.5
+#EXT-X-PART:DURATION=0.5,URI="part-120.0.m4s"
+#EXT-X-PART:DURATION=0.5,URI="part-120.1.m4s"
+#EXT-X-PRELOAD-HINT:TYPE=PART,URI="part-120.2.m4s"`,
+  );
+  assert.equal(result.playlistType, "media");
+  assert.equal(result.streamType, "live");
+  assert.equal(result.lowLatency, true);
+  assert.equal(result.segmentCount, 0);
+  assert.equal(result.partialSegmentCount, 2);
+});
+
+test("recognizes iframe-only master playlists without treating them as live", () => {
+  const result = parseHlsManifest(
+    "https://cdn.example/master.m3u8",
+    `#EXTM3U
+#EXT-X-I-FRAME-STREAM-INF:BANDWIDTH=250000,RESOLUTION=1280x720,URI="iframe/720.m3u8"`,
+  );
+  assert.equal(result.playlistType, "master");
+  assert.equal(result.streamType, null);
+  assert.equal(result.variants.length, 0);
+  assert.equal(result.iframeVariants.length, 1);
+  assert.equal(
+    result.iframeVariants[0].url,
+    "https://cdn.example/iframe/720.m3u8",
+  );
+});
+
 test("catalog applies a manifest probe even if discovery arrives late", () => {
   const catalog = createMediaCatalog();
   const event = createRegisteredEvent(EVENTS.MEDIA_PROBED, {
@@ -245,6 +302,40 @@ test("catalog applies a manifest probe even if discovery arrives late", () => {
   assert.equal(preserved.probeStatus, "ready");
   assert.equal(preserved.variants[0].resolution.height, 1080);
   assert.deepEqual(preserved.detectionSources, ["network", "dom"]);
+});
+
+test("catalog links a discovered child playlist back to its HLS master", () => {
+  const catalog = createMediaCatalog();
+  const pageUrl = "https://video.example/watch";
+  const master = createMediaCandidateFromSource({
+    pageUrl,
+    sourceUrl: "https://cdn.example/master.m3u8",
+    detectedBy: "network",
+  });
+  const child = createMediaCandidateFromSource({
+    pageUrl,
+    sourceUrl: "https://cdn.example/720.m3u8",
+    detectedBy: "network",
+  });
+  catalog.add(12, createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, master));
+  catalog.add(12, createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, child));
+  catalog.applyProbe(
+    12,
+    createRegisteredEvent(EVENTS.MEDIA_PROBED, {
+      mediaId: master.id,
+      pageUrl,
+      manifestUrl: master.manifestUrl,
+      kind: "hls",
+      status: "ready",
+      playlistType: "master",
+      variants: [{ id: "720p", url: child.manifestUrl }],
+    }),
+  );
+  const items = catalog.list(12);
+  const linkedMaster = items.find((item) => item.id === master.id);
+  const linkedChild = items.find((item) => item.id === child.id);
+  assert.deepEqual(linkedMaster.childManifestIds, [child.id]);
+  assert.deepEqual(linkedChild.parentManifestIds, [master.id]);
 });
 
 test("fallback probe gate accepts HTTP manifests once and stays bounded", () => {
@@ -351,6 +442,7 @@ test("download availability blocks DRM and live HLS before job creation", () => 
     streamType: "vod",
     drm: "none",
     encryptionMethods: [],
+    segmentCount: 1,
   };
   assert.equal(getMediaDownloadAvailability(base).supported, true);
   assert.match(
@@ -435,4 +527,26 @@ test("media popup keeps rows stable when heartbeat order changes", () => {
     ]).map((item) => item.id),
     ["newer", "older"],
   );
+});
+
+test("media popup groups duplicate unresolved blobs from one player", () => {
+  const items = selectVisibleMediaItems([
+    {
+      id: "blob-1",
+      kind: "blob",
+      pageUrl: "https://video.example/watch",
+      title: "Player",
+      firstSeenAt: 10,
+    },
+    {
+      id: "blob-2",
+      kind: "blob",
+      pageUrl: "https://video.example/watch",
+      title: "Player",
+      firstSeenAt: 20,
+    },
+  ]);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].id, "blob-2");
+  assert.equal(items[0].relatedCount, 2);
 });

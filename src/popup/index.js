@@ -580,11 +580,17 @@ function downloadUnavailableLabel(reason = "") {
   if (reason.includes("DRM")) return "DRM";
   if (reason.includes("Live")) return "Live";
   if (reason.includes("Encrypted")) return "Encrypted";
+  if (reason.includes("waiting") || reason.includes("not exposed"))
+    return "Waiting";
+  if (reason.includes("no media")) return "No media";
   return "Unavailable";
 }
 
 function mediaDetails(item) {
-  if (item.kind === "blob") return "Blob only · source not resolved yet";
+  if (item.kind === "blob")
+    return item.relatedCount > 1
+      ? `${item.relatedCount} Blob signals · tracing one source`
+      : "Blob signal · tracing network source";
   if (item.kind === "direct") return "Direct video file";
   if (item.kind === "dash") return "DASH found · parser comes next";
   if (item.kind !== "hls") return "Media source found";
@@ -598,6 +604,9 @@ function mediaDetails(item) {
   if (item.probeStatus !== "ready")
     return "HLS manifest found · reading qualities";
 
+  if (item.playlistType === "unknown")
+    return "HLS endpoint · waiting for media playlist";
+
   const facts = [];
   if (item.playlistType === "master") {
     const qualityLabels = [...(item.variants || [])]
@@ -610,14 +619,44 @@ function mediaDetails(item) {
     facts.push(
       qualityLabels.length
         ? qualityLabels.join(" · ")
-        : `${item.variants?.length || 0} stream variants`,
+        : item.iframeVariants?.length
+          ? `${item.iframeVariants.length} preview streams · waiting for primary stream`
+          : "Master playlist · waiting for quality streams",
     );
+    if (item.childManifestIds?.length)
+      facts.push(`${item.childManifestIds.length} active child streams`);
   } else {
-    facts.push(item.streamType === "live" ? "Live stream" : "VOD stream");
+    if (item.streamType === "unknown")
+      return "HLS media playlist · waiting for segments";
+    const streamLabel =
+      item.streamType === "live"
+        ? item.lowLatency
+          ? "Low-latency live"
+          : "Live stream"
+        : "VOD stream";
+    facts.push(
+      item.parentManifestIds?.length ? `Variant ${streamLabel}` : streamLabel,
+    );
     if (Number.isFinite(item.duration) && item.duration > 0)
       facts.push(formatDuration(item.duration));
-    if (Number.isInteger(item.segmentCount))
+    if (Number.isInteger(item.segmentCount) && item.segmentCount > 0)
       facts.push(`${item.segmentCount} segments`);
+    if (
+      Number.isInteger(item.partialSegmentCount) &&
+      item.partialSegmentCount > 0
+    )
+      facts.push(`${item.partialSegmentCount} parts`);
+    if (
+      Number.isInteger(item.skippedSegmentCount) &&
+      item.skippedSegmentCount > 0
+    )
+      facts.push(`${item.skippedSegmentCount} skipped`);
+    if (
+      item.streamType === "live" &&
+      !item.segmentCount &&
+      !item.partialSegmentCount
+    )
+      facts.push("waiting for segments");
   }
   if (item.audioTracks?.length) facts.push(`${item.audioTracks.length} audio`);
   if (item.subtitles?.length) facts.push(`${item.subtitles.length} subtitles`);
@@ -660,6 +699,8 @@ function mediaDisplayName(item, sourceUrl) {
     const url = new URL(sourceUrl);
     if (url.protocol === "blob:") return item.title || "Blob media stream";
     const file = url.pathname.split("/").filter(Boolean).at(-1);
+    if (item.kind === "hls" && file?.length > 48 && /^[a-z0-9_-]+$/i.test(file))
+      return `${url.hostname} · tokenized playlist`;
     return file ? `${url.hostname} · ${file}` : url.hostname;
   } catch {
     return item.title || sourceUrl || "Unknown media";

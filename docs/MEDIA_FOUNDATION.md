@@ -52,7 +52,10 @@ The popup exposes the catalog and user-initiated Media Helper setup in Assist
 and Auto modes. HLS response bodies already available to the page are parsed
 without a second network request. Master playlists expose quality variants, audio and
 subtitle tracks; media playlists expose VOD/live state, duration, segment count,
-encryption methods, and suspected DRM. Full manifest bodies, signed URLs outside
+Low-Latency HLS parts, delta updates, encryption methods, and suspected DRM.
+Empty HLS envelopes remain unknown until media evidence appears instead of being
+inferred as live merely because `EXT-X-ENDLIST` is absent. The catalog also links
+discovered child quality/audio/subtitle playlists back to their master. Full manifest bodies, signed URLs outside
 the per-tab session catalog, and segment lists are not persisted.
 
 Network capture is installed at `document_start` in Chrome's MAIN world for both
@@ -87,7 +90,8 @@ removed after the native helper reaches feature parity.
 
 Blob sources (including the common YouTube player case) remain discovery-only:
 the blob URL does not reveal the underlying adaptive streams. DASH probing and
-blob resolution are later slices. Probe results and download jobs are not
+blob resolution are later slices. Duplicate unresolved Blob handles from the
+same page player are grouped in the popup. Probe results and download jobs are not
 training labels or video-ad classifications.
 
 ## Optional helper boundary

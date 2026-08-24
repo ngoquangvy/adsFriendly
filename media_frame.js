@@ -32,6 +32,7 @@ var AdsFriendlyMediaFrame = (() => {
       title: optionalString(value.title),
       mimeType: optionalString(value.mimeType),
       variants: normalizeArray(value.variants),
+      iframeVariants: normalizeArray(value.iframeVariants),
       audioTracks: normalizeArray(value.audioTracks),
       subtitles: normalizeArray(value.subtitles),
       detectedBy: enumValue(
@@ -52,17 +53,20 @@ var AdsFriendlyMediaFrame = (() => {
       probeError: optionalString(value.probeError),
       playlistType: optionalEnumValue(
         value.playlistType,
-        ["master", "media"],
+        ["master", "media", "unknown"],
         "playlistType"
       ),
       streamType: optionalEnumValue(
         value.streamType,
-        ["vod", "live"],
+        ["vod", "live", "unknown"],
         "streamType"
       ),
       duration: optionalFiniteNumber(value.duration),
       targetDuration: optionalFiniteNumber(value.targetDuration),
       segmentCount: optionalNonNegativeInteger(value.segmentCount),
+      partialSegmentCount: optionalNonNegativeInteger(value.partialSegmentCount),
+      skippedSegmentCount: optionalNonNegativeInteger(value.skippedSegmentCount),
+      lowLatency: value.lowLatency === true,
       encryptionMethods: normalizeStrings(value.encryptionMethods)
     };
     if (!candidate.sourceUrl && !candidate.manifestUrl) {
@@ -96,20 +100,24 @@ var AdsFriendlyMediaFrame = (() => {
       error: optionalString(value.error),
       playlistType: optionalEnumValue(
         value.playlistType,
-        ["master", "media"],
+        ["master", "media", "unknown"],
         "playlistType"
       ),
       streamType: optionalEnumValue(
         value.streamType,
-        ["vod", "live"],
+        ["vod", "live", "unknown"],
         "streamType"
       ),
       variants: normalizeArray(value.variants),
+      iframeVariants: normalizeArray(value.iframeVariants),
       audioTracks: normalizeArray(value.audioTracks),
       subtitles: normalizeArray(value.subtitles),
       duration: optionalFiniteNumber(value.duration),
       targetDuration: optionalFiniteNumber(value.targetDuration),
       segmentCount: optionalNonNegativeInteger(value.segmentCount),
+      partialSegmentCount: optionalNonNegativeInteger(value.partialSegmentCount),
+      skippedSegmentCount: optionalNonNegativeInteger(value.skippedSegmentCount),
+      lowLatency: value.lowLatency === true,
       encryptionMethods: normalizeStrings(value.encryptionMethods),
       drm: enumValue(
         value.drm || DRM_STATES.NONE,

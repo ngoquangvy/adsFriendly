@@ -17,15 +17,21 @@ export function parseHlsManifest(manifestUrl, body) {
 
   try {
     const variants = [];
+    const iframeVariants = [];
     const audioTracks = [];
     const subtitles = [];
     const encryptionMethods = new Set();
     let pendingVariant = null;
+    let pendingSegmentDuration = null;
     let segmentCount = 0;
+    let partialSegmentCount = 0;
+    let skippedSegmentCount = 0;
     let duration = 0;
     let targetDuration = null;
     let hasEndList = false;
     let declaredPlaylistType = null;
+    let hasMediaEvidence = false;
+    let hasLowLatencyTag = false;
 
     for (const line of lines) {
       if (!line) continue;
@@ -36,8 +42,23 @@ export function parseHlsManifest(manifestUrl, body) {
         pendingVariant = null;
         continue;
       }
+      if (pendingSegmentDuration !== null && !line.startsWith("#")) {
+        duration += pendingSegmentDuration;
+        segmentCount += 1;
+        pendingSegmentDuration = null;
+        continue;
+      }
       if (line.startsWith("#EXT-X-STREAM-INF:")) {
         pendingVariant = parseAttributeList(valueAfterColon(line));
+        continue;
+      }
+      if (line.startsWith("#EXT-X-I-FRAME-STREAM-INF:")) {
+        const attributes = parseAttributeList(valueAfterColon(line));
+        if (attributes.URI && iframeVariants.length < MAX_VARIANTS) {
+          iframeVariants.push(
+            normalizeVariant(attributes, attributes.URI, manifestUrl, true),
+          );
+        }
         continue;
       }
       if (line.startsWith("#EXT-X-MEDIA:")) {
@@ -63,31 +84,88 @@ export function parseHlsManifest(manifestUrl, body) {
       }
       if (line.startsWith("#EXTINF:")) {
         const value = Number(valueAfterColon(line).split(",", 1)[0]);
-        if (Number.isFinite(value) && value >= 0) duration += value;
-        segmentCount += 1;
+        pendingSegmentDuration =
+          Number.isFinite(value) && value >= 0 ? value : 0;
+        hasMediaEvidence = true;
+        continue;
+      }
+      if (line.startsWith("#EXT-X-PART:")) {
+        partialSegmentCount += 1;
+        hasMediaEvidence = true;
+        hasLowLatencyTag = true;
+        continue;
+      }
+      if (
+        line.startsWith("#EXT-X-PART-INF:") ||
+        line.startsWith("#EXT-X-SERVER-CONTROL:")
+      ) {
+        hasMediaEvidence = true;
+        hasLowLatencyTag = true;
+        continue;
+      }
+      if (line.startsWith("#EXT-X-PRELOAD-HINT:")) {
+        const type = parseAttributeList(valueAfterColon(line)).TYPE;
+        hasMediaEvidence = true;
+        if (String(type || "").toUpperCase() === "PART")
+          hasLowLatencyTag = true;
+        continue;
+      }
+      if (line.startsWith("#EXT-X-SKIP:")) {
+        const skipped = Number(
+          parseAttributeList(valueAfterColon(line))["SKIPPED-SEGMENTS"],
+        );
+        if (Number.isInteger(skipped) && skipped >= 0)
+          skippedSegmentCount = skipped;
+        hasMediaEvidence = true;
         continue;
       }
       if (line.startsWith("#EXT-X-TARGETDURATION:")) {
         const value = Number(valueAfterColon(line));
         if (Number.isFinite(value) && value >= 0) targetDuration = value;
+        hasMediaEvidence = true;
+        continue;
+      }
+      if (
+        line.startsWith("#EXT-X-MEDIA-SEQUENCE:") ||
+        line.startsWith("#EXT-X-DISCONTINUITY-SEQUENCE:") ||
+        line.startsWith("#EXT-X-MAP:")
+      ) {
+        hasMediaEvidence = true;
         continue;
       }
       if (line === "#EXT-X-ENDLIST") {
         hasEndList = true;
+        hasMediaEvidence = true;
         continue;
       }
       if (line.startsWith("#EXT-X-PLAYLIST-TYPE:")) {
         declaredPlaylistType = valueAfterColon(line).toUpperCase();
+        hasMediaEvidence = true;
       }
     }
 
-    const playlistType = variants.length ? "master" : "media";
+    const hasMasterEvidence =
+      variants.length > 0 ||
+      iframeVariants.length > 0 ||
+      ((audioTracks.length > 0 || subtitles.length > 0) && !hasMediaEvidence);
+    const playlistType = hasMasterEvidence
+      ? "master"
+      : hasMediaEvidence
+        ? "media"
+        : "unknown";
     const streamType =
       playlistType === "master"
         ? null
-        : hasEndList || declaredPlaylistType === "VOD"
-          ? "vod"
-          : "live";
+        : playlistType === "unknown"
+          ? "unknown"
+          : hasEndList || declaredPlaylistType === "VOD"
+            ? "vod"
+            : segmentCount > 0 ||
+                partialSegmentCount > 0 ||
+                targetDuration !== null ||
+                declaredPlaylistType === "EVENT"
+              ? "live"
+              : "unknown";
     const methods = [...encryptionMethods];
     return {
       status: "ready",
@@ -95,11 +173,17 @@ export function parseHlsManifest(manifestUrl, body) {
       playlistType,
       streamType,
       variants,
+      iframeVariants,
       audioTracks,
       subtitles,
       duration: playlistType === "media" ? round(duration, 3) : null,
       targetDuration: playlistType === "media" ? targetDuration : null,
       segmentCount: playlistType === "media" ? segmentCount : null,
+      partialSegmentCount:
+        playlistType === "media" ? partialSegmentCount : null,
+      skippedSegmentCount:
+        playlistType === "media" ? skippedSegmentCount : null,
+      lowLatency: playlistType === "media" && hasLowLatencyTag,
       encryptionMethods: methods,
       drm: methods.some(isDrmLikeMethod) ? "suspected" : "none",
     };
@@ -116,7 +200,7 @@ export function parseHlsAttributeList(value = "") {
   return parseAttributeList(value);
 }
 
-function normalizeVariant(attributes, uri, manifestUrl) {
+function normalizeVariant(attributes, uri, manifestUrl, iframeOnly = false) {
   const bandwidth = optionalPositiveNumber(attributes.BANDWIDTH);
   const averageBandwidth = optionalPositiveNumber(
     attributes["AVERAGE-BANDWIDTH"],
@@ -131,6 +215,7 @@ function normalizeVariant(attributes, uri, manifestUrl) {
     frameRate: optionalPositiveNumber(attributes["FRAME-RATE"]),
     audioGroup: optionalText(attributes.AUDIO),
     subtitlesGroup: optionalText(attributes.SUBTITLES),
+    iframeOnly,
   };
 }
 
@@ -196,11 +281,15 @@ function unsupported(error) {
     playlistType: null,
     streamType: null,
     variants: [],
+    iframeVariants: [],
     audioTracks: [],
     subtitles: [],
     duration: null,
     targetDuration: null,
     segmentCount: null,
+    partialSegmentCount: null,
+    skippedSegmentCount: null,
+    lowLatency: false,
     encryptionMethods: [],
     drm: "none",
   };

@@ -39,10 +39,18 @@ export function normalizeMediaDownloadJob(value = {}) {
             drm: candidate.drm || "none",
             encryptionMethods: stringArray(candidate.encryptionMethods),
             variants: objectArray(candidate.variants),
+            iframeVariants: objectArray(candidate.iframeVariants),
             audioTracks: objectArray(candidate.audioTracks),
             subtitles: objectArray(candidate.subtitles),
             duration: optionalFiniteNumber(candidate.duration),
             segmentCount: optionalNonNegativeInteger(candidate.segmentCount),
+            partialSegmentCount: optionalNonNegativeInteger(
+              candidate.partialSegmentCount,
+            ),
+            skippedSegmentCount: optionalNonNegativeInteger(
+              candidate.skippedSegmentCount,
+            ),
+            lowLatency: candidate.lowLatency === true,
           },
   };
 }
@@ -73,8 +81,24 @@ export function getMediaDownloadAvailability(candidate = {}) {
     return { supported: false, reason: "DRM-protected stream." };
   if (candidate.encryptionMethods?.length)
     return { supported: false, reason: "Encrypted HLS is not supported yet." };
-  if (candidate.playlistType === "media" && candidate.streamType !== "vod")
+  if (candidate.playlistType === "unknown")
+    return {
+      supported: false,
+      reason: "HLS endpoint has not exposed a media playlist yet.",
+    };
+  if (candidate.playlistType === "media" && candidate.streamType === "unknown")
+    return {
+      supported: false,
+      reason: "HLS media playlist is waiting for segments.",
+    };
+  if (candidate.playlistType === "media" && candidate.streamType === "live")
     return { supported: false, reason: "Live HLS is not supported yet." };
+  if (
+    candidate.playlistType === "media" &&
+    candidate.streamType === "vod" &&
+    !candidate.segmentCount
+  )
+    return { supported: false, reason: "HLS VOD has no media segments." };
   if (candidate.playlistType === "master" && !candidate.variants?.length)
     return { supported: false, reason: "No quality variants found." };
   if (!["master", "media"].includes(candidate.playlistType))

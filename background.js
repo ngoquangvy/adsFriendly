@@ -1756,6 +1756,7 @@ var AdsFriendlyBackground = (() => {
       title: optionalString(value.title),
       mimeType: optionalString(value.mimeType),
       variants: normalizeArray(value.variants),
+      iframeVariants: normalizeArray(value.iframeVariants),
       audioTracks: normalizeArray(value.audioTracks),
       subtitles: normalizeArray(value.subtitles),
       detectedBy: enumValue(
@@ -1776,17 +1777,20 @@ var AdsFriendlyBackground = (() => {
       probeError: optionalString(value.probeError),
       playlistType: optionalEnumValue(
         value.playlistType,
-        ["master", "media"],
+        ["master", "media", "unknown"],
         "playlistType"
       ),
       streamType: optionalEnumValue(
         value.streamType,
-        ["vod", "live"],
+        ["vod", "live", "unknown"],
         "streamType"
       ),
       duration: optionalFiniteNumber(value.duration),
       targetDuration: optionalFiniteNumber(value.targetDuration),
       segmentCount: optionalNonNegativeInteger(value.segmentCount),
+      partialSegmentCount: optionalNonNegativeInteger(value.partialSegmentCount),
+      skippedSegmentCount: optionalNonNegativeInteger(value.skippedSegmentCount),
+      lowLatency: value.lowLatency === true,
       encryptionMethods: normalizeStrings(value.encryptionMethods)
     };
     if (!candidate.sourceUrl && !candidate.manifestUrl) {
@@ -1820,20 +1824,24 @@ var AdsFriendlyBackground = (() => {
       error: optionalString(value.error),
       playlistType: optionalEnumValue(
         value.playlistType,
-        ["master", "media"],
+        ["master", "media", "unknown"],
         "playlistType"
       ),
       streamType: optionalEnumValue(
         value.streamType,
-        ["vod", "live"],
+        ["vod", "live", "unknown"],
         "streamType"
       ),
       variants: normalizeArray(value.variants),
+      iframeVariants: normalizeArray(value.iframeVariants),
       audioTracks: normalizeArray(value.audioTracks),
       subtitles: normalizeArray(value.subtitles),
       duration: optionalFiniteNumber(value.duration),
       targetDuration: optionalFiniteNumber(value.targetDuration),
       segmentCount: optionalNonNegativeInteger(value.segmentCount),
+      partialSegmentCount: optionalNonNegativeInteger(value.partialSegmentCount),
+      skippedSegmentCount: optionalNonNegativeInteger(value.skippedSegmentCount),
+      lowLatency: value.lowLatency === true,
       encryptionMethods: normalizeStrings(value.encryptionMethods),
       drm: enumValue(
         value.drm || DRM_STATES.NONE,
@@ -2113,6 +2121,7 @@ var AdsFriendlyBackground = (() => {
         const item = {
           ...base,
           variants: probe.variants,
+          iframeVariants: probe.iframeVariants,
           audioTracks: probe.audioTracks,
           subtitles: probe.subtitles,
           drm: probe.drm,
@@ -2123,6 +2132,9 @@ var AdsFriendlyBackground = (() => {
           duration: probe.duration,
           targetDuration: probe.targetDuration,
           segmentCount: probe.segmentCount,
+          partialSegmentCount: probe.partialSegmentCount,
+          skippedSegmentCount: probe.skippedSegmentCount,
+          lowLatency: probe.lowLatency,
           encryptionMethods: probe.encryptionMethods,
           detectionSources: uniqueStrings([
             ...existing?.detectionSources || [],
@@ -2140,7 +2152,11 @@ var AdsFriendlyBackground = (() => {
         const tabCatalog = tabs.get(tabId);
         if (!tabCatalog || pageUrl && !samePageUrl(tabCatalog.pageUrl, pageUrl))
           return [];
-        return [...tabCatalog.items.values()].sort((left, right) => right.lastSeenAt - left.lastSeenAt).map(cloneItem);
+        const items = [...tabCatalog.items.values()].sort(
+          (left, right) => right.lastSeenAt - left.lastSeenAt
+        );
+        const relationships = linkManifestItems(items);
+        return items.map((item) => cloneItem(item, relationships.get(item.id)));
       },
       clear(tabId) {
         assertTabId(tabId);
@@ -2154,6 +2170,7 @@ var AdsFriendlyBackground = (() => {
   function probeFields(item) {
     return {
       variants: item.variants,
+      iframeVariants: item.iframeVariants,
       audioTracks: item.audioTracks,
       subtitles: item.subtitles,
       drm: item.drm,
@@ -2164,6 +2181,9 @@ var AdsFriendlyBackground = (() => {
       duration: item.duration,
       targetDuration: item.targetDuration,
       segmentCount: item.segmentCount,
+      partialSegmentCount: item.partialSegmentCount,
+      skippedSegmentCount: item.skippedSegmentCount,
+      lowLatency: item.lowLatency,
       encryptionMethods: item.encryptionMethods
     };
   }
@@ -2184,18 +2204,47 @@ var AdsFriendlyBackground = (() => {
   function uniqueStrings(values) {
     return [...new Set(values.filter((value) => typeof value === "string"))];
   }
-  function cloneItem(item) {
+  function cloneItem(item, relationships = null) {
     return {
       ...item,
       variants: item.variants.map((variant) => ({
         ...variant,
         resolution: variant.resolution ? { ...variant.resolution } : null
       })),
+      iframeVariants: item.iframeVariants.map((variant) => ({
+        ...variant,
+        resolution: variant.resolution ? { ...variant.resolution } : null
+      })),
       audioTracks: item.audioTracks.map((track) => ({ ...track })),
       subtitles: item.subtitles.map((track) => ({ ...track })),
       detectionSources: [...item.detectionSources],
-      encryptionMethods: [...item.encryptionMethods || []]
+      encryptionMethods: [...item.encryptionMethods || []],
+      parentManifestIds: [...relationships?.parents || []],
+      childManifestIds: [...relationships?.children || []]
     };
+  }
+  function linkManifestItems(items) {
+    const relationships = new Map(
+      items.map((item) => [item.id, { parents: /* @__PURE__ */ new Set(), children: /* @__PURE__ */ new Set() }])
+    );
+    const byManifestUrl = new Map(
+      items.filter((item) => item.kind === "hls" && item.manifestUrl).map((item) => [item.manifestUrl, item])
+    );
+    for (const parent of items) {
+      if (parent.kind !== "hls" || parent.playlistType !== "master") continue;
+      const childUrls = [
+        ...(parent.variants || []).map((variant) => variant.url),
+        ...(parent.audioTracks || []).map((track) => track.url),
+        ...(parent.subtitles || []).map((track) => track.url)
+      ].filter(Boolean);
+      for (const childUrl of childUrls) {
+        const child = byManifestUrl.get(childUrl);
+        if (!child || child.id === parent.id) continue;
+        relationships.get(parent.id).children.add(child.id);
+        relationships.get(child.id).parents.add(parent.id);
+      }
+    }
+    return relationships;
   }
   function assertTabId(tabId) {
     if (!Number.isInteger(tabId) || tabId < 0) {
@@ -2512,10 +2561,18 @@ var AdsFriendlyBackground = (() => {
         drm: candidate.drm || "none",
         encryptionMethods: stringArray(candidate.encryptionMethods),
         variants: objectArray(candidate.variants),
+        iframeVariants: objectArray(candidate.iframeVariants),
         audioTracks: objectArray(candidate.audioTracks),
         subtitles: objectArray(candidate.subtitles),
         duration: optionalFiniteNumber2(candidate.duration),
-        segmentCount: optionalNonNegativeInteger2(candidate.segmentCount)
+        segmentCount: optionalNonNegativeInteger2(candidate.segmentCount),
+        partialSegmentCount: optionalNonNegativeInteger2(
+          candidate.partialSegmentCount
+        ),
+        skippedSegmentCount: optionalNonNegativeInteger2(
+          candidate.skippedSegmentCount
+        ),
+        lowLatency: candidate.lowLatency === true
       }
     };
   }
@@ -2544,8 +2601,20 @@ var AdsFriendlyBackground = (() => {
       return { supported: false, reason: "DRM-protected stream." };
     if (candidate.encryptionMethods?.length)
       return { supported: false, reason: "Encrypted HLS is not supported yet." };
-    if (candidate.playlistType === "media" && candidate.streamType !== "vod")
+    if (candidate.playlistType === "unknown")
+      return {
+        supported: false,
+        reason: "HLS endpoint has not exposed a media playlist yet."
+      };
+    if (candidate.playlistType === "media" && candidate.streamType === "unknown")
+      return {
+        supported: false,
+        reason: "HLS media playlist is waiting for segments."
+      };
+    if (candidate.playlistType === "media" && candidate.streamType === "live")
       return { supported: false, reason: "Live HLS is not supported yet." };
+    if (candidate.playlistType === "media" && candidate.streamType === "vod" && !candidate.segmentCount)
+      return { supported: false, reason: "HLS VOD has no media segments." };
     if (candidate.playlistType === "master" && !candidate.variants?.length)
       return { supported: false, reason: "No quality variants found." };
     if (!["master", "media"].includes(candidate.playlistType))

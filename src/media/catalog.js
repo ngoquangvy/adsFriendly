@@ -86,6 +86,7 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
       const item = {
         ...base,
         variants: probe.variants,
+        iframeVariants: probe.iframeVariants,
         audioTracks: probe.audioTracks,
         subtitles: probe.subtitles,
         drm: probe.drm,
@@ -96,6 +97,9 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
         duration: probe.duration,
         targetDuration: probe.targetDuration,
         segmentCount: probe.segmentCount,
+        partialSegmentCount: probe.partialSegmentCount,
+        skippedSegmentCount: probe.skippedSegmentCount,
+        lowLatency: probe.lowLatency,
         encryptionMethods: probe.encryptionMethods,
         detectionSources: uniqueStrings([
           ...(existing?.detectionSources || []),
@@ -113,9 +117,11 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
       const tabCatalog = tabs.get(tabId);
       if (!tabCatalog || (pageUrl && !samePageUrl(tabCatalog.pageUrl, pageUrl)))
         return [];
-      return [...tabCatalog.items.values()]
-        .sort((left, right) => right.lastSeenAt - left.lastSeenAt)
-        .map(cloneItem);
+      const items = [...tabCatalog.items.values()].sort(
+        (left, right) => right.lastSeenAt - left.lastSeenAt,
+      );
+      const relationships = linkManifestItems(items);
+      return items.map((item) => cloneItem(item, relationships.get(item.id)));
     },
     clear(tabId) {
       assertTabId(tabId);
@@ -130,6 +136,7 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
 function probeFields(item) {
   return {
     variants: item.variants,
+    iframeVariants: item.iframeVariants,
     audioTracks: item.audioTracks,
     subtitles: item.subtitles,
     drm: item.drm,
@@ -140,6 +147,9 @@ function probeFields(item) {
     duration: item.duration,
     targetDuration: item.targetDuration,
     segmentCount: item.segmentCount,
+    partialSegmentCount: item.partialSegmentCount,
+    skippedSegmentCount: item.skippedSegmentCount,
+    lowLatency: item.lowLatency,
     encryptionMethods: item.encryptionMethods,
   };
 }
@@ -163,10 +173,14 @@ function uniqueStrings(values) {
   return [...new Set(values.filter((value) => typeof value === "string"))];
 }
 
-function cloneItem(item) {
+function cloneItem(item, relationships = null) {
   return {
     ...item,
     variants: item.variants.map((variant) => ({
+      ...variant,
+      resolution: variant.resolution ? { ...variant.resolution } : null,
+    })),
+    iframeVariants: item.iframeVariants.map((variant) => ({
       ...variant,
       resolution: variant.resolution ? { ...variant.resolution } : null,
     })),
@@ -174,7 +188,35 @@ function cloneItem(item) {
     subtitles: item.subtitles.map((track) => ({ ...track })),
     detectionSources: [...item.detectionSources],
     encryptionMethods: [...(item.encryptionMethods || [])],
+    parentManifestIds: [...(relationships?.parents || [])],
+    childManifestIds: [...(relationships?.children || [])],
   };
+}
+
+function linkManifestItems(items) {
+  const relationships = new Map(
+    items.map((item) => [item.id, { parents: new Set(), children: new Set() }]),
+  );
+  const byManifestUrl = new Map(
+    items
+      .filter((item) => item.kind === "hls" && item.manifestUrl)
+      .map((item) => [item.manifestUrl, item]),
+  );
+  for (const parent of items) {
+    if (parent.kind !== "hls" || parent.playlistType !== "master") continue;
+    const childUrls = [
+      ...(parent.variants || []).map((variant) => variant.url),
+      ...(parent.audioTracks || []).map((track) => track.url),
+      ...(parent.subtitles || []).map((track) => track.url),
+    ].filter(Boolean);
+    for (const childUrl of childUrls) {
+      const child = byManifestUrl.get(childUrl);
+      if (!child || child.id === parent.id) continue;
+      relationships.get(parent.id).children.add(child.id);
+      relationships.get(child.id).parents.add(parent.id);
+    }
+  }
+  return relationships;
 }
 
 function assertTabId(tabId) {

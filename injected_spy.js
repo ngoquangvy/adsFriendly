@@ -58,6 +58,7 @@ var AdsFriendlyMainWorld = (() => {
       title: optionalString(value.title),
       mimeType: optionalString(value.mimeType),
       variants: normalizeArray(value.variants),
+      iframeVariants: normalizeArray(value.iframeVariants),
       audioTracks: normalizeArray(value.audioTracks),
       subtitles: normalizeArray(value.subtitles),
       detectedBy: enumValue(
@@ -78,17 +79,20 @@ var AdsFriendlyMainWorld = (() => {
       probeError: optionalString(value.probeError),
       playlistType: optionalEnumValue(
         value.playlistType,
-        ["master", "media"],
+        ["master", "media", "unknown"],
         "playlistType"
       ),
       streamType: optionalEnumValue(
         value.streamType,
-        ["vod", "live"],
+        ["vod", "live", "unknown"],
         "streamType"
       ),
       duration: optionalFiniteNumber(value.duration),
       targetDuration: optionalFiniteNumber(value.targetDuration),
       segmentCount: optionalNonNegativeInteger(value.segmentCount),
+      partialSegmentCount: optionalNonNegativeInteger(value.partialSegmentCount),
+      skippedSegmentCount: optionalNonNegativeInteger(value.skippedSegmentCount),
+      lowLatency: value.lowLatency === true,
       encryptionMethods: normalizeStrings(value.encryptionMethods)
     };
     if (!candidate.sourceUrl && !candidate.manifestUrl) {
@@ -122,20 +126,24 @@ var AdsFriendlyMainWorld = (() => {
       error: optionalString(value.error),
       playlistType: optionalEnumValue(
         value.playlistType,
-        ["master", "media"],
+        ["master", "media", "unknown"],
         "playlistType"
       ),
       streamType: optionalEnumValue(
         value.streamType,
-        ["vod", "live"],
+        ["vod", "live", "unknown"],
         "streamType"
       ),
       variants: normalizeArray(value.variants),
+      iframeVariants: normalizeArray(value.iframeVariants),
       audioTracks: normalizeArray(value.audioTracks),
       subtitles: normalizeArray(value.subtitles),
       duration: optionalFiniteNumber(value.duration),
       targetDuration: optionalFiniteNumber(value.targetDuration),
       segmentCount: optionalNonNegativeInteger(value.segmentCount),
+      partialSegmentCount: optionalNonNegativeInteger(value.partialSegmentCount),
+      skippedSegmentCount: optionalNonNegativeInteger(value.skippedSegmentCount),
+      lowLatency: value.lowLatency === true,
       encryptionMethods: normalizeStrings(value.encryptionMethods),
       drm: enumValue(
         value.drm || DRM_STATES.NONE,
@@ -308,15 +316,21 @@ var AdsFriendlyMainWorld = (() => {
     if (lines.length > MAX_LINES) return unsupported("too_many_manifest_lines");
     try {
       const variants = [];
+      const iframeVariants = [];
       const audioTracks = [];
       const subtitles = [];
       const encryptionMethods = /* @__PURE__ */ new Set();
       let pendingVariant = null;
+      let pendingSegmentDuration = null;
       let segmentCount = 0;
+      let partialSegmentCount = 0;
+      let skippedSegmentCount = 0;
       let duration = 0;
       let targetDuration = null;
       let hasEndList = false;
       let declaredPlaylistType = null;
+      let hasMediaEvidence = false;
+      let hasLowLatencyTag = false;
       for (const line of lines) {
         if (!line) continue;
         if (pendingVariant && !line.startsWith("#")) {
@@ -326,8 +340,23 @@ var AdsFriendlyMainWorld = (() => {
           pendingVariant = null;
           continue;
         }
+        if (pendingSegmentDuration !== null && !line.startsWith("#")) {
+          duration += pendingSegmentDuration;
+          segmentCount += 1;
+          pendingSegmentDuration = null;
+          continue;
+        }
         if (line.startsWith("#EXT-X-STREAM-INF:")) {
           pendingVariant = parseAttributeList(valueAfterColon(line));
+          continue;
+        }
+        if (line.startsWith("#EXT-X-I-FRAME-STREAM-INF:")) {
+          const attributes = parseAttributeList(valueAfterColon(line));
+          if (attributes.URI && iframeVariants.length < MAX_VARIANTS) {
+            iframeVariants.push(
+              normalizeVariant(attributes, attributes.URI, manifestUrl, true)
+            );
+          }
           continue;
         }
         if (line.startsWith("#EXT-X-MEDIA:")) {
@@ -350,25 +379,60 @@ var AdsFriendlyMainWorld = (() => {
         }
         if (line.startsWith("#EXTINF:")) {
           const value = Number(valueAfterColon(line).split(",", 1)[0]);
-          if (Number.isFinite(value) && value >= 0) duration += value;
-          segmentCount += 1;
+          pendingSegmentDuration = Number.isFinite(value) && value >= 0 ? value : 0;
+          hasMediaEvidence = true;
+          continue;
+        }
+        if (line.startsWith("#EXT-X-PART:")) {
+          partialSegmentCount += 1;
+          hasMediaEvidence = true;
+          hasLowLatencyTag = true;
+          continue;
+        }
+        if (line.startsWith("#EXT-X-PART-INF:") || line.startsWith("#EXT-X-SERVER-CONTROL:")) {
+          hasMediaEvidence = true;
+          hasLowLatencyTag = true;
+          continue;
+        }
+        if (line.startsWith("#EXT-X-PRELOAD-HINT:")) {
+          const type = parseAttributeList(valueAfterColon(line)).TYPE;
+          hasMediaEvidence = true;
+          if (String(type || "").toUpperCase() === "PART")
+            hasLowLatencyTag = true;
+          continue;
+        }
+        if (line.startsWith("#EXT-X-SKIP:")) {
+          const skipped = Number(
+            parseAttributeList(valueAfterColon(line))["SKIPPED-SEGMENTS"]
+          );
+          if (Number.isInteger(skipped) && skipped >= 0)
+            skippedSegmentCount = skipped;
+          hasMediaEvidence = true;
           continue;
         }
         if (line.startsWith("#EXT-X-TARGETDURATION:")) {
           const value = Number(valueAfterColon(line));
           if (Number.isFinite(value) && value >= 0) targetDuration = value;
+          hasMediaEvidence = true;
+          continue;
+        }
+        if (line.startsWith("#EXT-X-MEDIA-SEQUENCE:") || line.startsWith("#EXT-X-DISCONTINUITY-SEQUENCE:") || line.startsWith("#EXT-X-MAP:")) {
+          hasMediaEvidence = true;
           continue;
         }
         if (line === "#EXT-X-ENDLIST") {
           hasEndList = true;
+          hasMediaEvidence = true;
           continue;
         }
         if (line.startsWith("#EXT-X-PLAYLIST-TYPE:")) {
           declaredPlaylistType = valueAfterColon(line).toUpperCase();
+          hasMediaEvidence = true;
         }
       }
-      const playlistType = variants.length ? "master" : "media";
-      const streamType = playlistType === "master" ? null : hasEndList || declaredPlaylistType === "VOD" ? "vod" : "live";
+      const hasMasterEvidence = variants.length > 0 || iframeVariants.length > 0 || (audioTracks.length > 0 || subtitles.length > 0) && !hasMediaEvidence;
+      const playlistType = hasMasterEvidence ? "master" : hasMediaEvidence ? "media" : "unknown";
+      const streamType = playlistType === "master" ? null : playlistType === "unknown" ? "unknown" : hasEndList || declaredPlaylistType === "VOD" ? "vod" : segmentCount > 0 || partialSegmentCount > 0 || targetDuration !== null || declaredPlaylistType === "EVENT" ? "live" : "unknown";
       const methods = [...encryptionMethods];
       return {
         status: "ready",
@@ -376,11 +440,15 @@ var AdsFriendlyMainWorld = (() => {
         playlistType,
         streamType,
         variants,
+        iframeVariants,
         audioTracks,
         subtitles,
         duration: playlistType === "media" ? round(duration, 3) : null,
         targetDuration: playlistType === "media" ? targetDuration : null,
         segmentCount: playlistType === "media" ? segmentCount : null,
+        partialSegmentCount: playlistType === "media" ? partialSegmentCount : null,
+        skippedSegmentCount: playlistType === "media" ? skippedSegmentCount : null,
+        lowLatency: playlistType === "media" && hasLowLatencyTag,
         encryptionMethods: methods,
         drm: methods.some(isDrmLikeMethod) ? "suspected" : "none"
       };
@@ -392,7 +460,7 @@ var AdsFriendlyMainWorld = (() => {
       };
     }
   }
-  function normalizeVariant(attributes, uri, manifestUrl) {
+  function normalizeVariant(attributes, uri, manifestUrl, iframeOnly = false) {
     const bandwidth = optionalPositiveNumber(attributes.BANDWIDTH);
     const averageBandwidth = optionalPositiveNumber(
       attributes["AVERAGE-BANDWIDTH"]
@@ -406,7 +474,8 @@ var AdsFriendlyMainWorld = (() => {
       codecs: optionalText(attributes.CODECS),
       frameRate: optionalPositiveNumber(attributes["FRAME-RATE"]),
       audioGroup: optionalText(attributes.AUDIO),
-      subtitlesGroup: optionalText(attributes.SUBTITLES)
+      subtitlesGroup: optionalText(attributes.SUBTITLES),
+      iframeOnly
     };
   }
   function normalizeTrack(attributes, manifestUrl) {
@@ -468,11 +537,15 @@ var AdsFriendlyMainWorld = (() => {
       playlistType: null,
       streamType: null,
       variants: [],
+      iframeVariants: [],
       audioTracks: [],
       subtitles: [],
       duration: null,
       targetDuration: null,
       segmentCount: null,
+      partialSegmentCount: null,
+      skippedSegmentCount: null,
+      lowLatency: false,
       encryptionMethods: [],
       drm: "none"
     };

@@ -454,8 +454,20 @@ var AdsFriendlyPopup = (() => {
       return { supported: false, reason: "DRM-protected stream." };
     if (candidate.encryptionMethods?.length)
       return { supported: false, reason: "Encrypted HLS is not supported yet." };
-    if (candidate.playlistType === "media" && candidate.streamType !== "vod")
+    if (candidate.playlistType === "unknown")
+      return {
+        supported: false,
+        reason: "HLS endpoint has not exposed a media playlist yet."
+      };
+    if (candidate.playlistType === "media" && candidate.streamType === "unknown")
+      return {
+        supported: false,
+        reason: "HLS media playlist is waiting for segments."
+      };
+    if (candidate.playlistType === "media" && candidate.streamType === "live")
       return { supported: false, reason: "Live HLS is not supported yet." };
+    if (candidate.playlistType === "media" && candidate.streamType === "vod" && !candidate.segmentCount)
+      return { supported: false, reason: "HLS VOD has no media segments." };
     if (candidate.playlistType === "master" && !candidate.variants?.length)
       return { supported: false, reason: "No quality variants found." };
     if (!["master", "media"].includes(candidate.playlistType))
@@ -490,6 +502,7 @@ var AdsFriendlyPopup = (() => {
       helper: helper ? {
         status: helper.status,
         helperVersion: helper.helperVersion,
+        canDownloadDirect: helper.canDownloadDirect,
         canDownloadHls: helper.canDownloadHls,
         error: helper.error
       } : null,
@@ -497,9 +510,28 @@ var AdsFriendlyPopup = (() => {
     });
   }
   function selectVisibleMediaItems(items = [], maximum = 8) {
-    return [...items].sort(
+    const sorted = [...items].sort(
       (left, right) => (right.firstSeenAt || 0) - (left.firstSeenAt || 0) || String(left.id || "").localeCompare(String(right.id || ""))
-    ).slice(0, maximum);
+    );
+    const visible = [];
+    const blobGroups = /* @__PURE__ */ new Map();
+    for (const item of sorted) {
+      if (item.kind !== "blob") {
+        visible.push(item);
+        continue;
+      }
+      const key = `${item.pageUrl || ""}
+${item.title || "blob"}`;
+      const existing = blobGroups.get(key);
+      if (existing) {
+        existing.relatedCount += 1;
+        continue;
+      }
+      const grouped = { ...item, relatedCount: 1 };
+      blobGroups.set(key, grouped);
+      visible.push(grouped);
+    }
+    return visible.slice(0, maximum);
   }
   function mediaRenderFacts(item) {
     return {
@@ -514,9 +546,16 @@ var AdsFriendlyPopup = (() => {
       streamType: item.streamType,
       duration: item.duration,
       segmentCount: item.segmentCount,
+      partialSegmentCount: item.partialSegmentCount,
+      skippedSegmentCount: item.skippedSegmentCount,
+      lowLatency: item.lowLatency,
+      relatedCount: item.relatedCount,
+      parentManifestIds: item.parentManifestIds,
+      childManifestIds: item.childManifestIds,
       drm: item.drm,
       encryptionMethods: item.encryptionMethods,
       variants: item.variants,
+      iframeVariants: item.iframeVariants,
       audioTracks: item.audioTracks,
       subtitles: item.subtitles
     };
@@ -1032,10 +1071,14 @@ var AdsFriendlyPopup = (() => {
     if (reason.includes("DRM")) return "DRM";
     if (reason.includes("Live")) return "Live";
     if (reason.includes("Encrypted")) return "Encrypted";
+    if (reason.includes("waiting") || reason.includes("not exposed"))
+      return "Waiting";
+    if (reason.includes("no media")) return "No media";
     return "Unavailable";
   }
   function mediaDetails(item) {
-    if (item.kind === "blob") return "Blob only \xB7 source not resolved yet";
+    if (item.kind === "blob")
+      return item.relatedCount > 1 ? `${item.relatedCount} Blob signals \xB7 tracing one source` : "Blob signal \xB7 tracing network source";
     if (item.kind === "direct") return "Direct video file";
     if (item.kind === "dash") return "DASH found \xB7 parser comes next";
     if (item.kind !== "hls") return "Media source found";
@@ -1045,20 +1088,35 @@ var AdsFriendlyPopup = (() => {
       return "HLS \xB7 manifest format not supported";
     if (item.probeStatus !== "ready")
       return "HLS manifest found \xB7 reading qualities";
+    if (item.playlistType === "unknown")
+      return "HLS endpoint \xB7 waiting for media playlist";
     const facts = [];
     if (item.playlistType === "master") {
       const qualityLabels = [...item.variants || []].sort(compareVariantQuality).map(variantLabel).filter(
         (label, index, labels) => label && labels.indexOf(label) === index
       ).slice(0, 4);
       facts.push(
-        qualityLabels.length ? qualityLabels.join(" \xB7 ") : `${item.variants?.length || 0} stream variants`
+        qualityLabels.length ? qualityLabels.join(" \xB7 ") : item.iframeVariants?.length ? `${item.iframeVariants.length} preview streams \xB7 waiting for primary stream` : "Master playlist \xB7 waiting for quality streams"
       );
+      if (item.childManifestIds?.length)
+        facts.push(`${item.childManifestIds.length} active child streams`);
     } else {
-      facts.push(item.streamType === "live" ? "Live stream" : "VOD stream");
+      if (item.streamType === "unknown")
+        return "HLS media playlist \xB7 waiting for segments";
+      const streamLabel = item.streamType === "live" ? item.lowLatency ? "Low-latency live" : "Live stream" : "VOD stream";
+      facts.push(
+        item.parentManifestIds?.length ? `Variant ${streamLabel}` : streamLabel
+      );
       if (Number.isFinite(item.duration) && item.duration > 0)
         facts.push(formatDuration(item.duration));
-      if (Number.isInteger(item.segmentCount))
+      if (Number.isInteger(item.segmentCount) && item.segmentCount > 0)
         facts.push(`${item.segmentCount} segments`);
+      if (Number.isInteger(item.partialSegmentCount) && item.partialSegmentCount > 0)
+        facts.push(`${item.partialSegmentCount} parts`);
+      if (Number.isInteger(item.skippedSegmentCount) && item.skippedSegmentCount > 0)
+        facts.push(`${item.skippedSegmentCount} skipped`);
+      if (item.streamType === "live" && !item.segmentCount && !item.partialSegmentCount)
+        facts.push("waiting for segments");
     }
     if (item.audioTracks?.length) facts.push(`${item.audioTracks.length} audio`);
     if (item.subtitles?.length) facts.push(`${item.subtitles.length} subtitles`);
@@ -1091,6 +1149,8 @@ var AdsFriendlyPopup = (() => {
       const url = new URL(sourceUrl);
       if (url.protocol === "blob:") return item.title || "Blob media stream";
       const file = url.pathname.split("/").filter(Boolean).at(-1);
+      if (item.kind === "hls" && file?.length > 48 && /^[a-z0-9_-]+$/i.test(file))
+        return `${url.hostname} \xB7 tokenized playlist`;
       return file ? `${url.hostname} \xB7 ${file}` : url.hostname;
     } catch {
       return item.title || sourceUrl || "Unknown media";
