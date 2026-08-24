@@ -2214,8 +2214,16 @@ var AdsFriendlyBackground = (() => {
     }
   }
 
+  // src/media/storage-keys.js
+  var MEDIA_CATALOG_SESSION_PREFIX = "adsfriendly.mediaCatalog.";
+  function mediaCatalogSessionKey(tabId) {
+    if (!Number.isInteger(tabId) || tabId < 0) {
+      throw new Error("[MediaCatalog] A valid tab ID is required.");
+    }
+    return `${MEDIA_CATALOG_SESSION_PREFIX}${tabId}`;
+  }
+
   // src/background/media-catalog.js
-  var SESSION_PREFIX = "adsfriendly.mediaCatalog.";
   var catalog = createMediaCatalog();
   var active = false;
   async function startBackgroundMediaCatalog() {
@@ -2266,8 +2274,9 @@ var AdsFriendlyBackground = (() => {
     if (!storage) return;
     const snapshot = await storage.get(null);
     for (const [key, items] of Object.entries(snapshot)) {
-      if (!key.startsWith(SESSION_PREFIX) || !Array.isArray(items)) continue;
-      const tabId = Number(key.slice(SESSION_PREFIX.length));
+      if (!key.startsWith(MEDIA_CATALOG_SESSION_PREFIX) || !Array.isArray(items))
+        continue;
+      const tabId = Number(key.slice(MEDIA_CATALOG_SESSION_PREFIX.length));
       if (!Number.isInteger(tabId)) continue;
       for (const item of items) {
         if (item.kind === "direct" && isLikelyMediaSegment(item.sourceUrl, item.mimeType))
@@ -2294,24 +2303,21 @@ var AdsFriendlyBackground = (() => {
   async function persistTab(tabId) {
     const storage = chrome.storage.session;
     if (!storage) return;
-    await storage.set({ [sessionKey(tabId)]: catalog.list(tabId) });
+    await storage.set({ [mediaCatalogSessionKey(tabId)]: catalog.list(tabId) });
   }
   async function clearTab(tabId) {
     catalog.clear(tabId);
     if (chrome.storage.session)
-      await chrome.storage.session.remove(sessionKey(tabId));
+      await chrome.storage.session.remove(mediaCatalogSessionKey(tabId));
   }
   async function clearSessionCatalog() {
     const storage = chrome.storage.session;
     if (!storage) return;
     const snapshot = await storage.get(null);
     const keys = Object.keys(snapshot).filter(
-      (key) => key.startsWith(SESSION_PREFIX)
+      (key) => key.startsWith(MEDIA_CATALOG_SESSION_PREFIX)
     );
     if (keys.length) await storage.remove(keys);
-  }
-  function sessionKey(tabId) {
-    return `${SESSION_PREFIX}${tabId}`;
   }
   function sameDocumentExceptHash(left, right) {
     try {

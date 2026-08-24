@@ -4,6 +4,11 @@ import {
   getCapabilitiesForMode,
 } from "../runtime/feature-catalog.js";
 import { getMediaDownloadAvailability } from "../media/download-job-contract.js";
+import {
+  createMediaCatalogViewSignature,
+  selectVisibleMediaItems,
+} from "../media/catalog-view.js";
+import { mediaCatalogSessionKey } from "../media/storage-keys.js";
 
 const blockedCountElement = document.getElementById("blocked-count");
 const statusToggle = document.getElementById("status-toggle");
@@ -22,6 +27,9 @@ const MODE_DESCRIPTIONS = Object.freeze({
 let settings = null;
 let mediaRefreshInFlight = false;
 let mediaHelperStatus = { status: "checking", canDownloadHls: false };
+let activeMediaTabId = null;
+let mediaRenderSignature = null;
+let scheduledMediaRefresh = null;
 initialize().catch((error) =>
   console.error("[AdsFriendly Popup] initialization failed", error),
 );
@@ -149,7 +157,8 @@ async function runRuleButtonAction(button, workingText, action) {
 }
 
 setInterval(updateBlockedCount, 1000);
-setInterval(updateMediaCatalog, 1500);
+setInterval(updateMediaCatalog, 10_000);
+chrome.storage.onChanged.addListener(onMediaStorageChanged);
 
 async function initialize() {
   settings = await loadSettings();
@@ -194,20 +203,23 @@ async function updateMediaCatalog() {
 }
 
 async function renderMediaCatalog(tab) {
-  mediaList.replaceChildren();
-  mediaList.hidden = true;
-  mediaCount.textContent = "0";
+  activeMediaTabId = tab?.id ?? null;
   if (!settings.enabled) {
-    mediaStatus.textContent = "Protection is off; media observation is paused.";
+    commitMediaCatalog({
+      status: "Protection is off; media observation is paused.",
+    });
     return;
   }
   if (settings.protectionMode === "safe") {
-    mediaStatus.textContent =
-      "Switch to Assist or Auto, then reload the video page.";
+    commitMediaCatalog({
+      status: "Switch to Assist or Auto, then reload the video page.",
+    });
     return;
   }
   if (!tab) {
-    mediaStatus.textContent = "Open an HTTP video page to test detection.";
+    commitMediaCatalog({
+      status: "Open an HTTP video page to test detection.",
+    });
     return;
   }
   try {
@@ -217,26 +229,64 @@ async function renderMediaCatalog(tab) {
       pageUrl: tab.url,
     });
     const items = Array.isArray(response?.items) ? response.items : [];
-    mediaCount.textContent = String(items.length);
     if (!items.length) {
-      mediaStatus.textContent =
-        response?.status === "capability_disabled"
-          ? "Media observation is still starting. Reload the page once."
-          : "No MP4, WebM, HLS, or DASH source detected yet.";
+      commitMediaCatalog({
+        tab,
+        status:
+          response?.status === "capability_disabled"
+            ? "Media observation is still starting. Reload the page once."
+            : "No MP4, WebM, HLS, or DASH source detected yet.",
+      });
       return;
     }
     mediaHelperStatus = await readMediaHelperStatus();
-    mediaStatus.textContent = helperSummary(mediaHelperStatus);
-    mediaList.hidden = false;
-    items
-      .slice(0, 8)
-      .forEach((item) =>
-        mediaList.append(createMediaItem(item, tab, mediaHelperStatus)),
-      );
+    commitMediaCatalog({
+      tab,
+      status: helperSummary(mediaHelperStatus),
+      items,
+      helper: mediaHelperStatus,
+    });
   } catch (error) {
-    mediaStatus.textContent = "Could not read the media catalog.";
+    setText(mediaStatus, "Could not refresh media · showing previous results.");
     console.debug("[AdsFriendly Popup] Media catalog unavailable", error);
   }
+}
+
+function commitMediaCatalog({ status, items = [], tab = null, helper = null }) {
+  const visibleItems = selectVisibleMediaItems(items);
+  const signature = createMediaCatalogViewSignature({
+    tabId: tab?.id ?? null,
+    status,
+    helper,
+    items: visibleItems,
+  });
+
+  setText(mediaCount, String(items.length));
+  setText(mediaStatus, status);
+  if (signature === mediaRenderSignature) return;
+
+  const fragment = document.createDocumentFragment();
+  for (const item of visibleItems) {
+    fragment.append(createMediaItem(item, tab, helper));
+  }
+  mediaList.replaceChildren(fragment);
+  mediaList.hidden = visibleItems.length === 0;
+  mediaRenderSignature = signature;
+}
+
+function setText(element, value) {
+  if (element.textContent !== value) element.textContent = value;
+}
+
+function onMediaStorageChanged(changes, areaName) {
+  if (areaName !== "session" || !Number.isInteger(activeMediaTabId)) return;
+  const key = mediaCatalogSessionKey(activeMediaTabId);
+  if (!(key in changes)) return;
+  clearTimeout(scheduledMediaRefresh);
+  scheduledMediaRefresh = setTimeout(() => {
+    scheduledMediaRefresh = null;
+    updateMediaCatalog();
+  }, 120);
 }
 
 function createMediaItem(item, tab, helper) {

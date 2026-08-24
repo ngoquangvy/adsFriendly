@@ -17,6 +17,10 @@ import {
 import { createHlsDownloadPlan } from "../src/media/hls-download-plan.js";
 import { downloadResourcesInParallel } from "../src/media/parallel-downloader.js";
 import { getMediaDownloadAvailability } from "../src/media/download-job-contract.js";
+import {
+  createMediaCatalogViewSignature,
+  selectVisibleMediaItems,
+} from "../src/media/catalog-view.js";
 import { EVENTS, createRegisteredEvent } from "../src/runtime/event-catalog.js";
 
 test("classifies direct, HLS, DASH, and blob media without treating segments as videos", () => {
@@ -353,5 +357,54 @@ test("download availability blocks DRM and live HLS before job creation", () => 
   assert.match(
     getMediaDownloadAvailability({ ...base, streamType: "live" }).reason,
     /Live/,
+  );
+});
+
+test("media popup signature ignores heartbeat timestamps but detects visible changes", () => {
+  const base = {
+    tabId: 4,
+    status: "Media Helper ready.",
+    helper: { status: "ready", helperVersion: "1.0.0", canDownloadHls: true },
+    items: [
+      {
+        id: "media-1",
+        kind: "hls",
+        manifestUrl: "https://cdn.example/index.m3u8",
+        probeStatus: "ready",
+        streamType: "vod",
+        lastSeenAt: 1,
+      },
+    ],
+  };
+  const initial = createMediaCatalogViewSignature(base);
+  assert.equal(
+    createMediaCatalogViewSignature({
+      ...base,
+      items: [{ ...base.items[0], lastSeenAt: 999 }],
+    }),
+    initial,
+  );
+  assert.notEqual(
+    createMediaCatalogViewSignature({
+      ...base,
+      items: [{ ...base.items[0], probeStatus: "failed" }],
+    }),
+    initial,
+  );
+});
+
+test("media popup keeps rows stable when heartbeat order changes", () => {
+  const older = { id: "older", firstSeenAt: 10, lastSeenAt: 1000 };
+  const newer = { id: "newer", firstSeenAt: 20, lastSeenAt: 50 };
+  assert.deepEqual(
+    selectVisibleMediaItems([older, newer]).map((item) => item.id),
+    ["newer", "older"],
+  );
+  assert.deepEqual(
+    selectVisibleMediaItems([
+      { ...newer, lastSeenAt: 5000 },
+      { ...older, lastSeenAt: 6000 },
+    ]).map((item) => item.id),
+    ["newer", "older"],
   );
 });

@@ -1,8 +1,11 @@
 import { createMediaCatalog } from "../media/catalog.js";
+import {
+  MEDIA_CATALOG_SESSION_PREFIX,
+  mediaCatalogSessionKey,
+} from "../media/storage-keys.js";
 import { EVENTS, createRegisteredEvent } from "../runtime/event-catalog.js";
 import { isLikelyMediaSegment } from "../media/detection.js";
 
-const SESSION_PREFIX = "adsfriendly.mediaCatalog.";
 const catalog = createMediaCatalog();
 let active = false;
 
@@ -55,8 +58,9 @@ async function hydrateCatalog() {
   if (!storage) return;
   const snapshot = await storage.get(null);
   for (const [key, items] of Object.entries(snapshot)) {
-    if (!key.startsWith(SESSION_PREFIX) || !Array.isArray(items)) continue;
-    const tabId = Number(key.slice(SESSION_PREFIX.length));
+    if (!key.startsWith(MEDIA_CATALOG_SESSION_PREFIX) || !Array.isArray(items))
+      continue;
+    const tabId = Number(key.slice(MEDIA_CATALOG_SESSION_PREFIX.length));
     if (!Number.isInteger(tabId)) continue;
     for (const item of items) {
       if (
@@ -88,13 +92,13 @@ async function hydrateCatalog() {
 async function persistTab(tabId) {
   const storage = chrome.storage.session;
   if (!storage) return;
-  await storage.set({ [sessionKey(tabId)]: catalog.list(tabId) });
+  await storage.set({ [mediaCatalogSessionKey(tabId)]: catalog.list(tabId) });
 }
 
 async function clearTab(tabId) {
   catalog.clear(tabId);
   if (chrome.storage.session)
-    await chrome.storage.session.remove(sessionKey(tabId));
+    await chrome.storage.session.remove(mediaCatalogSessionKey(tabId));
 }
 
 async function clearSessionCatalog() {
@@ -102,13 +106,9 @@ async function clearSessionCatalog() {
   if (!storage) return;
   const snapshot = await storage.get(null);
   const keys = Object.keys(snapshot).filter((key) =>
-    key.startsWith(SESSION_PREFIX),
+    key.startsWith(MEDIA_CATALOG_SESSION_PREFIX),
   );
   if (keys.length) await storage.remove(keys);
-}
-
-function sessionKey(tabId) {
-  return `${SESSION_PREFIX}${tabId}`;
 }
 
 function sameDocumentExceptHash(left, right) {
