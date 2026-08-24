@@ -1,4 +1,8 @@
 import { analyzeManifest } from "./manifest-analyzer.js";
+import { notifyContentScript } from "./bridge.js";
+import { createMediaCandidateFromSource } from "../media/detection.js";
+import { MEDIA_DETECTION_SOURCES } from "../media/contracts.js";
+import { EVENTS, createRegisteredEvent } from "../runtime/event-catalog.js";
 import { CAPABILITIES } from "../runtime/feature-catalog.js";
 
 export function installNetworkCapture(policy) {
@@ -15,11 +19,14 @@ function installFetchCapture(policy) {
   const fetchWrapper = async function (...args) {
     const url = requestUrl(args[0]);
     const response = await originalFetch.apply(this, args);
-    if (policy.can(CAPABILITIES.MEDIA_OBSERVE) && isManifestLike(url)) {
+    if (!policy.can(CAPABILITIES.MEDIA_OBSERVE)) return response;
+    const finalUrl = response.url || url;
+    reportMediaSource(finalUrl, response.headers.get("content-type"));
+    if (isManifestLike(finalUrl)) {
       response
         .clone()
         .text()
-        .then((body) => analyzeManifest(url, body))
+        .then((body) => analyzeManifest(finalUrl, body))
         .catch(() => {});
     }
     return response;
@@ -40,7 +47,8 @@ function installXhrCapture(policy) {
   const sendWrapper = function (...args) {
     this.addEventListener("load", () => {
       if (!policy.can(CAPABILITIES.MEDIA_OBSERVE)) return;
-      const url = this.__adsfriendly_url || "";
+      const url = this.responseURL || this.__adsfriendly_url || "";
+      reportMediaSource(url, this.getResponseHeader("content-type"));
       if (!isManifestLike(url)) return;
       try {
         if (typeof this.responseText === "string")
@@ -59,6 +67,21 @@ function installXhrCapture(policy) {
   };
 }
 
+function reportMediaSource(sourceUrl, mimeType) {
+  const candidate = createMediaCandidateFromSource({
+    pageUrl: location.href,
+    sourceUrl,
+    mimeType,
+    title: document.title || null,
+    detectedBy: MEDIA_DETECTION_SOURCES.NETWORK,
+  });
+  if (!candidate) return;
+  notifyContentScript({
+    type: "REGISTERED_EVENT",
+    event: createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, candidate),
+  });
+}
+
 function requestUrl(input) {
   if (!input) return "";
   if (typeof input === "string") return input;
@@ -68,9 +91,10 @@ function requestUrl(input) {
 }
 
 function isManifestLike(url = "") {
+  const normalized = url.toLowerCase();
   return (
-    url.includes(".m3u8") ||
-    url.includes(".mpd") ||
-    url.includes("player/v1/player")
+    normalized.includes(".m3u8") ||
+    normalized.includes(".mpd") ||
+    normalized.includes("player/v1/player")
   );
 }

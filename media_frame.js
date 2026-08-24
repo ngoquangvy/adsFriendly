@@ -1,87 +1,407 @@
-var AdsFriendlyVideo = (() => {
-  // src/video/state.js
-  var videoState = {
-    activeAds: /* @__PURE__ */ new Set(),
-    playbackSnapshots: /* @__PURE__ */ new WeakMap(),
-    cachedPatterns: [],
-    currentAdDensity: 0,
-    siteTrustScore: 0.5,
-    initialized: false
-  };
-
-  // src/shared/pattern-store.js
-  var VIDEO_PATTERN_TYPES = /* @__PURE__ */ new Set([
-    "video_source_marker",
-    "video_marker"
-  ]);
-  async function getGlobalPatterns() {
-    const { globalAdPatterns = [] } = await chrome.storage.local.get("globalAdPatterns");
-    return Array.isArray(globalAdPatterns) ? globalAdPatterns : [];
-  }
-  async function getVideoPatterns() {
-    return (await getGlobalPatterns()).filter(
-      (pattern) => VIDEO_PATTERN_TYPES.has(pattern?.type)
-    );
-  }
-
-  // src/video/patterns.js
-  async function loadPatternsAndReputation() {
-    try {
-      const { siteReputation = {} } = await chrome.storage.local.get("siteReputation");
-      videoState.cachedPatterns = await getVideoPatterns();
-      const rep = siteReputation[location.hostname];
-      if (rep) videoState.siteTrustScore = rep.trustScore;
-      console.log(
-        `[AdsFriendly Video] Brain Synced. Site Trust: ${videoState.siteTrustScore.toFixed(2)}`
-      );
-    } catch {
-    }
-  }
-
-  // src/video/scoring.js
-  function calculateAdScore(video) {
-    let score = 0;
-    const src = video.currentSrc || video.src || "";
-    if (!src) return 0;
-    videoState.cachedPatterns.forEach((p) => {
-      if (p.type === "video_source_marker" && src.includes(p.value)) score += 0.8;
-      if (p.type === "video_marker" && video.closest(p.value)) score += 0.6;
-    });
-    if (videoState.siteTrustScore < 0.3) score += 0.3;
-    if (videoState.siteTrustScore > 0.8) score -= 0.6;
-    if (videoState.currentAdDensity > 5) score += 0.2;
-    if (videoState.currentAdDensity > 15) score += 0.4;
-    const external = !src.startsWith("blob:") && !src.includes(location.hostname);
-    if (external) {
-      score += 0.3;
-      if (src.includes("githubusercontent.com") || src.includes("github.io"))
-        score += 0.2;
-      if (src.toLowerCase().endsWith(".mp4")) score += 0.2;
-    }
-    if (video.duration > 0 && video.duration < 65) score += 0.2;
-    if (video.duration > 300) score -= 1;
-    return Math.min(1, score);
-  }
-  function isAdVideo(video) {
-    return calculateAdScore(video) >= 0.8;
-  }
-
-  // src/video/spy-bridge.js
-  function notifySpy(adMode) {
-    window.postMessage(
-      { source: "adsfriendly-content", type: "SET_AD_MODE", value: adMode },
-      "*"
-    );
-  }
-  function startSpyBridge(onAdDetected) {
-    const onMessage = (event) => {
-      if (event.data?.source === "adsfriendly-spy" && event.data.type === "AD_MAP_DETECTED")
-        onAdDetected();
-      if (event.data?.source === "adsfriendly-content" && event.data.type === "AD_DENSITY_VALUE" && window.AdsFriendlyVideoState)
-        window.AdsFriendlyVideoState.currentAdDensity = event.data.value;
+var AdsFriendlyMediaFrame = (() => {
+  // src/media/contracts.js
+  var MEDIA_KINDS = Object.freeze({
+    DIRECT: "direct",
+    HLS: "hls",
+    DASH: "dash",
+    BLOB: "blob"
+  });
+  var MEDIA_DETECTION_SOURCES = Object.freeze({
+    DOM: "dom",
+    NETWORK: "network",
+    PLAYER: "player"
+  });
+  var DRM_STATES = Object.freeze({
+    NONE: "none",
+    SUSPECTED: "suspected",
+    CONFIRMED: "confirmed"
+  });
+  function normalizeMediaCandidate(value = {}) {
+    const candidate = {
+      id: requiredString(value.id, "id"),
+      pageUrl: requiredString(value.pageUrl, "pageUrl"),
+      sourceUrl: optionalString(value.sourceUrl),
+      manifestUrl: optionalString(value.manifestUrl),
+      kind: enumValue(value.kind, Object.values(MEDIA_KINDS), "kind"),
+      title: optionalString(value.title),
+      mimeType: optionalString(value.mimeType),
+      variants: normalizeArray(value.variants),
+      audioTracks: normalizeArray(value.audioTracks),
+      subtitles: normalizeArray(value.subtitles),
+      detectedBy: enumValue(
+        value.detectedBy,
+        Object.values(MEDIA_DETECTION_SOURCES),
+        "detectedBy"
+      ),
+      drm: enumValue(
+        value.drm || DRM_STATES.NONE,
+        Object.values(DRM_STATES),
+        "drm"
+      )
     };
-    window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
+    if (!candidate.sourceUrl && !candidate.manifestUrl) {
+      throw new Error(
+        "[MediaContract] A media candidate needs sourceUrl or manifestUrl."
+      );
+    }
+    return candidate;
+  }
+  function normalizeVideoAdEvidence(value = {}) {
+    const confidence = Number(value.confidence);
+    if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
+      throw new Error("[MediaContract] confidence must be between 0 and 1.");
+    }
+    return {
+      mediaId: requiredString(value.mediaId, "mediaId"),
+      startTime: optionalFiniteNumber(value.startTime),
+      endTime: optionalFiniteNumber(value.endTime),
+      signals: Array.isArray(value.signals) ? value.signals.filter((signal) => typeof signal === "string") : [],
+      confidence,
+      label: enumValue(
+        value.label || "unknown",
+        ["ad", "content", "unknown"],
+        "label"
+      ),
+      labelSource: enumValue(
+        value.labelSource,
+        ["user", "manifest", "heuristic", "model"],
+        "labelSource"
+      )
+    };
+  }
+  function requiredString(value, field) {
+    if (typeof value !== "string" || !value.trim()) {
+      throw new Error(`[MediaContract] ${field} must be a non-empty string.`);
+    }
+    return value;
+  }
+  function optionalString(value) {
+    return typeof value === "string" && value ? value : null;
+  }
+  function enumValue(value, allowed, field) {
+    if (!allowed.includes(value)) {
+      throw new Error(
+        `[MediaContract] ${field} must be one of: ${allowed.join(", ")}.`
+      );
+    }
+    return value;
+  }
+  function normalizeArray(value) {
+    return Array.isArray(value) ? value.map((item) => ({ ...item })) : [];
+  }
+  function optionalFiniteNumber(value) {
+    if (value === null || value === void 0) return null;
+    const number = Number(value);
+    if (!Number.isFinite(number)) {
+      throw new Error("[MediaContract] Timeline values must be finite numbers.");
+    }
+    return number;
+  }
+
+  // src/media/detection.js
+  var HLS_MIME_TYPES = /* @__PURE__ */ new Set([
+    "application/vnd.apple.mpegurl",
+    "application/x-mpegurl",
+    "audio/mpegurl",
+    "audio/x-mpegurl"
+  ]);
+  var DASH_MIME_TYPES = /* @__PURE__ */ new Set(["application/dash+xml"]);
+  function classifyMediaSource(sourceUrl = "", mimeType = "") {
+    const normalizedUrl = String(sourceUrl).trim().toLowerCase();
+    const normalizedMime = String(mimeType).split(";")[0].trim().toLowerCase();
+    const path = normalizedUrl.split(/[?#]/)[0];
+    if (normalizedUrl.startsWith("blob:")) return MEDIA_KINDS.BLOB;
+    if (path.endsWith(".m3u8") || HLS_MIME_TYPES.has(normalizedMime))
+      return MEDIA_KINDS.HLS;
+    if (path.endsWith(".mpd") || DASH_MIME_TYPES.has(normalizedMime))
+      return MEDIA_KINDS.DASH;
+    if (/\.(mp4|webm|m4v|mov)$/.test(path) || normalizedMime.startsWith("video/"))
+      return MEDIA_KINDS.DIRECT;
+    return null;
+  }
+  function createMediaCandidateFromSource({
+    pageUrl,
+    sourceUrl,
+    mimeType = null,
+    title = null,
+    detectedBy = MEDIA_DETECTION_SOURCES.DOM
+  }) {
+    const absoluteSourceUrl = resolveSourceUrl(sourceUrl, pageUrl);
+    const kind = classifyMediaSource(absoluteSourceUrl, mimeType);
+    if (!kind) return null;
+    const isManifest = [MEDIA_KINDS.HLS, MEDIA_KINDS.DASH].includes(kind);
+    return normalizeMediaCandidate({
+      id: stableMediaId(kind, absoluteSourceUrl),
+      pageUrl,
+      sourceUrl: isManifest ? null : absoluteSourceUrl,
+      manifestUrl: isManifest ? absoluteSourceUrl : null,
+      kind,
+      title,
+      mimeType,
+      detectedBy,
+      drm: "none"
+    });
+  }
+  function stableMediaId(kind, sourceUrl) {
+    const input = `${kind}:${sourceUrl}`;
+    let hash = 2166136261;
+    for (let index = 0; index < input.length; index++) {
+      hash ^= input.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return `media-${(hash >>> 0).toString(36)}`;
+  }
+  function resolveSourceUrl(sourceUrl, pageUrl) {
+    if (typeof sourceUrl !== "string" || !sourceUrl.trim()) return "";
+    try {
+      return new URL(sourceUrl, pageUrl).href;
+    } catch {
+      return sourceUrl;
+    }
+  }
+
+  // src/runtime/event-catalog.js
+  var EVENTS = Object.freeze({
+    MEDIA_DISCOVERED: "media.discovered",
+    MEDIA_CATALOG_UPDATED: "media.catalog.updated",
+    VIDEO_AD_EVIDENCE_FOUND: "video_ad.evidence_found",
+    VIDEO_AD_LABELLED: "video_ad.labelled"
+  });
+  var E = EVENTS;
+  var EVENT_CATALOG = Object.freeze({
+    [E.MEDIA_DISCOVERED]: event(
+      E.MEDIA_DISCOVERED,
+      "media.observer",
+      ["media.catalog"],
+      normalizeMediaCandidate
+    ),
+    [E.MEDIA_CATALOG_UPDATED]: event(
+      E.MEDIA_CATALOG_UPDATED,
+      "media.catalog",
+      ["media.downloader", "video-ad.evidence-collector"],
+      normalizeCatalogUpdate
+    ),
+    [E.VIDEO_AD_EVIDENCE_FOUND]: event(
+      E.VIDEO_AD_EVIDENCE_FOUND,
+      "video-ad.evidence-collector",
+      ["video-ad.classifier"],
+      normalizeVideoAdEvidence
+    ),
+    [E.VIDEO_AD_LABELLED]: event(
+      E.VIDEO_AD_LABELLED,
+      "video-ad.feedback-labeler",
+      ["training.samples"],
+      normalizeVideoAdEvidence
+    )
+  });
+  validateEventCatalog();
+  function getEventDefinition(eventId) {
+    const definition = EVENT_CATALOG[eventId];
+    if (!definition) {
+      throw new Error(
+        `[EventRegistry] Unknown event "${eventId}". Register it in event-catalog.js before use.`
+      );
+    }
+    return definition;
+  }
+  function createRegisteredEvent(eventId, payload, metadata = {}) {
+    const definition = getEventDefinition(eventId);
+    return {
+      eventId: randomId(),
+      type: eventId,
+      timestamp: Date.now(),
+      producer: definition.producer,
+      payload: definition.normalize(payload),
+      metadata: { ...metadata }
+    };
+  }
+  function normalizeRegisteredEvent(value = {}) {
+    const definition = getEventDefinition(value.type);
+    return {
+      eventId: typeof value.eventId === "string" && value.eventId ? value.eventId : randomId(),
+      type: definition.id,
+      timestamp: Number.isFinite(Number(value.timestamp)) ? Number(value.timestamp) : Date.now(),
+      producer: definition.producer,
+      payload: definition.normalize(value.payload),
+      metadata: value.metadata && typeof value.metadata === "object" ? { ...value.metadata } : {}
+    };
+  }
+  function event(id, producer, consumers, normalize) {
+    return Object.freeze({
+      id,
+      producer,
+      consumers: Object.freeze([...consumers]),
+      normalize
+    });
+  }
+  function normalizeCatalogUpdate(value = {}) {
+    if (typeof value.mediaId !== "string" || !value.mediaId) {
+      throw new Error("[EventRegistry] catalog update needs mediaId.");
+    }
+    const revision = Number(value.revision);
+    if (!Number.isInteger(revision) || revision < 0) {
+      throw new Error(
+        "[EventRegistry] catalog update revision must be a non-negative integer."
+      );
+    }
+    return { mediaId: value.mediaId, revision };
+  }
+  function validateEventCatalog() {
+    const eventIds = Object.values(EVENTS);
+    if (new Set(eventIds).size !== eventIds.length) {
+      throw new Error("[EventRegistry] Duplicate event ID.");
+    }
+    for (const eventId of eventIds) {
+      const definition = EVENT_CATALOG[eventId];
+      if (!definition || definition.id !== eventId) {
+        throw new Error(
+          `[EventRegistry] Event "${eventId}" has no metadata definition.`
+        );
+      }
+      if (!definition.producer || !definition.consumers.length) {
+        throw new Error(
+          `[EventRegistry] Event "${eventId}" needs a producer and consumers.`
+        );
+      }
+    }
+  }
+  function randomId() {
+    return globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+
+  // src/shared/extension-context.js
+  function isExtensionContextInvalidated(error) {
+    return /extension context invalidated/i.test(String(error?.message || error));
+  }
+
+  // src/content/media-observer.js
+  function startMediaObserver() {
+    let stopped = false;
+    const reported = /* @__PURE__ */ new Set();
+    const pending = /* @__PURE__ */ new Set();
+    const retryCounts = /* @__PURE__ */ new Map();
+    const retryTimers = /* @__PURE__ */ new Set();
+    const videoListeners = /* @__PURE__ */ new Map();
+    const mutationObserver = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        if (mutation.type === "attributes") scanElement(mutation.target);
+        for (const node of mutation.addedNodes) {
+          if (node.nodeType === Node.ELEMENT_NODE) scanElement(node);
+        }
+      }
+    });
+    mutationObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["src", "type"],
+      childList: true,
+      subtree: true
+    });
+    const onMainWorldMessage = (messageEvent) => {
+      if (messageEvent.source !== window || messageEvent.data?.source !== "adsfriendly-spy" || messageEvent.data?.type !== "REGISTERED_EVENT" || messageEvent.data.event?.type !== EVENTS.MEDIA_DISCOVERED)
+        return;
+      try {
+        reportEvent(normalizeRegisteredEvent(messageEvent.data.event));
+      } catch {
+      }
+    };
+    window.addEventListener("message", onMainWorldMessage);
+    const performanceObserver = startPerformanceObserver((entry) => {
+      reportSource(entry.name, null, MEDIA_DETECTION_SOURCES.NETWORK);
+    });
+    scanElement(document.documentElement);
+    performance.getEntriesByType("resource").forEach((entry) => reportSource(entry.name, null, "network"));
+    return () => {
+      stopped = true;
+      mutationObserver.disconnect();
+      performanceObserver?.disconnect();
+      window.removeEventListener("message", onMainWorldMessage);
+      for (const [video, listener] of videoListeners) {
+        video.removeEventListener("loadedmetadata", listener);
+        video.removeEventListener("durationchange", listener);
+        video.removeEventListener("play", listener);
+      }
+      videoListeners.clear();
+      reported.clear();
+      pending.clear();
+      retryCounts.clear();
+      retryTimers.forEach(clearTimeout);
+      retryTimers.clear();
+    };
+    function scanElement(element) {
+      if (stopped || !element) return;
+      if (element.matches?.("video")) observeVideo(element);
+      if (element.matches?.("video, source")) reportElementSource(element);
+      element.querySelectorAll?.("video").forEach(observeVideo);
+      element.querySelectorAll?.("video, video source").forEach(reportElementSource);
+    }
+    function observeVideo(video) {
+      if (videoListeners.has(video)) return;
+      const listener = () => {
+        reportElementSource(video);
+        video.querySelectorAll("source").forEach(reportElementSource);
+      };
+      videoListeners.set(video, listener);
+      video.addEventListener("loadedmetadata", listener);
+      video.addEventListener("durationchange", listener);
+      video.addEventListener("play", listener);
+      listener();
+    }
+    function reportElementSource(element) {
+      const sourceUrl = element.currentSrc || element.src || element.getAttribute?.("src");
+      const mimeType = element.currentType || element.type || element.getAttribute?.("type");
+      reportSource(sourceUrl, mimeType, MEDIA_DETECTION_SOURCES.DOM);
+    }
+    function reportSource(sourceUrl, mimeType, detectedBy) {
+      const candidate = createMediaCandidateFromSource({
+        pageUrl: location.href,
+        sourceUrl,
+        mimeType,
+        title: document.title || null,
+        detectedBy
+      });
+      if (!candidate) return;
+      reportEvent(createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, candidate));
+    }
+    function reportEvent(event2) {
+      if (stopped) return;
+      const reportKey = `${event2.payload.id}:${event2.payload.detectedBy}`;
+      if (reported.has(reportKey) || pending.has(reportKey)) return;
+      pending.add(reportKey);
+      chrome.runtime.sendMessage({ type: "MEDIA_DISCOVERED", event: event2 }).then((response) => {
+        pending.delete(reportKey);
+        if (response?.status === "recorded") {
+          reported.add(reportKey);
+          retryCounts.delete(reportKey);
+          return;
+        }
+        if (["catalog_disabled", "capability_disabled"].includes(response?.status)) {
+          const retryCount = retryCounts.get(reportKey) || 0;
+          if (retryCount >= 6) return;
+          retryCounts.set(reportKey, retryCount + 1);
+          const retryId = setTimeout(() => {
+            retryTimers.delete(retryId);
+            reportEvent(event2);
+          }, 500);
+          retryTimers.add(retryId);
+        }
+      }).catch((error) => {
+        pending.delete(reportKey);
+        if (!isExtensionContextInvalidated(error))
+          console.debug("[AdsFriendly Media] Catalog unavailable", error);
+      });
+    }
+  }
+  function startPerformanceObserver(onEntry) {
+    if (typeof PerformanceObserver === "undefined") return null;
+    try {
+      const observer = new PerformanceObserver((list) => {
+        list.getEntries().forEach(onEntry);
+      });
+      observer.observe({ type: "resource", buffered: true });
+      return observer;
+    } catch {
+      return null;
+    }
   }
 
   // src/runtime/feature-catalog.js
@@ -326,203 +646,6 @@ var AdsFriendlyVideo = (() => {
     }
   }
 
-  // src/runtime/action-catalog.js
-  var ACTIONS = Object.freeze({
-    VIDEO_ACCELERATE_AUTOMATIC: "video.accelerate.automatic",
-    VIDEO_ACCELERATE_USER: "video.accelerate.user",
-    VIDEO_RESTORE_PLAYBACK: "video.restore_playback",
-    VIDEO_SKIP_AUTOMATIC: "video.skip.automatic"
-  });
-  var A = ACTIONS;
-  var C2 = CAPABILITIES;
-  var ACTION_CATALOG = Object.freeze({
-    [A.VIDEO_ACCELERATE_AUTOMATIC]: action(
-      A.VIDEO_ACCELERATE_AUTOMATIC,
-      "video.surgeon",
-      C2.VIDEO_AUTO_ACTION
-    ),
-    [A.VIDEO_ACCELERATE_USER]: action(
-      A.VIDEO_ACCELERATE_USER,
-      "video.surgeon",
-      C2.VIDEO_USER_ACTION
-    ),
-    [A.VIDEO_RESTORE_PLAYBACK]: action(
-      A.VIDEO_RESTORE_PLAYBACK,
-      "video.surgeon",
-      C2.VIDEO_RESTORE_STATE
-    ),
-    [A.VIDEO_SKIP_AUTOMATIC]: action(
-      A.VIDEO_SKIP_AUTOMATIC,
-      "video.surgeon",
-      C2.VIDEO_AUTO_ACTION
-    )
-  });
-  validateActionCatalog();
-  function getActionDefinition(actionId) {
-    const definition = ACTION_CATALOG[actionId];
-    if (!definition) {
-      throw new Error(
-        `[ActionRegistry] Unknown action "${actionId}". Register it in action-catalog.js before use.`
-      );
-    }
-    return definition;
-  }
-  function getActionsForFeature(featureId) {
-    getFeatureDefinition(featureId);
-    return Object.values(ACTION_CATALOG).filter(
-      (definition) => definition.featureId === featureId
-    );
-  }
-  function action(id, featureId, capability2) {
-    return Object.freeze({ id, featureId, capability: capability2 });
-  }
-  function validateActionCatalog() {
-    const actionIds = Object.values(ACTIONS);
-    if (new Set(actionIds).size !== actionIds.length) {
-      throw new Error("[ActionRegistry] Duplicate action ID.");
-    }
-    for (const actionId of actionIds) {
-      const definition = ACTION_CATALOG[actionId];
-      if (!definition || definition.id !== actionId) {
-        throw new Error(
-          `[ActionRegistry] Action "${actionId}" has no metadata definition.`
-        );
-      }
-      const feature2 = getFeatureDefinition(definition.featureId);
-      getCapabilityDefinition(definition.capability);
-      if (!feature2.capabilities.includes(definition.capability)) {
-        throw new Error(
-          `[ActionRegistry] Action "${actionId}" uses capability "${definition.capability}" not declared by feature "${feature2.id}".`
-        );
-      }
-    }
-  }
-
-  // src/video/observer.js
-  var videoActions = null;
-  var attachments = /* @__PURE__ */ new Map();
-  function setVideoActions(actions) {
-    videoActions = actions;
-  }
-  function scanAndObserveVideos() {
-    document.querySelectorAll("video").forEach((video) => {
-      if (video.dataset.adsfriendlyVideoObserved) return;
-      video.dataset.adsfriendlyVideoObserved = "true";
-      attach(video);
-      checkAndExecute(video);
-    });
-  }
-  function checkAllVideos() {
-    document.querySelectorAll("video").forEach(checkAndExecute);
-  }
-  function stopObservingVideos() {
-    for (const [video, attachment] of attachments) {
-      attachment.observer.disconnect();
-      video.removeEventListener("play", attachment.onPlayback);
-      video.removeEventListener("playing", attachment.onPlayback);
-      delete video.dataset.adsfriendlyVideoObserved;
-    }
-    attachments.clear();
-    videoActions = null;
-  }
-  function attach(video) {
-    const observer = new MutationObserver(() => checkAndExecute(video));
-    observer.observe(video, { attributes: true, attributeFilter: ["src"] });
-    const onPlayback = () => checkAndExecute(video);
-    video.addEventListener("play", onPlayback);
-    video.addEventListener("playing", onPlayback);
-    attachments.set(video, { observer, onPlayback });
-  }
-  function checkAndExecute(video) {
-    const score = calculateAdScore(video);
-    if (score >= 0.8 && videoActions?.can(ACTIONS.VIDEO_ACCELERATE_AUTOMATIC)) {
-      console.log(
-        `[AdsFriendly Video] Neutralizing Ad (${(score * 100).toFixed(0)}%)`
-      );
-      execute(ACTIONS.VIDEO_ACCELERATE_AUTOMATIC, video);
-      notifySpy(true);
-    } else {
-      execute(ACTIONS.VIDEO_RESTORE_PLAYBACK, video);
-      notifySpy(false);
-    }
-  }
-  function execute(actionId, video) {
-    if (!videoActions?.can(actionId)) return;
-    videoActions.execute(actionId, video).catch(
-      (error) => console.error(`[AdsFriendly Video] Action ${actionId} failed`, error)
-    );
-  }
-
-  // src/video/skip.js
-  var SKIP_SELECTORS = [
-    ".ytp-ad-skip-button",
-    ".ytp-ad-skip-button-modern",
-    ".ytp-ad-skip-button-container",
-    ".videoAdUiSkipButton",
-    ".fluid_ad_skip_button",
-    'button[class*="skip"]',
-    '[aria-label*="Skip ad"]'
-  ];
-  function skipVisibleAds() {
-    SKIP_SELECTORS.forEach((selector) => {
-      const button = document.querySelector(selector);
-      clickIfVisible(button);
-    });
-    document.querySelectorAll('button, div[role="button"], span[role="button"]').forEach((button) => {
-      const text = button.textContent.toLowerCase();
-      if ((text.includes("skip") || text.includes("b\u1ECF qua")) && (text.includes("ad") || text.includes("qu\u1EA3ng")) && isVisible(button)) {
-        clickIfVisible(button);
-      }
-    });
-  }
-  function clickIfVisible(element) {
-    if (!isVisible(element) || typeof element.click !== "function") return;
-    element.click();
-  }
-  function isVisible(element) {
-    if (!element) return false;
-    return element.offsetParent !== null || element.getClientRects().length > 0;
-  }
-
-  // src/video/actions.js
-  function accelerate(video) {
-    if (video.playbackRate >= 16) return;
-    console.log(
-      "[AdsFriendly Video] Neutralizing Ad:",
-      video.src || "Dynamic Stream"
-    );
-    if (!videoState.activeAds.has(video)) {
-      videoState.playbackSnapshots.set(video, {
-        playbackRate: video.playbackRate,
-        muted: video.muted
-      });
-    }
-    video.playbackRate = 16;
-    video.muted = true;
-    videoState.activeAds.add(video);
-    notifyBrainOfAdState(video);
-  }
-  function restore(video) {
-    if (!videoState.activeAds.has(video)) return;
-    console.log("[AdsFriendly Video] Ad finished. Restoring content speed.");
-    const snapshot = videoState.playbackSnapshots.get(video);
-    video.playbackRate = snapshot?.playbackRate ?? 1;
-    video.muted = snapshot?.muted ?? false;
-    videoState.activeAds.delete(video);
-    videoState.playbackSnapshots.delete(video);
-    notifySpy(false);
-  }
-  function notifyBrainOfAdState(video) {
-    const player = video.closest('[class*="player"]');
-    if (!player) return;
-    chrome.runtime.sendMessage({
-      type: "SYNC_VIDEO_LEARNING",
-      hostname: location.hostname,
-      classes: player.className,
-      duration: video.duration
-    });
-  }
-
   // src/runtime/settings-store.js
   var SETTINGS_KEY = "appSettings";
   var DEFAULT_SETTINGS = Object.freeze({
@@ -580,16 +703,16 @@ var AdsFriendlyVideo = (() => {
     let started = false;
     const lifecycles = /* @__PURE__ */ new Map();
     const listeners = /* @__PURE__ */ new Set();
-    const controller2 = {
+    const controller = {
       context,
       async start() {
-        if (started) return controller2;
+        if (started) return controller;
         started = true;
         if (!initialSettings) settings = await settingsLoader();
         await reconcile();
         if (watchSettings) {
           unsubscribe = settingsSubscriber((nextSettings) => {
-            controller2.updateSettings(nextSettings).catch(
+            controller.updateSettings(nextSettings).catch(
               (error) => logger.error(
                 `[MainController:${context}] reconcile failed`,
                 error
@@ -598,13 +721,13 @@ var AdsFriendlyVideo = (() => {
           });
         }
         notify();
-        return controller2;
+        return controller;
       },
       async updateSettings(nextSettings) {
         settings = normalizeSettings(nextSettings);
         if (started) await reconcile();
         notify();
-        return controller2.snapshot();
+        return controller.snapshot();
       },
       snapshot() {
         return {
@@ -642,7 +765,7 @@ var AdsFriendlyVideo = (() => {
             continue;
           }
           const result = implementations[definition.id]({
-            controller: controller2,
+            controller,
             feature: definition,
             policy
           });
@@ -678,10 +801,10 @@ var AdsFriendlyVideo = (() => {
       lifecycle.active = false;
     }
     function notify() {
-      const snapshot = controller2.snapshot();
+      const snapshot = controller.snapshot();
       for (const listener of listeners) listener(snapshot);
     }
-    return controller2;
+    return controller;
   }
   function createFeaturePolicy(definitionOrId, readSettings) {
     const definition = typeof definitionOrId === "string" ? getFeatureDefinition(definitionOrId) : definitionOrId;
@@ -744,147 +867,16 @@ var AdsFriendlyVideo = (() => {
     }
   }
 
-  // src/runtime/action-broker.js
-  function createActionBroker({
-    featureId,
-    policy,
-    handlers,
-    permissionChecker = hasBrowserPermissions
-  }) {
-    const declaredActions = getActionsForFeature(featureId);
-    const declaredIds = new Set(declaredActions.map((action2) => action2.id));
-    for (const action2 of declaredActions) {
-      if (typeof handlers[action2.id] !== "function") {
-        throw new Error(
-          `[ActionBroker] Feature "${featureId}" has no handler for registered action "${action2.id}".`
-        );
-      }
-    }
-    for (const actionId of Object.keys(handlers)) {
-      const action2 = getActionDefinition(actionId);
-      if (action2.featureId !== featureId || !declaredIds.has(actionId)) {
-        throw new Error(
-          `[ActionBroker] Feature "${featureId}" cannot handle action "${actionId}" owned by "${action2.featureId}".`
-        );
-      }
-    }
-    return Object.freeze({
-      featureId,
-      can(actionId) {
-        const action2 = requireOwnedAction(actionId, featureId);
-        return policy.can(action2.capability);
-      },
-      async execute(actionId, payload) {
-        const action2 = requireOwnedAction(actionId, featureId);
-        policy.require(action2.capability);
-        const capability2 = getCapabilityDefinition(action2.capability);
-        if (capability2.browserPermissions.length > 0 && !await permissionChecker(capability2.browserPermissions)) {
-          throw new Error(
-            `[ActionBroker] Action "${actionId}" requires browser permissions: ${capability2.browserPermissions.join(", ")}.`
-          );
-        }
-        return handlers[actionId](payload);
+  // src/media-frame/index.js
+  if (window.top !== window) {
+    const controller = createMainController({
+      context: "media-frame",
+      implementations: {
+        "media-frame.observer": () => startMediaObserver()
       }
     });
+    controller.start().catch(
+      (error) => console.error("[AdsFriendly Media Frame] MainController failed", error)
+    );
   }
-  function requireOwnedAction(actionId, featureId) {
-    const action2 = getActionDefinition(actionId);
-    if (action2.featureId !== featureId) {
-      throw new Error(
-        `[ActionBroker] Feature "${featureId}" cannot execute action "${actionId}" owned by "${action2.featureId}".`
-      );
-    }
-    return action2;
-  }
-  async function hasBrowserPermissions(permissions) {
-    if (!permissions.length) return true;
-    if (typeof chrome === "undefined" || !chrome.permissions?.contains)
-      return false;
-    return chrome.permissions.contains({ permissions });
-  }
-
-  // src/video/index.js
-  function startVideoSurgeon(policy) {
-    if (videoState.initialized) return;
-    videoState.initialized = true;
-    const actions = createActionBroker({
-      featureId: "video.surgeon",
-      policy,
-      handlers: {
-        [ACTIONS.VIDEO_ACCELERATE_AUTOMATIC]: accelerate,
-        [ACTIONS.VIDEO_ACCELERATE_USER]: accelerate,
-        [ACTIONS.VIDEO_RESTORE_PLAYBACK]: restore,
-        [ACTIONS.VIDEO_SKIP_AUTOMATIC]: skipVisibleAds
-      }
-    });
-    setVideoActions(actions);
-    window.AdsFriendlyVideoState = videoState;
-    console.log("[AdsFriendly Video] Surgeon controlled by MainController.");
-    loadPatternsAndReputation();
-    scanAndObserveVideos();
-    const stopBodyObserver = startBodyObserver();
-    const skipIntervalId = setInterval(() => {
-      if (!actions.can(ACTIONS.VIDEO_SKIP_AUTOMATIC)) return;
-      actions.execute(ACTIONS.VIDEO_SKIP_AUTOMATIC).catch(
-        (error) => console.error("[AdsFriendly Video] Auto-skip failed", error)
-      );
-    }, 500);
-    const stopSpyBridge = startSpyBridge(checkAllVideos);
-    const onRuntimeMessage = (message) => {
-      if (message.type === "SYNC_LEARNING") loadPatternsAndReputation();
-    };
-    chrome.runtime.onMessage.addListener(onRuntimeMessage);
-    const publicApi = {
-      accelerate: (video) => actions.execute(ACTIONS.VIDEO_ACCELERATE_USER, video),
-      calculateAdScore,
-      isAdVideo,
-      scanAndObserve: scanAndObserveVideos
-    };
-    window.VideoSurgeon = publicApi;
-    return async () => {
-      clearInterval(skipIntervalId);
-      stopBodyObserver();
-      stopSpyBridge();
-      stopObservingVideos();
-      chrome.runtime.onMessage.removeListener(onRuntimeMessage);
-      await Promise.all(
-        [...videoState.activeAds].map(
-          (video) => actions.execute(ACTIONS.VIDEO_RESTORE_PLAYBACK, video)
-        )
-      );
-      if (window.VideoSurgeon === publicApi) delete window.VideoSurgeon;
-      if (window.AdsFriendlyVideoState === videoState)
-        delete window.AdsFriendlyVideoState;
-      videoState.initialized = false;
-    };
-  }
-  function startBodyObserver() {
-    let stopped = false;
-    let observer = null;
-    let retryId = null;
-    const start = () => {
-      if (stopped) return;
-      if (document.body) {
-        observer = new MutationObserver(scanAndObserveVideos);
-        observer.observe(document.body, { childList: true, subtree: true });
-      } else {
-        retryId = setTimeout(start, 50);
-      }
-    };
-    start();
-    return () => {
-      stopped = true;
-      if (retryId) clearTimeout(retryId);
-      observer?.disconnect();
-    };
-  }
-  var controller = createMainController({
-    context: "video",
-    implementations: {
-      "video.surgeon": ({ policy }) => startVideoSurgeon(policy)
-    }
-  });
-  controller.start().catch(
-    (error) => console.error("[AdsFriendly Video] MainController failed", error)
-  );
 })();

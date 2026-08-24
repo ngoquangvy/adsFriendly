@@ -17,6 +17,7 @@ import {
   getStorageHealth,
 } from "./settings-mutations.js";
 import { addDomTrainingSample } from "../storage/training-store.js";
+import { listDiscoveredMedia, recordDiscoveredMedia } from "./media-catalog.js";
 
 const MESSAGE_CAPABILITIES = Object.freeze({
   TRUSTED_CLICK: CAPABILITIES.NAVIGATION_INTENT,
@@ -42,6 +43,8 @@ const MESSAGE_CAPABILITIES = Object.freeze({
   REMOVE_DOMAIN_DECISION: CAPABILITIES.CORE_MAINTENANCE,
   GET_STORAGE_HEALTH: CAPABILITIES.CORE_MAINTENANCE,
   RECORD_DOM_SAMPLE: CAPABILITIES.LEARNING_FEEDBACK,
+  MEDIA_DISCOVERED: CAPABILITIES.MEDIA_CATALOG,
+  GET_MEDIA_CATALOG: CAPABILITIES.MEDIA_CATALOG,
 });
 
 export function registerMessageRouter(policy) {
@@ -115,6 +118,26 @@ async function route(message, sender) {
   if (message.type === "RECORD_DOM_SAMPLE") {
     await addDomTrainingSample(message.sample);
     return { status: "saved" };
+  }
+  if (message.type === "MEDIA_DISCOVERED") {
+    const tabId = sender?.tab?.id;
+    if (!Number.isInteger(tabId)) return { status: "ignored" };
+    return recordDiscoveredMedia(tabId, {
+      ...message.event,
+      payload: {
+        ...message.event?.payload,
+        pageUrl: sender.tab.url || message.event?.payload?.pageUrl,
+      },
+      metadata: {
+        ...message.event?.metadata,
+        frameId: sender.frameId ?? null,
+        frameUrl: message.event?.payload?.pageUrl || null,
+      },
+    });
+  }
+  if (message.type === "GET_MEDIA_CATALOG") {
+    if (!Number.isInteger(message.tabId)) return { status: "invalid_tab" };
+    return listDiscoveredMedia(message.tabId, message.pageUrl || null);
   }
   if (message.type === "NEGATIVE_LEARNING")
     return handleNegativeLearning(message.fingerprint);

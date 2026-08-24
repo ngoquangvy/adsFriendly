@@ -66,6 +66,14 @@ test("capability metadata is the single source for mode access", () => {
   assert.equal(observe.minMode, "assist");
   assert.equal(observe.trigger, CAPABILITY_TRIGGERS.PASSIVE);
   assert.equal(
+    getCapabilitiesForMode("assist").includes(CAPABILITIES.MEDIA_CATALOG),
+    true,
+  );
+  assert.equal(
+    getCapabilitiesForMode("safe").includes(CAPABILITIES.MEDIA_CATALOG),
+    false,
+  );
+  assert.equal(
     getCapabilitiesForMode("safe").includes(CAPABILITIES.VIDEO_USER_ACTION),
     false,
   );

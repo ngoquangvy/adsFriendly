@@ -63,6 +63,26 @@ export function createRegisteredEvent(eventId, payload, metadata = {}) {
   };
 }
 
+export function normalizeRegisteredEvent(value = {}) {
+  const definition = getEventDefinition(value.type);
+  return {
+    eventId:
+      typeof value.eventId === "string" && value.eventId
+        ? value.eventId
+        : randomId(),
+    type: definition.id,
+    timestamp: Number.isFinite(Number(value.timestamp))
+      ? Number(value.timestamp)
+      : Date.now(),
+    producer: definition.producer,
+    payload: definition.normalize(value.payload),
+    metadata:
+      value.metadata && typeof value.metadata === "object"
+        ? { ...value.metadata }
+        : {},
+  };
+}
+
 function event(id, producer, consumers, normalize) {
   return Object.freeze({
     id,

@@ -8,6 +8,9 @@ const blockedCountElement = document.getElementById("blocked-count");
 const statusToggle = document.getElementById("status-toggle");
 const modeSelect = document.getElementById("protection-mode-select");
 const modeDescription = document.getElementById("mode-description");
+const mediaCount = document.getElementById("media-count");
+const mediaStatus = document.getElementById("media-status");
+const mediaList = document.getElementById("media-list");
 
 const MODE_DESCRIPTIONS = Object.freeze({
   safe: "Verified rules; no predictive DOM actions",
@@ -16,6 +19,7 @@ const MODE_DESCRIPTIONS = Object.freeze({
 });
 
 let settings = null;
+let mediaRefreshInFlight = false;
 initialize().catch((error) =>
   console.error("[AdsFriendly Popup] initialization failed", error),
 );
@@ -26,6 +30,7 @@ statusToggle.addEventListener("change", async () => {
     enabled: statusToggle.checked,
   });
   await renderMode();
+  await updateMediaCatalog();
 });
 
 modeSelect.addEventListener("change", async () => {
@@ -34,6 +39,7 @@ modeSelect.addEventListener("change", async () => {
     protectionMode: modeSelect.value,
   });
   await renderMode();
+  await updateMediaCatalog();
 });
 
 document.getElementById("settings-btn").addEventListener("click", () => {
@@ -141,6 +147,7 @@ async function runRuleButtonAction(button, workingText, action) {
 }
 
 setInterval(updateBlockedCount, 1000);
+setInterval(updateMediaCatalog, 1500);
 
 async function initialize() {
   settings = await loadSettings();
@@ -153,6 +160,7 @@ async function render() {
   await updateBlockedCount();
   await renderMode();
   const tab = await getActiveHttpTab();
+  await renderMediaCatalog(tab);
   if (!tab) return;
   const hostname = new URL(tab.url).hostname;
   const { userCustomRules = {} } =
@@ -171,6 +179,86 @@ async function renderMode() {
 async function updateBlockedCount() {
   const { blockedCount = 0 } = await chrome.storage.local.get("blockedCount");
   blockedCountElement.textContent = blockedCount;
+}
+
+async function updateMediaCatalog() {
+  if (!settings || mediaRefreshInFlight) return;
+  mediaRefreshInFlight = true;
+  try {
+    await renderMediaCatalog(await getActiveHttpTab());
+  } finally {
+    mediaRefreshInFlight = false;
+  }
+}
+
+async function renderMediaCatalog(tab) {
+  mediaList.replaceChildren();
+  mediaList.hidden = true;
+  mediaCount.textContent = "0";
+  if (!settings.enabled) {
+    mediaStatus.textContent = "Protection is off; media observation is paused.";
+    return;
+  }
+  if (settings.protectionMode === "safe") {
+    mediaStatus.textContent =
+      "Switch to Assist or Auto, then reload the video page.";
+    return;
+  }
+  if (!tab) {
+    mediaStatus.textContent = "Open an HTTP video page to test detection.";
+    return;
+  }
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "GET_MEDIA_CATALOG",
+      tabId: tab.id,
+      pageUrl: tab.url,
+    });
+    const items = Array.isArray(response?.items) ? response.items : [];
+    mediaCount.textContent = String(items.length);
+    if (!items.length) {
+      mediaStatus.textContent =
+        response?.status === "capability_disabled"
+          ? "Media observation is still starting. Reload the page once."
+          : "No MP4, WebM, HLS, or DASH source detected yet.";
+      return;
+    }
+    mediaStatus.textContent =
+      "Read-only catalog · downloading is not enabled yet.";
+    mediaList.hidden = false;
+    items
+      .slice(0, 8)
+      .forEach((item) => mediaList.append(createMediaItem(item)));
+  } catch (error) {
+    mediaStatus.textContent = "Could not read the media catalog.";
+    console.debug("[AdsFriendly Popup] Media catalog unavailable", error);
+  }
+}
+
+function createMediaItem(item) {
+  const row = document.createElement("div");
+  row.className = "media-item";
+  const kind = document.createElement("span");
+  kind.className = "media-kind";
+  kind.textContent = String(item.kind || "media").toUpperCase();
+  const name = document.createElement("span");
+  name.className = "media-name";
+  const sourceUrl = item.manifestUrl || item.sourceUrl || "";
+  name.textContent = mediaDisplayName(item, sourceUrl);
+  name.title = sourceUrl;
+  row.append(kind, name);
+  return row;
+}
+
+function mediaDisplayName(item, sourceUrl) {
+  try {
+    const url = new URL(sourceUrl);
+    if (url.protocol === "blob:") return item.title || "Blob media stream";
+    const file = url.pathname.split("/").filter(Boolean).at(-1);
+    return file ? `${url.hostname} · ${file}` : url.hostname;
+  } catch {
+    return item.title || sourceUrl || "Unknown media";
+  }
 }
 
 async function getActiveHttpTab() {

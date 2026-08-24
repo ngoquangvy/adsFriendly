@@ -32,3 +32,15 @@ independent of protection mode.
 
 No download output adapter or browser download permission is selected in this
 foundation change.
+
+## Current discovery slice
+
+The first implementation detects direct MP4/WebM sources, HLS manifests, DASH
+manifests, and blob-backed video elements from DOM, Performance Resource Timing,
+page-world `fetch`, and page-world XHR. Results are deduplicated into a per-tab
+catalog and mirrored only to `chrome.storage.session` so service-worker sleep
+does not erase the test view. The session catalog is cleared when its tab
+navigates or closes, and it is not part of Settings Packages or training data.
+
+The popup exposes the catalog as a read-only test surface in Assist and Auto
+modes. It does not yet download, parse variants, or classify an item as an ad.

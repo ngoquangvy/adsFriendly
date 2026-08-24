@@ -7,6 +7,7 @@ const checkOnly = process.argv.includes("--check");
 const entries = [
   ["src/background/index.js", "background.js", "AdsFriendlyBackground"],
   ["src/content/index.js", "content.js", "AdsFriendlyContent"],
+  ["src/media-frame/index.js", "media_frame.js", "AdsFriendlyMediaFrame"],
   ["src/picker/index.js", "picker.js", "AdsFriendlyPicker"],
   ["src/video/index.js", "video_surgeon.js", "AdsFriendlyVideo"],
   ["src/main-world/index.js", "injected_spy.js", "AdsFriendlyMainWorld"],
@@ -35,6 +36,7 @@ const resources =
   [];
 for (const required of [
   "content.js",
+  "media_frame.js",
   "picker.js",
   "video_surgeon.js",
   "injected_spy.js",

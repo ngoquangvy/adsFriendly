@@ -4,8 +4,8 @@ var AdsFriendlyMainWorld = (() => {
     window.postMessage({ source: "adsfriendly-spy", ...data }, "*");
   }
   function onContentMessage(handler) {
-    const onMessage = (event) => {
-      if (event.data?.source === "adsfriendly-content") handler(event.data);
+    const onMessage = (event2) => {
+      if (event2.data?.source === "adsfriendly-content") handler(event2.data);
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
@@ -23,6 +23,265 @@ var AdsFriendlyMainWorld = (() => {
     if (!AD_MARKERS.some((marker) => body.includes(marker))) return;
     console.log("[AdsFriendly Spy] Ad segment detected in manifest:", url);
     notifyContentScript({ type: "AD_MAP_DETECTED", url });
+  }
+
+  // src/media/contracts.js
+  var MEDIA_KINDS = Object.freeze({
+    DIRECT: "direct",
+    HLS: "hls",
+    DASH: "dash",
+    BLOB: "blob"
+  });
+  var MEDIA_DETECTION_SOURCES = Object.freeze({
+    DOM: "dom",
+    NETWORK: "network",
+    PLAYER: "player"
+  });
+  var DRM_STATES = Object.freeze({
+    NONE: "none",
+    SUSPECTED: "suspected",
+    CONFIRMED: "confirmed"
+  });
+  function normalizeMediaCandidate(value = {}) {
+    const candidate = {
+      id: requiredString(value.id, "id"),
+      pageUrl: requiredString(value.pageUrl, "pageUrl"),
+      sourceUrl: optionalString(value.sourceUrl),
+      manifestUrl: optionalString(value.manifestUrl),
+      kind: enumValue(value.kind, Object.values(MEDIA_KINDS), "kind"),
+      title: optionalString(value.title),
+      mimeType: optionalString(value.mimeType),
+      variants: normalizeArray(value.variants),
+      audioTracks: normalizeArray(value.audioTracks),
+      subtitles: normalizeArray(value.subtitles),
+      detectedBy: enumValue(
+        value.detectedBy,
+        Object.values(MEDIA_DETECTION_SOURCES),
+        "detectedBy"
+      ),
+      drm: enumValue(
+        value.drm || DRM_STATES.NONE,
+        Object.values(DRM_STATES),
+        "drm"
+      )
+    };
+    if (!candidate.sourceUrl && !candidate.manifestUrl) {
+      throw new Error(
+        "[MediaContract] A media candidate needs sourceUrl or manifestUrl."
+      );
+    }
+    return candidate;
+  }
+  function normalizeVideoAdEvidence(value = {}) {
+    const confidence = Number(value.confidence);
+    if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
+      throw new Error("[MediaContract] confidence must be between 0 and 1.");
+    }
+    return {
+      mediaId: requiredString(value.mediaId, "mediaId"),
+      startTime: optionalFiniteNumber(value.startTime),
+      endTime: optionalFiniteNumber(value.endTime),
+      signals: Array.isArray(value.signals) ? value.signals.filter((signal) => typeof signal === "string") : [],
+      confidence,
+      label: enumValue(
+        value.label || "unknown",
+        ["ad", "content", "unknown"],
+        "label"
+      ),
+      labelSource: enumValue(
+        value.labelSource,
+        ["user", "manifest", "heuristic", "model"],
+        "labelSource"
+      )
+    };
+  }
+  function requiredString(value, field) {
+    if (typeof value !== "string" || !value.trim()) {
+      throw new Error(`[MediaContract] ${field} must be a non-empty string.`);
+    }
+    return value;
+  }
+  function optionalString(value) {
+    return typeof value === "string" && value ? value : null;
+  }
+  function enumValue(value, allowed, field) {
+    if (!allowed.includes(value)) {
+      throw new Error(
+        `[MediaContract] ${field} must be one of: ${allowed.join(", ")}.`
+      );
+    }
+    return value;
+  }
+  function normalizeArray(value) {
+    return Array.isArray(value) ? value.map((item) => ({ ...item })) : [];
+  }
+  function optionalFiniteNumber(value) {
+    if (value === null || value === void 0) return null;
+    const number = Number(value);
+    if (!Number.isFinite(number)) {
+      throw new Error("[MediaContract] Timeline values must be finite numbers.");
+    }
+    return number;
+  }
+
+  // src/media/detection.js
+  var HLS_MIME_TYPES = /* @__PURE__ */ new Set([
+    "application/vnd.apple.mpegurl",
+    "application/x-mpegurl",
+    "audio/mpegurl",
+    "audio/x-mpegurl"
+  ]);
+  var DASH_MIME_TYPES = /* @__PURE__ */ new Set(["application/dash+xml"]);
+  function classifyMediaSource(sourceUrl = "", mimeType = "") {
+    const normalizedUrl = String(sourceUrl).trim().toLowerCase();
+    const normalizedMime = String(mimeType).split(";")[0].trim().toLowerCase();
+    const path = normalizedUrl.split(/[?#]/)[0];
+    if (normalizedUrl.startsWith("blob:")) return MEDIA_KINDS.BLOB;
+    if (path.endsWith(".m3u8") || HLS_MIME_TYPES.has(normalizedMime))
+      return MEDIA_KINDS.HLS;
+    if (path.endsWith(".mpd") || DASH_MIME_TYPES.has(normalizedMime))
+      return MEDIA_KINDS.DASH;
+    if (/\.(mp4|webm|m4v|mov)$/.test(path) || normalizedMime.startsWith("video/"))
+      return MEDIA_KINDS.DIRECT;
+    return null;
+  }
+  function createMediaCandidateFromSource({
+    pageUrl,
+    sourceUrl,
+    mimeType = null,
+    title = null,
+    detectedBy = MEDIA_DETECTION_SOURCES.DOM
+  }) {
+    const absoluteSourceUrl = resolveSourceUrl(sourceUrl, pageUrl);
+    const kind = classifyMediaSource(absoluteSourceUrl, mimeType);
+    if (!kind) return null;
+    const isManifest = [MEDIA_KINDS.HLS, MEDIA_KINDS.DASH].includes(kind);
+    return normalizeMediaCandidate({
+      id: stableMediaId(kind, absoluteSourceUrl),
+      pageUrl,
+      sourceUrl: isManifest ? null : absoluteSourceUrl,
+      manifestUrl: isManifest ? absoluteSourceUrl : null,
+      kind,
+      title,
+      mimeType,
+      detectedBy,
+      drm: "none"
+    });
+  }
+  function stableMediaId(kind, sourceUrl) {
+    const input = `${kind}:${sourceUrl}`;
+    let hash = 2166136261;
+    for (let index = 0; index < input.length; index++) {
+      hash ^= input.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return `media-${(hash >>> 0).toString(36)}`;
+  }
+  function resolveSourceUrl(sourceUrl, pageUrl) {
+    if (typeof sourceUrl !== "string" || !sourceUrl.trim()) return "";
+    try {
+      return new URL(sourceUrl, pageUrl).href;
+    } catch {
+      return sourceUrl;
+    }
+  }
+
+  // src/runtime/event-catalog.js
+  var EVENTS = Object.freeze({
+    MEDIA_DISCOVERED: "media.discovered",
+    MEDIA_CATALOG_UPDATED: "media.catalog.updated",
+    VIDEO_AD_EVIDENCE_FOUND: "video_ad.evidence_found",
+    VIDEO_AD_LABELLED: "video_ad.labelled"
+  });
+  var E = EVENTS;
+  var EVENT_CATALOG = Object.freeze({
+    [E.MEDIA_DISCOVERED]: event(
+      E.MEDIA_DISCOVERED,
+      "media.observer",
+      ["media.catalog"],
+      normalizeMediaCandidate
+    ),
+    [E.MEDIA_CATALOG_UPDATED]: event(
+      E.MEDIA_CATALOG_UPDATED,
+      "media.catalog",
+      ["media.downloader", "video-ad.evidence-collector"],
+      normalizeCatalogUpdate
+    ),
+    [E.VIDEO_AD_EVIDENCE_FOUND]: event(
+      E.VIDEO_AD_EVIDENCE_FOUND,
+      "video-ad.evidence-collector",
+      ["video-ad.classifier"],
+      normalizeVideoAdEvidence
+    ),
+    [E.VIDEO_AD_LABELLED]: event(
+      E.VIDEO_AD_LABELLED,
+      "video-ad.feedback-labeler",
+      ["training.samples"],
+      normalizeVideoAdEvidence
+    )
+  });
+  validateEventCatalog();
+  function getEventDefinition(eventId) {
+    const definition = EVENT_CATALOG[eventId];
+    if (!definition) {
+      throw new Error(
+        `[EventRegistry] Unknown event "${eventId}". Register it in event-catalog.js before use.`
+      );
+    }
+    return definition;
+  }
+  function createRegisteredEvent(eventId, payload, metadata = {}) {
+    const definition = getEventDefinition(eventId);
+    return {
+      eventId: randomId(),
+      type: eventId,
+      timestamp: Date.now(),
+      producer: definition.producer,
+      payload: definition.normalize(payload),
+      metadata: { ...metadata }
+    };
+  }
+  function event(id, producer, consumers, normalize) {
+    return Object.freeze({
+      id,
+      producer,
+      consumers: Object.freeze([...consumers]),
+      normalize
+    });
+  }
+  function normalizeCatalogUpdate(value = {}) {
+    if (typeof value.mediaId !== "string" || !value.mediaId) {
+      throw new Error("[EventRegistry] catalog update needs mediaId.");
+    }
+    const revision = Number(value.revision);
+    if (!Number.isInteger(revision) || revision < 0) {
+      throw new Error(
+        "[EventRegistry] catalog update revision must be a non-negative integer."
+      );
+    }
+    return { mediaId: value.mediaId, revision };
+  }
+  function validateEventCatalog() {
+    const eventIds = Object.values(EVENTS);
+    if (new Set(eventIds).size !== eventIds.length) {
+      throw new Error("[EventRegistry] Duplicate event ID.");
+    }
+    for (const eventId of eventIds) {
+      const definition = EVENT_CATALOG[eventId];
+      if (!definition || definition.id !== eventId) {
+        throw new Error(
+          `[EventRegistry] Event "${eventId}" has no metadata definition.`
+        );
+      }
+      if (!definition.producer || !definition.consumers.length) {
+        throw new Error(
+          `[EventRegistry] Event "${eventId}" needs a producer and consumers.`
+        );
+      }
+    }
+  }
+  function randomId() {
+    return globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   }
 
   // src/runtime/feature-catalog.js
@@ -56,6 +315,7 @@ var AdsFriendlyMainWorld = (() => {
     LEARNING_APPLY: "learning.apply_patterns",
     TELEMETRY_QUEUE: "telemetry.queue",
     MEDIA_OBSERVE: "media.observe",
+    MEDIA_CATALOG: "media.catalog",
     VIDEO_OBSERVE: "video.observe",
     VIDEO_RESTORE_STATE: "video.restore_state",
     VIDEO_USER_ACTION: "video.user_action",
@@ -93,6 +353,7 @@ var AdsFriendlyMainWorld = (() => {
     [C.LEARNING_APPLY]: capability(C.LEARNING_APPLY, "auto", T.AUTOMATIC),
     [C.TELEMETRY_QUEUE]: capability(C.TELEMETRY_QUEUE, "safe", T.STORAGE),
     [C.MEDIA_OBSERVE]: capability(C.MEDIA_OBSERVE, "assist", T.PASSIVE),
+    [C.MEDIA_CATALOG]: capability(C.MEDIA_CATALOG, "assist", T.PASSIVE),
     [C.VIDEO_OBSERVE]: capability(C.VIDEO_OBSERVE, "assist", T.PASSIVE),
     [C.VIDEO_RESTORE_STATE]: capability(C.VIDEO_RESTORE_STATE, "safe", T.CORE, {
       availableWhenDisabled: true
@@ -106,8 +367,10 @@ var AdsFriendlyMainWorld = (() => {
       C.NAVIGATION_INTENT,
       C.NAVIGATION_FEEDBACK,
       C.LEARNING_FEEDBACK,
-      C.TELEMETRY_QUEUE
+      C.TELEMETRY_QUEUE,
+      C.MEDIA_CATALOG
     ]),
+    feature("background.media-catalog", "background", C.MEDIA_CATALOG),
     feature("background.navigation-guard", "background", C.NAVIGATION_GUARD, [
       C.NAVIGATION_REVERSE_POPUNDER,
       C.NAVIGATION_FEEDBACK,
@@ -123,6 +386,9 @@ var AdsFriendlyMainWorld = (() => {
     ),
     feature("background.settings-package-seed", "background", C.CORE_MAINTENANCE),
     feature("content.spy-injector", "content", C.MEDIA_OBSERVE),
+    feature("content.media-observer", "content", C.MEDIA_OBSERVE, [
+      C.MEDIA_CATALOG
+    ]),
     feature("content.youtube-cleaner", "content", C.DOM_STATIC_RULES),
     feature("content.navigation-intent", "content", C.NAVIGATION_INTENT),
     feature("content.navigation-toast", "content", C.NAVIGATION_FEEDBACK),
@@ -137,6 +403,9 @@ var AdsFriendlyMainWorld = (() => {
     ]),
     feature("content.dom-learned-blocker", "content", C.LEARNING_APPLY, [
       C.DOM_AUTO_HIDE
+    ]),
+    feature("media-frame.observer", "media-frame", C.MEDIA_OBSERVE, [
+      C.MEDIA_CATALOG
     ]),
     feature("video.surgeon", "video", C.VIDEO_OBSERVE, [
       C.VIDEO_RESTORE_STATE,
@@ -271,8 +540,11 @@ var AdsFriendlyMainWorld = (() => {
     const fetchWrapper = async function(...args) {
       const url = requestUrl(args[0]);
       const response = await originalFetch.apply(this, args);
-      if (policy.can(CAPABILITIES.MEDIA_OBSERVE) && isManifestLike(url)) {
-        response.clone().text().then((body) => analyzeManifest(url, body)).catch(() => {
+      if (!policy.can(CAPABILITIES.MEDIA_OBSERVE)) return response;
+      const finalUrl = response.url || url;
+      reportMediaSource(finalUrl, response.headers.get("content-type"));
+      if (isManifestLike(finalUrl)) {
+        response.clone().text().then((body) => analyzeManifest(finalUrl, body)).catch(() => {
         });
       }
       return response;
@@ -292,7 +564,8 @@ var AdsFriendlyMainWorld = (() => {
     const sendWrapper = function(...args) {
       this.addEventListener("load", () => {
         if (!policy.can(CAPABILITIES.MEDIA_OBSERVE)) return;
-        const url = this.__adsfriendly_url || "";
+        const url = this.responseURL || this.__adsfriendly_url || "";
+        reportMediaSource(url, this.getResponseHeader("content-type"));
         if (!isManifestLike(url)) return;
         try {
           if (typeof this.responseText === "string")
@@ -311,6 +584,20 @@ var AdsFriendlyMainWorld = (() => {
         XMLHttpRequest.prototype.send = originalSend;
     };
   }
+  function reportMediaSource(sourceUrl, mimeType) {
+    const candidate = createMediaCandidateFromSource({
+      pageUrl: location.href,
+      sourceUrl,
+      mimeType,
+      title: document.title || null,
+      detectedBy: MEDIA_DETECTION_SOURCES.NETWORK
+    });
+    if (!candidate) return;
+    notifyContentScript({
+      type: "REGISTERED_EVENT",
+      event: createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, candidate)
+    });
+  }
   function requestUrl(input) {
     if (!input) return "";
     if (typeof input === "string") return input;
@@ -319,7 +606,8 @@ var AdsFriendlyMainWorld = (() => {
     return input.toString();
   }
   function isManifestLike(url = "") {
-    return url.includes(".m3u8") || url.includes(".mpd") || url.includes("player/v1/player");
+    const normalized = url.toLowerCase();
+    return normalized.includes(".m3u8") || normalized.includes(".mpd") || normalized.includes("player/v1/player");
   }
 
   // src/main-world/timer-control.js

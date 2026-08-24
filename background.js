@@ -446,10 +446,10 @@ var AdsFriendlyBackground = (() => {
   async function addDomTrainingSample(sample) {
     return putCapped(DOM_STORE, ensureIdentity(sample), MAX_DOM_SAMPLES);
   }
-  async function enqueueTelemetryEvent(event) {
+  async function enqueueTelemetryEvent(event2) {
     return putCapped(
       TELEMETRY_STORE,
-      ensureIdentity(event),
+      ensureIdentity(event2),
       MAX_TELEMETRY_EVENTS
     );
   }
@@ -470,8 +470,8 @@ var AdsFriendlyBackground = (() => {
     const telemetryEvents = Array.isArray(legacy[LEGACY_TELEMETRY_KEY]) ? legacy[LEGACY_TELEMETRY_KEY] : [];
     for (const sample of domSamples.slice(-MAX_DOM_SAMPLES))
       await addDomTrainingSample(sample);
-    for (const event of telemetryEvents.slice(-MAX_TELEMETRY_EVENTS))
-      await enqueueTelemetryEvent(event);
+    for (const event2 of telemetryEvents.slice(-MAX_TELEMETRY_EVENTS))
+      await enqueueTelemetryEvent(event2);
     if (domSamples.length || telemetryEvents.length)
       await storage.remove([LEGACY_DOM_KEY, LEGACY_TELEMETRY_KEY]);
     return {
@@ -575,10 +575,10 @@ var AdsFriendlyBackground = (() => {
   var BATCH_SIZE = 50;
   var flushInFlight = false;
   async function recordTelemetry(raw = {}) {
-    const event = await buildEvent(raw);
-    await enqueueTelemetryEvent(event);
+    const event2 = await buildEvent(raw);
+    await enqueueTelemetryEvent(event2);
     flushTelemetry();
-    return event;
+    return event2;
   }
   async function flushTelemetry() {
     if (flushInFlight) return { status: "busy" };
@@ -599,7 +599,7 @@ var AdsFriendlyBackground = (() => {
       if (!response.ok && response.status !== 207) {
         return { status: "server_error", statusCode: response.status };
       }
-      await deleteTelemetryEvents(batch.map((event) => event.sample_id));
+      await deleteTelemetryEvents(batch.map((event2) => event2.sample_id));
       if (queue.length === BATCH_SIZE) setTimeout(flushTelemetry, 100);
       return { status: "flushed", count: batch.length };
     } catch (error) {
@@ -734,6 +734,7 @@ var AdsFriendlyBackground = (() => {
     LEARNING_APPLY: "learning.apply_patterns",
     TELEMETRY_QUEUE: "telemetry.queue",
     MEDIA_OBSERVE: "media.observe",
+    MEDIA_CATALOG: "media.catalog",
     VIDEO_OBSERVE: "video.observe",
     VIDEO_RESTORE_STATE: "video.restore_state",
     VIDEO_USER_ACTION: "video.user_action",
@@ -771,6 +772,7 @@ var AdsFriendlyBackground = (() => {
     [C.LEARNING_APPLY]: capability(C.LEARNING_APPLY, "auto", T.AUTOMATIC),
     [C.TELEMETRY_QUEUE]: capability(C.TELEMETRY_QUEUE, "safe", T.STORAGE),
     [C.MEDIA_OBSERVE]: capability(C.MEDIA_OBSERVE, "assist", T.PASSIVE),
+    [C.MEDIA_CATALOG]: capability(C.MEDIA_CATALOG, "assist", T.PASSIVE),
     [C.VIDEO_OBSERVE]: capability(C.VIDEO_OBSERVE, "assist", T.PASSIVE),
     [C.VIDEO_RESTORE_STATE]: capability(C.VIDEO_RESTORE_STATE, "safe", T.CORE, {
       availableWhenDisabled: true
@@ -784,8 +786,10 @@ var AdsFriendlyBackground = (() => {
       C.NAVIGATION_INTENT,
       C.NAVIGATION_FEEDBACK,
       C.LEARNING_FEEDBACK,
-      C.TELEMETRY_QUEUE
+      C.TELEMETRY_QUEUE,
+      C.MEDIA_CATALOG
     ]),
+    feature("background.media-catalog", "background", C.MEDIA_CATALOG),
     feature("background.navigation-guard", "background", C.NAVIGATION_GUARD, [
       C.NAVIGATION_REVERSE_POPUNDER,
       C.NAVIGATION_FEEDBACK,
@@ -801,6 +805,9 @@ var AdsFriendlyBackground = (() => {
     ),
     feature("background.settings-package-seed", "background", C.CORE_MAINTENANCE),
     feature("content.spy-injector", "content", C.MEDIA_OBSERVE),
+    feature("content.media-observer", "content", C.MEDIA_OBSERVE, [
+      C.MEDIA_CATALOG
+    ]),
     feature("content.youtube-cleaner", "content", C.DOM_STATIC_RULES),
     feature("content.navigation-intent", "content", C.NAVIGATION_INTENT),
     feature("content.navigation-toast", "content", C.NAVIGATION_FEEDBACK),
@@ -815,6 +822,9 @@ var AdsFriendlyBackground = (() => {
     ]),
     feature("content.dom-learned-blocker", "content", C.LEARNING_APPLY, [
       C.DOM_AUTO_HIDE
+    ]),
+    feature("media-frame.observer", "media-frame", C.MEDIA_OBSERVE, [
+      C.MEDIA_CATALOG
     ]),
     feature("video.surgeon", "video", C.VIDEO_OBSERVE, [
       C.VIDEO_RESTORE_STATE,
@@ -1551,6 +1561,408 @@ var AdsFriendlyBackground = (() => {
     );
   }
 
+  // src/media/contracts.js
+  var MEDIA_KINDS = Object.freeze({
+    DIRECT: "direct",
+    HLS: "hls",
+    DASH: "dash",
+    BLOB: "blob"
+  });
+  var MEDIA_DETECTION_SOURCES = Object.freeze({
+    DOM: "dom",
+    NETWORK: "network",
+    PLAYER: "player"
+  });
+  var DRM_STATES = Object.freeze({
+    NONE: "none",
+    SUSPECTED: "suspected",
+    CONFIRMED: "confirmed"
+  });
+  function normalizeMediaCandidate(value = {}) {
+    const candidate = {
+      id: requiredString(value.id, "id"),
+      pageUrl: requiredString(value.pageUrl, "pageUrl"),
+      sourceUrl: optionalString(value.sourceUrl),
+      manifestUrl: optionalString(value.manifestUrl),
+      kind: enumValue(value.kind, Object.values(MEDIA_KINDS), "kind"),
+      title: optionalString(value.title),
+      mimeType: optionalString(value.mimeType),
+      variants: normalizeArray(value.variants),
+      audioTracks: normalizeArray(value.audioTracks),
+      subtitles: normalizeArray(value.subtitles),
+      detectedBy: enumValue(
+        value.detectedBy,
+        Object.values(MEDIA_DETECTION_SOURCES),
+        "detectedBy"
+      ),
+      drm: enumValue(
+        value.drm || DRM_STATES.NONE,
+        Object.values(DRM_STATES),
+        "drm"
+      )
+    };
+    if (!candidate.sourceUrl && !candidate.manifestUrl) {
+      throw new Error(
+        "[MediaContract] A media candidate needs sourceUrl or manifestUrl."
+      );
+    }
+    return candidate;
+  }
+  function normalizeVideoAdEvidence(value = {}) {
+    const confidence = Number(value.confidence);
+    if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
+      throw new Error("[MediaContract] confidence must be between 0 and 1.");
+    }
+    return {
+      mediaId: requiredString(value.mediaId, "mediaId"),
+      startTime: optionalFiniteNumber(value.startTime),
+      endTime: optionalFiniteNumber(value.endTime),
+      signals: Array.isArray(value.signals) ? value.signals.filter((signal) => typeof signal === "string") : [],
+      confidence,
+      label: enumValue(
+        value.label || "unknown",
+        ["ad", "content", "unknown"],
+        "label"
+      ),
+      labelSource: enumValue(
+        value.labelSource,
+        ["user", "manifest", "heuristic", "model"],
+        "labelSource"
+      )
+    };
+  }
+  function requiredString(value, field) {
+    if (typeof value !== "string" || !value.trim()) {
+      throw new Error(`[MediaContract] ${field} must be a non-empty string.`);
+    }
+    return value;
+  }
+  function optionalString(value) {
+    return typeof value === "string" && value ? value : null;
+  }
+  function enumValue(value, allowed, field) {
+    if (!allowed.includes(value)) {
+      throw new Error(
+        `[MediaContract] ${field} must be one of: ${allowed.join(", ")}.`
+      );
+    }
+    return value;
+  }
+  function normalizeArray(value) {
+    return Array.isArray(value) ? value.map((item) => ({ ...item })) : [];
+  }
+  function optionalFiniteNumber(value) {
+    if (value === null || value === void 0) return null;
+    const number = Number(value);
+    if (!Number.isFinite(number)) {
+      throw new Error("[MediaContract] Timeline values must be finite numbers.");
+    }
+    return number;
+  }
+
+  // src/runtime/event-catalog.js
+  var EVENTS = Object.freeze({
+    MEDIA_DISCOVERED: "media.discovered",
+    MEDIA_CATALOG_UPDATED: "media.catalog.updated",
+    VIDEO_AD_EVIDENCE_FOUND: "video_ad.evidence_found",
+    VIDEO_AD_LABELLED: "video_ad.labelled"
+  });
+  var E = EVENTS;
+  var EVENT_CATALOG = Object.freeze({
+    [E.MEDIA_DISCOVERED]: event(
+      E.MEDIA_DISCOVERED,
+      "media.observer",
+      ["media.catalog"],
+      normalizeMediaCandidate
+    ),
+    [E.MEDIA_CATALOG_UPDATED]: event(
+      E.MEDIA_CATALOG_UPDATED,
+      "media.catalog",
+      ["media.downloader", "video-ad.evidence-collector"],
+      normalizeCatalogUpdate
+    ),
+    [E.VIDEO_AD_EVIDENCE_FOUND]: event(
+      E.VIDEO_AD_EVIDENCE_FOUND,
+      "video-ad.evidence-collector",
+      ["video-ad.classifier"],
+      normalizeVideoAdEvidence
+    ),
+    [E.VIDEO_AD_LABELLED]: event(
+      E.VIDEO_AD_LABELLED,
+      "video-ad.feedback-labeler",
+      ["training.samples"],
+      normalizeVideoAdEvidence
+    )
+  });
+  validateEventCatalog();
+  function getEventDefinition(eventId) {
+    const definition = EVENT_CATALOG[eventId];
+    if (!definition) {
+      throw new Error(
+        `[EventRegistry] Unknown event "${eventId}". Register it in event-catalog.js before use.`
+      );
+    }
+    return definition;
+  }
+  function createRegisteredEvent(eventId, payload, metadata = {}) {
+    const definition = getEventDefinition(eventId);
+    return {
+      eventId: randomId3(),
+      type: eventId,
+      timestamp: Date.now(),
+      producer: definition.producer,
+      payload: definition.normalize(payload),
+      metadata: { ...metadata }
+    };
+  }
+  function normalizeRegisteredEvent(value = {}) {
+    const definition = getEventDefinition(value.type);
+    return {
+      eventId: typeof value.eventId === "string" && value.eventId ? value.eventId : randomId3(),
+      type: definition.id,
+      timestamp: Number.isFinite(Number(value.timestamp)) ? Number(value.timestamp) : Date.now(),
+      producer: definition.producer,
+      payload: definition.normalize(value.payload),
+      metadata: value.metadata && typeof value.metadata === "object" ? { ...value.metadata } : {}
+    };
+  }
+  function event(id, producer, consumers, normalize) {
+    return Object.freeze({
+      id,
+      producer,
+      consumers: Object.freeze([...consumers]),
+      normalize
+    });
+  }
+  function normalizeCatalogUpdate(value = {}) {
+    if (typeof value.mediaId !== "string" || !value.mediaId) {
+      throw new Error("[EventRegistry] catalog update needs mediaId.");
+    }
+    const revision = Number(value.revision);
+    if (!Number.isInteger(revision) || revision < 0) {
+      throw new Error(
+        "[EventRegistry] catalog update revision must be a non-negative integer."
+      );
+    }
+    return { mediaId: value.mediaId, revision };
+  }
+  function validateEventCatalog() {
+    const eventIds = Object.values(EVENTS);
+    if (new Set(eventIds).size !== eventIds.length) {
+      throw new Error("[EventRegistry] Duplicate event ID.");
+    }
+    for (const eventId of eventIds) {
+      const definition = EVENT_CATALOG[eventId];
+      if (!definition || definition.id !== eventId) {
+        throw new Error(
+          `[EventRegistry] Event "${eventId}" has no metadata definition.`
+        );
+      }
+      if (!definition.producer || !definition.consumers.length) {
+        throw new Error(
+          `[EventRegistry] Event "${eventId}" needs a producer and consumers.`
+        );
+      }
+    }
+  }
+  function randomId3() {
+    return globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+
+  // src/media/catalog.js
+  function createMediaCatalog({ maximumPerTab = 50 } = {}) {
+    const tabs = /* @__PURE__ */ new Map();
+    return Object.freeze({
+      add(tabId, rawEvent) {
+        assertTabId(tabId);
+        const event2 = normalizeRegisteredEvent(rawEvent);
+        if (event2.type !== EVENTS.MEDIA_DISCOVERED) {
+          throw new Error(`[MediaCatalog] Cannot add event "${event2.type}".`);
+        }
+        const candidate = event2.payload;
+        let tabCatalog = tabs.get(tabId);
+        if (tabCatalog && !samePageUrl(tabCatalog.pageUrl, candidate.pageUrl)) {
+          tabs.delete(tabId);
+          tabCatalog = null;
+        }
+        if (!tabCatalog) {
+          tabCatalog = { pageUrl: candidate.pageUrl, items: /* @__PURE__ */ new Map() };
+          tabs.set(tabId, tabCatalog);
+        }
+        const now = event2.timestamp;
+        const existing = tabCatalog.items.get(candidate.id);
+        const item = {
+          ...existing || {},
+          ...candidate,
+          detectionSources: uniqueStrings([
+            ...existing?.detectionSources || [],
+            candidate.detectedBy
+          ]),
+          firstSeenAt: existing?.firstSeenAt || now,
+          lastSeenAt: now
+        };
+        tabCatalog.items.set(candidate.id, item);
+        trimOldest(tabCatalog.items, maximumPerTab);
+        return cloneItem(item);
+      },
+      list(tabId, pageUrl = null) {
+        assertTabId(tabId);
+        const tabCatalog = tabs.get(tabId);
+        if (!tabCatalog || pageUrl && !samePageUrl(tabCatalog.pageUrl, pageUrl))
+          return [];
+        return [...tabCatalog.items.values()].sort((left, right) => right.lastSeenAt - left.lastSeenAt).map(cloneItem);
+      },
+      clear(tabId) {
+        assertTabId(tabId);
+        tabs.delete(tabId);
+      },
+      clearAll() {
+        tabs.clear();
+      }
+    });
+  }
+  function trimOldest(items, maximum) {
+    while (items.size > maximum) {
+      let oldestId = null;
+      let oldestTimestamp = Infinity;
+      for (const [id, item] of items) {
+        if (item.lastSeenAt < oldestTimestamp) {
+          oldestId = id;
+          oldestTimestamp = item.lastSeenAt;
+        }
+      }
+      if (!oldestId) return;
+      items.delete(oldestId);
+    }
+  }
+  function uniqueStrings(values) {
+    return [...new Set(values.filter((value) => typeof value === "string"))];
+  }
+  function cloneItem(item) {
+    return {
+      ...item,
+      variants: item.variants.map((variant) => ({ ...variant })),
+      audioTracks: item.audioTracks.map((track) => ({ ...track })),
+      subtitles: item.subtitles.map((track) => ({ ...track })),
+      detectionSources: [...item.detectionSources]
+    };
+  }
+  function assertTabId(tabId) {
+    if (!Number.isInteger(tabId) || tabId < 0) {
+      throw new Error("[MediaCatalog] A valid tab ID is required.");
+    }
+  }
+  function samePageUrl(left, right) {
+    try {
+      const leftUrl = new URL(left);
+      const rightUrl = new URL(right);
+      leftUrl.hash = "";
+      rightUrl.hash = "";
+      return leftUrl.href === rightUrl.href;
+    } catch {
+      return left === right;
+    }
+  }
+
+  // src/background/media-catalog.js
+  var SESSION_PREFIX = "adsfriendly.mediaCatalog.";
+  var catalog = createMediaCatalog();
+  var active = false;
+  async function startBackgroundMediaCatalog() {
+    await hydrateCatalog().catch(() => {
+    });
+    active = true;
+    const onRemoved = (tabId) => clearTab(tabId).catch(() => {
+    });
+    const onUpdated = (tabId, changeInfo) => {
+      if (!changeInfo.url) return;
+      const currentPageUrl = catalog.list(tabId)[0]?.pageUrl;
+      if (currentPageUrl && sameDocumentExceptHash(currentPageUrl, changeInfo.url))
+        return;
+      clearTab(tabId).catch(() => {
+      });
+    };
+    chrome.tabs.onRemoved.addListener(onRemoved);
+    chrome.tabs.onUpdated.addListener(onUpdated);
+    return async () => {
+      active = false;
+      catalog.clearAll();
+      chrome.tabs.onRemoved.removeListener(onRemoved);
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      await clearSessionCatalog().catch(() => {
+      });
+    };
+  }
+  async function recordDiscoveredMedia(tabId, event2) {
+    if (!active) return { status: "catalog_disabled" };
+    const item = catalog.add(tabId, event2);
+    await persistTab(tabId).catch(() => {
+    });
+    return { status: "recorded", item };
+  }
+  async function listDiscoveredMedia(tabId, pageUrl = null) {
+    if (!active) return { status: "catalog_disabled", items: [] };
+    return { status: "ok", items: catalog.list(tabId, pageUrl) };
+  }
+  async function hydrateCatalog() {
+    const storage = chrome.storage.session;
+    if (!storage) return;
+    const snapshot = await storage.get(null);
+    for (const [key, items] of Object.entries(snapshot)) {
+      if (!key.startsWith(SESSION_PREFIX) || !Array.isArray(items)) continue;
+      const tabId = Number(key.slice(SESSION_PREFIX.length));
+      if (!Number.isInteger(tabId)) continue;
+      for (const item of items) {
+        const sources = item.detectionSources?.length ? item.detectionSources : [item.detectedBy];
+        for (const detectedBy of sources) {
+          try {
+            catalog.add(tabId, {
+              ...createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, {
+                ...item,
+                detectedBy
+              }),
+              timestamp: item.lastSeenAt || Date.now()
+            });
+          } catch {
+          }
+        }
+      }
+    }
+  }
+  async function persistTab(tabId) {
+    const storage = chrome.storage.session;
+    if (!storage) return;
+    await storage.set({ [sessionKey(tabId)]: catalog.list(tabId) });
+  }
+  async function clearTab(tabId) {
+    catalog.clear(tabId);
+    if (chrome.storage.session)
+      await chrome.storage.session.remove(sessionKey(tabId));
+  }
+  async function clearSessionCatalog() {
+    const storage = chrome.storage.session;
+    if (!storage) return;
+    const snapshot = await storage.get(null);
+    const keys = Object.keys(snapshot).filter(
+      (key) => key.startsWith(SESSION_PREFIX)
+    );
+    if (keys.length) await storage.remove(keys);
+  }
+  function sessionKey(tabId) {
+    return `${SESSION_PREFIX}${tabId}`;
+  }
+  function sameDocumentExceptHash(left, right) {
+    try {
+      const leftUrl = new URL(left);
+      const rightUrl = new URL(right);
+      leftUrl.hash = "";
+      rightUrl.hash = "";
+      return leftUrl.href === rightUrl.href;
+    } catch {
+      return left === right;
+    }
+  }
+
   // src/background/message-router.js
   var MESSAGE_CAPABILITIES = Object.freeze({
     TRUSTED_CLICK: CAPABILITIES.NAVIGATION_INTENT,
@@ -1575,7 +1987,9 @@ var AdsFriendlyBackground = (() => {
     SAVE_DOMAIN_DECISION: CAPABILITIES.CORE_MAINTENANCE,
     REMOVE_DOMAIN_DECISION: CAPABILITIES.CORE_MAINTENANCE,
     GET_STORAGE_HEALTH: CAPABILITIES.CORE_MAINTENANCE,
-    RECORD_DOM_SAMPLE: CAPABILITIES.LEARNING_FEEDBACK
+    RECORD_DOM_SAMPLE: CAPABILITIES.LEARNING_FEEDBACK,
+    MEDIA_DISCOVERED: CAPABILITIES.MEDIA_CATALOG,
+    GET_MEDIA_CATALOG: CAPABILITIES.MEDIA_CATALOG
   });
   function registerMessageRouter(policy) {
     const onMessage = (message, sender, sendResponse) => {
@@ -1644,6 +2058,26 @@ var AdsFriendlyBackground = (() => {
     if (message.type === "RECORD_DOM_SAMPLE") {
       await addDomTrainingSample(message.sample);
       return { status: "saved" };
+    }
+    if (message.type === "MEDIA_DISCOVERED") {
+      const tabId = sender?.tab?.id;
+      if (!Number.isInteger(tabId)) return { status: "ignored" };
+      return recordDiscoveredMedia(tabId, {
+        ...message.event,
+        payload: {
+          ...message.event?.payload,
+          pageUrl: sender.tab.url || message.event?.payload?.pageUrl
+        },
+        metadata: {
+          ...message.event?.metadata,
+          frameId: sender.frameId ?? null,
+          frameUrl: message.event?.payload?.pageUrl || null
+        }
+      });
+    }
+    if (message.type === "GET_MEDIA_CATALOG") {
+      if (!Number.isInteger(message.tabId)) return { status: "invalid_tab" };
+      return listDiscoveredMedia(message.tabId, message.pageUrl || null);
     }
     if (message.type === "NEGATIVE_LEARNING")
       return handleNegativeLearning(message.fingerprint);
@@ -1767,9 +2201,9 @@ var AdsFriendlyBackground = (() => {
       console.log("Protection status:", message.isEnabled);
     return { status: "ignored" };
   }
-  async function recordTelemetryBestEffort(event) {
+  async function recordTelemetryBestEffort(event2) {
     try {
-      return await recordTelemetry(event);
+      return await recordTelemetry(event2);
     } catch (error) {
       console.warn("[AdsFriendly] Telemetry skipped:", error.message);
       return { status: "skipped", error: error.message };
@@ -2263,6 +2697,7 @@ var AdsFriendlyBackground = (() => {
     initialSettings: DEFAULT_SETTINGS,
     implementations: {
       "background.message-router": ({ policy }) => registerMessageRouter(policy),
+      "background.media-catalog": () => startBackgroundMediaCatalog(),
       "background.navigation-guard": ({ policy }) => registerNavigationGuard(policy),
       "background.telemetry-flush": () => startTelemetryFlush(),
       "background.memory-cleanup": () => {

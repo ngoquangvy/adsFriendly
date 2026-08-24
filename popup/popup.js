@@ -30,6 +30,7 @@ var AdsFriendlyPopup = (() => {
     LEARNING_APPLY: "learning.apply_patterns",
     TELEMETRY_QUEUE: "telemetry.queue",
     MEDIA_OBSERVE: "media.observe",
+    MEDIA_CATALOG: "media.catalog",
     VIDEO_OBSERVE: "video.observe",
     VIDEO_RESTORE_STATE: "video.restore_state",
     VIDEO_USER_ACTION: "video.user_action",
@@ -67,6 +68,7 @@ var AdsFriendlyPopup = (() => {
     [C.LEARNING_APPLY]: capability(C.LEARNING_APPLY, "auto", T.AUTOMATIC),
     [C.TELEMETRY_QUEUE]: capability(C.TELEMETRY_QUEUE, "safe", T.STORAGE),
     [C.MEDIA_OBSERVE]: capability(C.MEDIA_OBSERVE, "assist", T.PASSIVE),
+    [C.MEDIA_CATALOG]: capability(C.MEDIA_CATALOG, "assist", T.PASSIVE),
     [C.VIDEO_OBSERVE]: capability(C.VIDEO_OBSERVE, "assist", T.PASSIVE),
     [C.VIDEO_RESTORE_STATE]: capability(C.VIDEO_RESTORE_STATE, "safe", T.CORE, {
       availableWhenDisabled: true
@@ -80,8 +82,10 @@ var AdsFriendlyPopup = (() => {
       C.NAVIGATION_INTENT,
       C.NAVIGATION_FEEDBACK,
       C.LEARNING_FEEDBACK,
-      C.TELEMETRY_QUEUE
+      C.TELEMETRY_QUEUE,
+      C.MEDIA_CATALOG
     ]),
+    feature("background.media-catalog", "background", C.MEDIA_CATALOG),
     feature("background.navigation-guard", "background", C.NAVIGATION_GUARD, [
       C.NAVIGATION_REVERSE_POPUNDER,
       C.NAVIGATION_FEEDBACK,
@@ -97,6 +101,9 @@ var AdsFriendlyPopup = (() => {
     ),
     feature("background.settings-package-seed", "background", C.CORE_MAINTENANCE),
     feature("content.spy-injector", "content", C.MEDIA_OBSERVE),
+    feature("content.media-observer", "content", C.MEDIA_OBSERVE, [
+      C.MEDIA_CATALOG
+    ]),
     feature("content.youtube-cleaner", "content", C.DOM_STATIC_RULES),
     feature("content.navigation-intent", "content", C.NAVIGATION_INTENT),
     feature("content.navigation-toast", "content", C.NAVIGATION_FEEDBACK),
@@ -111,6 +118,9 @@ var AdsFriendlyPopup = (() => {
     ]),
     feature("content.dom-learned-blocker", "content", C.LEARNING_APPLY, [
       C.DOM_AUTO_HIDE
+    ]),
+    feature("media-frame.observer", "media-frame", C.MEDIA_OBSERVE, [
+      C.MEDIA_CATALOG
     ]),
     feature("video.surgeon", "video", C.VIDEO_OBSERVE, [
       C.VIDEO_RESTORE_STATE,
@@ -262,12 +272,16 @@ var AdsFriendlyPopup = (() => {
   var statusToggle = document.getElementById("status-toggle");
   var modeSelect = document.getElementById("protection-mode-select");
   var modeDescription = document.getElementById("mode-description");
+  var mediaCount = document.getElementById("media-count");
+  var mediaStatus = document.getElementById("media-status");
+  var mediaList = document.getElementById("media-list");
   var MODE_DESCRIPTIONS = Object.freeze({
     safe: "Verified rules; no predictive DOM actions",
     assist: "Detect and ask before hiding",
     auto: "Allow registered automatic actions"
   });
   var settings = null;
+  var mediaRefreshInFlight = false;
   initialize().catch(
     (error) => console.error("[AdsFriendly Popup] initialization failed", error)
   );
@@ -277,6 +291,7 @@ var AdsFriendlyPopup = (() => {
       enabled: statusToggle.checked
     });
     await renderMode();
+    await updateMediaCatalog();
   });
   modeSelect.addEventListener("change", async () => {
     settings = await saveSettings({
@@ -284,6 +299,7 @@ var AdsFriendlyPopup = (() => {
       protectionMode: modeSelect.value
     });
     await renderMode();
+    await updateMediaCatalog();
   });
   document.getElementById("settings-btn").addEventListener("click", () => {
     chrome.runtime.openOptionsPage();
@@ -373,6 +389,7 @@ var AdsFriendlyPopup = (() => {
     }
   }
   setInterval(updateBlockedCount, 1e3);
+  setInterval(updateMediaCatalog, 1500);
   async function initialize() {
     settings = await loadSettings();
     await render();
@@ -383,6 +400,7 @@ var AdsFriendlyPopup = (() => {
     await updateBlockedCount();
     await renderMode();
     const tab = await getActiveHttpTab();
+    await renderMediaCatalog(tab);
     if (!tab) return;
     const hostname = new URL(tab.url).hostname;
     const { userCustomRules = {} } = await chrome.storage.local.get("userCustomRules");
@@ -395,6 +413,75 @@ var AdsFriendlyPopup = (() => {
   async function updateBlockedCount() {
     const { blockedCount = 0 } = await chrome.storage.local.get("blockedCount");
     blockedCountElement.textContent = blockedCount;
+  }
+  async function updateMediaCatalog() {
+    if (!settings || mediaRefreshInFlight) return;
+    mediaRefreshInFlight = true;
+    try {
+      await renderMediaCatalog(await getActiveHttpTab());
+    } finally {
+      mediaRefreshInFlight = false;
+    }
+  }
+  async function renderMediaCatalog(tab) {
+    mediaList.replaceChildren();
+    mediaList.hidden = true;
+    mediaCount.textContent = "0";
+    if (!settings.enabled) {
+      mediaStatus.textContent = "Protection is off; media observation is paused.";
+      return;
+    }
+    if (settings.protectionMode === "safe") {
+      mediaStatus.textContent = "Switch to Assist or Auto, then reload the video page.";
+      return;
+    }
+    if (!tab) {
+      mediaStatus.textContent = "Open an HTTP video page to test detection.";
+      return;
+    }
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: "GET_MEDIA_CATALOG",
+        tabId: tab.id,
+        pageUrl: tab.url
+      });
+      const items = Array.isArray(response?.items) ? response.items : [];
+      mediaCount.textContent = String(items.length);
+      if (!items.length) {
+        mediaStatus.textContent = response?.status === "capability_disabled" ? "Media observation is still starting. Reload the page once." : "No MP4, WebM, HLS, or DASH source detected yet.";
+        return;
+      }
+      mediaStatus.textContent = "Read-only catalog \xB7 downloading is not enabled yet.";
+      mediaList.hidden = false;
+      items.slice(0, 8).forEach((item) => mediaList.append(createMediaItem(item)));
+    } catch (error) {
+      mediaStatus.textContent = "Could not read the media catalog.";
+      console.debug("[AdsFriendly Popup] Media catalog unavailable", error);
+    }
+  }
+  function createMediaItem(item) {
+    const row = document.createElement("div");
+    row.className = "media-item";
+    const kind = document.createElement("span");
+    kind.className = "media-kind";
+    kind.textContent = String(item.kind || "media").toUpperCase();
+    const name = document.createElement("span");
+    name.className = "media-name";
+    const sourceUrl = item.manifestUrl || item.sourceUrl || "";
+    name.textContent = mediaDisplayName(item, sourceUrl);
+    name.title = sourceUrl;
+    row.append(kind, name);
+    return row;
+  }
+  function mediaDisplayName(item, sourceUrl) {
+    try {
+      const url = new URL(sourceUrl);
+      if (url.protocol === "blob:") return item.title || "Blob media stream";
+      const file = url.pathname.split("/").filter(Boolean).at(-1);
+      return file ? `${url.hostname} \xB7 ${file}` : url.hostname;
+    } catch {
+      return item.title || sourceUrl || "Unknown media";
+    }
   }
   async function getActiveHttpTab() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });

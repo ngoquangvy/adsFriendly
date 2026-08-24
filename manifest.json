@@ -24,6 +24,12 @@
       "matches": ["<all_urls>"],
       "js": ["content.js", "picker.js", "video_surgeon.js"],
       "run_at": "document_start"
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["media_frame.js"],
+      "run_at": "document_start",
+      "all_frames": true
     }
   ],
   "action": {
