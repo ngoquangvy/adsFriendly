@@ -3,6 +3,7 @@ import { notifyContentScript } from "./bridge.js";
 import { createMediaCandidateFromSource } from "../media/detection.js";
 import { MEDIA_DETECTION_SOURCES, MEDIA_KINDS } from "../media/contracts.js";
 import { parseHlsManifest } from "../media/hls-parser.js";
+import { createHlsProbeAlternatives } from "../media/hls-probe-adapters.js";
 import {
   createMediaProbeGate,
   isUsableMediaProbe,
@@ -132,6 +133,7 @@ function installFallbackProbe({ policy, originalFetch, probeGate, inspect }) {
         if (!response.ok)
           throw new Error(`manifest_http_${response.status || "error"}`);
         const finalUrl = response.url || manifestUrl;
+        const body = await response.text();
         const finalCandidate =
           finalUrl === manifestUrl
             ? candidate
@@ -139,12 +141,45 @@ function installFallbackProbe({ policy, originalFetch, probeGate, inspect }) {
                 finalUrl,
                 response.headers.get("content-type"),
               ) || candidate;
-        return inspect(
+        const primaryProbe = inspect(
           finalUrl,
-          await response.text(),
+          body,
           finalCandidate,
           createFallbackRequestContext(manifestUrl, finalUrl),
         );
+        if (isUsableMediaProbe(primaryProbe)) return primaryProbe;
+
+        for (const alternativeUrl of createHlsProbeAlternatives(
+          finalUrl,
+          body,
+        )) {
+          const alternativeResponse = await originalFetch.call(
+            window,
+            alternativeUrl,
+            {
+              credentials: "same-origin",
+              cache: "default",
+            },
+          );
+          if (!alternativeResponse.ok) continue;
+          const alternativeFinalUrl = alternativeResponse.url || alternativeUrl;
+          const alternativeCandidate =
+            reportMediaSource(
+              alternativeFinalUrl,
+              alternativeResponse.headers.get("content-type"),
+            ) || candidate;
+          const alternativeProbe = inspect(
+            alternativeFinalUrl,
+            await alternativeResponse.text(),
+            alternativeCandidate,
+            createFallbackRequestContext(manifestUrl, alternativeFinalUrl),
+          );
+          if (isUsableMediaProbe(alternativeProbe)) {
+            probeGate.remember(manifestUrl, "ready");
+            return alternativeProbe;
+          }
+        }
+        return primaryProbe;
       })
       .catch((error) => {
         if (probeGate.state(manifestUrl) !== "pending") return;

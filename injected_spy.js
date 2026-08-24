@@ -659,6 +659,45 @@ var AdsFriendlyMainWorld = (() => {
     return `revision-${(hash >>> 0).toString(36)}`;
   }
 
+  // src/media/hls-probe-adapters.js
+  var HLS_PROBE_ADAPTERS = Object.freeze([
+    Object.freeze({
+      id: "aesgcm-b65-clear-variant",
+      matches(body) {
+        const source = normalizeBody(body);
+        return source.startsWith("#EXTM3U") && source.includes("#ENC-AESGCM;") && source.includes("#EXT-X-B65:");
+      },
+      alternatives(manifestUrl) {
+        const url = new URL(manifestUrl);
+        if (url.searchParams.get("d") !== "1") return [];
+        url.searchParams.delete("d");
+        return [url.href];
+      }
+    })
+  ]);
+  function createHlsProbeAlternatives(manifestUrl, body) {
+    let url;
+    try {
+      url = new URL(manifestUrl);
+    } catch {
+      return [];
+    }
+    if (!["http:", "https:"].includes(url.protocol)) return [];
+    const alternatives = [];
+    for (const adapter of HLS_PROBE_ADAPTERS) {
+      if (!adapter.matches(body)) continue;
+      for (const value of adapter.alternatives(url.href)) {
+        if (value !== url.href && !alternatives.includes(value)) {
+          alternatives.push(value);
+        }
+      }
+    }
+    return alternatives.slice(0, 3);
+  }
+  function normalizeBody(body) {
+    return typeof body === "string" ? body.replace(/^\uFEFF/, "").trimStart() : "";
+  }
+
   // src/media/probe-gate.js
   function createMediaProbeGate({ maximumRemembered = 100 } = {}) {
     const states = /* @__PURE__ */ new Map();
@@ -1332,16 +1371,48 @@ var AdsFriendlyMainWorld = (() => {
         if (!response.ok)
           throw new Error(`manifest_http_${response.status || "error"}`);
         const finalUrl = response.url || manifestUrl;
+        const body = await response.text();
         const finalCandidate = finalUrl === manifestUrl ? candidate : reportMediaSource(
           finalUrl,
           response.headers.get("content-type")
         ) || candidate;
-        return inspect(
+        const primaryProbe = inspect(
           finalUrl,
-          await response.text(),
+          body,
           finalCandidate,
           createFallbackRequestContext(manifestUrl, finalUrl)
         );
+        if (isUsableMediaProbe(primaryProbe)) return primaryProbe;
+        for (const alternativeUrl of createHlsProbeAlternatives(
+          finalUrl,
+          body
+        )) {
+          const alternativeResponse = await originalFetch.call(
+            window,
+            alternativeUrl,
+            {
+              credentials: "same-origin",
+              cache: "default"
+            }
+          );
+          if (!alternativeResponse.ok) continue;
+          const alternativeFinalUrl = alternativeResponse.url || alternativeUrl;
+          const alternativeCandidate = reportMediaSource(
+            alternativeFinalUrl,
+            alternativeResponse.headers.get("content-type")
+          ) || candidate;
+          const alternativeProbe = inspect(
+            alternativeFinalUrl,
+            await alternativeResponse.text(),
+            alternativeCandidate,
+            createFallbackRequestContext(manifestUrl, alternativeFinalUrl)
+          );
+          if (isUsableMediaProbe(alternativeProbe)) {
+            probeGate.remember(manifestUrl, "ready");
+            return alternativeProbe;
+          }
+        }
+        return primaryProbe;
       }).catch((error) => {
         if (probeGate.state(manifestUrl) !== "pending") return;
         probeGate.release(manifestUrl);

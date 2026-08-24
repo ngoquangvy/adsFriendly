@@ -10,6 +10,7 @@ import {
   parseHlsAttributeList,
   parseHlsManifest,
 } from "../src/media/hls-parser.js";
+import { createHlsProbeAlternatives } from "../src/media/hls-probe-adapters.js";
 import {
   createMediaProbeGate,
   isUsableMediaProbe,
@@ -229,6 +230,27 @@ test("empty HLS envelopes remain unknown instead of being mislabeled live", () =
       ...result,
     }).reason,
     /not exposed/,
+  );
+});
+
+test("encrypted HLS envelopes register a bounded clear playlist alternative", () => {
+  const encrypted = `#EXTM3U
+#ENC-AESGCM;iv=1234
+#EXT-X-B65:0-138
+encrypted-payload`;
+  assert.deepEqual(
+    createHlsProbeAlternatives(
+      "https://embed.example/token?d=1&session=abc",
+      encrypted,
+    ),
+    ["https://embed.example/token?session=abc"],
+  );
+  assert.deepEqual(
+    createHlsProbeAlternatives(
+      "https://embed.example/token?d=1",
+      "#EXTM3U\n#EXTINF:4,\nsegment.ts",
+    ),
+    [],
   );
 });
 

@@ -64,6 +64,7 @@ async function main() {
     CHROME,
     [
       `--user-data-dir=${profileDir}`,
+      `--disable-extensions-except=${EXTENSION_PATH}`,
       `--load-extension=${EXTENSION_PATH}`,
       `--remote-debugging-port=${DEBUG_PORT}`,
       "--no-first-run",
@@ -80,12 +81,14 @@ async function main() {
   const sessions = [];
   try {
     await waitForChrome();
+    const bootstrapTarget = await newPage(urls[0]);
     const workerTarget = await findTarget((target) => {
       return (
         target.url.startsWith("chrome-extension://") &&
         target.url.includes("background.js")
       );
     });
+    await closeTarget(bootstrapTarget.id);
     const contentSource = workerTarget
       ? null
       : await readFile(path.join(ROOT, "content.js"), "utf8");
@@ -194,6 +197,8 @@ async function testSite(harness, url) {
       domSamples: summarizeSamples(storage.domTrainingSamples || []),
       blockedLogCount: storage.blockedLogs?.length || 0,
       blockedLogs: (storage.blockedLogs || []).slice(-5),
+      settings: storage.appSettings || null,
+      mediaCatalogs: summarizeMediaCatalogs(storage.mediaCatalogs || {}),
     };
   } catch (error) {
     return { url, error: error.message };
@@ -347,7 +352,23 @@ async function setExtensionState(worker, patch) {
 async function getExtensionStorage(worker) {
   return evaluateJson(
     worker,
-    `new Promise(resolve => chrome.storage.local.get(["domTrainingSamples", "blockedLogs"], resolve))`,
+    `Promise.all([
+      chrome.storage.local.get([
+        "appSettings",
+        "isEnabled",
+        "friendlyMode",
+        "domTrainingSamples",
+        "blockedLogs"
+      ]),
+      chrome.storage.session.get(null)
+    ]).then(([local, session]) => ({
+      ...local,
+      mediaCatalogs: Object.fromEntries(
+        Object.entries(session).filter(([key, value]) =>
+          key.startsWith("adsfriendly.mediaCatalog.") && Array.isArray(value)
+        )
+      )
+    }))`,
   );
 }
 
@@ -373,6 +394,35 @@ function summarizeSamples(samples) {
     srcHost: sample.evidence?.features?.srcHost,
     hrefHost: sample.evidence?.features?.hrefHost,
   }));
+}
+
+function summarizeMediaCatalogs(catalogs) {
+  return Object.fromEntries(
+    Object.entries(catalogs).map(([key, items]) => [
+      key,
+      items.map((item) => ({
+        id: item.id,
+        kind: item.kind,
+        manifestUrl: item.manifestUrl,
+        probeStatus: item.probeStatus,
+        probeError: item.probeError,
+        playlistType: item.playlistType,
+        streamType: item.streamType,
+        duration: item.duration,
+        segmentCount: item.segmentCount,
+        probeCount: item.probeCount,
+        resolutionStatus: item.resolutionStatus,
+        selectedMediaId: item.selectedMediaId,
+        resolvedStream: item.resolvedStream
+          ? {
+              streamType: item.resolvedStream.streamType,
+              duration: item.resolvedStream.duration,
+              segmentCount: item.resolvedStream.segmentCount,
+            }
+          : null,
+      })),
+    ]),
+  );
 }
 
 async function evaluateJson(session, expression) {
@@ -451,6 +501,12 @@ async function closeExtraPages(targets, keepIds, currentId) {
           () => {},
         ),
       ),
+  );
+}
+
+async function closeTarget(targetId) {
+  await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/close/${targetId}`).catch(
+    () => {},
   );
 }
 
