@@ -3,6 +3,7 @@ import {
   CAPABILITIES,
   getCapabilitiesForMode,
 } from "../runtime/feature-catalog.js";
+import { getMediaDownloadAvailability } from "../media/download-job-contract.js";
 
 const blockedCountElement = document.getElementById("blocked-count");
 const statusToggle = document.getElementById("status-toggle");
@@ -223,19 +224,18 @@ async function renderMediaCatalog(tab) {
           : "No MP4, WebM, HLS, or DASH source detected yet.";
       return;
     }
-    mediaStatus.textContent =
-      "Read-only catalog · downloading is not enabled yet.";
+    mediaStatus.textContent = "HLS VOD download preview · max 16 connections.";
     mediaList.hidden = false;
     items
       .slice(0, 8)
-      .forEach((item) => mediaList.append(createMediaItem(item)));
+      .forEach((item) => mediaList.append(createMediaItem(item, tab)));
   } catch (error) {
     mediaStatus.textContent = "Could not read the media catalog.";
     console.debug("[AdsFriendly Popup] Media catalog unavailable", error);
   }
 }
 
-function createMediaItem(item) {
+function createMediaItem(item, tab) {
   const row = document.createElement("div");
   row.className = "media-item";
   const kind = document.createElement("span");
@@ -253,7 +253,55 @@ function createMediaItem(item) {
   details.textContent = mediaDetails(item);
   copy.append(name, details);
   row.append(kind, copy);
+  if (item.kind === "hls") row.append(createMediaDownloadButton(item, tab));
   return row;
+}
+
+function createMediaDownloadButton(item, tab) {
+  const availability = getMediaDownloadAvailability(item);
+  const button = document.createElement("button");
+  button.className = "media-download";
+  button.disabled = !availability.supported;
+  button.textContent = availability.supported
+    ? "Download"
+    : downloadUnavailableLabel(availability.reason);
+  button.title = availability.reason || "Open the HLS download page.";
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    button.textContent = "Opening…";
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: "CREATE_MEDIA_DOWNLOAD_JOB",
+        tabId: tab.id,
+        mediaId: item.id,
+      });
+      if (response?.status !== "created")
+        throw new Error(
+          response?.reason ||
+            response?.error ||
+            "Could not create download job.",
+        );
+      await chrome.tabs.create({
+        url: chrome.runtime.getURL(
+          `download/download.html?job=${encodeURIComponent(response.jobId)}`,
+        ),
+        active: true,
+      });
+      window.close();
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = "Retry";
+      button.title = error?.message || String(error);
+    }
+  });
+  return button;
+}
+
+function downloadUnavailableLabel(reason = "") {
+  if (reason.includes("DRM")) return "DRM";
+  if (reason.includes("Live")) return "Live";
+  if (reason.includes("Encrypted")) return "Encrypted";
+  return "Unavailable";
 }
 
 function mediaDetails(item) {

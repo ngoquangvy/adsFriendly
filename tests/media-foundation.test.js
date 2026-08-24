@@ -13,6 +13,9 @@ import {
   createMediaProbeGate,
   normalizeHttpMediaUrl,
 } from "../src/media/probe-gate.js";
+import { createHlsDownloadPlan } from "../src/media/hls-download-plan.js";
+import { downloadResourcesInParallel } from "../src/media/parallel-downloader.js";
+import { getMediaDownloadAvailability } from "../src/media/download-job-contract.js";
 import { EVENTS, createRegisteredEvent } from "../src/runtime/event-catalog.js";
 
 test("classifies direct, HLS, DASH, and blob media without treating segments as videos", () => {
@@ -219,4 +222,105 @@ test("fallback probe gate accepts HTTP manifests once and stays bounded", () => 
   assert.equal(gate.state("https://cdn.example/two.m3u8"), "ready");
   assert.equal(normalizeHttpMediaUrl("blob:https://video.example/id"), null);
   assert.equal(normalizeHttpMediaUrl("javascript:alert(1)"), null);
+});
+
+test("builds an ordered HLS VOD download plan with init and byte ranges", () => {
+  const plan = createHlsDownloadPlan(
+    "https://cdn.example/video/playlist.m3u8",
+    `#EXTM3U
+#EXT-X-TARGETDURATION:6
+#EXT-X-MAP:URI="init.mp4"
+#EXTINF:6,
+#EXT-X-BYTERANGE:1000@0
+media.mp4
+#EXTINF:5.5,
+#EXT-X-BYTERANGE:800
+media.mp4
+#EXT-X-ENDLIST`,
+  );
+  assert.equal(plan.status, "ready");
+  assert.equal(plan.outputExtension, "mp4");
+  assert.equal(plan.segmentCount, 2);
+  assert.deepEqual(
+    plan.resources.map((item) => [item.kind, item.byteRange]),
+    [
+      ["init", null],
+      ["segment", { offset: 0, length: 1000 }],
+      ["segment", { offset: 1000, length: 800 }],
+    ],
+  );
+});
+
+test("download plan rejects live, encrypted, and discontinuous playlists", () => {
+  assert.equal(
+    createHlsDownloadPlan(
+      "https://cdn.example/live.m3u8",
+      "#EXTM3U\n#EXTINF:6,\na.ts",
+    ).reason,
+    "live_not_supported",
+  );
+  assert.equal(
+    createHlsDownloadPlan(
+      "https://cdn.example/encrypted.m3u8",
+      '#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI="key"\n#EXTINF:6,\na.ts\n#EXT-X-ENDLIST',
+    ).reason,
+    "encrypted_not_supported",
+  );
+  assert.equal(
+    createHlsDownloadPlan(
+      "https://cdn.example/discontinuous.m3u8",
+      "#EXTM3U\n#EXTINF:6,\na.ts\n#EXT-X-DISCONTINUITY\n#EXTINF:6,\nb.ts\n#EXT-X-ENDLIST",
+    ).reason,
+    "discontinuity_not_supported",
+  );
+});
+
+test("parallel downloader bounds concurrency, retries, and writes in order", async () => {
+  const resources = Array.from({ length: 7 }, (_, index) => ({ index }));
+  const attempts = new Map();
+  const written = [];
+  let active = 0;
+  let maximumActive = 0;
+  const result = await downloadResourcesInParallel(resources, {
+    concurrency: 3,
+    retries: 1,
+    retryDelay: async () => {},
+    async fetchResource(resource) {
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      active -= 1;
+      const count = (attempts.get(resource.index) || 0) + 1;
+      attempts.set(resource.index, count);
+      if (resource.index === 2 && count === 1) throw new Error("retry");
+      return Uint8Array.of(resource.index);
+    },
+    async writeResource(bytes) {
+      written.push(bytes[0]);
+    },
+  });
+  assert.equal(maximumActive, 3);
+  assert.equal(attempts.get(2), 2);
+  assert.deepEqual(written, [0, 1, 2, 3, 4, 5, 6]);
+  assert.equal(result.downloadedBytes, 7);
+});
+
+test("download availability blocks DRM and live HLS before job creation", () => {
+  const base = {
+    kind: "hls",
+    probeStatus: "ready",
+    playlistType: "media",
+    streamType: "vod",
+    drm: "none",
+    encryptionMethods: [],
+  };
+  assert.equal(getMediaDownloadAvailability(base).supported, true);
+  assert.match(
+    getMediaDownloadAvailability({ ...base, drm: "suspected" }).reason,
+    /DRM/,
+  );
+  assert.match(
+    getMediaDownloadAvailability({ ...base, streamType: "live" }).reason,
+    /Live/,
+  );
 });

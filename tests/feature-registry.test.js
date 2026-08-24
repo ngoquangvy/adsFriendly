@@ -88,6 +88,14 @@ test("capability metadata is the single source for mode access", () => {
   );
 });
 
+test("media download is an Assist user action, not a Safe capability", () => {
+  const definition = getCapabilityDefinition(CAPABILITIES.MEDIA_DOWNLOAD);
+  assert.equal(definition.minMode, "assist");
+  assert.equal(definition.trigger, "user");
+  assert.equal(getCapabilitiesForMode("safe").includes(definition.id), false);
+  assert.equal(getCapabilitiesForMode("assist").includes(definition.id), true);
+});
+
 test("legacy settings migrate deterministically", () => {
   assert.deepEqual(migrateLegacySettings({ friendlyMode: true }), {
     enabled: true,

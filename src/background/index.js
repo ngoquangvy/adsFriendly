@@ -8,6 +8,7 @@ import { createMainController } from "../runtime/main-controller.js";
 import { DEFAULT_SETTINGS, loadSettings } from "../runtime/settings-store.js";
 import { migrateLegacyTrainingStorage } from "../storage/training-store.js";
 import { startBackgroundMediaCatalog } from "./media-catalog.js";
+import { startMediaDownloadJobStore } from "./media-download-jobs.js";
 
 const controller = createMainController({
   context: "background",
@@ -15,6 +16,8 @@ const controller = createMainController({
   implementations: {
     "background.message-router": ({ policy }) => registerMessageRouter(policy),
     "background.media-catalog": () => startBackgroundMediaCatalog(),
+    "background.media-download-jobs": ({ policy }) =>
+      startMediaDownloadJobStore(policy),
     "background.navigation-guard": ({ policy }) =>
       registerNavigationGuard(policy),
     "background.telemetry-flush": () => startTelemetryFlush(),

@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   ACTIONS,
+  getActionDefinition,
   getActionsForFeature,
 } from "../src/runtime/action-catalog.js";
 import { createActionBroker } from "../src/runtime/action-broker.js";
@@ -43,6 +44,12 @@ test("action broker enforces the capability declared by the registry", async () 
     broker.execute(ACTIONS.VIDEO_ACCELERATE_AUTOMATIC, "video"),
     /denied:video\.auto_action/,
   );
+});
+
+test("media download job creation is registered as a user action", () => {
+  const action = getActionDefinition(ACTIONS.MEDIA_DOWNLOAD_CREATE);
+  assert.equal(action.featureId, "background.media-download-jobs");
+  assert.equal(action.capability, CAPABILITIES.MEDIA_DOWNLOAD);
 });
 
 test("action broker requires handlers for all actions owned by a feature", () => {

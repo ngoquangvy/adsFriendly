@@ -678,6 +678,7 @@ var AdsFriendlyMainWorld = (() => {
     TELEMETRY_QUEUE: "telemetry.queue",
     MEDIA_OBSERVE: "media.observe",
     MEDIA_CATALOG: "media.catalog",
+    MEDIA_DOWNLOAD: "media.download",
     VIDEO_OBSERVE: "video.observe",
     VIDEO_RESTORE_STATE: "video.restore_state",
     VIDEO_USER_ACTION: "video.user_action",
@@ -716,6 +717,9 @@ var AdsFriendlyMainWorld = (() => {
     [C.TELEMETRY_QUEUE]: capability(C.TELEMETRY_QUEUE, "safe", T.STORAGE),
     [C.MEDIA_OBSERVE]: capability(C.MEDIA_OBSERVE, "assist", T.PASSIVE),
     [C.MEDIA_CATALOG]: capability(C.MEDIA_CATALOG, "assist", T.PASSIVE),
+    [C.MEDIA_DOWNLOAD]: capability(C.MEDIA_DOWNLOAD, "assist", T.USER, {
+      browserPermissions: ["storage", "tabs"]
+    }),
     [C.VIDEO_OBSERVE]: capability(C.VIDEO_OBSERVE, "assist", T.PASSIVE),
     [C.VIDEO_RESTORE_STATE]: capability(C.VIDEO_RESTORE_STATE, "safe", T.CORE, {
       availableWhenDisabled: true
@@ -730,9 +734,11 @@ var AdsFriendlyMainWorld = (() => {
       C.NAVIGATION_FEEDBACK,
       C.LEARNING_FEEDBACK,
       C.TELEMETRY_QUEUE,
-      C.MEDIA_CATALOG
+      C.MEDIA_CATALOG,
+      C.MEDIA_DOWNLOAD
     ]),
     feature("background.media-catalog", "background", C.MEDIA_CATALOG),
+    feature("background.media-download-jobs", "background", C.MEDIA_DOWNLOAD),
     feature("background.navigation-guard", "background", C.NAVIGATION_GUARD, [
       C.NAVIGATION_REVERSE_POPUNDER,
       C.NAVIGATION_FEEDBACK,

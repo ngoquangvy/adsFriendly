@@ -31,6 +31,7 @@ var AdsFriendlyPopup = (() => {
     TELEMETRY_QUEUE: "telemetry.queue",
     MEDIA_OBSERVE: "media.observe",
     MEDIA_CATALOG: "media.catalog",
+    MEDIA_DOWNLOAD: "media.download",
     VIDEO_OBSERVE: "video.observe",
     VIDEO_RESTORE_STATE: "video.restore_state",
     VIDEO_USER_ACTION: "video.user_action",
@@ -69,6 +70,9 @@ var AdsFriendlyPopup = (() => {
     [C.TELEMETRY_QUEUE]: capability(C.TELEMETRY_QUEUE, "safe", T.STORAGE),
     [C.MEDIA_OBSERVE]: capability(C.MEDIA_OBSERVE, "assist", T.PASSIVE),
     [C.MEDIA_CATALOG]: capability(C.MEDIA_CATALOG, "assist", T.PASSIVE),
+    [C.MEDIA_DOWNLOAD]: capability(C.MEDIA_DOWNLOAD, "assist", T.USER, {
+      browserPermissions: ["storage", "tabs"]
+    }),
     [C.VIDEO_OBSERVE]: capability(C.VIDEO_OBSERVE, "assist", T.PASSIVE),
     [C.VIDEO_RESTORE_STATE]: capability(C.VIDEO_RESTORE_STATE, "safe", T.CORE, {
       availableWhenDisabled: true
@@ -83,9 +87,11 @@ var AdsFriendlyPopup = (() => {
       C.NAVIGATION_FEEDBACK,
       C.LEARNING_FEEDBACK,
       C.TELEMETRY_QUEUE,
-      C.MEDIA_CATALOG
+      C.MEDIA_CATALOG,
+      C.MEDIA_DOWNLOAD
     ]),
     feature("background.media-catalog", "background", C.MEDIA_CATALOG),
+    feature("background.media-download-jobs", "background", C.MEDIA_DOWNLOAD),
     feature("background.navigation-guard", "background", C.NAVIGATION_GUARD, [
       C.NAVIGATION_REVERSE_POPUNDER,
       C.NAVIGATION_FEEDBACK,
@@ -264,6 +270,26 @@ var AdsFriendlyPopup = (() => {
         throw new Error(`Could not verify saved setting: ${key}.`);
     }
     return settings2;
+  }
+
+  // src/media/download-job-contract.js
+  var DOWNLOAD_JOB_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
+  function getMediaDownloadAvailability(candidate = {}) {
+    if (candidate.kind !== "hls")
+      return { supported: false, reason: "Only HLS is supported for now." };
+    if (candidate.probeStatus !== "ready")
+      return { supported: false, reason: "Manifest is not ready." };
+    if (candidate.drm === "suspected" || candidate.drm === "confirmed")
+      return { supported: false, reason: "DRM-protected stream." };
+    if (candidate.encryptionMethods?.length)
+      return { supported: false, reason: "Encrypted HLS is not supported yet." };
+    if (candidate.playlistType === "media" && candidate.streamType !== "vod")
+      return { supported: false, reason: "Live HLS is not supported yet." };
+    if (candidate.playlistType === "master" && !candidate.variants?.length)
+      return { supported: false, reason: "No quality variants found." };
+    if (!["master", "media"].includes(candidate.playlistType))
+      return { supported: false, reason: "Unknown HLS playlist type." };
+    return { supported: true, reason: null };
   }
 
   // src/popup/index.js
@@ -450,15 +476,15 @@ var AdsFriendlyPopup = (() => {
         mediaStatus.textContent = response?.status === "capability_disabled" ? "Media observation is still starting. Reload the page once." : "No MP4, WebM, HLS, or DASH source detected yet.";
         return;
       }
-      mediaStatus.textContent = "Read-only catalog \xB7 downloading is not enabled yet.";
+      mediaStatus.textContent = "HLS VOD download preview \xB7 max 16 connections.";
       mediaList.hidden = false;
-      items.slice(0, 8).forEach((item) => mediaList.append(createMediaItem(item)));
+      items.slice(0, 8).forEach((item) => mediaList.append(createMediaItem(item, tab)));
     } catch (error) {
       mediaStatus.textContent = "Could not read the media catalog.";
       console.debug("[AdsFriendly Popup] Media catalog unavailable", error);
     }
   }
-  function createMediaItem(item) {
+  function createMediaItem(item, tab) {
     const row = document.createElement("div");
     row.className = "media-item";
     const kind = document.createElement("span");
@@ -476,7 +502,49 @@ var AdsFriendlyPopup = (() => {
     details.textContent = mediaDetails(item);
     copy.append(name, details);
     row.append(kind, copy);
+    if (item.kind === "hls") row.append(createMediaDownloadButton(item, tab));
     return row;
+  }
+  function createMediaDownloadButton(item, tab) {
+    const availability = getMediaDownloadAvailability(item);
+    const button = document.createElement("button");
+    button.className = "media-download";
+    button.disabled = !availability.supported;
+    button.textContent = availability.supported ? "Download" : downloadUnavailableLabel(availability.reason);
+    button.title = availability.reason || "Open the HLS download page.";
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      button.textContent = "Opening\u2026";
+      try {
+        const response = await chrome.runtime.sendMessage({
+          type: "CREATE_MEDIA_DOWNLOAD_JOB",
+          tabId: tab.id,
+          mediaId: item.id
+        });
+        if (response?.status !== "created")
+          throw new Error(
+            response?.reason || response?.error || "Could not create download job."
+          );
+        await chrome.tabs.create({
+          url: chrome.runtime.getURL(
+            `download/download.html?job=${encodeURIComponent(response.jobId)}`
+          ),
+          active: true
+        });
+        window.close();
+      } catch (error) {
+        button.disabled = false;
+        button.textContent = "Retry";
+        button.title = error?.message || String(error);
+      }
+    });
+    return button;
+  }
+  function downloadUnavailableLabel(reason = "") {
+    if (reason.includes("DRM")) return "DRM";
+    if (reason.includes("Live")) return "Live";
+    if (reason.includes("Encrypted")) return "Encrypted";
+    return "Unavailable";
   }
   function mediaDetails(item) {
     if (item.kind === "blob") return "Blob only \xB7 source not resolved yet";

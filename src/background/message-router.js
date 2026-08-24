@@ -22,6 +22,7 @@ import {
   recordDiscoveredMedia,
   recordMediaProbe,
 } from "./media-catalog.js";
+import { requestMediaDownloadJob } from "./media-download-jobs.js";
 
 const MESSAGE_CAPABILITIES = Object.freeze({
   TRUSTED_CLICK: CAPABILITIES.NAVIGATION_INTENT,
@@ -50,6 +51,7 @@ const MESSAGE_CAPABILITIES = Object.freeze({
   MEDIA_DISCOVERED: CAPABILITIES.MEDIA_CATALOG,
   MEDIA_PROBED: CAPABILITIES.MEDIA_CATALOG,
   GET_MEDIA_CATALOG: CAPABILITIES.MEDIA_CATALOG,
+  CREATE_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
 });
 
 export function registerMessageRouter(policy) {
@@ -160,6 +162,11 @@ async function route(message, sender) {
     if (!Number.isInteger(message.tabId)) return { status: "invalid_tab" };
     return listDiscoveredMedia(message.tabId, message.pageUrl || null);
   }
+  if (message.type === "CREATE_MEDIA_DOWNLOAD_JOB")
+    return requestMediaDownloadJob({
+      tabId: message.tabId,
+      mediaId: message.mediaId,
+    });
   if (message.type === "NEGATIVE_LEARNING")
     return handleNegativeLearning(message.fingerprint);
   if (message.type === "USER_DECISION") return handleUserDecision(message);

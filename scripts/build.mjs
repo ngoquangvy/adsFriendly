@@ -12,6 +12,7 @@ const entries = [
   ["src/video/index.js", "video_surgeon.js", "AdsFriendlyVideo"],
   ["src/main-world/index.js", "injected_spy.js", "AdsFriendlyMainWorld"],
   ["src/popup/index.js", "popup/popup.js", "AdsFriendlyPopup"],
+  ["src/download/index.js", "download/download.js", "AdsFriendlyDownload"],
   ["src/options/index.js", "options/options.js", "AdsFriendlyOptions"],
 ];
 const manifest = JSON.parse(await readFile("manifest.json", "utf8"));
@@ -29,6 +30,7 @@ for (const capability of Object.values(CAPABILITY_CATALOG)) {
   }
 }
 await access("packages/default-settings-package.json");
+await access("download/download.html");
 const scripts =
   manifest.content_scripts?.flatMap((item) => item.js || []) || [];
 const resources =

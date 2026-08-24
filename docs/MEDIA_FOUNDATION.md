@@ -1,8 +1,8 @@
 # Media Foundation Boundary
 
-AdsFriendly's media layer is content-neutral. It discovers and describes media;
-it does not decide whether that media is an advertisement and it does not choose
-where completed downloads are presented.
+AdsFriendly's media layer is content-neutral. It discovers, describes, and can
+download explicitly selected supported media; it does not decide whether that
+media is an advertisement.
 
 ## Shared foundation
 
@@ -15,8 +15,8 @@ timeline.
 ## Independent consumers
 
 - The downloader selects a candidate and creates a download job. Its output is
-  behind an adapter, so Chrome Downloads, a dedicated extension page, or a local
-  helper can be selected later without changing discovery and parsing.
+  behind a dedicated extension page, so another output adapter can be selected
+  later without changing discovery and parsing.
 - Video-ad intelligence reads the same media ID and timeline but emits separate
   `video_ad.*` evidence. It cannot silently remove suspected ad segments from a
   download.
@@ -30,8 +30,8 @@ Features do not maintain their own Safe/Assist/Auto checks. Registered side
 effects execute through an action broker, while pure media transformations stay
 independent of protection mode.
 
-No download output adapter or browser download permission is selected in this
-foundation change.
+The first output adapter uses the browser file picker and a streaming writable
+file where available. It does not require Chrome's `downloads` permission.
 
 ## Current discovery slice
 
@@ -42,8 +42,8 @@ catalog and mirrored only to `chrome.storage.session` so service-worker sleep
 does not erase the test view. The session catalog is cleared when its tab
 navigates or closes, and it is not part of Settings Packages or training data.
 
-The popup exposes the catalog as a read-only test surface in Assist and Auto
-modes. HLS response bodies already available to the page are parsed without a
+The popup exposes the catalog and user-initiated HLS download entry point in
+Assist and Auto modes. HLS response bodies already available to the page are parsed without a
 second network request. Master playlists expose quality variants, audio and
 subtitle tracks; media playlists expose VOD/live state, duration, segment count,
 encryption methods, and suspected DRM. Full manifest bodies, signed URLs outside
@@ -58,7 +58,25 @@ origin, referrer, and same-origin cookies; a bounded gate prevents repeated
 requests. A blocked fallback is reported explicitly instead of remaining in an
 indefinite “reading qualities” state.
 
+## Current download slice
+
+An HLS candidate is checked before a job can be created. The first supported
+path is an unencrypted VOD media playlist with muxed audio/video and no stream
+discontinuities. Master playlists expose a quality selector, but variants with a
+separate audio playlist are blocked until muxing is available. Live playlists,
+AES encryption, suspected DRM, and unsupported layouts fail visibly before any
+segment download begins.
+
+The dedicated download page refetches only the selected media playlist and
+builds a volatile ordered resource plan. It downloads 1–16 resources at a time
+(chosen adaptively, user-adjustable), retries transient failures twice, and
+writes each completed batch in playlist order. A browser writable file keeps
+memory bounded to roughly one concurrent batch; the Blob fallback is used only
+when the file picker API is unavailable. Byte-range resources and fMP4 init maps
+are supported. Jobs expire from `chrome.storage.session` after 24 hours, while
+manifest bodies and segment lists are not persisted.
+
 Blob sources (including the common YouTube player case) remain discovery-only:
 the blob URL does not reveal the underlying adaptive streams. DASH probing and
-download output are separate later slices. None of these probe results are
+blob resolution are later slices. Probe results and download jobs are not
 training labels or video-ad classifications.

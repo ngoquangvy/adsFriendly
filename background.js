@@ -276,7 +276,7 @@ var AdsFriendlyBackground = (() => {
           };
         });
       },
-      saveDomainDecision(action, domain) {
+      saveDomainDecision(action2, domain) {
         return serial(async () => {
           const hostname = normalizeHostname(domain);
           if (!hostname) throw new Error("Invalid domain decision.");
@@ -286,24 +286,24 @@ var AdsFriendlyBackground = (() => {
           ]);
           let nextWhitelist = [...whitelist];
           let nextBlacklist = [...blacklist];
-          if (action === "WHITELIST") {
+          if (action2 === "WHITELIST") {
             nextWhitelist = [.../* @__PURE__ */ new Set([...nextWhitelist, hostname])];
             nextBlacklist = nextBlacklist.filter(
               (entry) => normalizeHostname(entry) !== hostname
             );
-          } else if (action === "BLACKLIST") {
+          } else if (action2 === "BLACKLIST") {
             nextBlacklist = [.../* @__PURE__ */ new Set([...nextBlacklist, `||${hostname}^`])];
             nextWhitelist = nextWhitelist.filter(
               (entry) => normalizeHostname(entry) !== hostname
             );
           } else {
-            throw new Error(`Unsupported domain action: ${String(action)}`);
+            throw new Error(`Unsupported domain action: ${String(action2)}`);
           }
           await setAndVerify(storage, {
             whitelist: nextWhitelist,
             blacklist: nextBlacklist
           });
-          return { status: "saved", action, domain: hostname };
+          return { status: "saved", action: action2, domain: hostname };
         });
       },
       removeDomainDecision(listName, domain) {
@@ -399,9 +399,9 @@ var AdsFriendlyBackground = (() => {
     return (await chrome.storage.local.get([key]))[key] || null;
   }
   async function handleUserDecision(message) {
-    const { action, domain } = message;
-    if (!["WHITELIST", "BLACKLIST"].includes(action)) return;
-    return getSettingsMutationStore().saveDomainDecision(action, domain);
+    const { action: action2, domain } = message;
+    if (!["WHITELIST", "BLACKLIST"].includes(action2)) return;
+    return getSettingsMutationStore().saveDomainDecision(action2, domain);
   }
 
   // src/background/reputation.js
@@ -735,6 +735,7 @@ var AdsFriendlyBackground = (() => {
     TELEMETRY_QUEUE: "telemetry.queue",
     MEDIA_OBSERVE: "media.observe",
     MEDIA_CATALOG: "media.catalog",
+    MEDIA_DOWNLOAD: "media.download",
     VIDEO_OBSERVE: "video.observe",
     VIDEO_RESTORE_STATE: "video.restore_state",
     VIDEO_USER_ACTION: "video.user_action",
@@ -773,6 +774,9 @@ var AdsFriendlyBackground = (() => {
     [C.TELEMETRY_QUEUE]: capability(C.TELEMETRY_QUEUE, "safe", T.STORAGE),
     [C.MEDIA_OBSERVE]: capability(C.MEDIA_OBSERVE, "assist", T.PASSIVE),
     [C.MEDIA_CATALOG]: capability(C.MEDIA_CATALOG, "assist", T.PASSIVE),
+    [C.MEDIA_DOWNLOAD]: capability(C.MEDIA_DOWNLOAD, "assist", T.USER, {
+      browserPermissions: ["storage", "tabs"]
+    }),
     [C.VIDEO_OBSERVE]: capability(C.VIDEO_OBSERVE, "assist", T.PASSIVE),
     [C.VIDEO_RESTORE_STATE]: capability(C.VIDEO_RESTORE_STATE, "safe", T.CORE, {
       availableWhenDisabled: true
@@ -787,9 +791,11 @@ var AdsFriendlyBackground = (() => {
       C.NAVIGATION_FEEDBACK,
       C.LEARNING_FEEDBACK,
       C.TELEMETRY_QUEUE,
-      C.MEDIA_CATALOG
+      C.MEDIA_CATALOG,
+      C.MEDIA_DOWNLOAD
     ]),
     feature("background.media-catalog", "background", C.MEDIA_CATALOG),
+    feature("background.media-download-jobs", "background", C.MEDIA_DOWNLOAD),
     feature("background.navigation-guard", "background", C.NAVIGATION_GUARD, [
       C.NAVIGATION_REVERSE_POPUNDER,
       C.NAVIGATION_FEEDBACK,
@@ -2140,6 +2146,291 @@ var AdsFriendlyBackground = (() => {
     }
   }
 
+  // src/runtime/action-catalog.js
+  var ACTIONS = Object.freeze({
+    MEDIA_DOWNLOAD_CREATE: "media.download.create",
+    VIDEO_ACCELERATE_AUTOMATIC: "video.accelerate.automatic",
+    VIDEO_ACCELERATE_USER: "video.accelerate.user",
+    VIDEO_RESTORE_PLAYBACK: "video.restore_playback",
+    VIDEO_SKIP_AUTOMATIC: "video.skip.automatic"
+  });
+  var A = ACTIONS;
+  var C2 = CAPABILITIES;
+  var ACTION_CATALOG = Object.freeze({
+    [A.MEDIA_DOWNLOAD_CREATE]: action(
+      A.MEDIA_DOWNLOAD_CREATE,
+      "background.media-download-jobs",
+      C2.MEDIA_DOWNLOAD
+    ),
+    [A.VIDEO_ACCELERATE_AUTOMATIC]: action(
+      A.VIDEO_ACCELERATE_AUTOMATIC,
+      "video.surgeon",
+      C2.VIDEO_AUTO_ACTION
+    ),
+    [A.VIDEO_ACCELERATE_USER]: action(
+      A.VIDEO_ACCELERATE_USER,
+      "video.surgeon",
+      C2.VIDEO_USER_ACTION
+    ),
+    [A.VIDEO_RESTORE_PLAYBACK]: action(
+      A.VIDEO_RESTORE_PLAYBACK,
+      "video.surgeon",
+      C2.VIDEO_RESTORE_STATE
+    ),
+    [A.VIDEO_SKIP_AUTOMATIC]: action(
+      A.VIDEO_SKIP_AUTOMATIC,
+      "video.surgeon",
+      C2.VIDEO_AUTO_ACTION
+    )
+  });
+  validateActionCatalog();
+  function getActionDefinition(actionId) {
+    const definition = ACTION_CATALOG[actionId];
+    if (!definition) {
+      throw new Error(
+        `[ActionRegistry] Unknown action "${actionId}". Register it in action-catalog.js before use.`
+      );
+    }
+    return definition;
+  }
+  function getActionsForFeature(featureId) {
+    getFeatureDefinition(featureId);
+    return Object.values(ACTION_CATALOG).filter(
+      (definition) => definition.featureId === featureId
+    );
+  }
+  function action(id, featureId, capability2) {
+    return Object.freeze({ id, featureId, capability: capability2 });
+  }
+  function validateActionCatalog() {
+    const actionIds = Object.values(ACTIONS);
+    if (new Set(actionIds).size !== actionIds.length) {
+      throw new Error("[ActionRegistry] Duplicate action ID.");
+    }
+    for (const actionId of actionIds) {
+      const definition = ACTION_CATALOG[actionId];
+      if (!definition || definition.id !== actionId) {
+        throw new Error(
+          `[ActionRegistry] Action "${actionId}" has no metadata definition.`
+        );
+      }
+      const feature2 = getFeatureDefinition(definition.featureId);
+      getCapabilityDefinition(definition.capability);
+      if (!feature2.capabilities.includes(definition.capability)) {
+        throw new Error(
+          `[ActionRegistry] Action "${actionId}" uses capability "${definition.capability}" not declared by feature "${feature2.id}".`
+        );
+      }
+    }
+  }
+
+  // src/runtime/action-broker.js
+  function createActionBroker({
+    featureId,
+    policy,
+    handlers,
+    permissionChecker = hasBrowserPermissions
+  }) {
+    const declaredActions = getActionsForFeature(featureId);
+    const declaredIds = new Set(declaredActions.map((action2) => action2.id));
+    for (const action2 of declaredActions) {
+      if (typeof handlers[action2.id] !== "function") {
+        throw new Error(
+          `[ActionBroker] Feature "${featureId}" has no handler for registered action "${action2.id}".`
+        );
+      }
+    }
+    for (const actionId of Object.keys(handlers)) {
+      const action2 = getActionDefinition(actionId);
+      if (action2.featureId !== featureId || !declaredIds.has(actionId)) {
+        throw new Error(
+          `[ActionBroker] Feature "${featureId}" cannot handle action "${actionId}" owned by "${action2.featureId}".`
+        );
+      }
+    }
+    return Object.freeze({
+      featureId,
+      can(actionId) {
+        const action2 = requireOwnedAction(actionId, featureId);
+        return policy.can(action2.capability);
+      },
+      async execute(actionId, payload) {
+        const action2 = requireOwnedAction(actionId, featureId);
+        policy.require(action2.capability);
+        const capability2 = getCapabilityDefinition(action2.capability);
+        if (capability2.browserPermissions.length > 0 && !await permissionChecker(capability2.browserPermissions)) {
+          throw new Error(
+            `[ActionBroker] Action "${actionId}" requires browser permissions: ${capability2.browserPermissions.join(", ")}.`
+          );
+        }
+        return handlers[actionId](payload);
+      }
+    });
+  }
+  function requireOwnedAction(actionId, featureId) {
+    const action2 = getActionDefinition(actionId);
+    if (action2.featureId !== featureId) {
+      throw new Error(
+        `[ActionBroker] Feature "${featureId}" cannot execute action "${actionId}" owned by "${action2.featureId}".`
+      );
+    }
+    return action2;
+  }
+  async function hasBrowserPermissions(permissions) {
+    if (!permissions.length) return true;
+    if (typeof chrome === "undefined" || !chrome.permissions?.contains)
+      return false;
+    return chrome.permissions.contains({ permissions });
+  }
+
+  // src/media/download-job-contract.js
+  var DOWNLOAD_JOB_PREFIX = "adsfriendly.mediaDownloadJob.";
+  var DOWNLOAD_JOB_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
+  function normalizeMediaDownloadJob(value = {}) {
+    const candidate = value.candidate;
+    if (!candidate || candidate.kind !== "hls") {
+      throw new Error("[MediaDownload] Only HLS candidates are supported.");
+    }
+    return {
+      id: requiredString2(value.id, "id"),
+      createdAt: finiteNumber(value.createdAt, "createdAt"),
+      sourceTabId: nonNegativeInteger(value.sourceTabId, "sourceTabId"),
+      candidate: {
+        id: requiredString2(candidate.id, "candidate.id"),
+        pageUrl: requiredString2(candidate.pageUrl, "candidate.pageUrl"),
+        manifestUrl: requiredHttpUrl(
+          candidate.manifestUrl,
+          "candidate.manifestUrl"
+        ),
+        kind: "hls",
+        title: optionalString2(candidate.title),
+        probeStatus: candidate.probeStatus,
+        playlistType: candidate.playlistType,
+        streamType: candidate.streamType,
+        drm: candidate.drm || "none",
+        encryptionMethods: stringArray(candidate.encryptionMethods),
+        variants: objectArray(candidate.variants),
+        audioTracks: objectArray(candidate.audioTracks),
+        subtitles: objectArray(candidate.subtitles),
+        duration: optionalFiniteNumber2(candidate.duration),
+        segmentCount: optionalNonNegativeInteger2(candidate.segmentCount)
+      }
+    };
+  }
+  function downloadJobKey(jobId) {
+    return `${DOWNLOAD_JOB_PREFIX}${requiredString2(jobId, "jobId")}`;
+  }
+  function getMediaDownloadAvailability(candidate = {}) {
+    if (candidate.kind !== "hls")
+      return { supported: false, reason: "Only HLS is supported for now." };
+    if (candidate.probeStatus !== "ready")
+      return { supported: false, reason: "Manifest is not ready." };
+    if (candidate.drm === "suspected" || candidate.drm === "confirmed")
+      return { supported: false, reason: "DRM-protected stream." };
+    if (candidate.encryptionMethods?.length)
+      return { supported: false, reason: "Encrypted HLS is not supported yet." };
+    if (candidate.playlistType === "media" && candidate.streamType !== "vod")
+      return { supported: false, reason: "Live HLS is not supported yet." };
+    if (candidate.playlistType === "master" && !candidate.variants?.length)
+      return { supported: false, reason: "No quality variants found." };
+    if (!["master", "media"].includes(candidate.playlistType))
+      return { supported: false, reason: "Unknown HLS playlist type." };
+    return { supported: true, reason: null };
+  }
+  function requiredString2(value, field) {
+    if (typeof value !== "string" || !value.trim())
+      throw new Error(`[MediaDownload] ${field} is required.`);
+    return value;
+  }
+  function requiredHttpUrl(value, field) {
+    const url = requiredString2(value, field);
+    try {
+      if (!["http:", "https:"].includes(new URL(url).protocol)) throw new Error();
+    } catch {
+      throw new Error(`[MediaDownload] ${field} must be an HTTP(S) URL.`);
+    }
+    return url;
+  }
+  function finiteNumber(value, field) {
+    const number = Number(value);
+    if (!Number.isFinite(number))
+      throw new Error(`[MediaDownload] ${field} must be finite.`);
+    return number;
+  }
+  function nonNegativeInteger(value, field) {
+    const number = Number(value);
+    if (!Number.isInteger(number) || number < 0)
+      throw new Error(`[MediaDownload] ${field} must be non-negative.`);
+    return number;
+  }
+  function optionalString2(value) {
+    return typeof value === "string" && value ? value : null;
+  }
+  function optionalFiniteNumber2(value) {
+    if (value === null || value === void 0) return null;
+    return finiteNumber(value, "optional number");
+  }
+  function optionalNonNegativeInteger2(value) {
+    if (value === null || value === void 0) return null;
+    return nonNegativeInteger(value, "optional integer");
+  }
+  function stringArray(value) {
+    return Array.isArray(value) ? value.filter((item) => typeof item === "string").slice(0, 20) : [];
+  }
+  function objectArray(value) {
+    return Array.isArray(value) ? value.filter((item) => item && typeof item === "object").slice(0, 100).map((item) => ({ ...item })) : [];
+  }
+
+  // src/background/media-download-jobs.js
+  var broker = null;
+  async function startMediaDownloadJobStore(policy) {
+    await removeStaleJobs();
+    broker = createActionBroker({
+      featureId: "background.media-download-jobs",
+      policy,
+      handlers: {
+        [ACTIONS.MEDIA_DOWNLOAD_CREATE]: createJob
+      }
+    });
+    return () => {
+      broker = null;
+    };
+  }
+  async function requestMediaDownloadJob(payload) {
+    if (!broker) return { status: "download_disabled" };
+    return broker.execute(ACTIONS.MEDIA_DOWNLOAD_CREATE, payload);
+  }
+  async function createJob({ tabId, mediaId } = {}) {
+    if (!Number.isInteger(tabId) || tabId < 0) return { status: "invalid_tab" };
+    if (typeof mediaId !== "string" || !mediaId)
+      return { status: "invalid_media" };
+    const response = await listDiscoveredMedia(tabId);
+    const candidate = response.items.find((item) => item.id === mediaId);
+    if (!candidate) return { status: "media_not_found" };
+    const availability = getMediaDownloadAvailability(candidate);
+    if (!availability.supported)
+      return { status: "unsupported", reason: availability.reason };
+    const job = normalizeMediaDownloadJob({
+      id: randomId4(),
+      createdAt: Date.now(),
+      sourceTabId: tabId,
+      candidate
+    });
+    await chrome.storage.session.set({ [downloadJobKey(job.id)]: job });
+    return { status: "created", jobId: job.id };
+  }
+  async function removeStaleJobs() {
+    const snapshot = await chrome.storage.session.get(null);
+    const cutoff = Date.now() - DOWNLOAD_JOB_MAX_AGE_MS;
+    const staleKeys = Object.entries(snapshot).filter(
+      ([key, value]) => key.startsWith(DOWNLOAD_JOB_PREFIX) && (!Number.isFinite(value?.createdAt) || value.createdAt < cutoff)
+    ).map(([key]) => key);
+    if (staleKeys.length) await chrome.storage.session.remove(staleKeys);
+  }
+  function randomId4() {
+    return globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+
   // src/background/message-router.js
   var MESSAGE_CAPABILITIES = Object.freeze({
     TRUSTED_CLICK: CAPABILITIES.NAVIGATION_INTENT,
@@ -2167,7 +2458,8 @@ var AdsFriendlyBackground = (() => {
     RECORD_DOM_SAMPLE: CAPABILITIES.LEARNING_FEEDBACK,
     MEDIA_DISCOVERED: CAPABILITIES.MEDIA_CATALOG,
     MEDIA_PROBED: CAPABILITIES.MEDIA_CATALOG,
-    GET_MEDIA_CATALOG: CAPABILITIES.MEDIA_CATALOG
+    GET_MEDIA_CATALOG: CAPABILITIES.MEDIA_CATALOG,
+    CREATE_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD
   });
   function registerMessageRouter(policy) {
     const onMessage = (message, sender, sendResponse) => {
@@ -2273,6 +2565,11 @@ var AdsFriendlyBackground = (() => {
       if (!Number.isInteger(message.tabId)) return { status: "invalid_tab" };
       return listDiscoveredMedia(message.tabId, message.pageUrl || null);
     }
+    if (message.type === "CREATE_MEDIA_DOWNLOAD_JOB")
+      return requestMediaDownloadJob({
+        tabId: message.tabId,
+        mediaId: message.mediaId
+      });
     if (message.type === "NEGATIVE_LEARNING")
       return handleNegativeLearning(message.fingerprint);
     if (message.type === "USER_DECISION") return handleUserDecision(message);
@@ -2892,6 +3189,7 @@ var AdsFriendlyBackground = (() => {
     implementations: {
       "background.message-router": ({ policy }) => registerMessageRouter(policy),
       "background.media-catalog": () => startBackgroundMediaCatalog(),
+      "background.media-download-jobs": ({ policy }) => startMediaDownloadJobStore(policy),
       "background.navigation-guard": ({ policy }) => registerNavigationGuard(policy),
       "background.telemetry-flush": () => startTelemetryFlush(),
       "background.memory-cleanup": () => {
