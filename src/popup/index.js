@@ -21,6 +21,7 @@ const MODE_DESCRIPTIONS = Object.freeze({
 
 let settings = null;
 let mediaRefreshInFlight = false;
+let mediaHelperStatus = { status: "checking", canDownloadHls: false };
 initialize().catch((error) =>
   console.error("[AdsFriendly Popup] initialization failed", error),
 );
@@ -224,18 +225,21 @@ async function renderMediaCatalog(tab) {
           : "No MP4, WebM, HLS, or DASH source detected yet.";
       return;
     }
-    mediaStatus.textContent = "HLS VOD download preview · max 16 connections.";
+    mediaHelperStatus = await readMediaHelperStatus();
+    mediaStatus.textContent = helperSummary(mediaHelperStatus);
     mediaList.hidden = false;
     items
       .slice(0, 8)
-      .forEach((item) => mediaList.append(createMediaItem(item, tab)));
+      .forEach((item) =>
+        mediaList.append(createMediaItem(item, tab, mediaHelperStatus)),
+      );
   } catch (error) {
     mediaStatus.textContent = "Could not read the media catalog.";
     console.debug("[AdsFriendly Popup] Media catalog unavailable", error);
   }
 }
 
-function createMediaItem(item, tab) {
+function createMediaItem(item, tab, helper) {
   const row = document.createElement("div");
   row.className = "media-item";
   const kind = document.createElement("span");
@@ -253,41 +257,39 @@ function createMediaItem(item, tab) {
   details.textContent = mediaDetails(item);
   copy.append(name, details);
   row.append(kind, copy);
-  if (item.kind === "hls") row.append(createMediaDownloadButton(item, tab));
+  if (item.kind === "hls")
+    row.append(createMediaDownloadButton(item, tab, helper));
   return row;
 }
 
-function createMediaDownloadButton(item, tab) {
+function createMediaDownloadButton(item, tab, helper) {
   const availability = getMediaDownloadAvailability(item);
   const button = document.createElement("button");
   button.className = "media-download";
-  button.disabled = !availability.supported;
-  button.textContent = availability.supported
-    ? "Download"
-    : downloadUnavailableLabel(availability.reason);
-  button.title = availability.reason || "Open the HLS download page.";
+  const presentation = downloadButtonPresentation(availability, helper);
+  button.disabled = presentation.disabled;
+  button.textContent = presentation.label;
+  button.title = presentation.title;
   button.addEventListener("click", async () => {
     button.disabled = true;
-    button.textContent = "Opening…";
+    if (helper.status !== "ready" || !helper.canDownloadHls) {
+      await setupMediaHelper(button, helper);
+      return;
+    }
+    button.textContent = "Starting…";
     try {
       const response = await chrome.runtime.sendMessage({
         type: "CREATE_MEDIA_DOWNLOAD_JOB",
         tabId: tab.id,
         mediaId: item.id,
       });
-      if (response?.status !== "created")
+      if (response?.status !== "started")
         throw new Error(
           response?.reason ||
             response?.error ||
-            "Could not create download job.",
+            "Could not start the helper download job.",
         );
-      await chrome.tabs.create({
-        url: chrome.runtime.getURL(
-          `download/download.html?job=${encodeURIComponent(response.jobId)}`,
-        ),
-        active: true,
-      });
-      window.close();
+      button.textContent = "Started";
     } catch (error) {
       button.disabled = false;
       button.textContent = "Retry";
@@ -295,6 +297,108 @@ function createMediaDownloadButton(item, tab) {
     }
   });
   return button;
+}
+
+function downloadButtonPresentation(availability, helper) {
+  if (!availability.supported) {
+    return {
+      disabled: true,
+      label: downloadUnavailableLabel(availability.reason),
+      title: availability.reason,
+    };
+  }
+  if (helper.status === "permission_required") {
+    return {
+      disabled: false,
+      label: "Set up",
+      title: "Enable the optional Media Helper connection to download video.",
+    };
+  }
+  if (helper.status === "not_installed") {
+    return {
+      disabled: false,
+      label: "Install",
+      title: "Media Helper is required for video downloads.",
+    };
+  }
+  if (helper.status === "ready" && !helper.canDownloadHls) {
+    return {
+      disabled: true,
+      label: "Helper update",
+      title: "The installed Media Helper does not support HLS downloads yet.",
+    };
+  }
+  if (helper.status !== "ready") {
+    return {
+      disabled: false,
+      label: "Retry",
+      title: helper.error || "Could not connect to Media Helper.",
+    };
+  }
+  return {
+    disabled: false,
+    label: "Download",
+    title: "Download with AdsFriendly Media Helper.",
+  };
+}
+
+async function setupMediaHelper(button, helper) {
+  try {
+    if (helper.status === "permission_required") {
+      button.textContent = "Allowing…";
+      const granted = await chrome.permissions.request({
+        permissions: ["nativeMessaging"],
+      });
+      if (!granted) {
+        button.disabled = false;
+        button.textContent = "Set up";
+        button.title = "Media Helper permission was not granted.";
+        return;
+      }
+    } else if (helper.status === "not_installed") {
+      alert(
+        "AdsFriendly Media Helper is not installed. The installer will be added after the native downloader is implemented.",
+      );
+      button.disabled = false;
+      button.textContent = "Install";
+      return;
+    }
+    button.textContent = "Checking…";
+    mediaHelperStatus = await readMediaHelperStatus(true);
+    await renderMediaCatalog(await getActiveHttpTab());
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = "Retry";
+    button.title = error?.message || String(error);
+  }
+}
+
+async function readMediaHelperStatus(force = false) {
+  const response = await chrome.runtime.sendMessage({
+    type: "GET_MEDIA_HELPER_STATUS",
+    force,
+  });
+  return response?.status
+    ? response
+    : {
+        status: "unavailable",
+        canDownloadHls: false,
+        error: response?.error || "Could not read Media Helper status.",
+      };
+}
+
+function helperSummary(helper) {
+  if (helper.status === "permission_required")
+    return "Media found · set up Media Helper to download.";
+  if (helper.status === "not_installed")
+    return "Media found · Media Helper is not installed.";
+  if (helper.status === "ready" && helper.canDownloadHls)
+    return `Media Helper ${helper.helperVersion || ""} ready.`.trim();
+  if (helper.status === "ready")
+    return "Media Helper connected · downloader update required.";
+  if (helper.status === "incompatible")
+    return "Media Helper version is incompatible.";
+  return "Media found · Media Helper is unavailable.";
 }
 
 function downloadUnavailableLabel(reason = "") {

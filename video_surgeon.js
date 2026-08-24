@@ -278,6 +278,7 @@ var AdsFriendlyVideo = (() => {
       "assist",
       T.USER,
       {
+        browserPermissions: ["nativeMessaging"],
         productIds: [P2.MEDIA_TOOLS],
         requiredComponents: [R.BROWSER_EXTENSION, R.MEDIA_HELPER]
       }
@@ -307,7 +308,9 @@ var AdsFriendlyVideo = (() => {
       C2.MEDIA_DOWNLOAD
     ]),
     feature("background.media-catalog", "background", C2.MEDIA_CATALOG),
-    feature("background.media-download-jobs", "background", C2.MEDIA_DOWNLOAD),
+    feature("background.media-download-jobs", "background", C2.MEDIA_DOWNLOAD, [
+      C2.MEDIA_NATIVE_DOWNLOAD
+    ]),
     feature("background.navigation-guard", "background", C2.NAVIGATION_GUARD, [
       C2.NAVIGATION_REVERSE_POPUNDER,
       C2.NAVIGATION_FEEDBACK,
@@ -499,7 +502,7 @@ var AdsFriendlyVideo = (() => {
     [A.MEDIA_DOWNLOAD_CREATE]: action(
       A.MEDIA_DOWNLOAD_CREATE,
       "background.media-download-jobs",
-      C3.MEDIA_DOWNLOAD
+      C3.MEDIA_NATIVE_DOWNLOAD
     ),
     [A.VIDEO_ACCELERATE_AUTOMATIC]: action(
       A.VIDEO_ACCELERATE_AUTOMATIC,

@@ -16,8 +16,14 @@ import {
   MEDIA_HELPER_PROTOCOL_VERSION,
   MEDIA_HELPER_REQUESTS,
   createHelperEvent,
+  normalizeHelperEvent,
   normalizeHelperRequest,
 } from "../src/media/helper-contract.js";
+import {
+  MEDIA_HELPER_STATES,
+  classifyNativeMessagingError,
+  getMediaHelperStatus,
+} from "../src/background/media-helper-bridge.js";
 
 test("ad protection is extension-only while the media helper stays optional", () => {
   assert.equal(
@@ -98,4 +104,67 @@ test("media helper messages are versioned and normalized", () => {
   });
   assert.equal(event.protocolVersion, MEDIA_HELPER_PROTOCOL_VERSION);
   assert.equal(event.payload.helperVersion, "0.1.0");
+  assert.equal(normalizeHelperEvent(event).type, MEDIA_HELPER_EVENTS.READY);
+});
+
+test("native host errors distinguish a missing helper from a broken helper", () => {
+  assert.equal(
+    classifyNativeMessagingError("Specified native messaging host not found."),
+    MEDIA_HELPER_STATES.NOT_INSTALLED,
+  );
+  assert.equal(
+    classifyNativeMessagingError("Media Helper handshake timed out."),
+    MEDIA_HELPER_STATES.UNAVAILABLE,
+  );
+});
+
+test("helper status does not connect before optional permission is granted", async () => {
+  const previousChrome = globalThis.chrome;
+  let nativeCalls = 0;
+  globalThis.chrome = {
+    permissions: { contains: async () => false },
+    runtime: {
+      sendNativeMessage: async () => {
+        nativeCalls += 1;
+      },
+    },
+  };
+  try {
+    const status = await getMediaHelperStatus({ force: true });
+    assert.equal(status.status, MEDIA_HELPER_STATES.PERMISSION_REQUIRED);
+    assert.equal(nativeCalls, 0);
+  } finally {
+    globalThis.chrome = previousChrome;
+  }
+});
+
+test("helper status exposes only declared download capabilities", async () => {
+  const previousChrome = globalThis.chrome;
+  globalThis.chrome = {
+    permissions: { contains: async () => true },
+    runtime: {
+      getManifest: () => ({ version: "2.2.0" }),
+      sendNativeMessage: async (_host, request) =>
+        createHelperEvent(MEDIA_HELPER_EVENTS.READY, request.requestId, {
+          helperVersion: "0.1.0",
+          capabilities: {
+            "download.hls_vod": false,
+            "mux.ffmpeg": true,
+            ignored: { nested: true },
+          },
+        }),
+    },
+  };
+  try {
+    const status = await getMediaHelperStatus({ force: true });
+    assert.equal(status.status, MEDIA_HELPER_STATES.READY);
+    assert.equal(status.canDownloadHls, false);
+    assert.equal(status.canMuxWithFfmpeg, true);
+    assert.deepEqual(status.capabilities, {
+      "download.hls_vod": false,
+      "mux.ffmpeg": true,
+    });
+  } finally {
+    globalThis.chrome = previousChrome;
+  }
 });

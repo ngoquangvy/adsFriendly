@@ -7,10 +7,9 @@ AdsFriendly is one ecosystem with independently installable components:
 - `ad-protection` is the browser protection product. It requires only the
   extension and must keep navigation, DOM, rules, learning, and future video-ad
   protection working when the media helper is absent or broken.
-- `media-tools` provides media discovery and user-initiated downloads. Its
-  browser backend remains available without another installation. The optional
-  `media-helper` component adds Node.js/TypeScript download orchestration and
-  FFmpeg-backed output for jobs the browser cannot finish reliably.
+- `media-tools` provides media discovery and user-initiated downloads. Discovery
+  remains in the extension, while every actual download is executed by the
+  optional `media-helper` Node.js/TypeScript component with FFmpeg-backed output.
 - Media observation and normalized timelines form a browser-resident shared
   core. Downloader jobs consume that core without becoming ad labels. Future
   video-ad classification can consume the same core without acquiring a helper
@@ -18,13 +17,16 @@ AdsFriendly is one ecosystem with independently installable components:
 
 `src/runtime/ecosystem-catalog.js` registers product/component relationships.
 Capability ownership and component requirements are declared centrally in
-`src/runtime/feature-catalog.js`. `media.download` is browser-only;
-`media.native_download` is the explicit helper boundary. No protection
+`src/runtime/feature-catalog.js`. `media.download` owns browser UI and job
+requests; `media.native_download` owns every execution path and requires both
+the optional `nativeMessaging` permission and `media-helper`. No protection
 capability may require `media-helper`.
 
 The helper lives in `packages/media-helper/` and is released separately from the
 extension. Installing or updating the extension must never install, launch, or
-require the helper without an explicit media-tools action from the user.
+require the helper without an explicit media-tools action from the user. The
+`nativeMessaging` permission is optional and requested only from that action, so
+ad-protection-only users do not receive its permission warning.
 
 ## Source vs Runtime Bundles
 

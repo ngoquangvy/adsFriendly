@@ -897,6 +897,7 @@ var AdsFriendlyBackground = (() => {
       "assist",
       T.USER,
       {
+        browserPermissions: ["nativeMessaging"],
         productIds: [P2.MEDIA_TOOLS],
         requiredComponents: [R.BROWSER_EXTENSION, R.MEDIA_HELPER]
       }
@@ -926,7 +927,9 @@ var AdsFriendlyBackground = (() => {
       C2.MEDIA_DOWNLOAD
     ]),
     feature("background.media-catalog", "background", C2.MEDIA_CATALOG),
-    feature("background.media-download-jobs", "background", C2.MEDIA_DOWNLOAD),
+    feature("background.media-download-jobs", "background", C2.MEDIA_DOWNLOAD, [
+      C2.MEDIA_NATIVE_DOWNLOAD
+    ]),
     feature("background.navigation-guard", "background", C2.NAVIGATION_GUARD, [
       C2.NAVIGATION_REVERSE_POPUNDER,
       C2.NAVIGATION_FEEDBACK,
@@ -2336,7 +2339,7 @@ var AdsFriendlyBackground = (() => {
     [A.MEDIA_DOWNLOAD_CREATE]: action(
       A.MEDIA_DOWNLOAD_CREATE,
       "background.media-download-jobs",
-      C3.MEDIA_DOWNLOAD
+      C3.MEDIA_NATIVE_DOWNLOAD
     ),
     [A.VIDEO_ACCELERATE_AUTOMATIC]: action(
       A.VIDEO_ACCELERATE_AUTOMATIC,
@@ -2462,40 +2465,6 @@ var AdsFriendlyBackground = (() => {
   // src/media/download-job-contract.js
   var DOWNLOAD_JOB_PREFIX = "adsfriendly.mediaDownloadJob.";
   var DOWNLOAD_JOB_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
-  function normalizeMediaDownloadJob(value = {}) {
-    const candidate = value.candidate;
-    if (!candidate || candidate.kind !== "hls") {
-      throw new Error("[MediaDownload] Only HLS candidates are supported.");
-    }
-    return {
-      id: requiredString2(value.id, "id"),
-      createdAt: finiteNumber(value.createdAt, "createdAt"),
-      sourceTabId: nonNegativeInteger(value.sourceTabId, "sourceTabId"),
-      candidate: {
-        id: requiredString2(candidate.id, "candidate.id"),
-        pageUrl: requiredString2(candidate.pageUrl, "candidate.pageUrl"),
-        manifestUrl: requiredHttpUrl(
-          candidate.manifestUrl,
-          "candidate.manifestUrl"
-        ),
-        kind: "hls",
-        title: optionalString2(candidate.title),
-        probeStatus: candidate.probeStatus,
-        playlistType: candidate.playlistType,
-        streamType: candidate.streamType,
-        drm: candidate.drm || "none",
-        encryptionMethods: stringArray(candidate.encryptionMethods),
-        variants: objectArray(candidate.variants),
-        audioTracks: objectArray(candidate.audioTracks),
-        subtitles: objectArray(candidate.subtitles),
-        duration: optionalFiniteNumber2(candidate.duration),
-        segmentCount: optionalNonNegativeInteger2(candidate.segmentCount)
-      }
-    };
-  }
-  function downloadJobKey(jobId) {
-    return `${DOWNLOAD_JOB_PREFIX}${requiredString2(jobId, "jobId")}`;
-  }
   function getMediaDownloadAvailability(candidate = {}) {
     if (candidate.kind !== "hls")
       return { supported: false, reason: "Only HLS is supported for now." };
@@ -2513,48 +2482,190 @@ var AdsFriendlyBackground = (() => {
       return { supported: false, reason: "Unknown HLS playlist type." };
     return { supported: true, reason: null };
   }
-  function requiredString2(value, field) {
-    if (typeof value !== "string" || !value.trim())
-      throw new Error(`[MediaDownload] ${field} is required.`);
-    return value;
-  }
-  function requiredHttpUrl(value, field) {
-    const url = requiredString2(value, field);
-    try {
-      if (!["http:", "https:"].includes(new URL(url).protocol)) throw new Error();
-    } catch {
-      throw new Error(`[MediaDownload] ${field} must be an HTTP(S) URL.`);
+
+  // src/media/helper-contract.js
+  var MEDIA_HELPER_PROTOCOL_VERSION = 1;
+  var MEDIA_HELPER_HOST_NAME = "com.adsfriendly.media_helper";
+  var MEDIA_HELPER_REQUESTS = Object.freeze({
+    HELLO: "helper.hello",
+    GET_CAPABILITIES: "helper.capabilities.get",
+    DOWNLOAD_START: "download.start",
+    DOWNLOAD_CANCEL: "download.cancel"
+  });
+  var MEDIA_HELPER_EVENTS = Object.freeze({
+    READY: "helper.ready",
+    CAPABILITIES: "helper.capabilities",
+    DOWNLOAD_PROGRESS: "download.progress",
+    DOWNLOAD_COMPLETED: "download.completed",
+    ERROR: "helper.error"
+  });
+  var MEDIA_HELPER_CAPABILITIES = Object.freeze({
+    HLS_VOD_DOWNLOAD: "download.hls_vod",
+    FFMPEG_MUX: "mux.ffmpeg"
+  });
+  function normalizeHelperEvent(value = {}) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error("[MediaHelperProtocol] Event must be an object.");
     }
-    return url;
+    if (!Object.values(MEDIA_HELPER_EVENTS).includes(value.type)) {
+      throw new Error(
+        `[MediaHelperProtocol] Unknown event type "${value.type || ""}".`
+      );
+    }
+    if (typeof value.requestId !== "string" || !value.requestId.trim()) {
+      throw new Error("[MediaHelperProtocol] requestId is required.");
+    }
+    return {
+      type: value.type,
+      requestId: value.requestId.trim(),
+      protocolVersion: normalizeProtocolVersion(value.protocolVersion),
+      payload: value.payload && typeof value.payload === "object" && !Array.isArray(value.payload) ? { ...value.payload } : {}
+    };
   }
-  function finiteNumber(value, field) {
-    const number = Number(value);
-    if (!Number.isFinite(number))
-      throw new Error(`[MediaDownload] ${field} must be finite.`);
-    return number;
+  function normalizeProtocolVersion(value) {
+    const version = Number(value);
+    if (!Number.isInteger(version) || version < 1) {
+      throw new Error("[MediaHelperProtocol] Invalid protocol version.");
+    }
+    return version;
   }
-  function nonNegativeInteger(value, field) {
-    const number = Number(value);
-    if (!Number.isInteger(number) || number < 0)
-      throw new Error(`[MediaDownload] ${field} must be non-negative.`);
-    return number;
+
+  // src/background/media-helper-bridge.js
+  var DEFAULT_TIMEOUT_MS = 3e3;
+  var STATUS_CACHE_MS = 15e3;
+  var cachedStatus = null;
+  var cachedAt = 0;
+  var statusPromise = null;
+  var MEDIA_HELPER_STATES = Object.freeze({
+    PERMISSION_REQUIRED: "permission_required",
+    NOT_INSTALLED: "not_installed",
+    READY: "ready",
+    INCOMPATIBLE: "incompatible",
+    UNAVAILABLE: "unavailable"
+  });
+  async function getMediaHelperStatus({
+    force = false,
+    timeoutMs = DEFAULT_TIMEOUT_MS
+  } = {}) {
+    if (!force && cachedStatus && Date.now() - cachedAt < STATUS_CACHE_MS) {
+      return cachedStatus;
+    }
+    if (!force && statusPromise) return statusPromise;
+    statusPromise = probeMediaHelperStatus(timeoutMs);
+    try {
+      cachedStatus = await statusPromise;
+      cachedAt = Date.now();
+      return cachedStatus;
+    } finally {
+      statusPromise = null;
+    }
   }
-  function optionalString2(value) {
+  async function probeMediaHelperStatus(timeoutMs) {
+    if (!await hasNativeMessagingPermission()) {
+      return helperStatus(MEDIA_HELPER_STATES.PERMISSION_REQUIRED);
+    }
+    const requestId = randomId4();
+    try {
+      const response = normalizeHelperEvent(
+        await withTimeout(
+          chrome.runtime.sendNativeMessage(MEDIA_HELPER_HOST_NAME, {
+            type: MEDIA_HELPER_REQUESTS.HELLO,
+            requestId,
+            protocolVersion: MEDIA_HELPER_PROTOCOL_VERSION,
+            payload: { extensionVersion: chrome.runtime.getManifest().version }
+          }),
+          timeoutMs
+        )
+      );
+      if (response.requestId !== requestId) {
+        throw new Error("Media Helper returned a mismatched request ID.");
+      }
+      if (response.protocolVersion !== MEDIA_HELPER_PROTOCOL_VERSION) {
+        return helperStatus(MEDIA_HELPER_STATES.INCOMPATIBLE, {
+          error: `Protocol ${response.protocolVersion} is not supported.`
+        });
+      }
+      if (response.type === MEDIA_HELPER_EVENTS.ERROR) {
+        return helperStatus(MEDIA_HELPER_STATES.UNAVAILABLE, {
+          error: response.payload.message || "Media Helper reported an error."
+        });
+      }
+      if (response.type !== MEDIA_HELPER_EVENTS.READY) {
+        throw new Error(`Unexpected Media Helper event: ${response.type}.`);
+      }
+      const capabilities = normalizeCapabilities(response.payload.capabilities);
+      return helperStatus(MEDIA_HELPER_STATES.READY, {
+        helperVersion: stringOrNull(response.payload.helperVersion),
+        capabilities,
+        canDownloadHls: capabilities[MEDIA_HELPER_CAPABILITIES.HLS_VOD_DOWNLOAD] === true,
+        canMuxWithFfmpeg: capabilities[MEDIA_HELPER_CAPABILITIES.FFMPEG_MUX] === true
+      });
+    } catch (error) {
+      const message = messageOf(error);
+      return helperStatus(classifyNativeMessagingError(message), {
+        error: message
+      });
+    }
+  }
+  function classifyNativeMessagingError(message = "") {
+    if (/host.*not found|specified native messaging host not found|not registered/i.test(
+      message
+    )) {
+      return MEDIA_HELPER_STATES.NOT_INSTALLED;
+    }
+    if (/protocol|incompatible/i.test(message)) {
+      return MEDIA_HELPER_STATES.INCOMPATIBLE;
+    }
+    return MEDIA_HELPER_STATES.UNAVAILABLE;
+  }
+  async function hasNativeMessagingPermission() {
+    if (!chrome.permissions?.contains) return false;
+    return chrome.permissions.contains({ permissions: ["nativeMessaging"] });
+  }
+  function normalizeCapabilities(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    return Object.fromEntries(
+      Object.entries(value).filter(([, enabled]) => typeof enabled === "boolean")
+    );
+  }
+  function helperStatus(status, details = {}) {
+    return {
+      status,
+      installed: status === MEDIA_HELPER_STATES.READY,
+      canDownloadHls: false,
+      canMuxWithFfmpeg: false,
+      helperVersion: null,
+      capabilities: {},
+      error: null,
+      ...details
+    };
+  }
+  function withTimeout(promise, timeoutMs) {
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(
+        () => reject(new Error("Media Helper handshake timed out.")),
+        timeoutMs
+      );
+      Promise.resolve(promise).then(
+        (value) => {
+          clearTimeout(timeout);
+          resolve(value);
+        },
+        (error) => {
+          clearTimeout(timeout);
+          reject(error);
+        }
+      );
+    });
+  }
+  function randomId4() {
+    return globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+  function stringOrNull(value) {
     return typeof value === "string" && value ? value : null;
   }
-  function optionalFiniteNumber2(value) {
-    if (value === null || value === void 0) return null;
-    return finiteNumber(value, "optional number");
-  }
-  function optionalNonNegativeInteger2(value) {
-    if (value === null || value === void 0) return null;
-    return nonNegativeInteger(value, "optional integer");
-  }
-  function stringArray(value) {
-    return Array.isArray(value) ? value.filter((item) => typeof item === "string").slice(0, 20) : [];
-  }
-  function objectArray(value) {
-    return Array.isArray(value) ? value.filter((item) => item && typeof item === "object").slice(0, 100).map((item) => ({ ...item })) : [];
+  function messageOf(error) {
+    return error instanceof Error ? error.message : String(error);
   }
 
   // src/background/media-download-jobs.js
@@ -2586,14 +2697,26 @@ var AdsFriendlyBackground = (() => {
     const availability = getMediaDownloadAvailability(candidate);
     if (!availability.supported)
       return { status: "unsupported", reason: availability.reason };
-    const job = normalizeMediaDownloadJob({
-      id: randomId4(),
-      createdAt: Date.now(),
-      sourceTabId: tabId,
-      candidate
-    });
-    await chrome.storage.session.set({ [downloadJobKey(job.id)]: job });
-    return { status: "created", jobId: job.id };
+    const helper = await getMediaHelperStatus({ force: true });
+    if (helper.status !== "ready") {
+      return {
+        status: "helper_required",
+        helper,
+        reason: "Media Helper must be installed and available to download video."
+      };
+    }
+    if (!helper.canDownloadHls) {
+      return {
+        status: "helper_not_ready",
+        helper,
+        reason: "This Media Helper build does not execute HLS downloads yet."
+      };
+    }
+    return {
+      status: "helper_not_ready",
+      helper,
+      reason: "Native download job execution is the next implementation slice."
+    };
   }
   async function removeStaleJobs() {
     const snapshot = await chrome.storage.session.get(null);
@@ -2602,9 +2725,6 @@ var AdsFriendlyBackground = (() => {
       ([key, value]) => key.startsWith(DOWNLOAD_JOB_PREFIX) && (!Number.isFinite(value?.createdAt) || value.createdAt < cutoff)
     ).map(([key]) => key);
     if (staleKeys.length) await chrome.storage.session.remove(staleKeys);
-  }
-  function randomId4() {
-    return globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   }
 
   // src/background/message-router.js
@@ -2635,6 +2755,7 @@ var AdsFriendlyBackground = (() => {
     MEDIA_DISCOVERED: CAPABILITIES.MEDIA_CATALOG,
     MEDIA_PROBED: CAPABILITIES.MEDIA_CATALOG,
     GET_MEDIA_CATALOG: CAPABILITIES.MEDIA_CATALOG,
+    GET_MEDIA_HELPER_STATUS: CAPABILITIES.MEDIA_DOWNLOAD,
     CREATE_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD
   });
   function registerMessageRouter(policy) {
@@ -2740,6 +2861,9 @@ var AdsFriendlyBackground = (() => {
     if (message.type === "GET_MEDIA_CATALOG") {
       if (!Number.isInteger(message.tabId)) return { status: "invalid_tab" };
       return listDiscoveredMedia(message.tabId, message.pageUrl || null);
+    }
+    if (message.type === "GET_MEDIA_HELPER_STATUS") {
+      return getMediaHelperStatus({ force: message.force === true });
     }
     if (message.type === "CREATE_MEDIA_DOWNLOAD_JOB")
       return requestMediaDownloadJob({

@@ -61,6 +61,31 @@ export function createHelperEvent(type, requestId, payload = {}) {
   };
 }
 
+export function normalizeHelperEvent(value = {}) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("[MediaHelperProtocol] Event must be an object.");
+  }
+  if (!Object.values(MEDIA_HELPER_EVENTS).includes(value.type)) {
+    throw new Error(
+      `[MediaHelperProtocol] Unknown event type "${value.type || ""}".`,
+    );
+  }
+  if (typeof value.requestId !== "string" || !value.requestId.trim()) {
+    throw new Error("[MediaHelperProtocol] requestId is required.");
+  }
+  return {
+    type: value.type,
+    requestId: value.requestId.trim(),
+    protocolVersion: normalizeProtocolVersion(value.protocolVersion),
+    payload:
+      value.payload &&
+      typeof value.payload === "object" &&
+      !Array.isArray(value.payload)
+        ? { ...value.payload }
+        : {},
+  };
+}
+
 function normalizeProtocolVersion(value) {
   const version = Number(value);
   if (!Number.isInteger(version) || version < 1) {

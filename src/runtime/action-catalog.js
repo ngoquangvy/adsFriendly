@@ -19,7 +19,7 @@ export const ACTION_CATALOG = Object.freeze({
   [A.MEDIA_DOWNLOAD_CREATE]: action(
     A.MEDIA_DOWNLOAD_CREATE,
     "background.media-download-jobs",
-    C.MEDIA_DOWNLOAD,
+    C.MEDIA_NATIVE_DOWNLOAD,
   ),
   [A.VIDEO_ACCELERATE_AUTOMATIC]: action(
     A.VIDEO_ACCELERATE_AUTOMATIC,

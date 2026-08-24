@@ -3,11 +3,10 @@ import { createActionBroker } from "../runtime/action-broker.js";
 import {
   DOWNLOAD_JOB_MAX_AGE_MS,
   DOWNLOAD_JOB_PREFIX,
-  downloadJobKey,
   getMediaDownloadAvailability,
-  normalizeMediaDownloadJob,
 } from "../media/download-job-contract.js";
 import { listDiscoveredMedia } from "./media-catalog.js";
+import { getMediaHelperStatus } from "./media-helper-bridge.js";
 
 let broker = null;
 
@@ -40,15 +39,26 @@ async function createJob({ tabId, mediaId } = {}) {
   const availability = getMediaDownloadAvailability(candidate);
   if (!availability.supported)
     return { status: "unsupported", reason: availability.reason };
-
-  const job = normalizeMediaDownloadJob({
-    id: randomId(),
-    createdAt: Date.now(),
-    sourceTabId: tabId,
-    candidate,
-  });
-  await chrome.storage.session.set({ [downloadJobKey(job.id)]: job });
-  return { status: "created", jobId: job.id };
+  const helper = await getMediaHelperStatus({ force: true });
+  if (helper.status !== "ready") {
+    return {
+      status: "helper_required",
+      helper,
+      reason: "Media Helper must be installed and available to download video.",
+    };
+  }
+  if (!helper.canDownloadHls) {
+    return {
+      status: "helper_not_ready",
+      helper,
+      reason: "This Media Helper build does not execute HLS downloads yet.",
+    };
+  }
+  return {
+    status: "helper_not_ready",
+    helper,
+    reason: "Native download job execution is the next implementation slice.",
+  };
 }
 
 async function removeStaleJobs() {
@@ -62,10 +72,4 @@ async function removeStaleJobs() {
     )
     .map(([key]) => key);
   if (staleKeys.length) await chrome.storage.session.remove(staleKeys);
-}
-
-function randomId() {
-  return globalThis.crypto?.randomUUID
-    ? globalThis.crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }

@@ -123,6 +123,7 @@ export const CAPABILITY_CATALOG = Object.freeze({
     "assist",
     T.USER,
     {
+      browserPermissions: ["nativeMessaging"],
       productIds: [P.MEDIA_TOOLS],
       requiredComponents: [R.BROWSER_EXTENSION, R.MEDIA_HELPER],
     },
@@ -153,7 +154,9 @@ export const FEATURE_CATALOG = Object.freeze([
     C.MEDIA_DOWNLOAD,
   ]),
   feature("background.media-catalog", "background", C.MEDIA_CATALOG),
-  feature("background.media-download-jobs", "background", C.MEDIA_DOWNLOAD),
+  feature("background.media-download-jobs", "background", C.MEDIA_DOWNLOAD, [
+    C.MEDIA_NATIVE_DOWNLOAD,
+  ]),
   feature("background.navigation-guard", "background", C.NAVIGATION_GUARD, [
     C.NAVIGATION_REVERSE_POPUNDER,
     C.NAVIGATION_FEEDBACK,
