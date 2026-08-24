@@ -56,7 +56,8 @@ then run the unit tests and build.
 
 - feature IDs and their execution contexts;
 - registered capability IDs;
-- capabilities granted by `safe`, `assist`, and `auto` modes;
+- the minimum mode, trigger type, disabled-state behavior, and browser
+  permissions for each capability;
 - capabilities each feature is allowed to request.
 
 Each execution context has a small implementation list in its entrypoint and is
@@ -69,11 +70,25 @@ calls not declared for the calling feature are hard runtime errors. Adding a
 feature or capability therefore requires an explicit catalog entry before it can
 run.
 
-Protection modes are capability bundles rather than feature-specific booleans:
+Protection modes are derived from capability metadata rather than maintained as
+three separate lists. Adding a capability requires one metadata entry with a
+`minMode` and `trigger`; `safe`, `assist`, and `auto` views are generated from
+that entry:
 
 - `safe`: verified static rules, untrusted new-tab verification, reverse pop-under protection, and manual controls;
 - `assist`: observation and user-confirmed suggestions;
 - `auto`: registered automatic actions and learned-pattern execution.
+
+Side effects should pass through a context action broker. The broker maps a
+registered action to its owning feature and capability, verifies the active
+policy and any browser permissions, and only then invokes the implementation.
+Pure parsers, scoring functions, and catalog transformations should not contain
+mode checks.
+
+Cross-module media and video-ad messages are declared in
+`src/runtime/event-catalog.js`. Payloads are normalized by the content-neutral
+contracts in `src/media/contracts.js`; downloader events and video-ad evidence
+remain separate even when both reference the same media ID.
 
 Legacy `friendlyMode` and `isEnabled` values are migrated once into:
 

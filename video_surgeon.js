@@ -2,6 +2,7 @@ var AdsFriendlyVideo = (() => {
   // src/video/state.js
   var videoState = {
     activeAds: /* @__PURE__ */ new Set(),
+    playbackSnapshots: /* @__PURE__ */ new WeakMap(),
     cachedPatterns: [],
     currentAdDensity: 0,
     siteTrustScore: 0.5,
@@ -37,53 +38,6 @@ var AdsFriendlyVideo = (() => {
     }
   }
 
-  // src/video/spy-bridge.js
-  function notifySpy(adMode) {
-    window.postMessage(
-      { source: "adsfriendly-content", type: "SET_AD_MODE", value: adMode },
-      "*"
-    );
-  }
-  function startSpyBridge(onAdDetected) {
-    window.addEventListener("message", (event) => {
-      if (event.data?.source === "adsfriendly-spy" && event.data.type === "AD_MAP_DETECTED")
-        onAdDetected();
-      if (event.data?.source === "adsfriendly-content" && event.data.type === "AD_DENSITY_VALUE" && window.AdsFriendlyVideoState)
-        window.AdsFriendlyVideoState.currentAdDensity = event.data.value;
-    });
-  }
-
-  // src/video/actions.js
-  function accelerate(video) {
-    if (video.playbackRate >= 16) return;
-    console.log(
-      "[AdsFriendly Video] Neutralizing Ad:",
-      video.src || "Dynamic Stream"
-    );
-    video.playbackRate = 16;
-    video.muted = true;
-    videoState.activeAds.add(video);
-    notifyBrainOfAdState(video);
-  }
-  function restore(video) {
-    if (!videoState.activeAds.has(video)) return;
-    console.log("[AdsFriendly Video] Ad finished. Restoring content speed.");
-    video.playbackRate = 1;
-    video.muted = false;
-    videoState.activeAds.delete(video);
-    notifySpy(false);
-  }
-  function notifyBrainOfAdState(video) {
-    const player = video.closest('[class*="player"]');
-    if (!player) return;
-    chrome.runtime.sendMessage({
-      type: "SYNC_VIDEO_LEARNING",
-      hostname: location.hostname,
-      classes: player.className,
-      duration: video.duration
-    });
-  }
-
   // src/video/scoring.js
   function calculateAdScore(video) {
     let score = 0;
@@ -112,11 +66,37 @@ var AdsFriendlyVideo = (() => {
     return calculateAdScore(video) >= 0.8;
   }
 
+  // src/video/spy-bridge.js
+  function notifySpy(adMode) {
+    window.postMessage(
+      { source: "adsfriendly-content", type: "SET_AD_MODE", value: adMode },
+      "*"
+    );
+  }
+  function startSpyBridge(onAdDetected) {
+    const onMessage = (event) => {
+      if (event.data?.source === "adsfriendly-spy" && event.data.type === "AD_MAP_DETECTED")
+        onAdDetected();
+      if (event.data?.source === "adsfriendly-content" && event.data.type === "AD_DENSITY_VALUE" && window.AdsFriendlyVideoState)
+        window.AdsFriendlyVideoState.currentAdDensity = event.data.value;
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }
+
   // src/runtime/feature-catalog.js
   var PROTECTION_MODES = Object.freeze({
     SAFE: "safe",
     ASSIST: "assist",
     AUTO: "auto"
+  });
+  var CAPABILITY_TRIGGERS = Object.freeze({
+    CORE: "core",
+    PASSIVE: "passive",
+    USER: "user",
+    SUGGESTION: "suggestion",
+    AUTOMATIC: "automatic",
+    STORAGE: "storage"
   });
   var CAPABILITIES = Object.freeze({
     CORE_MESSAGING: "core.messaging",
@@ -136,60 +116,48 @@ var AdsFriendlyVideo = (() => {
     TELEMETRY_QUEUE: "telemetry.queue",
     MEDIA_OBSERVE: "media.observe",
     VIDEO_OBSERVE: "video.observe",
+    VIDEO_RESTORE_STATE: "video.restore_state",
+    VIDEO_USER_ACTION: "video.user_action",
     VIDEO_AUTO_ACTION: "video.auto_action"
   });
   var C = CAPABILITIES;
-  var MODE_CAPABILITIES = Object.freeze({
-    [PROTECTION_MODES.SAFE]: Object.freeze([
-      C.CORE_MESSAGING,
-      C.CORE_MAINTENANCE,
-      C.NAVIGATION_GUARD,
+  var T = CAPABILITY_TRIGGERS;
+  var MODE_RANK = Object.freeze({
+    [PROTECTION_MODES.SAFE]: 0,
+    [PROTECTION_MODES.ASSIST]: 1,
+    [PROTECTION_MODES.AUTO]: 2
+  });
+  var CAPABILITY_CATALOG = Object.freeze({
+    [C.CORE_MESSAGING]: capability(C.CORE_MESSAGING, "safe", T.CORE, {
+      availableWhenDisabled: true
+    }),
+    [C.CORE_MAINTENANCE]: capability(C.CORE_MAINTENANCE, "safe", T.CORE, {
+      availableWhenDisabled: true
+    }),
+    [C.NAVIGATION_GUARD]: capability(C.NAVIGATION_GUARD, "safe", T.AUTOMATIC),
+    [C.NAVIGATION_REVERSE_POPUNDER]: capability(
       C.NAVIGATION_REVERSE_POPUNDER,
-      C.NAVIGATION_INTENT,
-      C.NAVIGATION_FEEDBACK,
-      C.DOM_STATIC_RULES,
-      C.DOM_MANUAL_PICKER,
-      C.LEARNING_SEED,
-      C.LEARNING_FEEDBACK,
-      C.TELEMETRY_QUEUE
-    ]),
-    [PROTECTION_MODES.ASSIST]: Object.freeze([
-      C.CORE_MESSAGING,
-      C.CORE_MAINTENANCE,
-      C.NAVIGATION_GUARD,
-      C.NAVIGATION_REVERSE_POPUNDER,
-      C.NAVIGATION_INTENT,
-      C.NAVIGATION_FEEDBACK,
-      C.DOM_STATIC_RULES,
-      C.DOM_OBSERVE,
-      C.DOM_SUGGEST,
-      C.DOM_MANUAL_PICKER,
-      C.LEARNING_SEED,
-      C.LEARNING_FEEDBACK,
-      C.TELEMETRY_QUEUE,
-      C.MEDIA_OBSERVE,
-      C.VIDEO_OBSERVE
-    ]),
-    [PROTECTION_MODES.AUTO]: Object.freeze([
-      C.CORE_MESSAGING,
-      C.CORE_MAINTENANCE,
-      C.NAVIGATION_GUARD,
-      C.NAVIGATION_REVERSE_POPUNDER,
-      C.NAVIGATION_INTENT,
-      C.NAVIGATION_FEEDBACK,
-      C.DOM_STATIC_RULES,
-      C.DOM_OBSERVE,
-      C.DOM_SUGGEST,
-      C.DOM_AUTO_HIDE,
-      C.DOM_MANUAL_PICKER,
-      C.LEARNING_SEED,
-      C.LEARNING_FEEDBACK,
-      C.LEARNING_APPLY,
-      C.TELEMETRY_QUEUE,
-      C.MEDIA_OBSERVE,
-      C.VIDEO_OBSERVE,
-      C.VIDEO_AUTO_ACTION
-    ])
+      "safe",
+      T.AUTOMATIC
+    ),
+    [C.NAVIGATION_INTENT]: capability(C.NAVIGATION_INTENT, "safe", T.PASSIVE),
+    [C.NAVIGATION_FEEDBACK]: capability(C.NAVIGATION_FEEDBACK, "safe", T.USER),
+    [C.DOM_STATIC_RULES]: capability(C.DOM_STATIC_RULES, "safe", T.AUTOMATIC),
+    [C.DOM_OBSERVE]: capability(C.DOM_OBSERVE, "assist", T.PASSIVE),
+    [C.DOM_SUGGEST]: capability(C.DOM_SUGGEST, "assist", T.SUGGESTION),
+    [C.DOM_AUTO_HIDE]: capability(C.DOM_AUTO_HIDE, "auto", T.AUTOMATIC),
+    [C.DOM_MANUAL_PICKER]: capability(C.DOM_MANUAL_PICKER, "safe", T.USER),
+    [C.LEARNING_SEED]: capability(C.LEARNING_SEED, "safe", T.STORAGE),
+    [C.LEARNING_FEEDBACK]: capability(C.LEARNING_FEEDBACK, "safe", T.USER),
+    [C.LEARNING_APPLY]: capability(C.LEARNING_APPLY, "auto", T.AUTOMATIC),
+    [C.TELEMETRY_QUEUE]: capability(C.TELEMETRY_QUEUE, "safe", T.STORAGE),
+    [C.MEDIA_OBSERVE]: capability(C.MEDIA_OBSERVE, "assist", T.PASSIVE),
+    [C.VIDEO_OBSERVE]: capability(C.VIDEO_OBSERVE, "assist", T.PASSIVE),
+    [C.VIDEO_RESTORE_STATE]: capability(C.VIDEO_RESTORE_STATE, "safe", T.CORE, {
+      availableWhenDisabled: true
+    }),
+    [C.VIDEO_USER_ACTION]: capability(C.VIDEO_USER_ACTION, "assist", T.USER),
+    [C.VIDEO_AUTO_ACTION]: capability(C.VIDEO_AUTO_ACTION, "auto", T.AUTOMATIC)
   });
   var FEATURE_CATALOG = Object.freeze([
     feature("background.message-router", "background", C.CORE_MESSAGING, [
@@ -229,7 +197,11 @@ var AdsFriendlyVideo = (() => {
     feature("content.dom-learned-blocker", "content", C.LEARNING_APPLY, [
       C.DOM_AUTO_HIDE
     ]),
-    feature("video.surgeon", "video", C.VIDEO_OBSERVE, [C.VIDEO_AUTO_ACTION]),
+    feature("video.surgeon", "video", C.VIDEO_OBSERVE, [
+      C.VIDEO_RESTORE_STATE,
+      C.VIDEO_USER_ACTION,
+      C.VIDEO_AUTO_ACTION
+    ]),
     feature("picker.controller", "picker", C.DOM_MANUAL_PICKER, [
       C.LEARNING_FEEDBACK
     ]),
@@ -239,6 +211,14 @@ var AdsFriendlyVideo = (() => {
   var CAPABILITY_SET = new Set(Object.values(CAPABILITIES));
   var FEATURE_BY_ID = new Map(FEATURE_CATALOG.map((item) => [item.id, item]));
   validateCatalog();
+  var MODE_CAPABILITIES = Object.freeze(
+    Object.fromEntries(
+      Object.values(PROTECTION_MODES).map((mode) => [
+        mode,
+        Object.freeze(resolveCapabilitiesForMode(mode))
+      ])
+    )
+  );
   function getFeatureDefinition(featureId) {
     const definition = FEATURE_BY_ID.get(featureId);
     if (!definition) {
@@ -253,20 +233,33 @@ var AdsFriendlyVideo = (() => {
       (featureItem) => featureItem.context === context
     );
   }
-  function assertRegisteredCapability(capability) {
-    if (!CAPABILITY_SET.has(capability)) {
+  function getCapabilityDefinition(capabilityId) {
+    assertRegisteredCapability(capabilityId);
+    return CAPABILITY_CATALOG[capabilityId];
+  }
+  function assertRegisteredCapability(capabilityId) {
+    if (!CAPABILITY_SET.has(capabilityId) || !CAPABILITY_CATALOG[capabilityId]) {
       throw new Error(
-        `[FeatureRegistry] Unknown capability "${capability}". Register it in feature-catalog.js before use.`
+        `[FeatureRegistry] Unknown capability "${capabilityId}". Register it in feature-catalog.js before use.`
       );
     }
-    return capability;
+    return capabilityId;
   }
-  function getCapabilitiesForMode(mode) {
-    const capabilities = MODE_CAPABILITIES[mode];
-    if (!capabilities) {
-      throw new Error(`[FeatureRegistry] Unknown protection mode "${mode}".`);
-    }
-    return capabilities;
+  function isCapabilityEnabled(capabilityId, settings = {}) {
+    const definition = getCapabilityDefinition(capabilityId);
+    const mode = settings.protectionMode || PROTECTION_MODES.SAFE;
+    assertProtectionMode(mode);
+    if (settings.enabled === false) return definition.availableWhenDisabled;
+    return MODE_RANK[mode] >= MODE_RANK[definition.minMode];
+  }
+  function capability(id, minMode, trigger, { availableWhenDisabled = false, browserPermissions = [] } = {}) {
+    return Object.freeze({
+      id,
+      minMode,
+      trigger,
+      availableWhenDisabled,
+      browserPermissions: Object.freeze([...browserPermissions])
+    });
   }
   function feature(id, context, startCapability, extraCapabilities = []) {
     return Object.freeze({
@@ -276,7 +269,34 @@ var AdsFriendlyVideo = (() => {
       capabilities: Object.freeze([startCapability, ...extraCapabilities])
     });
   }
+  function resolveCapabilitiesForMode(mode) {
+    assertProtectionMode(mode);
+    return Object.values(CAPABILITY_CATALOG).filter((definition) => MODE_RANK[mode] >= MODE_RANK[definition.minMode]).map((definition) => definition.id);
+  }
+  function assertProtectionMode(mode) {
+    if (!(mode in MODE_RANK)) {
+      throw new Error(`[FeatureRegistry] Unknown protection mode "${mode}".`);
+    }
+  }
   function validateCatalog() {
+    const capabilityIds = Object.values(CAPABILITIES);
+    if (new Set(capabilityIds).size !== capabilityIds.length) {
+      throw new Error("[FeatureRegistry] Duplicate capability ID.");
+    }
+    for (const capabilityId of capabilityIds) {
+      const definition = CAPABILITY_CATALOG[capabilityId];
+      if (!definition || definition.id !== capabilityId) {
+        throw new Error(
+          `[FeatureRegistry] Capability "${capabilityId}" has no metadata definition.`
+        );
+      }
+      assertProtectionMode(definition.minMode);
+      if (!Object.values(CAPABILITY_TRIGGERS).includes(definition.trigger)) {
+        throw new Error(
+          `[FeatureRegistry] Capability "${capabilityId}" has unknown trigger "${definition.trigger}".`
+        );
+      }
+    }
     const ids = /* @__PURE__ */ new Set();
     for (const definition of FEATURE_CATALOG) {
       if (ids.has(definition.id)) {
@@ -285,30 +305,99 @@ var AdsFriendlyVideo = (() => {
         );
       }
       ids.add(definition.id);
-      for (const capability of definition.capabilities) {
-        assertRegisteredCapability(capability);
+      if (new Set(definition.capabilities).size !== definition.capabilities.length) {
+        throw new Error(
+          `[FeatureRegistry] Feature "${definition.id}" declares a capability more than once.`
+        );
+      }
+      for (const capabilityId of definition.capabilities) {
+        assertRegisteredCapability(capabilityId);
       }
     }
-    for (const [mode, capabilities] of Object.entries(MODE_CAPABILITIES)) {
-      for (const capability of capabilities) {
-        if (!CAPABILITY_SET.has(capability)) {
-          throw new Error(
-            `[FeatureRegistry] Mode "${mode}" uses unregistered capability "${capability}".`
-          );
-        }
+  }
+
+  // src/runtime/action-catalog.js
+  var ACTIONS = Object.freeze({
+    VIDEO_ACCELERATE_AUTOMATIC: "video.accelerate.automatic",
+    VIDEO_ACCELERATE_USER: "video.accelerate.user",
+    VIDEO_RESTORE_PLAYBACK: "video.restore_playback",
+    VIDEO_SKIP_AUTOMATIC: "video.skip.automatic"
+  });
+  var A = ACTIONS;
+  var C2 = CAPABILITIES;
+  var ACTION_CATALOG = Object.freeze({
+    [A.VIDEO_ACCELERATE_AUTOMATIC]: action(
+      A.VIDEO_ACCELERATE_AUTOMATIC,
+      "video.surgeon",
+      C2.VIDEO_AUTO_ACTION
+    ),
+    [A.VIDEO_ACCELERATE_USER]: action(
+      A.VIDEO_ACCELERATE_USER,
+      "video.surgeon",
+      C2.VIDEO_USER_ACTION
+    ),
+    [A.VIDEO_RESTORE_PLAYBACK]: action(
+      A.VIDEO_RESTORE_PLAYBACK,
+      "video.surgeon",
+      C2.VIDEO_RESTORE_STATE
+    ),
+    [A.VIDEO_SKIP_AUTOMATIC]: action(
+      A.VIDEO_SKIP_AUTOMATIC,
+      "video.surgeon",
+      C2.VIDEO_AUTO_ACTION
+    )
+  });
+  validateActionCatalog();
+  function getActionDefinition(actionId) {
+    const definition = ACTION_CATALOG[actionId];
+    if (!definition) {
+      throw new Error(
+        `[ActionRegistry] Unknown action "${actionId}". Register it in action-catalog.js before use.`
+      );
+    }
+    return definition;
+  }
+  function getActionsForFeature(featureId) {
+    getFeatureDefinition(featureId);
+    return Object.values(ACTION_CATALOG).filter(
+      (definition) => definition.featureId === featureId
+    );
+  }
+  function action(id, featureId, capability2) {
+    return Object.freeze({ id, featureId, capability: capability2 });
+  }
+  function validateActionCatalog() {
+    const actionIds = Object.values(ACTIONS);
+    if (new Set(actionIds).size !== actionIds.length) {
+      throw new Error("[ActionRegistry] Duplicate action ID.");
+    }
+    for (const actionId of actionIds) {
+      const definition = ACTION_CATALOG[actionId];
+      if (!definition || definition.id !== actionId) {
+        throw new Error(
+          `[ActionRegistry] Action "${actionId}" has no metadata definition.`
+        );
+      }
+      const feature2 = getFeatureDefinition(definition.featureId);
+      getCapabilityDefinition(definition.capability);
+      if (!feature2.capabilities.includes(definition.capability)) {
+        throw new Error(
+          `[ActionRegistry] Action "${actionId}" uses capability "${definition.capability}" not declared by feature "${feature2.id}".`
+        );
       }
     }
   }
 
   // src/video/observer.js
-  var videoPolicy = null;
-  function setVideoPolicy(policy) {
-    videoPolicy = policy;
+  var videoActions = null;
+  var attachments = /* @__PURE__ */ new Map();
+  function setVideoActions(actions) {
+    videoActions = actions;
   }
   function scanAndObserveVideos() {
     document.querySelectorAll("video").forEach((video) => {
-      if (video.dataset.observed) return;
-      video.dataset.observed = "true";
+      if (video.dataset.adsfriendlyVideoObserved) return;
+      video.dataset.adsfriendlyVideoObserved = "true";
       attach(video);
       checkAndExecute(video);
     });
@@ -316,24 +405,42 @@ var AdsFriendlyVideo = (() => {
   function checkAllVideos() {
     document.querySelectorAll("video").forEach(checkAndExecute);
   }
+  function stopObservingVideos() {
+    for (const [video, attachment] of attachments) {
+      attachment.observer.disconnect();
+      video.removeEventListener("play", attachment.onPlayback);
+      video.removeEventListener("playing", attachment.onPlayback);
+      delete video.dataset.adsfriendlyVideoObserved;
+    }
+    attachments.clear();
+    videoActions = null;
+  }
   function attach(video) {
     const observer = new MutationObserver(() => checkAndExecute(video));
     observer.observe(video, { attributes: true, attributeFilter: ["src"] });
-    video.addEventListener("play", () => checkAndExecute(video));
-    video.addEventListener("playing", () => checkAndExecute(video));
+    const onPlayback = () => checkAndExecute(video);
+    video.addEventListener("play", onPlayback);
+    video.addEventListener("playing", onPlayback);
+    attachments.set(video, { observer, onPlayback });
   }
   function checkAndExecute(video) {
     const score = calculateAdScore(video);
-    if (score >= 0.8 && videoPolicy?.can(CAPABILITIES.VIDEO_AUTO_ACTION)) {
+    if (score >= 0.8 && videoActions?.can(ACTIONS.VIDEO_ACCELERATE_AUTOMATIC)) {
       console.log(
         `[AdsFriendly Video] Neutralizing Ad (${(score * 100).toFixed(0)}%)`
       );
-      accelerate(video);
+      execute(ACTIONS.VIDEO_ACCELERATE_AUTOMATIC, video);
       notifySpy(true);
     } else {
-      restore(video);
+      execute(ACTIONS.VIDEO_RESTORE_PLAYBACK, video);
       notifySpy(false);
     }
+  }
+  function execute(actionId, video) {
+    if (!videoActions?.can(actionId)) return;
+    videoActions.execute(actionId, video).catch(
+      (error) => console.error(`[AdsFriendly Video] Action ${actionId} failed`, error)
+    );
   }
 
   // src/video/skip.js
@@ -346,8 +453,7 @@ var AdsFriendlyVideo = (() => {
     'button[class*="skip"]',
     '[aria-label*="Skip ad"]'
   ];
-  function autoSkip(policy) {
-    if (!policy?.can(CAPABILITIES.VIDEO_AUTO_ACTION)) return;
+  function skipVisibleAds() {
     SKIP_SELECTORS.forEach((selector) => {
       const button = document.querySelector(selector);
       clickIfVisible(button);
@@ -366,6 +472,45 @@ var AdsFriendlyVideo = (() => {
   function isVisible(element) {
     if (!element) return false;
     return element.offsetParent !== null || element.getClientRects().length > 0;
+  }
+
+  // src/video/actions.js
+  function accelerate(video) {
+    if (video.playbackRate >= 16) return;
+    console.log(
+      "[AdsFriendly Video] Neutralizing Ad:",
+      video.src || "Dynamic Stream"
+    );
+    if (!videoState.activeAds.has(video)) {
+      videoState.playbackSnapshots.set(video, {
+        playbackRate: video.playbackRate,
+        muted: video.muted
+      });
+    }
+    video.playbackRate = 16;
+    video.muted = true;
+    videoState.activeAds.add(video);
+    notifyBrainOfAdState(video);
+  }
+  function restore(video) {
+    if (!videoState.activeAds.has(video)) return;
+    console.log("[AdsFriendly Video] Ad finished. Restoring content speed.");
+    const snapshot = videoState.playbackSnapshots.get(video);
+    video.playbackRate = snapshot?.playbackRate ?? 1;
+    video.muted = snapshot?.muted ?? false;
+    videoState.activeAds.delete(video);
+    videoState.playbackSnapshots.delete(video);
+    notifySpy(false);
+  }
+  function notifyBrainOfAdState(video) {
+    const player = video.closest('[class*="player"]');
+    if (!player) return;
+    chrome.runtime.sendMessage({
+      type: "SYNC_VIDEO_LEARNING",
+      hostname: location.hostname,
+      classes: player.className,
+      duration: video.duration
+    });
   }
 
   // src/runtime/settings-store.js
@@ -531,33 +676,26 @@ var AdsFriendlyVideo = (() => {
   function createFeaturePolicy(definitionOrId, readSettings) {
     const definition = typeof definitionOrId === "string" ? getFeatureDefinition(definitionOrId) : definitionOrId;
     const declared = new Set(definition.capabilities);
-    function assertAllowed(capability) {
-      assertRegisteredCapability(capability);
-      if (!declared.has(capability)) {
+    function assertAllowed(capability2) {
+      assertRegisteredCapability(capability2);
+      if (!declared.has(capability2)) {
         throw new Error(
-          `[FeatureRegistry] Feature "${definition.id}" tried to use undeclared capability "${capability}". Add it to that feature in feature-catalog.js.`
+          `[FeatureRegistry] Feature "${definition.id}" tried to use undeclared capability "${capability2}". Add it to that feature in feature-catalog.js.`
         );
       }
     }
     return Object.freeze({
       featureId: definition.id,
-      can(capability) {
-        assertAllowed(capability);
+      can(capability2) {
+        assertAllowed(capability2);
         const settings = readSettings();
-        if (!settings.enabled)
-          return [
-            CAPABILITIES.CORE_MESSAGING,
-            CAPABILITIES.CORE_MAINTENANCE
-          ].includes(capability);
-        return getCapabilitiesForMode(settings.protectionMode).includes(
-          capability
-        );
+        return isCapabilityEnabled(capability2, settings);
       },
-      require(capability) {
-        if (!this.can(capability)) {
+      require(capability2) {
+        if (!this.can(capability2)) {
           const settings = readSettings();
           throw new Error(
-            `[FeatureRegistry] Capability "${capability}" is disabled for feature "${definition.id}" in mode "${settings.protectionMode}".`
+            `[FeatureRegistry] Capability "${capability2}" is disabled for feature "${definition.id}" in mode "${settings.protectionMode}".`
           );
         }
         return true;
@@ -567,14 +705,7 @@ var AdsFriendlyVideo = (() => {
   function shouldStartFeature(definition, settings) {
     const override = settings.featureOverrides?.[definition.id];
     if (override === false) return false;
-    if ([CAPABILITIES.CORE_MESSAGING, CAPABILITIES.CORE_MAINTENANCE].includes(
-      definition.startCapability
-    ))
-      return true;
-    if (!settings.enabled) return false;
-    return getCapabilitiesForMode(settings.protectionMode).includes(
-      definition.startCapability
-    );
+    return isCapabilityEnabled(definition.startCapability, settings);
   }
   function validateFeatureOverrides(featureOverrides = {}) {
     for (const featureId of Object.keys(featureOverrides)) {
@@ -603,38 +734,139 @@ var AdsFriendlyVideo = (() => {
     }
   }
 
+  // src/runtime/action-broker.js
+  function createActionBroker({
+    featureId,
+    policy,
+    handlers,
+    permissionChecker = hasBrowserPermissions
+  }) {
+    const declaredActions = getActionsForFeature(featureId);
+    const declaredIds = new Set(declaredActions.map((action2) => action2.id));
+    for (const action2 of declaredActions) {
+      if (typeof handlers[action2.id] !== "function") {
+        throw new Error(
+          `[ActionBroker] Feature "${featureId}" has no handler for registered action "${action2.id}".`
+        );
+      }
+    }
+    for (const actionId of Object.keys(handlers)) {
+      const action2 = getActionDefinition(actionId);
+      if (action2.featureId !== featureId || !declaredIds.has(actionId)) {
+        throw new Error(
+          `[ActionBroker] Feature "${featureId}" cannot handle action "${actionId}" owned by "${action2.featureId}".`
+        );
+      }
+    }
+    return Object.freeze({
+      featureId,
+      can(actionId) {
+        const action2 = requireOwnedAction(actionId, featureId);
+        return policy.can(action2.capability);
+      },
+      async execute(actionId, payload) {
+        const action2 = requireOwnedAction(actionId, featureId);
+        policy.require(action2.capability);
+        const capability2 = getCapabilityDefinition(action2.capability);
+        if (capability2.browserPermissions.length > 0 && !await permissionChecker(capability2.browserPermissions)) {
+          throw new Error(
+            `[ActionBroker] Action "${actionId}" requires browser permissions: ${capability2.browserPermissions.join(", ")}.`
+          );
+        }
+        return handlers[actionId](payload);
+      }
+    });
+  }
+  function requireOwnedAction(actionId, featureId) {
+    const action2 = getActionDefinition(actionId);
+    if (action2.featureId !== featureId) {
+      throw new Error(
+        `[ActionBroker] Feature "${featureId}" cannot execute action "${actionId}" owned by "${action2.featureId}".`
+      );
+    }
+    return action2;
+  }
+  async function hasBrowserPermissions(permissions) {
+    if (!permissions.length) return true;
+    if (typeof chrome === "undefined" || !chrome.permissions?.contains)
+      return false;
+    return chrome.permissions.contains({ permissions });
+  }
+
   // src/video/index.js
   function startVideoSurgeon(policy) {
     if (videoState.initialized) return;
     videoState.initialized = true;
-    setVideoPolicy(policy);
+    const actions = createActionBroker({
+      featureId: "video.surgeon",
+      policy,
+      handlers: {
+        [ACTIONS.VIDEO_ACCELERATE_AUTOMATIC]: accelerate,
+        [ACTIONS.VIDEO_ACCELERATE_USER]: accelerate,
+        [ACTIONS.VIDEO_RESTORE_PLAYBACK]: restore,
+        [ACTIONS.VIDEO_SKIP_AUTOMATIC]: skipVisibleAds
+      }
+    });
+    setVideoActions(actions);
     window.AdsFriendlyVideoState = videoState;
     console.log("[AdsFriendly Video] Surgeon controlled by MainController.");
     loadPatternsAndReputation();
     scanAndObserveVideos();
-    startBodyObserver();
-    setInterval(() => autoSkip(policy), 500);
-    startSpyBridge(checkAllVideos);
-    chrome.runtime.onMessage.addListener((message) => {
+    const stopBodyObserver = startBodyObserver();
+    const skipIntervalId = setInterval(() => {
+      if (!actions.can(ACTIONS.VIDEO_SKIP_AUTOMATIC)) return;
+      actions.execute(ACTIONS.VIDEO_SKIP_AUTOMATIC).catch(
+        (error) => console.error("[AdsFriendly Video] Auto-skip failed", error)
+      );
+    }, 500);
+    const stopSpyBridge = startSpyBridge(checkAllVideos);
+    const onRuntimeMessage = (message) => {
       if (message.type === "SYNC_LEARNING") loadPatternsAndReputation();
-    });
-    window.VideoSurgeon = {
-      accelerate,
+    };
+    chrome.runtime.onMessage.addListener(onRuntimeMessage);
+    const publicApi = {
+      accelerate: (video) => actions.execute(ACTIONS.VIDEO_ACCELERATE_USER, video),
       calculateAdScore,
       isAdVideo,
       scanAndObserve: scanAndObserveVideos
     };
+    window.VideoSurgeon = publicApi;
+    return async () => {
+      clearInterval(skipIntervalId);
+      stopBodyObserver();
+      stopSpyBridge();
+      stopObservingVideos();
+      chrome.runtime.onMessage.removeListener(onRuntimeMessage);
+      await Promise.all(
+        [...videoState.activeAds].map(
+          (video) => actions.execute(ACTIONS.VIDEO_RESTORE_PLAYBACK, video)
+        )
+      );
+      if (window.VideoSurgeon === publicApi) delete window.VideoSurgeon;
+      if (window.AdsFriendlyVideoState === videoState)
+        delete window.AdsFriendlyVideoState;
+      videoState.initialized = false;
+    };
   }
   function startBodyObserver() {
+    let stopped = false;
+    let observer = null;
+    let retryId = null;
     const start = () => {
+      if (stopped) return;
       if (document.body) {
-        const observer = new MutationObserver(scanAndObserveVideos);
+        observer = new MutationObserver(scanAndObserveVideos);
         observer.observe(document.body, { childList: true, subtree: true });
       } else {
-        setTimeout(start, 50);
+        retryId = setTimeout(start, 50);
       }
     };
     start();
+    return () => {
+      stopped = true;
+      if (retryId) clearTimeout(retryId);
+      observer?.disconnect();
+    };
   }
   var controller = createMainController({
     context: "video",

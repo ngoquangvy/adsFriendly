@@ -1,5 +1,8 @@
 ﻿import { build } from "esbuild";
 import { access, readFile } from "node:fs/promises";
+import { CAPABILITY_CATALOG } from "../src/runtime/feature-catalog.js";
+import "../src/runtime/action-catalog.js";
+import "../src/runtime/event-catalog.js";
 const checkOnly = process.argv.includes("--check");
 const entries = [
   ["src/background/index.js", "background.js", "AdsFriendlyBackground"],
@@ -11,6 +14,19 @@ const entries = [
   ["src/options/index.js", "options/options.js", "AdsFriendlyOptions"],
 ];
 const manifest = JSON.parse(await readFile("manifest.json", "utf8"));
+const declaredPermissions = new Set([
+  ...(manifest.permissions || []),
+  ...(manifest.optional_permissions || []),
+]);
+for (const capability of Object.values(CAPABILITY_CATALOG)) {
+  for (const permission of capability.browserPermissions) {
+    if (!declaredPermissions.has(permission)) {
+      throw new Error(
+        `capability ${capability.id} requires undeclared browser permission ${permission}`,
+      );
+    }
+  }
+}
 await access("packages/default-settings-package.json");
 const scripts =
   manifest.content_scripts?.flatMap((item) => item.js || []) || [];

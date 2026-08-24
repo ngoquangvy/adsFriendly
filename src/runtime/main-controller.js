@@ -1,9 +1,8 @@
 import {
-  CAPABILITIES,
   assertRegisteredCapability,
-  getCapabilitiesForMode,
   getFeatureDefinition,
   getFeaturesForContext,
+  isCapabilityEnabled,
 } from "./feature-catalog.js";
 import {
   DEFAULT_SETTINGS,
@@ -163,14 +162,7 @@ export function createFeaturePolicy(definitionOrId, readSettings) {
     can(capability) {
       assertAllowed(capability);
       const settings = readSettings();
-      if (!settings.enabled)
-        return [
-          CAPABILITIES.CORE_MESSAGING,
-          CAPABILITIES.CORE_MAINTENANCE,
-        ].includes(capability);
-      return getCapabilitiesForMode(settings.protectionMode).includes(
-        capability,
-      );
+      return isCapabilityEnabled(capability, settings);
     },
     require(capability) {
       if (!this.can(capability)) {
@@ -187,16 +179,7 @@ export function createFeaturePolicy(definitionOrId, readSettings) {
 function shouldStartFeature(definition, settings) {
   const override = settings.featureOverrides?.[definition.id];
   if (override === false) return false;
-  if (
-    [CAPABILITIES.CORE_MESSAGING, CAPABILITIES.CORE_MAINTENANCE].includes(
-      definition.startCapability,
-    )
-  )
-    return true;
-  if (!settings.enabled) return false;
-  return getCapabilitiesForMode(settings.protectionMode).includes(
-    definition.startCapability,
-  );
+  return isCapabilityEnabled(definition.startCapability, settings);
 }
 
 function validateFeatureOverrides(featureOverrides = {}) {

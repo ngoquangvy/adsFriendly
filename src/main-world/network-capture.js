@@ -2,13 +2,17 @@ import { analyzeManifest } from "./manifest-analyzer.js";
 import { CAPABILITIES } from "../runtime/feature-catalog.js";
 
 export function installNetworkCapture(policy) {
-  installFetchCapture(policy);
-  installXhrCapture(policy);
+  const stopFetchCapture = installFetchCapture(policy);
+  const stopXhrCapture = installXhrCapture(policy);
+  return () => {
+    stopFetchCapture();
+    stopXhrCapture();
+  };
 }
 
 function installFetchCapture(policy) {
   const originalFetch = window.fetch;
-  window.fetch = async function (...args) {
+  const fetchWrapper = async function (...args) {
     const url = requestUrl(args[0]);
     const response = await originalFetch.apply(this, args);
     if (policy.can(CAPABILITIES.MEDIA_OBSERVE) && isManifestLike(url)) {
@@ -20,16 +24,20 @@ function installFetchCapture(policy) {
     }
     return response;
   };
+  window.fetch = fetchWrapper;
+  return () => {
+    if (window.fetch === fetchWrapper) window.fetch = originalFetch;
+  };
 }
 
 function installXhrCapture(policy) {
   const originalOpen = XMLHttpRequest.prototype.open;
   const originalSend = XMLHttpRequest.prototype.send;
-  XMLHttpRequest.prototype.open = function (method, url, ...rest) {
+  const openWrapper = function (method, url, ...rest) {
     this.__adsfriendly_url = requestUrl(url);
     return originalOpen.call(this, method, url, ...rest);
   };
-  XMLHttpRequest.prototype.send = function (...args) {
+  const sendWrapper = function (...args) {
     this.addEventListener("load", () => {
       if (!policy.can(CAPABILITIES.MEDIA_OBSERVE)) return;
       const url = this.__adsfriendly_url || "";
@@ -40,6 +48,14 @@ function installXhrCapture(policy) {
       } catch {}
     });
     return originalSend.apply(this, args);
+  };
+  XMLHttpRequest.prototype.open = openWrapper;
+  XMLHttpRequest.prototype.send = sendWrapper;
+  return () => {
+    if (XMLHttpRequest.prototype.open === openWrapper)
+      XMLHttpRequest.prototype.open = originalOpen;
+    if (XMLHttpRequest.prototype.send === sendWrapper)
+      XMLHttpRequest.prototype.send = originalSend;
   };
 }
 

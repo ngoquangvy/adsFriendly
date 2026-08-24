@@ -5,7 +5,7 @@
   );
 }
 export function startSpyBridge(onAdDetected) {
-  window.addEventListener("message", (event) => {
+  const onMessage = (event) => {
     if (
       event.data?.source === "adsfriendly-spy" &&
       event.data.type === "AD_MAP_DETECTED"
@@ -17,5 +17,7 @@ export function startSpyBridge(onAdDetected) {
       window.AdsFriendlyVideoState
     )
       window.AdsFriendlyVideoState.currentAdDensity = event.data.value;
-  });
+  };
+  window.addEventListener("message", onMessage);
+  return () => window.removeEventListener("message", onMessage);
 }

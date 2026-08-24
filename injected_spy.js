@@ -31,6 +31,14 @@ var AdsFriendlyMainWorld = (() => {
     ASSIST: "assist",
     AUTO: "auto"
   });
+  var CAPABILITY_TRIGGERS = Object.freeze({
+    CORE: "core",
+    PASSIVE: "passive",
+    USER: "user",
+    SUGGESTION: "suggestion",
+    AUTOMATIC: "automatic",
+    STORAGE: "storage"
+  });
   var CAPABILITIES = Object.freeze({
     CORE_MESSAGING: "core.messaging",
     CORE_MAINTENANCE: "core.maintenance",
@@ -49,60 +57,48 @@ var AdsFriendlyMainWorld = (() => {
     TELEMETRY_QUEUE: "telemetry.queue",
     MEDIA_OBSERVE: "media.observe",
     VIDEO_OBSERVE: "video.observe",
+    VIDEO_RESTORE_STATE: "video.restore_state",
+    VIDEO_USER_ACTION: "video.user_action",
     VIDEO_AUTO_ACTION: "video.auto_action"
   });
   var C = CAPABILITIES;
-  var MODE_CAPABILITIES = Object.freeze({
-    [PROTECTION_MODES.SAFE]: Object.freeze([
-      C.CORE_MESSAGING,
-      C.CORE_MAINTENANCE,
-      C.NAVIGATION_GUARD,
+  var T = CAPABILITY_TRIGGERS;
+  var MODE_RANK = Object.freeze({
+    [PROTECTION_MODES.SAFE]: 0,
+    [PROTECTION_MODES.ASSIST]: 1,
+    [PROTECTION_MODES.AUTO]: 2
+  });
+  var CAPABILITY_CATALOG = Object.freeze({
+    [C.CORE_MESSAGING]: capability(C.CORE_MESSAGING, "safe", T.CORE, {
+      availableWhenDisabled: true
+    }),
+    [C.CORE_MAINTENANCE]: capability(C.CORE_MAINTENANCE, "safe", T.CORE, {
+      availableWhenDisabled: true
+    }),
+    [C.NAVIGATION_GUARD]: capability(C.NAVIGATION_GUARD, "safe", T.AUTOMATIC),
+    [C.NAVIGATION_REVERSE_POPUNDER]: capability(
       C.NAVIGATION_REVERSE_POPUNDER,
-      C.NAVIGATION_INTENT,
-      C.NAVIGATION_FEEDBACK,
-      C.DOM_STATIC_RULES,
-      C.DOM_MANUAL_PICKER,
-      C.LEARNING_SEED,
-      C.LEARNING_FEEDBACK,
-      C.TELEMETRY_QUEUE
-    ]),
-    [PROTECTION_MODES.ASSIST]: Object.freeze([
-      C.CORE_MESSAGING,
-      C.CORE_MAINTENANCE,
-      C.NAVIGATION_GUARD,
-      C.NAVIGATION_REVERSE_POPUNDER,
-      C.NAVIGATION_INTENT,
-      C.NAVIGATION_FEEDBACK,
-      C.DOM_STATIC_RULES,
-      C.DOM_OBSERVE,
-      C.DOM_SUGGEST,
-      C.DOM_MANUAL_PICKER,
-      C.LEARNING_SEED,
-      C.LEARNING_FEEDBACK,
-      C.TELEMETRY_QUEUE,
-      C.MEDIA_OBSERVE,
-      C.VIDEO_OBSERVE
-    ]),
-    [PROTECTION_MODES.AUTO]: Object.freeze([
-      C.CORE_MESSAGING,
-      C.CORE_MAINTENANCE,
-      C.NAVIGATION_GUARD,
-      C.NAVIGATION_REVERSE_POPUNDER,
-      C.NAVIGATION_INTENT,
-      C.NAVIGATION_FEEDBACK,
-      C.DOM_STATIC_RULES,
-      C.DOM_OBSERVE,
-      C.DOM_SUGGEST,
-      C.DOM_AUTO_HIDE,
-      C.DOM_MANUAL_PICKER,
-      C.LEARNING_SEED,
-      C.LEARNING_FEEDBACK,
-      C.LEARNING_APPLY,
-      C.TELEMETRY_QUEUE,
-      C.MEDIA_OBSERVE,
-      C.VIDEO_OBSERVE,
-      C.VIDEO_AUTO_ACTION
-    ])
+      "safe",
+      T.AUTOMATIC
+    ),
+    [C.NAVIGATION_INTENT]: capability(C.NAVIGATION_INTENT, "safe", T.PASSIVE),
+    [C.NAVIGATION_FEEDBACK]: capability(C.NAVIGATION_FEEDBACK, "safe", T.USER),
+    [C.DOM_STATIC_RULES]: capability(C.DOM_STATIC_RULES, "safe", T.AUTOMATIC),
+    [C.DOM_OBSERVE]: capability(C.DOM_OBSERVE, "assist", T.PASSIVE),
+    [C.DOM_SUGGEST]: capability(C.DOM_SUGGEST, "assist", T.SUGGESTION),
+    [C.DOM_AUTO_HIDE]: capability(C.DOM_AUTO_HIDE, "auto", T.AUTOMATIC),
+    [C.DOM_MANUAL_PICKER]: capability(C.DOM_MANUAL_PICKER, "safe", T.USER),
+    [C.LEARNING_SEED]: capability(C.LEARNING_SEED, "safe", T.STORAGE),
+    [C.LEARNING_FEEDBACK]: capability(C.LEARNING_FEEDBACK, "safe", T.USER),
+    [C.LEARNING_APPLY]: capability(C.LEARNING_APPLY, "auto", T.AUTOMATIC),
+    [C.TELEMETRY_QUEUE]: capability(C.TELEMETRY_QUEUE, "safe", T.STORAGE),
+    [C.MEDIA_OBSERVE]: capability(C.MEDIA_OBSERVE, "assist", T.PASSIVE),
+    [C.VIDEO_OBSERVE]: capability(C.VIDEO_OBSERVE, "assist", T.PASSIVE),
+    [C.VIDEO_RESTORE_STATE]: capability(C.VIDEO_RESTORE_STATE, "safe", T.CORE, {
+      availableWhenDisabled: true
+    }),
+    [C.VIDEO_USER_ACTION]: capability(C.VIDEO_USER_ACTION, "assist", T.USER),
+    [C.VIDEO_AUTO_ACTION]: capability(C.VIDEO_AUTO_ACTION, "auto", T.AUTOMATIC)
   });
   var FEATURE_CATALOG = Object.freeze([
     feature("background.message-router", "background", C.CORE_MESSAGING, [
@@ -142,7 +138,11 @@ var AdsFriendlyMainWorld = (() => {
     feature("content.dom-learned-blocker", "content", C.LEARNING_APPLY, [
       C.DOM_AUTO_HIDE
     ]),
-    feature("video.surgeon", "video", C.VIDEO_OBSERVE, [C.VIDEO_AUTO_ACTION]),
+    feature("video.surgeon", "video", C.VIDEO_OBSERVE, [
+      C.VIDEO_RESTORE_STATE,
+      C.VIDEO_USER_ACTION,
+      C.VIDEO_AUTO_ACTION
+    ]),
     feature("picker.controller", "picker", C.DOM_MANUAL_PICKER, [
       C.LEARNING_FEEDBACK
     ]),
@@ -152,6 +152,14 @@ var AdsFriendlyMainWorld = (() => {
   var CAPABILITY_SET = new Set(Object.values(CAPABILITIES));
   var FEATURE_BY_ID = new Map(FEATURE_CATALOG.map((item) => [item.id, item]));
   validateCatalog();
+  var MODE_CAPABILITIES = Object.freeze(
+    Object.fromEntries(
+      Object.values(PROTECTION_MODES).map((mode) => [
+        mode,
+        Object.freeze(resolveCapabilitiesForMode(mode))
+      ])
+    )
+  );
   function getFeatureDefinition(featureId) {
     const definition = FEATURE_BY_ID.get(featureId);
     if (!definition) {
@@ -166,20 +174,33 @@ var AdsFriendlyMainWorld = (() => {
       (featureItem) => featureItem.context === context
     );
   }
-  function assertRegisteredCapability(capability) {
-    if (!CAPABILITY_SET.has(capability)) {
+  function getCapabilityDefinition(capabilityId) {
+    assertRegisteredCapability(capabilityId);
+    return CAPABILITY_CATALOG[capabilityId];
+  }
+  function assertRegisteredCapability(capabilityId) {
+    if (!CAPABILITY_SET.has(capabilityId) || !CAPABILITY_CATALOG[capabilityId]) {
       throw new Error(
-        `[FeatureRegistry] Unknown capability "${capability}". Register it in feature-catalog.js before use.`
+        `[FeatureRegistry] Unknown capability "${capabilityId}". Register it in feature-catalog.js before use.`
       );
     }
-    return capability;
+    return capabilityId;
   }
-  function getCapabilitiesForMode(mode) {
-    const capabilities = MODE_CAPABILITIES[mode];
-    if (!capabilities) {
-      throw new Error(`[FeatureRegistry] Unknown protection mode "${mode}".`);
-    }
-    return capabilities;
+  function isCapabilityEnabled(capabilityId, settings = {}) {
+    const definition = getCapabilityDefinition(capabilityId);
+    const mode = settings.protectionMode || PROTECTION_MODES.SAFE;
+    assertProtectionMode(mode);
+    if (settings.enabled === false) return definition.availableWhenDisabled;
+    return MODE_RANK[mode] >= MODE_RANK[definition.minMode];
+  }
+  function capability(id, minMode, trigger, { availableWhenDisabled = false, browserPermissions = [] } = {}) {
+    return Object.freeze({
+      id,
+      minMode,
+      trigger,
+      availableWhenDisabled,
+      browserPermissions: Object.freeze([...browserPermissions])
+    });
   }
   function feature(id, context, startCapability, extraCapabilities = []) {
     return Object.freeze({
@@ -189,7 +210,34 @@ var AdsFriendlyMainWorld = (() => {
       capabilities: Object.freeze([startCapability, ...extraCapabilities])
     });
   }
+  function resolveCapabilitiesForMode(mode) {
+    assertProtectionMode(mode);
+    return Object.values(CAPABILITY_CATALOG).filter((definition) => MODE_RANK[mode] >= MODE_RANK[definition.minMode]).map((definition) => definition.id);
+  }
+  function assertProtectionMode(mode) {
+    if (!(mode in MODE_RANK)) {
+      throw new Error(`[FeatureRegistry] Unknown protection mode "${mode}".`);
+    }
+  }
   function validateCatalog() {
+    const capabilityIds = Object.values(CAPABILITIES);
+    if (new Set(capabilityIds).size !== capabilityIds.length) {
+      throw new Error("[FeatureRegistry] Duplicate capability ID.");
+    }
+    for (const capabilityId of capabilityIds) {
+      const definition = CAPABILITY_CATALOG[capabilityId];
+      if (!definition || definition.id !== capabilityId) {
+        throw new Error(
+          `[FeatureRegistry] Capability "${capabilityId}" has no metadata definition.`
+        );
+      }
+      assertProtectionMode(definition.minMode);
+      if (!Object.values(CAPABILITY_TRIGGERS).includes(definition.trigger)) {
+        throw new Error(
+          `[FeatureRegistry] Capability "${capabilityId}" has unknown trigger "${definition.trigger}".`
+        );
+      }
+    }
     const ids = /* @__PURE__ */ new Set();
     for (const definition of FEATURE_CATALOG) {
       if (ids.has(definition.id)) {
@@ -198,29 +246,29 @@ var AdsFriendlyMainWorld = (() => {
         );
       }
       ids.add(definition.id);
-      for (const capability of definition.capabilities) {
-        assertRegisteredCapability(capability);
+      if (new Set(definition.capabilities).size !== definition.capabilities.length) {
+        throw new Error(
+          `[FeatureRegistry] Feature "${definition.id}" declares a capability more than once.`
+        );
       }
-    }
-    for (const [mode, capabilities] of Object.entries(MODE_CAPABILITIES)) {
-      for (const capability of capabilities) {
-        if (!CAPABILITY_SET.has(capability)) {
-          throw new Error(
-            `[FeatureRegistry] Mode "${mode}" uses unregistered capability "${capability}".`
-          );
-        }
+      for (const capabilityId of definition.capabilities) {
+        assertRegisteredCapability(capabilityId);
       }
     }
   }
 
   // src/main-world/network-capture.js
   function installNetworkCapture(policy) {
-    installFetchCapture(policy);
-    installXhrCapture(policy);
+    const stopFetchCapture = installFetchCapture(policy);
+    const stopXhrCapture = installXhrCapture(policy);
+    return () => {
+      stopFetchCapture();
+      stopXhrCapture();
+    };
   }
   function installFetchCapture(policy) {
     const originalFetch = window.fetch;
-    window.fetch = async function(...args) {
+    const fetchWrapper = async function(...args) {
       const url = requestUrl(args[0]);
       const response = await originalFetch.apply(this, args);
       if (policy.can(CAPABILITIES.MEDIA_OBSERVE) && isManifestLike(url)) {
@@ -229,15 +277,19 @@ var AdsFriendlyMainWorld = (() => {
       }
       return response;
     };
+    window.fetch = fetchWrapper;
+    return () => {
+      if (window.fetch === fetchWrapper) window.fetch = originalFetch;
+    };
   }
   function installXhrCapture(policy) {
     const originalOpen = XMLHttpRequest.prototype.open;
     const originalSend = XMLHttpRequest.prototype.send;
-    XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+    const openWrapper = function(method, url, ...rest) {
       this.__adsfriendly_url = requestUrl(url);
       return originalOpen.call(this, method, url, ...rest);
     };
-    XMLHttpRequest.prototype.send = function(...args) {
+    const sendWrapper = function(...args) {
       this.addEventListener("load", () => {
         if (!policy.can(CAPABILITIES.MEDIA_OBSERVE)) return;
         const url = this.__adsfriendly_url || "";
@@ -249,6 +301,14 @@ var AdsFriendlyMainWorld = (() => {
         }
       });
       return originalSend.apply(this, args);
+    };
+    XMLHttpRequest.prototype.open = openWrapper;
+    XMLHttpRequest.prototype.send = sendWrapper;
+    return () => {
+      if (XMLHttpRequest.prototype.open === openWrapper)
+        XMLHttpRequest.prototype.open = originalOpen;
+      if (XMLHttpRequest.prototype.send === sendWrapper)
+        XMLHttpRequest.prototype.send = originalSend;
     };
   }
   function requestUrl(input) {
@@ -273,8 +333,18 @@ var AdsFriendlyMainWorld = (() => {
     timerPolicy = policy;
     const originalTimeout = window.setTimeout;
     const originalInterval = window.setInterval;
-    window.setTimeout = (handler, timeout, ...args) => originalTimeout(handler, scaled(timeout), ...args);
-    window.setInterval = (handler, timeout, ...args) => originalInterval(handler, scaled(timeout), ...args);
+    const timeoutWrapper = (handler, timeout, ...args) => originalTimeout(handler, scaled(timeout), ...args);
+    const intervalWrapper = (handler, timeout, ...args) => originalInterval(handler, scaled(timeout), ...args);
+    window.setTimeout = timeoutWrapper;
+    window.setInterval = intervalWrapper;
+    return () => {
+      if (window.setTimeout === timeoutWrapper)
+        window.setTimeout = originalTimeout;
+      if (window.setInterval === intervalWrapper)
+        window.setInterval = originalInterval;
+      timerPolicy = null;
+      isAdMode = false;
+    };
   }
   function scaled(timeout) {
     return isAdMode && timerPolicy?.can(CAPABILITIES.VIDEO_AUTO_ACTION) && typeof timeout === "number" && timeout > 50 ? timeout / 100 : timeout;
@@ -443,33 +513,26 @@ var AdsFriendlyMainWorld = (() => {
   function createFeaturePolicy(definitionOrId, readSettings) {
     const definition = typeof definitionOrId === "string" ? getFeatureDefinition(definitionOrId) : definitionOrId;
     const declared = new Set(definition.capabilities);
-    function assertAllowed(capability) {
-      assertRegisteredCapability(capability);
-      if (!declared.has(capability)) {
+    function assertAllowed(capability2) {
+      assertRegisteredCapability(capability2);
+      if (!declared.has(capability2)) {
         throw new Error(
-          `[FeatureRegistry] Feature "${definition.id}" tried to use undeclared capability "${capability}". Add it to that feature in feature-catalog.js.`
+          `[FeatureRegistry] Feature "${definition.id}" tried to use undeclared capability "${capability2}". Add it to that feature in feature-catalog.js.`
         );
       }
     }
     return Object.freeze({
       featureId: definition.id,
-      can(capability) {
-        assertAllowed(capability);
+      can(capability2) {
+        assertAllowed(capability2);
         const settings = readSettings();
-        if (!settings.enabled)
-          return [
-            CAPABILITIES.CORE_MESSAGING,
-            CAPABILITIES.CORE_MAINTENANCE
-          ].includes(capability);
-        return getCapabilitiesForMode(settings.protectionMode).includes(
-          capability
-        );
+        return isCapabilityEnabled(capability2, settings);
       },
-      require(capability) {
-        if (!this.can(capability)) {
+      require(capability2) {
+        if (!this.can(capability2)) {
           const settings = readSettings();
           throw new Error(
-            `[FeatureRegistry] Capability "${capability}" is disabled for feature "${definition.id}" in mode "${settings.protectionMode}".`
+            `[FeatureRegistry] Capability "${capability2}" is disabled for feature "${definition.id}" in mode "${settings.protectionMode}".`
           );
         }
         return true;
@@ -479,14 +542,7 @@ var AdsFriendlyMainWorld = (() => {
   function shouldStartFeature(definition, settings) {
     const override = settings.featureOverrides?.[definition.id];
     if (override === false) return false;
-    if ([CAPABILITIES.CORE_MESSAGING, CAPABILITIES.CORE_MAINTENANCE].includes(
-      definition.startCapability
-    ))
-      return true;
-    if (!settings.enabled) return false;
-    return getCapabilitiesForMode(settings.protectionMode).includes(
-      definition.startCapability
-    );
+    return isCapabilityEnabled(definition.startCapability, settings);
   }
   function validateFeatureOverrides(featureOverrides = {}) {
     for (const featureId of Object.keys(featureOverrides)) {

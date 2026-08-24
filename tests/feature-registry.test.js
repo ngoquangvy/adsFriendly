@@ -2,7 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   CAPABILITIES,
+  CAPABILITY_TRIGGERS,
   getCapabilitiesForMode,
+  getCapabilityDefinition,
   getFeatureDefinition,
   getFeaturesForContext,
 } from "../src/runtime/feature-catalog.js";
@@ -55,6 +57,25 @@ test("mode policy separates suggestion and automatic actions", () => {
   );
   assert.equal(
     getCapabilitiesForMode("auto").includes(CAPABILITIES.DOM_AUTO_HIDE),
+    true,
+  );
+});
+
+test("capability metadata is the single source for mode access", () => {
+  const observe = getCapabilityDefinition(CAPABILITIES.MEDIA_OBSERVE);
+  assert.equal(observe.minMode, "assist");
+  assert.equal(observe.trigger, CAPABILITY_TRIGGERS.PASSIVE);
+  assert.equal(
+    getCapabilitiesForMode("safe").includes(CAPABILITIES.VIDEO_USER_ACTION),
+    false,
+  );
+  assert.equal(
+    getCapabilitiesForMode("assist").includes(CAPABILITIES.VIDEO_USER_ACTION),
+    true,
+  );
+  assert.equal(
+    getCapabilityDefinition(CAPABILITIES.VIDEO_RESTORE_STATE)
+      .availableWhenDisabled,
     true,
   );
 });

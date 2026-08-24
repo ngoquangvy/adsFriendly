@@ -1,5 +1,3 @@
-import { CAPABILITIES } from "../runtime/feature-catalog.js";
-
 const SKIP_SELECTORS = [
   ".ytp-ad-skip-button",
   ".ytp-ad-skip-button-modern",
@@ -10,8 +8,7 @@ const SKIP_SELECTORS = [
   '[aria-label*="Skip ad"]',
 ];
 
-export function autoSkip(policy) {
-  if (!policy?.can(CAPABILITIES.VIDEO_AUTO_ACTION)) return;
+export function skipVisibleAds() {
   SKIP_SELECTORS.forEach((selector) => {
     const button = document.querySelector(selector);
     clickIfVisible(button);
