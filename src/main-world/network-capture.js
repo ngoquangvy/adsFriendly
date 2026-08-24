@@ -209,7 +209,7 @@ function requestUrl(input) {
 }
 
 function isManifestLike(url = "") {
-  const normalized = url.toLowerCase();
+  const normalized = String(url || "").toLowerCase();
   return (
     normalized.includes(".m3u8") ||
     normalized.includes(".mpd") ||

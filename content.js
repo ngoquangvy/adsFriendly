@@ -284,8 +284,8 @@ var AdsFriendlyContent = (() => {
     const rect = element.getBoundingClientRect();
     const style = getComputedStyle(element);
     const link = element.closest("a[href]");
-    const src = element.currentSrc || element.src || "";
-    const href = link?.href || element.href || "";
+    const src = normalizeUrlText(element.currentSrc || element.src);
+    const href = normalizeUrlText(link?.href || element.href);
     const idTokens = tokenize(element.id);
     const classTokens = tokenize(
       typeof element.className === "string" ? element.className : ""
@@ -394,7 +394,7 @@ var AdsFriendlyContent = (() => {
     return tokens.some((token) => AD_TOKEN_RE.test(token));
   }
   function looksAdLikeUrl(url = "") {
-    const value = url.toLowerCase();
+    const value = normalizeUrlText(url).toLowerCase();
     return /(?:[?&](?:utm_|aff_|clickid|adid|zoneid|bannerid)|\/(?:ad|ads|adv|advert|banner)(?:\/|\.|-|_))/i.test(
       value
     );
@@ -406,7 +406,7 @@ var AdsFriendlyContent = (() => {
     );
     const images = Array.from(element.querySelectorAll?.("img, iframe") || []).slice(0, 40).map((node) => ({
       tag: node.tagName.toLowerCase(),
-      src: node.currentSrc || node.src || "",
+      src: normalizeUrlText(node.currentSrc || node.src),
       srcHost: safeHost(node.currentSrc || node.src || "")
     }));
     const externalLinks = links.filter(
@@ -416,7 +416,7 @@ var AdsFriendlyContent = (() => {
       const text = [
         link.id,
         typeof link.className === "string" ? link.className : "",
-        link.href,
+        normalizeUrlText(link.href),
         link.textContent || ""
       ].join(" ");
       return tokensHaveAdSignal(tokenize(text)) || looksAdLikeUrl(link.href) || looksCommercialHost(link.href);
@@ -440,7 +440,7 @@ var AdsFriendlyContent = (() => {
       const value = [
         link.id,
         typeof link.className === "string" ? link.className : "",
-        link.href,
+        normalizeUrlText(link.href),
         link.textContent || ""
       ].join(" ");
       return tokensHaveAdSignal(tokenize(value)) || looksAdLikeUrl(link.href) || looksCommercialHost(link.href);
@@ -459,7 +459,21 @@ var AdsFriendlyContent = (() => {
   function safeHost(url) {
     try {
       const base = typeof location === "undefined" ? "https://adsfriendly.invalid/" : location.href;
-      return new URL(url, base).hostname.toLowerCase();
+      const value = normalizeUrlText(url);
+      return value ? new URL(value, base).hostname.toLowerCase() : "";
+    } catch {
+      return "";
+    }
+  }
+  function normalizeUrlText(value) {
+    if (typeof value === "string") return value;
+    if (!value) return "";
+    if (typeof value.baseVal === "string") return value.baseVal;
+    if (typeof value.href === "string") return value.href;
+    if (typeof value.url === "string") return value.url;
+    try {
+      const text = String(value);
+      return /^\[object .+\]$/.test(text) ? "" : text;
     } catch {
       return "";
     }

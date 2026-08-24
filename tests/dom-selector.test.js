@@ -6,7 +6,11 @@ import {
   isHiddenByAdsFriendly,
   restoreInlineVisibility,
 } from "../src/dom/actions.js";
-import { buildDomSelector } from "../src/dom/features.js";
+import {
+  buildDomSelector,
+  looksAdLikeUrl,
+  normalizeUrlText,
+} from "../src/dom/features.js";
 
 function element(tag, attributes = {}, parentElement = null) {
   const node = {
@@ -25,6 +29,14 @@ function element(tag, attributes = {}, parentElement = null) {
   if (parentElement) parentElement.children.push(node);
   return node;
 }
+
+test("URL heuristics accept SVG and URL objects without throwing", () => {
+  const svgHref = { baseVal: "https://ads.example/banner/click" };
+  assert.equal(normalizeUrlText(svgHref), svgHref.baseVal);
+  assert.equal(looksAdLikeUrl(svgHref), true);
+  assert.equal(looksAdLikeUrl(new URL("https://example.com/watch")), false);
+  assert.equal(looksAdLikeUrl({}), false);
+});
 
 test("builds a durable host selector for an unlabelled ad link", () => {
   const link = element("a", {
