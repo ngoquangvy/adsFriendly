@@ -3,7 +3,10 @@ import { notifyContentScript } from "./bridge.js";
 import { createMediaCandidateFromSource } from "../media/detection.js";
 import { MEDIA_DETECTION_SOURCES, MEDIA_KINDS } from "../media/contracts.js";
 import { parseHlsManifest } from "../media/hls-parser.js";
-import { createMediaProbeGate } from "../media/probe-gate.js";
+import {
+  createMediaProbeGate,
+  isUsableMediaProbe,
+} from "../media/probe-gate.js";
 import { EVENTS, createRegisteredEvent } from "../runtime/event-catalog.js";
 import { CAPABILITIES } from "../runtime/feature-catalog.js";
 
@@ -12,7 +15,8 @@ export function installNetworkCapture(policy) {
   const probeGate = createMediaProbeGate();
   const inspect = (manifestUrl, body, candidate, requestContext = null) => {
     const probe = inspectManifest(manifestUrl, body, candidate, requestContext);
-    if (probe) probeGate.remember(manifestUrl, probe.status);
+    if (isUsableMediaProbe(probe)) probeGate.remember(manifestUrl, "ready");
+    else probeGate.release(manifestUrl);
     return probe;
   };
   const stopFetchCapture = installFetchCapture(policy, inspect);
@@ -144,7 +148,7 @@ function installFallbackProbe({ policy, originalFetch, probeGate, inspect }) {
       })
       .catch((error) => {
         if (probeGate.state(manifestUrl) !== "pending") return;
-        probeGate.remember(manifestUrl, "failed");
+        probeGate.release(manifestUrl);
         reportProbeFailure(manifestUrl, candidate, probeErrorCode(error));
       });
   };

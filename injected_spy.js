@@ -675,6 +675,11 @@ var AdsFriendlyMainWorld = (() => {
         remember(key, state);
         return key;
       },
+      release(url) {
+        const key = normalizeHttpMediaUrl(url);
+        if (!key) return false;
+        return states.delete(key);
+      },
       state(url) {
         const key = normalizeHttpMediaUrl(url);
         return key ? states.get(key) || null : null;
@@ -690,6 +695,18 @@ var AdsFriendlyMainWorld = (() => {
         states.delete(states.keys().next().value);
       }
     }
+  }
+  function isUsableMediaProbe(probe = {}) {
+    if (probe.status !== "ready") return false;
+    if (probe.playlistType === "master") {
+      return Boolean(
+        probe.variants?.length || probe.iframeVariants?.length || probe.audioTracks?.length || probe.subtitles?.length
+      );
+    }
+    if (probe.playlistType !== "media") return false;
+    return Boolean(
+      probe.segmentCount > 0 || probe.partialSegmentCount > 0 || ["vod", "live"].includes(probe.streamType)
+    );
   }
   function normalizeHttpMediaUrl(value) {
     try {
@@ -1215,7 +1232,8 @@ var AdsFriendlyMainWorld = (() => {
     const probeGate = createMediaProbeGate();
     const inspect = (manifestUrl, body, candidate, requestContext2 = null) => {
       const probe = inspectManifest(manifestUrl, body, candidate, requestContext2);
-      if (probe) probeGate.remember(manifestUrl, probe.status);
+      if (isUsableMediaProbe(probe)) probeGate.remember(manifestUrl, "ready");
+      else probeGate.release(manifestUrl);
       return probe;
     };
     const stopFetchCapture = installFetchCapture(policy, inspect);
@@ -1326,7 +1344,7 @@ var AdsFriendlyMainWorld = (() => {
         );
       }).catch((error) => {
         if (probeGate.state(manifestUrl) !== "pending") return;
-        probeGate.remember(manifestUrl, "failed");
+        probeGate.release(manifestUrl);
         reportProbeFailure(manifestUrl, candidate, probeErrorCode(error));
       });
     };

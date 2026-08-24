@@ -14,6 +14,11 @@ export function createMediaProbeGate({ maximumRemembered = 100 } = {}) {
       remember(key, state);
       return key;
     },
+    release(url) {
+      const key = normalizeHttpMediaUrl(url);
+      if (!key) return false;
+      return states.delete(key);
+    },
     state(url) {
       const key = normalizeHttpMediaUrl(url);
       return key ? states.get(key) || null : null;
@@ -30,6 +35,24 @@ export function createMediaProbeGate({ maximumRemembered = 100 } = {}) {
       states.delete(states.keys().next().value);
     }
   }
+}
+
+export function isUsableMediaProbe(probe = {}) {
+  if (probe.status !== "ready") return false;
+  if (probe.playlistType === "master") {
+    return Boolean(
+      probe.variants?.length ||
+      probe.iframeVariants?.length ||
+      probe.audioTracks?.length ||
+      probe.subtitles?.length,
+    );
+  }
+  if (probe.playlistType !== "media") return false;
+  return Boolean(
+    probe.segmentCount > 0 ||
+    probe.partialSegmentCount > 0 ||
+    ["vod", "live"].includes(probe.streamType),
+  );
 }
 
 export function normalizeHttpMediaUrl(value) {

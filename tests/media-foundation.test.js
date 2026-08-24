@@ -12,8 +12,10 @@ import {
 } from "../src/media/hls-parser.js";
 import {
   createMediaProbeGate,
+  isUsableMediaProbe,
   normalizeHttpMediaUrl,
 } from "../src/media/probe-gate.js";
+import { createMediaObserverReportKey } from "../src/content/media-observer.js";
 import { createHlsDownloadPlan } from "../src/media/hls-download-plan.js";
 import { downloadResourcesInParallel } from "../src/media/parallel-downloader.js";
 import {
@@ -540,12 +542,60 @@ test("fallback probe gate accepts HTTP manifests once and stays bounded", () => 
     "https://cdn.example/master.m3u8",
   );
   assert.equal(gate.claim("https://cdn.example/master.m3u8"), null);
+  assert.equal(gate.release("https://cdn.example/master.m3u8"), true);
+  assert.equal(
+    gate.claim("https://cdn.example/master.m3u8"),
+    "https://cdn.example/master.m3u8",
+  );
   gate.remember("https://cdn.example/one.m3u8", "ready");
   gate.remember("https://cdn.example/two.m3u8", "ready");
   assert.equal(gate.state("https://cdn.example/master.m3u8"), null);
   assert.equal(gate.state("https://cdn.example/two.m3u8"), "ready");
   assert.equal(normalizeHttpMediaUrl("blob:https://video.example/id"), null);
   assert.equal(normalizeHttpMediaUrl("javascript:alert(1)"), null);
+});
+
+test("unknown HLS probes remain retryable while populated playlists complete", () => {
+  assert.equal(
+    isUsableMediaProbe({
+      status: "ready",
+      playlistType: "unknown",
+      streamType: "unknown",
+    }),
+    false,
+  );
+  assert.equal(
+    isUsableMediaProbe({
+      status: "ready",
+      playlistType: "media",
+      streamType: "vod",
+      segmentCount: 1726,
+    }),
+    true,
+  );
+});
+
+test("media observer accepts a resolved VOD after an unknown probe", () => {
+  const shared = {
+    mediaId: "media-hls-token",
+    status: "ready",
+    playlistType: "unknown",
+    streamType: "unknown",
+  };
+  const waitingKey = createMediaObserverReportKey({
+    type: EVENTS.MEDIA_PROBED,
+    payload: shared,
+  });
+  const resolvedKey = createMediaObserverReportKey({
+    type: EVENTS.MEDIA_PROBED,
+    payload: {
+      ...shared,
+      playlistType: "media",
+      streamType: "vod",
+      segmentCount: 1726,
+    },
+  });
+  assert.notEqual(waitingKey, resolvedKey);
 });
 
 test("builds an ordered HLS VOD download plan with init and byte ranges", () => {

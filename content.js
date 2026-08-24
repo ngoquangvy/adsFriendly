@@ -2776,9 +2776,7 @@ var AdsFriendlyContent = (() => {
     }
     function reportEvent(event2) {
       if (stopped) return;
-      const mediaId = event2.payload.id || event2.payload.mediaId;
-      const discriminator = event2.type === EVENTS.MEDIA_DISCOVERED ? event2.payload.detectedBy : event2.payload.status;
-      const reportKey = `${event2.type}:${mediaId}:${discriminator}`;
+      const reportKey = createMediaObserverReportKey(event2);
       if (reported.has(reportKey) || pending.has(reportKey)) return;
       pending.add(reportKey);
       chrome.runtime.sendMessage({
@@ -2830,6 +2828,29 @@ var AdsFriendlyContent = (() => {
         probeTimers.add(timerId);
       }
     }
+  }
+  function createMediaObserverReportKey(event2) {
+    const payload = event2?.payload || {};
+    const mediaId = payload.id || payload.mediaId || "unknown";
+    if (event2?.type === EVENTS.MEDIA_DISCOVERED) {
+      return `${event2.type}:${mediaId}:${payload.detectedBy || "unknown"}`;
+    }
+    if (event2?.type !== EVENTS.MEDIA_PROBED) {
+      return `${event2?.type || "unknown"}:${mediaId}`;
+    }
+    const segmentSignal = payload.streamType === "live" ? Number(payload.segmentCount > 0 || payload.partialSegmentCount > 0) : payload.segmentCount ?? payload.partialSegmentCount ?? "none";
+    return [
+      event2.type,
+      mediaId,
+      payload.status || "unknown",
+      payload.error || "none",
+      payload.playlistType || "unknown",
+      payload.streamType || "unknown",
+      payload.variants?.length || 0,
+      segmentSignal,
+      payload.drm || "none",
+      (payload.encryptionMethods || []).join(",")
+    ].join(":");
   }
   function startPerformanceObserver(onEntry) {
     if (typeof PerformanceObserver === "undefined") return null;

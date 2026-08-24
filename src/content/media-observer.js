@@ -122,12 +122,7 @@ export function startMediaObserver() {
 
   function reportEvent(event) {
     if (stopped) return;
-    const mediaId = event.payload.id || event.payload.mediaId;
-    const discriminator =
-      event.type === EVENTS.MEDIA_DISCOVERED
-        ? event.payload.detectedBy
-        : event.payload.status;
-    const reportKey = `${event.type}:${mediaId}:${discriminator}`;
+    const reportKey = createMediaObserverReportKey(event);
     if (reported.has(reportKey) || pending.has(reportKey)) return;
     pending.add(reportKey);
     chrome.runtime
@@ -192,6 +187,33 @@ export function startMediaObserver() {
       probeTimers.add(timerId);
     }
   }
+}
+
+export function createMediaObserverReportKey(event) {
+  const payload = event?.payload || {};
+  const mediaId = payload.id || payload.mediaId || "unknown";
+  if (event?.type === EVENTS.MEDIA_DISCOVERED) {
+    return `${event.type}:${mediaId}:${payload.detectedBy || "unknown"}`;
+  }
+  if (event?.type !== EVENTS.MEDIA_PROBED) {
+    return `${event?.type || "unknown"}:${mediaId}`;
+  }
+  const segmentSignal =
+    payload.streamType === "live"
+      ? Number(payload.segmentCount > 0 || payload.partialSegmentCount > 0)
+      : (payload.segmentCount ?? payload.partialSegmentCount ?? "none");
+  return [
+    event.type,
+    mediaId,
+    payload.status || "unknown",
+    payload.error || "none",
+    payload.playlistType || "unknown",
+    payload.streamType || "unknown",
+    payload.variants?.length || 0,
+    segmentSignal,
+    payload.drm || "none",
+    (payload.encryptionMethods || []).join(","),
+  ].join(":");
 }
 
 function startPerformanceObserver(onEntry) {
