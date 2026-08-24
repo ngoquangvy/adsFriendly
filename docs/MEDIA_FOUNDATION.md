@@ -58,6 +58,14 @@ inferred as live merely because `EXT-X-ENDLIST` is absent. The catalog also link
 discovered child quality/audio/subtitle playlists back to their master. Full manifest bodies, signed URLs outside
 the per-tab session catalog, and segment lists are not persisted.
 
+The HLS resolver keeps multiple observations of a tokenized endpoint and does
+not let a later empty envelope replace an already usable media playlist. It
+links request redirects and master variants, selects the best discovered VOD
+stream by readiness and quality, and exposes one logical source in the popup.
+Request routing facts (document/referrer URL, transport, credentials mode, and
+whether the browser session is required) stay in `chrome.storage.session`.
+Cookie, authorization, and arbitrary request-header values are never captured.
+
 Network capture is installed at `document_start` in Chrome's MAIN world for both
 the top page and video iframes, so page CSP does not block it. When a
 manifest URL is discovered through DOM or Resource Timing after its response was

@@ -10,8 +10,8 @@ import { CAPABILITIES } from "../runtime/feature-catalog.js";
 export function installNetworkCapture(policy) {
   const originalFetch = window.fetch;
   const probeGate = createMediaProbeGate();
-  const inspect = (manifestUrl, body, candidate) => {
-    const probe = inspectManifest(manifestUrl, body, candidate);
+  const inspect = (manifestUrl, body, candidate, requestContext = null) => {
+    const probe = inspectManifest(manifestUrl, body, candidate, requestContext);
     if (probe) probeGate.remember(manifestUrl, probe.status);
     return probe;
   };
@@ -38,13 +38,17 @@ function installFetchCapture(policy, inspect) {
     const response = await originalFetch.apply(this, args);
     if (!policy.can(CAPABILITIES.MEDIA_OBSERVE)) return response;
     const finalUrl = response.url || url;
+    const requestContext = createFetchRequestContext(args, url, finalUrl);
     const mimeType = response.headers.get("content-type");
     const candidate = reportMediaSource(finalUrl, mimeType);
+    if (url && finalUrl !== url && candidate?.kind === MEDIA_KINDS.HLS) {
+      reportMediaSource(url, mimeType);
+    }
     if (isManifestLike(finalUrl) || candidate?.kind === MEDIA_KINDS.HLS) {
       response
         .clone()
         .text()
-        .then((body) => inspect(finalUrl, body, candidate))
+        .then((body) => inspect(finalUrl, body, candidate, requestContext))
         .catch(() => {});
     }
     return response;
@@ -60,20 +64,27 @@ function installXhrCapture(policy, inspect) {
   const originalSend = XMLHttpRequest.prototype.send;
   const openWrapper = function (method, url, ...rest) {
     this.__adsfriendly_url = requestUrl(url);
+    this.__adsfriendly_method = String(method || "GET").toUpperCase();
     return originalOpen.call(this, method, url, ...rest);
   };
   const sendWrapper = function (...args) {
     this.addEventListener("load", () => {
       if (!policy.can(CAPABILITIES.MEDIA_OBSERVE)) return;
       const url = this.responseURL || this.__adsfriendly_url || "";
-      const candidate = reportMediaSource(
-        url,
-        this.getResponseHeader("content-type"),
-      );
+      const requestContext = createXhrRequestContext(this, url);
+      const mimeType = this.getResponseHeader("content-type");
+      const candidate = reportMediaSource(url, mimeType);
+      if (
+        this.__adsfriendly_url &&
+        url !== this.__adsfriendly_url &&
+        candidate?.kind === MEDIA_KINDS.HLS
+      ) {
+        reportMediaSource(this.__adsfriendly_url, mimeType);
+      }
       if (!isManifestLike(url) && candidate?.kind !== MEDIA_KINDS.HLS) return;
       try {
         if (typeof this.responseText === "string")
-          inspect(url, this.responseText, candidate);
+          inspect(url, this.responseText, candidate, requestContext);
       } catch {}
     });
     return originalSend.apply(this, args);
@@ -113,12 +124,24 @@ function installFallbackProbe({ policy, originalFetch, probeGate, inspect }) {
         credentials: "same-origin",
         cache: "default",
       })
-      .then((response) => {
+      .then(async (response) => {
         if (!response.ok)
           throw new Error(`manifest_http_${response.status || "error"}`);
-        return response.text();
+        const finalUrl = response.url || manifestUrl;
+        const finalCandidate =
+          finalUrl === manifestUrl
+            ? candidate
+            : reportMediaSource(
+                finalUrl,
+                response.headers.get("content-type"),
+              ) || candidate;
+        return inspect(
+          finalUrl,
+          await response.text(),
+          finalCandidate,
+          createFallbackRequestContext(manifestUrl, finalUrl),
+        );
       })
-      .then((body) => inspect(manifestUrl, body, candidate))
       .catch((error) => {
         if (probeGate.state(manifestUrl) !== "pending") return;
         probeGate.remember(manifestUrl, "failed");
@@ -148,7 +171,7 @@ function reportMediaSource(sourceUrl, mimeType) {
   return candidate;
 }
 
-function inspectManifest(manifestUrl, body, candidate) {
+function inspectManifest(manifestUrl, body, candidate, requestContext = null) {
   analyzeManifest(manifestUrl, body);
   let hlsCandidate = candidate;
   if (
@@ -174,6 +197,7 @@ function inspectManifest(manifestUrl, body, candidate) {
       manifestUrl: hlsCandidate.manifestUrl,
       kind: MEDIA_KINDS.HLS,
       ...probe,
+      requestContext,
     }),
   });
   return probe;
@@ -215,4 +239,82 @@ function isManifestLike(url = "") {
     normalized.includes(".mpd") ||
     normalized.includes("player/v1/player")
   );
+}
+
+function createFetchRequestContext(args, originalUrl, finalUrl) {
+  const input = args[0];
+  const init =
+    args[1] && typeof args[1] === "object" && !Array.isArray(args[1])
+      ? args[1]
+      : {};
+  const request = input && typeof input === "object" ? input : {};
+  const credentials = normalizeCredentials(
+    init.credentials || request.credentials || "same-origin",
+  );
+  return requestContext({
+    requestUrl: originalUrl,
+    finalUrl,
+    method: init.method || request.method || "GET",
+    credentials,
+    referrer: init.referrer || request.referrer || document.referrer,
+    transport: "fetch",
+  });
+}
+
+function createXhrRequestContext(xhr, finalUrl) {
+  return requestContext({
+    requestUrl: xhr.__adsfriendly_url,
+    finalUrl,
+    method: xhr.__adsfriendly_method || "GET",
+    credentials: xhr.withCredentials ? "include" : "same-origin",
+    referrer: document.referrer,
+    transport: "xhr",
+  });
+}
+
+function createFallbackRequestContext(manifestUrl, finalUrl = manifestUrl) {
+  return requestContext({
+    requestUrl: manifestUrl,
+    finalUrl,
+    method: "GET",
+    credentials: "same-origin",
+    referrer: document.referrer,
+    transport: "fallback",
+  });
+}
+
+function requestContext({
+  requestUrl: sourceUrl,
+  finalUrl,
+  method,
+  credentials,
+  referrer,
+  transport,
+}) {
+  const documentUrl = location.href;
+  return {
+    requestUrl: String(sourceUrl || ""),
+    finalUrl: String(finalUrl || sourceUrl || ""),
+    documentUrl,
+    referrer: String(referrer || ""),
+    method: String(method || "GET").toUpperCase(),
+    credentials,
+    transport,
+    requiresBrowserSession:
+      credentials === "include" ||
+      (credentials === "same-origin" &&
+        sameOrigin(finalUrl || sourceUrl, documentUrl)),
+  };
+}
+
+function normalizeCredentials(value) {
+  return ["omit", "same-origin", "include"].includes(value) ? value : "unknown";
+}
+
+function sameOrigin(left, right) {
+  try {
+    return new URL(left, right).origin === new URL(right).origin;
+  } catch {
+    return false;
+  }
 }

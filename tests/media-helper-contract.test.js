@@ -134,6 +134,28 @@ test("direct helper download payload is normalized at the protocol boundary", ()
   );
 });
 
+test("helper HLS context carries routing facts without arbitrary headers", () => {
+  const payload = normalizeHelperDownloadPayload({
+    jobId: "hls-1",
+    candidate: {
+      id: "media-hls",
+      kind: "hls",
+      pageUrl: "https://video.example/watch",
+      manifestUrl: "https://cdn.example/master.m3u8",
+      requestContext: {
+        documentUrl: "https://embed.example/player",
+        referrer: "https://video.example/watch",
+        credentials: "include",
+        requiresBrowserSession: true,
+        headers: { Cookie: "secret" },
+      },
+    },
+  });
+  assert.equal(payload.candidate.requestContext.credentials, "include");
+  assert.equal(payload.candidate.requestContext.requiresBrowserSession, true);
+  assert.equal("headers" in payload.candidate.requestContext, false);
+});
+
 test("native host errors distinguish a missing helper from a broken helper", () => {
   assert.equal(
     classifyNativeMessagingError("Specified native messaging host not found."),

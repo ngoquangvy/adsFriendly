@@ -93,6 +93,12 @@ var AdsFriendlyMainWorld = (() => {
       partialSegmentCount: optionalNonNegativeInteger(value.partialSegmentCount),
       skippedSegmentCount: optionalNonNegativeInteger(value.skippedSegmentCount),
       lowLatency: value.lowLatency === true,
+      mediaSequence: optionalNonNegativeInteger(value.mediaSequence),
+      discontinuitySequence: optionalNonNegativeInteger(
+        value.discontinuitySequence
+      ),
+      revisionId: optionalString(value.revisionId),
+      requestContexts: normalizeRequestContexts(value.requestContexts),
       encryptionMethods: normalizeStrings(value.encryptionMethods)
     };
     if (!candidate.sourceUrl && !candidate.manifestUrl) {
@@ -144,12 +150,42 @@ var AdsFriendlyMainWorld = (() => {
       partialSegmentCount: optionalNonNegativeInteger(value.partialSegmentCount),
       skippedSegmentCount: optionalNonNegativeInteger(value.skippedSegmentCount),
       lowLatency: value.lowLatency === true,
+      mediaSequence: optionalNonNegativeInteger(value.mediaSequence),
+      discontinuitySequence: optionalNonNegativeInteger(
+        value.discontinuitySequence
+      ),
+      revisionId: optionalString(value.revisionId),
+      requestContext: normalizeMediaRequestContext(value.requestContext),
       encryptionMethods: normalizeStrings(value.encryptionMethods),
       drm: enumValue(
         value.drm || DRM_STATES.NONE,
         Object.values(DRM_STATES),
         "drm"
       )
+    };
+  }
+  function normalizeMediaRequestContext(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const credentials = optionalEnumValue(
+      value.credentials,
+      ["omit", "same-origin", "include", "unknown"],
+      "requestContext.credentials"
+    );
+    const transport = optionalEnumValue(
+      value.transport,
+      ["fetch", "xhr", "fallback"],
+      "requestContext.transport"
+    );
+    return {
+      requestUrl: optionalString(value.requestUrl),
+      finalUrl: optionalString(value.finalUrl),
+      documentUrl: optionalString(value.documentUrl),
+      referrer: optionalString(value.referrer),
+      method: typeof value.method === "string" && value.method ? value.method.toUpperCase().slice(0, 12) : "GET",
+      credentials: credentials || "unknown",
+      transport,
+      requiresBrowserSession: value.requiresBrowserSession === true,
+      observedAt: optionalFiniteNumber(value.observedAt)
     };
   }
   function normalizeVideoAdEvidence(value = {}) {
@@ -205,6 +241,10 @@ var AdsFriendlyMainWorld = (() => {
         value.slice(0, 100).filter((item) => typeof item === "string" && item).map((item) => item.slice(0, 100))
       )
     ] : [];
+  }
+  function normalizeRequestContexts(value) {
+    if (!Array.isArray(value)) return [];
+    return value.slice(0, 8).map(normalizeMediaRequestContext).filter(Boolean);
   }
   function optionalFiniteNumber(value) {
     if (value === null || value === void 0) return null;
@@ -327,6 +367,8 @@ var AdsFriendlyMainWorld = (() => {
       let skippedSegmentCount = 0;
       let duration = 0;
       let targetDuration = null;
+      let mediaSequence = null;
+      let discontinuitySequence = null;
       let hasEndList = false;
       let declaredPlaylistType = null;
       let hasMediaEvidence = false;
@@ -416,7 +458,19 @@ var AdsFriendlyMainWorld = (() => {
           hasMediaEvidence = true;
           continue;
         }
-        if (line.startsWith("#EXT-X-MEDIA-SEQUENCE:") || line.startsWith("#EXT-X-DISCONTINUITY-SEQUENCE:") || line.startsWith("#EXT-X-MAP:")) {
+        if (line.startsWith("#EXT-X-MEDIA-SEQUENCE:")) {
+          mediaSequence = optionalNonNegativeInteger2(valueAfterColon(line));
+          hasMediaEvidence = true;
+          continue;
+        }
+        if (line.startsWith("#EXT-X-DISCONTINUITY-SEQUENCE:")) {
+          discontinuitySequence = optionalNonNegativeInteger2(
+            valueAfterColon(line)
+          );
+          hasMediaEvidence = true;
+          continue;
+        }
+        if (line.startsWith("#EXT-X-MAP:")) {
           hasMediaEvidence = true;
           continue;
         }
@@ -449,6 +503,9 @@ var AdsFriendlyMainWorld = (() => {
         partialSegmentCount: playlistType === "media" ? partialSegmentCount : null,
         skippedSegmentCount: playlistType === "media" ? skippedSegmentCount : null,
         lowLatency: playlistType === "media" && hasLowLatencyTag,
+        mediaSequence: playlistType === "media" ? mediaSequence : null,
+        discontinuitySequence: playlistType === "media" ? discontinuitySequence : null,
+        revisionId: stableTextId(source),
         encryptionMethods: methods,
         drm: methods.some(isDrmLikeMethod) ? "suspected" : "none"
       };
@@ -546,6 +603,9 @@ var AdsFriendlyMainWorld = (() => {
       partialSegmentCount: null,
       skippedSegmentCount: null,
       lowLatency: false,
+      mediaSequence: null,
+      discontinuitySequence: null,
+      revisionId: null,
       encryptionMethods: [],
       drm: "none"
     };
@@ -585,6 +645,18 @@ var AdsFriendlyMainWorld = (() => {
       hash = Math.imul(hash, 16777619);
     }
     return `stream-${(hash >>> 0).toString(36)}`;
+  }
+  function optionalNonNegativeInteger2(value) {
+    const number = Number(value);
+    return Number.isSafeInteger(number) && number >= 0 ? number : null;
+  }
+  function stableTextId(value) {
+    let hash = 2166136261;
+    for (let index = 0; index < value.length; index++) {
+      hash ^= value.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return `revision-${(hash >>> 0).toString(36)}`;
   }
 
   // src/media/probe-gate.js
@@ -1141,8 +1213,8 @@ var AdsFriendlyMainWorld = (() => {
   function installNetworkCapture(policy) {
     const originalFetch = window.fetch;
     const probeGate = createMediaProbeGate();
-    const inspect = (manifestUrl, body, candidate) => {
-      const probe = inspectManifest(manifestUrl, body, candidate);
+    const inspect = (manifestUrl, body, candidate, requestContext2 = null) => {
+      const probe = inspectManifest(manifestUrl, body, candidate, requestContext2);
       if (probe) probeGate.remember(manifestUrl, probe.status);
       return probe;
     };
@@ -1168,10 +1240,14 @@ var AdsFriendlyMainWorld = (() => {
       const response = await originalFetch.apply(this, args);
       if (!policy.can(CAPABILITIES.MEDIA_OBSERVE)) return response;
       const finalUrl = response.url || url;
+      const requestContext2 = createFetchRequestContext(args, url, finalUrl);
       const mimeType = response.headers.get("content-type");
       const candidate = reportMediaSource(finalUrl, mimeType);
+      if (url && finalUrl !== url && candidate?.kind === MEDIA_KINDS.HLS) {
+        reportMediaSource(url, mimeType);
+      }
       if (isManifestLike(finalUrl) || candidate?.kind === MEDIA_KINDS.HLS) {
-        response.clone().text().then((body) => inspect(finalUrl, body, candidate)).catch(() => {
+        response.clone().text().then((body) => inspect(finalUrl, body, candidate, requestContext2)).catch(() => {
         });
       }
       return response;
@@ -1186,20 +1262,23 @@ var AdsFriendlyMainWorld = (() => {
     const originalSend = XMLHttpRequest.prototype.send;
     const openWrapper = function(method, url, ...rest) {
       this.__adsfriendly_url = requestUrl(url);
+      this.__adsfriendly_method = String(method || "GET").toUpperCase();
       return originalOpen.call(this, method, url, ...rest);
     };
     const sendWrapper = function(...args) {
       this.addEventListener("load", () => {
         if (!policy.can(CAPABILITIES.MEDIA_OBSERVE)) return;
         const url = this.responseURL || this.__adsfriendly_url || "";
-        const candidate = reportMediaSource(
-          url,
-          this.getResponseHeader("content-type")
-        );
+        const requestContext2 = createXhrRequestContext(this, url);
+        const mimeType = this.getResponseHeader("content-type");
+        const candidate = reportMediaSource(url, mimeType);
+        if (this.__adsfriendly_url && url !== this.__adsfriendly_url && candidate?.kind === MEDIA_KINDS.HLS) {
+          reportMediaSource(this.__adsfriendly_url, mimeType);
+        }
         if (!isManifestLike(url) && candidate?.kind !== MEDIA_KINDS.HLS) return;
         try {
           if (typeof this.responseText === "string")
-            inspect(url, this.responseText, candidate);
+            inspect(url, this.responseText, candidate, requestContext2);
         } catch {
         }
       });
@@ -1231,11 +1310,21 @@ var AdsFriendlyMainWorld = (() => {
       originalFetch.call(window, manifestUrl, {
         credentials: "same-origin",
         cache: "default"
-      }).then((response) => {
+      }).then(async (response) => {
         if (!response.ok)
           throw new Error(`manifest_http_${response.status || "error"}`);
-        return response.text();
-      }).then((body) => inspect(manifestUrl, body, candidate)).catch((error) => {
+        const finalUrl = response.url || manifestUrl;
+        const finalCandidate = finalUrl === manifestUrl ? candidate : reportMediaSource(
+          finalUrl,
+          response.headers.get("content-type")
+        ) || candidate;
+        return inspect(
+          finalUrl,
+          await response.text(),
+          finalCandidate,
+          createFallbackRequestContext(manifestUrl, finalUrl)
+        );
+      }).catch((error) => {
         if (probeGate.state(manifestUrl) !== "pending") return;
         probeGate.remember(manifestUrl, "failed");
         reportProbeFailure(manifestUrl, candidate, probeErrorCode(error));
@@ -1262,7 +1351,7 @@ var AdsFriendlyMainWorld = (() => {
     });
     return candidate;
   }
-  function inspectManifest(manifestUrl, body, candidate) {
+  function inspectManifest(manifestUrl, body, candidate, requestContext2 = null) {
     analyzeManifest(manifestUrl, body);
     let hlsCandidate = candidate;
     if (hlsCandidate?.kind !== MEDIA_KINDS.HLS && typeof body === "string" && body.replace(/^\uFEFF/, "").trimStart().startsWith("#EXTM3U")) {
@@ -1280,7 +1369,8 @@ var AdsFriendlyMainWorld = (() => {
         pageUrl: location.href,
         manifestUrl: hlsCandidate.manifestUrl,
         kind: MEDIA_KINDS.HLS,
-        ...probe
+        ...probe,
+        requestContext: requestContext2
       })
     });
     return probe;
@@ -1314,6 +1404,72 @@ var AdsFriendlyMainWorld = (() => {
   function isManifestLike(url = "") {
     const normalized = String(url || "").toLowerCase();
     return normalized.includes(".m3u8") || normalized.includes(".mpd") || normalized.includes("player/v1/player");
+  }
+  function createFetchRequestContext(args, originalUrl, finalUrl) {
+    const input = args[0];
+    const init = args[1] && typeof args[1] === "object" && !Array.isArray(args[1]) ? args[1] : {};
+    const request = input && typeof input === "object" ? input : {};
+    const credentials = normalizeCredentials(
+      init.credentials || request.credentials || "same-origin"
+    );
+    return requestContext({
+      requestUrl: originalUrl,
+      finalUrl,
+      method: init.method || request.method || "GET",
+      credentials,
+      referrer: init.referrer || request.referrer || document.referrer,
+      transport: "fetch"
+    });
+  }
+  function createXhrRequestContext(xhr, finalUrl) {
+    return requestContext({
+      requestUrl: xhr.__adsfriendly_url,
+      finalUrl,
+      method: xhr.__adsfriendly_method || "GET",
+      credentials: xhr.withCredentials ? "include" : "same-origin",
+      referrer: document.referrer,
+      transport: "xhr"
+    });
+  }
+  function createFallbackRequestContext(manifestUrl, finalUrl = manifestUrl) {
+    return requestContext({
+      requestUrl: manifestUrl,
+      finalUrl,
+      method: "GET",
+      credentials: "same-origin",
+      referrer: document.referrer,
+      transport: "fallback"
+    });
+  }
+  function requestContext({
+    requestUrl: sourceUrl,
+    finalUrl,
+    method,
+    credentials,
+    referrer,
+    transport
+  }) {
+    const documentUrl = location.href;
+    return {
+      requestUrl: String(sourceUrl || ""),
+      finalUrl: String(finalUrl || sourceUrl || ""),
+      documentUrl,
+      referrer: String(referrer || ""),
+      method: String(method || "GET").toUpperCase(),
+      credentials,
+      transport,
+      requiresBrowserSession: credentials === "include" || credentials === "same-origin" && sameOrigin(finalUrl || sourceUrl, documentUrl)
+    };
+  }
+  function normalizeCredentials(value) {
+    return ["omit", "same-origin", "include"].includes(value) ? value : "unknown";
+  }
+  function sameOrigin(left, right) {
+    try {
+      return new URL(left, right).origin === new URL(right).origin;
+    } catch {
+      return false;
+    }
   }
 
   // src/main-world/timer-control.js

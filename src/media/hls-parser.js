@@ -28,6 +28,8 @@ export function parseHlsManifest(manifestUrl, body) {
     let skippedSegmentCount = 0;
     let duration = 0;
     let targetDuration = null;
+    let mediaSequence = null;
+    let discontinuitySequence = null;
     let hasEndList = false;
     let declaredPlaylistType = null;
     let hasMediaEvidence = false;
@@ -125,11 +127,19 @@ export function parseHlsManifest(manifestUrl, body) {
         hasMediaEvidence = true;
         continue;
       }
-      if (
-        line.startsWith("#EXT-X-MEDIA-SEQUENCE:") ||
-        line.startsWith("#EXT-X-DISCONTINUITY-SEQUENCE:") ||
-        line.startsWith("#EXT-X-MAP:")
-      ) {
+      if (line.startsWith("#EXT-X-MEDIA-SEQUENCE:")) {
+        mediaSequence = optionalNonNegativeInteger(valueAfterColon(line));
+        hasMediaEvidence = true;
+        continue;
+      }
+      if (line.startsWith("#EXT-X-DISCONTINUITY-SEQUENCE:")) {
+        discontinuitySequence = optionalNonNegativeInteger(
+          valueAfterColon(line),
+        );
+        hasMediaEvidence = true;
+        continue;
+      }
+      if (line.startsWith("#EXT-X-MAP:")) {
         hasMediaEvidence = true;
         continue;
       }
@@ -184,6 +194,10 @@ export function parseHlsManifest(manifestUrl, body) {
       skippedSegmentCount:
         playlistType === "media" ? skippedSegmentCount : null,
       lowLatency: playlistType === "media" && hasLowLatencyTag,
+      mediaSequence: playlistType === "media" ? mediaSequence : null,
+      discontinuitySequence:
+        playlistType === "media" ? discontinuitySequence : null,
+      revisionId: stableTextId(source),
       encryptionMethods: methods,
       drm: methods.some(isDrmLikeMethod) ? "suspected" : "none",
     };
@@ -290,6 +304,9 @@ function unsupported(error) {
     partialSegmentCount: null,
     skippedSegmentCount: null,
     lowLatency: false,
+    mediaSequence: null,
+    discontinuitySequence: null,
+    revisionId: null,
     encryptionMethods: [],
     drm: "none",
   };
@@ -337,4 +354,18 @@ function stableVariantId(...parts) {
     hash = Math.imul(hash, 16777619);
   }
   return `stream-${(hash >>> 0).toString(36)}`;
+}
+
+function optionalNonNegativeInteger(value) {
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number >= 0 ? number : null;
+}
+
+function stableTextId(value) {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index++) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `revision-${(hash >>> 0).toString(36)}`;
 }

@@ -25,6 +25,7 @@ import {
   selectVisibleMediaItems,
 } from "../src/media/catalog-view.js";
 import { EVENTS, createRegisteredEvent } from "../src/runtime/event-catalog.js";
+import { normalizeMediaRequestContext } from "../src/media/contracts.js";
 
 test("classifies direct, HLS, DASH, and blob media without treating segments as videos", () => {
   assert.equal(
@@ -247,6 +248,8 @@ test("parses low-latency HLS parts without inventing full segments", () => {
   assert.equal(result.lowLatency, true);
   assert.equal(result.segmentCount, 0);
   assert.equal(result.partialSegmentCount, 2);
+  assert.equal(result.mediaSequence, 120);
+  assert.match(result.revisionId, /^revision-/);
 });
 
 test("recognizes iframe-only master playlists without treating them as live", () => {
@@ -336,6 +339,198 @@ test("catalog links a discovered child playlist back to its HLS master", () => {
   const linkedChild = items.find((item) => item.id === child.id);
   assert.deepEqual(linkedMaster.childManifestIds, [child.id]);
   assert.deepEqual(linkedChild.parentManifestIds, [master.id]);
+});
+
+test("resolver selects the best discovered VOD variant and groups child rows", () => {
+  const catalog = createMediaCatalog();
+  const pageUrl = "https://video.example/watch";
+  const manifest = (sourceUrl) =>
+    createMediaCandidateFromSource({
+      pageUrl,
+      sourceUrl,
+      detectedBy: "network",
+    });
+  const master = manifest("https://cdn.example/master.m3u8");
+  const child720 = manifest("https://cdn.example/720.m3u8");
+  const child1080 = manifest("https://cdn.example/1080.m3u8");
+  for (const candidate of [master, child720, child1080]) {
+    catalog.add(13, createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, candidate));
+  }
+  catalog.applyProbe(
+    13,
+    createRegisteredEvent(EVENTS.MEDIA_PROBED, {
+      mediaId: master.id,
+      pageUrl,
+      manifestUrl: master.manifestUrl,
+      kind: "hls",
+      status: "ready",
+      playlistType: "master",
+      variants: [
+        {
+          id: "720p",
+          url: child720.manifestUrl,
+          resolution: { width: 1280, height: 720 },
+          bandwidth: 2_000_000,
+        },
+        {
+          id: "1080p",
+          url: child1080.manifestUrl,
+          resolution: { width: 1920, height: 1080 },
+          bandwidth: 5_000_000,
+        },
+      ],
+    }),
+  );
+  for (const [candidate, segmentCount] of [
+    [child720, 200],
+    [child1080, 300],
+  ]) {
+    catalog.applyProbe(
+      13,
+      createRegisteredEvent(EVENTS.MEDIA_PROBED, {
+        mediaId: candidate.id,
+        pageUrl,
+        manifestUrl: candidate.manifestUrl,
+        kind: "hls",
+        status: "ready",
+        playlistType: "media",
+        streamType: "vod",
+        segmentCount,
+      }),
+    );
+  }
+  const items = catalog.list(13);
+  const resolvedMaster = items.find((item) => item.id === master.id);
+  assert.equal(resolvedMaster.resolutionStatus, "resolved");
+  assert.equal(resolvedMaster.selectedMediaId, child1080.id);
+  assert.equal(resolvedMaster.resolvedStream.resolution.height, 1080);
+  assert.equal(resolvedMaster.resolvedStream.segmentCount, 300);
+  assert.deepEqual(
+    selectVisibleMediaItems(items).map((item) => item.id),
+    [master.id],
+  );
+});
+
+test("resolver follows a token endpoint redirect to the final media playlist", () => {
+  const catalog = createMediaCatalog();
+  const pageUrl = "https://video.example/watch";
+  const token = createMediaCandidateFromSource({
+    pageUrl,
+    sourceUrl: "https://embed.example/player/token",
+    mimeType: "application/vnd.apple.mpegurl",
+    detectedBy: "network",
+  });
+  const media = createMediaCandidateFromSource({
+    pageUrl,
+    sourceUrl: "https://cdn.example/session/media.m3u8",
+    detectedBy: "network",
+  });
+  for (const candidate of [token, media]) {
+    catalog.add(15, createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, candidate));
+  }
+  catalog.applyProbe(
+    15,
+    createRegisteredEvent(EVENTS.MEDIA_PROBED, {
+      mediaId: media.id,
+      pageUrl,
+      manifestUrl: media.manifestUrl,
+      kind: "hls",
+      status: "ready",
+      playlistType: "media",
+      streamType: "vod",
+      segmentCount: 24,
+      requestContext: {
+        requestUrl: token.manifestUrl,
+        finalUrl: media.manifestUrl,
+        documentUrl: "https://embed.example/player",
+        credentials: "include",
+        transport: "fetch",
+        requiresBrowserSession: true,
+      },
+    }),
+  );
+
+  const items = catalog.list(15);
+  const resolvedToken = items.find((item) => item.id === token.id);
+  assert.equal(resolvedToken.resolutionStatus, "resolved");
+  assert.equal(resolvedToken.selectedMediaId, media.id);
+  assert.equal(resolvedToken.resolvedStream.segmentCount, 24);
+  assert.equal(
+    resolvedToken.resolvedRequestContext.finalUrl,
+    media.manifestUrl,
+  );
+  assert.deepEqual(
+    selectVisibleMediaItems(items).map((item) => item.id),
+    [token.id],
+  );
+});
+
+test("catalog keeps a usable VOD snapshot when a later HLS envelope is empty", () => {
+  const catalog = createMediaCatalog();
+  const pageUrl = "https://video.example/watch";
+  const candidate = createMediaCandidateFromSource({
+    pageUrl,
+    sourceUrl: "https://cdn.example/token",
+    mimeType: "application/vnd.apple.mpegurl",
+    detectedBy: "network",
+  });
+  const usable = createRegisteredEvent(EVENTS.MEDIA_PROBED, {
+    mediaId: candidate.id,
+    pageUrl,
+    manifestUrl: candidate.manifestUrl,
+    kind: "hls",
+    status: "ready",
+    playlistType: "media",
+    streamType: "vod",
+    segmentCount: 42,
+    revisionId: "revision-usable",
+    requestContext: {
+      requestUrl: candidate.manifestUrl,
+      finalUrl: candidate.manifestUrl,
+      documentUrl: "https://embed.example/player",
+      credentials: "same-origin",
+      transport: "fetch",
+      requiresBrowserSession: true,
+    },
+  });
+  usable.timestamp = 100;
+  catalog.applyProbe(14, usable);
+  const empty = createRegisteredEvent(EVENTS.MEDIA_PROBED, {
+    mediaId: candidate.id,
+    pageUrl,
+    manifestUrl: candidate.manifestUrl,
+    kind: "hls",
+    status: "ready",
+    playlistType: "unknown",
+    streamType: "unknown",
+    revisionId: "revision-empty",
+  });
+  empty.timestamp = 200;
+  catalog.applyProbe(14, empty);
+  const item = catalog.list(14)[0];
+  assert.equal(item.streamType, "vod");
+  assert.equal(item.segmentCount, 42);
+  assert.equal(item.revisionId, "revision-usable");
+  assert.equal(item.probeCount, 2);
+  assert.equal(item.resolvedRequestContext.requiresBrowserSession, true);
+});
+
+test("request context keeps routing facts but discards headers and cookies", () => {
+  const context = normalizeMediaRequestContext({
+    requestUrl: "https://cdn.example/token",
+    finalUrl: "https://cdn.example/master.m3u8",
+    documentUrl: "https://embed.example/player",
+    method: "get",
+    credentials: "include",
+    transport: "fetch",
+    requiresBrowserSession: true,
+    headers: { Cookie: "secret", Authorization: "secret" },
+  });
+  assert.equal(context.method, "GET");
+  assert.equal(context.credentials, "include");
+  assert.equal(context.requiresBrowserSession, true);
+  assert.equal("headers" in context, false);
+  assert.equal("cookie" in context, false);
 });
 
 test("fallback probe gate accepts HTTP manifests once and stays bounded", () => {

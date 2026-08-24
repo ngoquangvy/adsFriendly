@@ -125,6 +125,10 @@ export function normalizeHelperDownloadPayload(value = {}) {
       manifestUrl: kind === "hls" ? sourceUrl : null,
       title: optionalString(candidate.title),
       mimeType: optionalString(candidate.mimeType),
+      requestContext:
+        kind === "hls"
+          ? normalizeHelperRequestContext(candidate.requestContext)
+          : null,
     },
   };
 }
@@ -157,4 +161,21 @@ function requiredHttpUrl(value, field) {
 
 function optionalString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function normalizeHelperRequestContext(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return {
+    requestUrl: optionalString(value.requestUrl),
+    finalUrl: optionalString(value.finalUrl),
+    documentUrl: optionalString(value.documentUrl),
+    referrer: optionalString(value.referrer),
+    method: optionalString(value.method) || "GET",
+    credentials: ["omit", "same-origin", "include", "unknown"].includes(
+      value.credentials,
+    )
+      ? value.credentials
+      : "unknown",
+    requiresBrowserSession: value.requiresBrowserSession === true,
+  };
 }

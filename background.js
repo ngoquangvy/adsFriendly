@@ -1791,6 +1791,12 @@ var AdsFriendlyBackground = (() => {
       partialSegmentCount: optionalNonNegativeInteger(value.partialSegmentCount),
       skippedSegmentCount: optionalNonNegativeInteger(value.skippedSegmentCount),
       lowLatency: value.lowLatency === true,
+      mediaSequence: optionalNonNegativeInteger(value.mediaSequence),
+      discontinuitySequence: optionalNonNegativeInteger(
+        value.discontinuitySequence
+      ),
+      revisionId: optionalString(value.revisionId),
+      requestContexts: normalizeRequestContexts(value.requestContexts),
       encryptionMethods: normalizeStrings(value.encryptionMethods)
     };
     if (!candidate.sourceUrl && !candidate.manifestUrl) {
@@ -1842,12 +1848,42 @@ var AdsFriendlyBackground = (() => {
       partialSegmentCount: optionalNonNegativeInteger(value.partialSegmentCount),
       skippedSegmentCount: optionalNonNegativeInteger(value.skippedSegmentCount),
       lowLatency: value.lowLatency === true,
+      mediaSequence: optionalNonNegativeInteger(value.mediaSequence),
+      discontinuitySequence: optionalNonNegativeInteger(
+        value.discontinuitySequence
+      ),
+      revisionId: optionalString(value.revisionId),
+      requestContext: normalizeMediaRequestContext(value.requestContext),
       encryptionMethods: normalizeStrings(value.encryptionMethods),
       drm: enumValue(
         value.drm || DRM_STATES.NONE,
         Object.values(DRM_STATES),
         "drm"
       )
+    };
+  }
+  function normalizeMediaRequestContext(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const credentials = optionalEnumValue(
+      value.credentials,
+      ["omit", "same-origin", "include", "unknown"],
+      "requestContext.credentials"
+    );
+    const transport = optionalEnumValue(
+      value.transport,
+      ["fetch", "xhr", "fallback"],
+      "requestContext.transport"
+    );
+    return {
+      requestUrl: optionalString(value.requestUrl),
+      finalUrl: optionalString(value.finalUrl),
+      documentUrl: optionalString(value.documentUrl),
+      referrer: optionalString(value.referrer),
+      method: typeof value.method === "string" && value.method ? value.method.toUpperCase().slice(0, 12) : "GET",
+      credentials: credentials || "unknown",
+      transport,
+      requiresBrowserSession: value.requiresBrowserSession === true,
+      observedAt: optionalFiniteNumber(value.observedAt)
     };
   }
   function normalizeVideoAdEvidence(value = {}) {
@@ -1903,6 +1939,10 @@ var AdsFriendlyBackground = (() => {
         value.slice(0, 100).filter((item) => typeof item === "string" && item).map((item) => item.slice(0, 100))
       )
     ] : [];
+  }
+  function normalizeRequestContexts(value) {
+    if (!Array.isArray(value)) return [];
+    return value.slice(0, 8).map(normalizeMediaRequestContext).filter(Boolean);
   }
   function optionalFiniteNumber(value) {
     if (value === null || value === void 0) return null;
@@ -2052,6 +2092,166 @@ var AdsFriendlyBackground = (() => {
     return SEGMENT_PATH_PATTERN.test(path) || SEGMENT_MIME_TYPES.has(normalizedMime);
   }
 
+  // src/media/hls-resolver.js
+  function resolveHlsSources(items = []) {
+    const annotations = new Map(
+      items.map((item) => [
+        item.id,
+        {
+          parents: /* @__PURE__ */ new Set(),
+          children: /* @__PURE__ */ new Set(),
+          edges: []
+        }
+      ])
+    );
+    const byManifestUrl = new Map(
+      items.filter((item) => item.kind === "hls" && item.manifestUrl).map((item) => [normalizeUrl(item.manifestUrl), item])
+    );
+    for (const parent of items) {
+      if (parent.kind !== "hls") continue;
+      if (parent.playlistType === "master") {
+        addEdges(parent, parent.variants, "variant");
+        addEdges(parent, parent.audioTracks, "audio");
+        addEdges(parent, parent.subtitles, "subtitles");
+      }
+      for (const context of parent.requestContexts || []) {
+        const source = byManifestUrl.get(normalizeUrl(context.requestUrl));
+        if (source && source.id !== parent.id) {
+          connect(source, parent, "redirect", null);
+        }
+      }
+    }
+    const resolved = /* @__PURE__ */ new Map();
+    for (const item of items) {
+      const relation = annotations.get(item.id);
+      if (item.kind !== "hls") {
+        resolved.set(item.id, emptyResolution(relation));
+        continue;
+      }
+      const streams = collectMediaStreams(item, annotations, items);
+      const selected = streams.sort(compareResolvedStreams)[0] || null;
+      resolved.set(item.id, {
+        parents: relation.parents,
+        children: relation.children,
+        resolutionStatus: resolutionStatus(item, selected),
+        resolvedMediaIds: [...new Set(streams.map((stream) => stream.item.id))],
+        selectedMediaId: selected?.item.id || null,
+        resolvedStream: selected ? summarizeStream(selected) : null,
+        resolvedRequestContext: selected ? chooseRequestContext(selected.item.requestContexts) : chooseRequestContext(item.requestContexts)
+      });
+    }
+    return resolved;
+    function addEdges(parent, entries = [], kind) {
+      for (const entry of entries || []) {
+        const child = byManifestUrl.get(normalizeUrl(entry.url));
+        if (child && child.id !== parent.id) connect(parent, child, kind, entry);
+      }
+    }
+    function connect(parent, child, kind, metadata) {
+      const parentRelation = annotations.get(parent.id);
+      const childRelation = annotations.get(child.id);
+      if (!parentRelation || !childRelation) return;
+      if (parentRelation.edges.some(
+        (edge) => edge.childId === child.id && edge.kind === kind
+      ))
+        return;
+      parentRelation.children.add(child.id);
+      childRelation.parents.add(parent.id);
+      parentRelation.edges.push({ childId: child.id, kind, metadata });
+    }
+  }
+  function chooseRequestContext(contexts = []) {
+    return [...contexts].filter((context) => context && typeof context === "object").sort(
+      (left, right) => Number(right.requiresBrowserSession) - Number(left.requiresBrowserSession) || (right.observedAt || 0) - (left.observedAt || 0)
+    )[0] || null;
+  }
+  function collectMediaStreams(root, annotations, items) {
+    const byId = new Map(items.map((item) => [item.id, item]));
+    const streams = [];
+    const visited = /* @__PURE__ */ new Set();
+    const visit = (item, quality = null) => {
+      const visitKey = `${item.id}:${quality?.height || 0}:${quality?.bandwidth || 0}`;
+      if (visited.has(visitKey)) return;
+      visited.add(visitKey);
+      if (item.playlistType === "media") {
+        streams.push({ item, quality, readiness: mediaReadiness(item) });
+        return;
+      }
+      for (const edge of annotations.get(item.id)?.edges || []) {
+        if (!["variant", "redirect"].includes(edge.kind)) continue;
+        const child = byId.get(edge.childId);
+        if (!child) continue;
+        visit(
+          child,
+          edge.kind === "variant" ? variantQuality(edge.metadata) : quality
+        );
+      }
+    };
+    visit(root);
+    return streams;
+  }
+  function mediaReadiness(item) {
+    if (["suspected", "confirmed"].includes(item.drm) || item.encryptionMethods?.length)
+      return "protected";
+    if (item.streamType === "vod" && item.segmentCount > 0) return "vod";
+    if (item.streamType === "live" && (item.segmentCount > 0 || item.partialSegmentCount > 0))
+      return "live";
+    return "waiting";
+  }
+  function resolutionStatus(item, selected) {
+    if (selected?.readiness === "vod")
+      return selected.item.id === item.id ? "ready" : "resolved";
+    if (selected?.readiness === "live") return "live";
+    if (selected?.readiness === "protected") return "protected";
+    return "waiting";
+  }
+  function compareResolvedStreams(left, right) {
+    const readinessRank = { vod: 4, live: 3, protected: 2, waiting: 1 };
+    return (readinessRank[right.readiness] || 0) - (readinessRank[left.readiness] || 0) || (right.quality?.height || 0) - (left.quality?.height || 0) || (right.quality?.bandwidth || 0) - (left.quality?.bandwidth || 0) || (right.item.segmentCount || 0) - (left.item.segmentCount || 0);
+  }
+  function summarizeStream(stream) {
+    const { item, quality, readiness } = stream;
+    return {
+      id: item.id,
+      manifestUrl: item.manifestUrl,
+      readiness,
+      streamType: item.streamType,
+      duration: item.duration,
+      segmentCount: item.segmentCount,
+      partialSegmentCount: item.partialSegmentCount,
+      lowLatency: item.lowLatency === true,
+      drm: item.drm,
+      encryptionMethods: [...item.encryptionMethods || []],
+      resolution: quality?.resolution || null,
+      bandwidth: quality?.bandwidth || null
+    };
+  }
+  function variantQuality(variant = {}) {
+    return {
+      resolution: variant.resolution || null,
+      height: variant.resolution?.height || 0,
+      bandwidth: variant.averageBandwidth || variant.bandwidth || 0
+    };
+  }
+  function emptyResolution(relation) {
+    return {
+      parents: relation.parents,
+      children: relation.children,
+      resolutionStatus: null,
+      resolvedMediaIds: [],
+      selectedMediaId: null,
+      resolvedStream: null,
+      resolvedRequestContext: null
+    };
+  }
+  function normalizeUrl(value) {
+    try {
+      return new URL(value).href;
+    } catch {
+      return typeof value === "string" ? value : "";
+    }
+  }
+
   // src/media/catalog.js
   function createMediaCatalog({ maximumPerTab = 50 } = {}) {
     const tabs = /* @__PURE__ */ new Map();
@@ -2081,6 +2281,10 @@ var AdsFriendlyBackground = (() => {
           ...existing || {},
           ...candidate,
           ...preserveExistingProbe ? probeFields(existing) : {},
+          requestContexts: existing?.requestContexts || candidate.requestContexts || [],
+          probeCount: existing?.probeCount || 0,
+          lastProbeAt: existing?.lastProbeAt || null,
+          lastUsableProbeAt: existing?.lastUsableProbeAt || null,
           detectionSources: uniqueStrings([
             ...existing?.detectionSources || [],
             candidate.detectedBy
@@ -2118,24 +2322,19 @@ var AdsFriendlyBackground = (() => {
           kind: probe.kind,
           detectedBy: MEDIA_DETECTION_SOURCES.NETWORK
         });
+        const acceptProbe = !existing || probeQuality(probe) >= probeQuality(existing);
+        const acceptedProbe = acceptProbe ? probeFieldsFromProbe(probe) : probeFields(existing);
         const item = {
           ...base,
-          variants: probe.variants,
-          iframeVariants: probe.iframeVariants,
-          audioTracks: probe.audioTracks,
-          subtitles: probe.subtitles,
-          drm: probe.drm,
-          probeStatus: probe.status,
-          probeError: probe.error,
-          playlistType: probe.playlistType,
-          streamType: probe.streamType,
-          duration: probe.duration,
-          targetDuration: probe.targetDuration,
-          segmentCount: probe.segmentCount,
-          partialSegmentCount: probe.partialSegmentCount,
-          skippedSegmentCount: probe.skippedSegmentCount,
-          lowLatency: probe.lowLatency,
-          encryptionMethods: probe.encryptionMethods,
+          ...acceptedProbe,
+          requestContexts: mergeRequestContexts(
+            existing?.requestContexts,
+            probe.requestContext,
+            event2.timestamp
+          ),
+          probeCount: (existing?.probeCount || 0) + 1,
+          lastProbeAt: event2.timestamp,
+          lastUsableProbeAt: acceptProbe ? event2.timestamp : existing?.lastUsableProbeAt || existing?.lastProbeAt || null,
           detectionSources: uniqueStrings([
             ...existing?.detectionSources || [],
             MEDIA_DETECTION_SOURCES.NETWORK
@@ -2155,8 +2354,8 @@ var AdsFriendlyBackground = (() => {
         const items = [...tabCatalog.items.values()].sort(
           (left, right) => right.lastSeenAt - left.lastSeenAt
         );
-        const relationships = linkManifestItems(items);
-        return items.map((item) => cloneItem(item, relationships.get(item.id)));
+        const resolutions = resolveHlsSources(items);
+        return items.map((item) => cloneItem(item, resolutions.get(item.id)));
       },
       clear(tabId) {
         assertTabId(tabId);
@@ -2184,8 +2383,61 @@ var AdsFriendlyBackground = (() => {
       partialSegmentCount: item.partialSegmentCount,
       skippedSegmentCount: item.skippedSegmentCount,
       lowLatency: item.lowLatency,
+      mediaSequence: item.mediaSequence,
+      discontinuitySequence: item.discontinuitySequence,
+      revisionId: item.revisionId,
       encryptionMethods: item.encryptionMethods
     };
+  }
+  function probeFieldsFromProbe(probe) {
+    return {
+      variants: probe.variants,
+      iframeVariants: probe.iframeVariants,
+      audioTracks: probe.audioTracks,
+      subtitles: probe.subtitles,
+      drm: probe.drm,
+      probeStatus: probe.status,
+      probeError: probe.error,
+      playlistType: probe.playlistType,
+      streamType: probe.streamType,
+      duration: probe.duration,
+      targetDuration: probe.targetDuration,
+      segmentCount: probe.segmentCount,
+      partialSegmentCount: probe.partialSegmentCount,
+      skippedSegmentCount: probe.skippedSegmentCount,
+      lowLatency: probe.lowLatency,
+      mediaSequence: probe.mediaSequence,
+      discontinuitySequence: probe.discontinuitySequence,
+      revisionId: probe.revisionId,
+      encryptionMethods: probe.encryptionMethods
+    };
+  }
+  function probeQuality(value) {
+    const status = value.probeStatus || value.status;
+    if (status !== MEDIA_PROBE_STATES.READY) return 0;
+    if (value.playlistType === "unknown") return 1;
+    if (value.playlistType === "master") return value.variants?.length ? 4 : 2;
+    if (value.playlistType !== "media") return 1;
+    if (value.streamType === "vod" && value.segmentCount > 0) return 5;
+    if (value.streamType === "live" && (value.segmentCount > 0 || value.partialSegmentCount > 0))
+      return 4;
+    return 2;
+  }
+  function mergeRequestContexts(existing = [], incoming, observedAt) {
+    const contexts = [...existing || []];
+    if (incoming) contexts.push({ ...incoming, observedAt });
+    const unique = /* @__PURE__ */ new Map();
+    for (const context of contexts) {
+      const key = [
+        context.requestUrl,
+        context.finalUrl,
+        context.documentUrl,
+        context.transport,
+        context.credentials
+      ].join("\n");
+      unique.set(key, context);
+    }
+    return [...unique.values()].sort((left, right) => (right.observedAt || 0) - (left.observedAt || 0)).slice(0, 8);
   }
   function trimOldest(items, maximum) {
     while (items.size > maximum) {
@@ -2204,7 +2456,7 @@ var AdsFriendlyBackground = (() => {
   function uniqueStrings(values) {
     return [...new Set(values.filter((value) => typeof value === "string"))];
   }
-  function cloneItem(item, relationships = null) {
+  function cloneItem(item, resolution = null) {
     return {
       ...item,
       variants: item.variants.map((variant) => ({
@@ -2219,32 +2471,23 @@ var AdsFriendlyBackground = (() => {
       subtitles: item.subtitles.map((track) => ({ ...track })),
       detectionSources: [...item.detectionSources],
       encryptionMethods: [...item.encryptionMethods || []],
-      parentManifestIds: [...relationships?.parents || []],
-      childManifestIds: [...relationships?.children || []]
+      requestContexts: (item.requestContexts || []).map((context) => ({
+        ...context
+      })),
+      parentManifestIds: [...resolution?.parents || []],
+      childManifestIds: [...resolution?.children || []],
+      resolutionStatus: resolution?.resolutionStatus || null,
+      resolvedMediaIds: [...resolution?.resolvedMediaIds || []],
+      selectedMediaId: resolution?.selectedMediaId || null,
+      resolvedStream: resolution?.resolvedStream ? {
+        ...resolution.resolvedStream,
+        resolution: resolution.resolvedStream.resolution ? { ...resolution.resolvedStream.resolution } : null,
+        encryptionMethods: [
+          ...resolution.resolvedStream.encryptionMethods || []
+        ]
+      } : null,
+      resolvedRequestContext: resolution?.resolvedRequestContext ? { ...resolution.resolvedRequestContext } : null
     };
-  }
-  function linkManifestItems(items) {
-    const relationships = new Map(
-      items.map((item) => [item.id, { parents: /* @__PURE__ */ new Set(), children: /* @__PURE__ */ new Set() }])
-    );
-    const byManifestUrl = new Map(
-      items.filter((item) => item.kind === "hls" && item.manifestUrl).map((item) => [item.manifestUrl, item])
-    );
-    for (const parent of items) {
-      if (parent.kind !== "hls" || parent.playlistType !== "master") continue;
-      const childUrls = [
-        ...(parent.variants || []).map((variant) => variant.url),
-        ...(parent.audioTracks || []).map((track) => track.url),
-        ...(parent.subtitles || []).map((track) => track.url)
-      ].filter(Boolean);
-      for (const childUrl of childUrls) {
-        const child = byManifestUrl.get(childUrl);
-        if (!child || child.id === parent.id) continue;
-        relationships.get(parent.id).children.add(child.id);
-        relationships.get(child.id).parents.add(parent.id);
-      }
-    }
-    return relationships;
   }
   function assertTabId(tabId) {
     if (!Number.isInteger(tabId) || tabId < 0) {
@@ -2572,7 +2815,10 @@ var AdsFriendlyBackground = (() => {
         skippedSegmentCount: optionalNonNegativeInteger2(
           candidate.skippedSegmentCount
         ),
-        lowLatency: candidate.lowLatency === true
+        lowLatency: candidate.lowLatency === true,
+        requestContext: normalizeDownloadRequestContext(
+          candidate.resolvedRequestContext || candidate.requestContext
+        )
       }
     };
   }
@@ -2663,6 +2909,20 @@ var AdsFriendlyBackground = (() => {
   }
   function objectArray(value) {
     return Array.isArray(value) ? value.filter((item) => item && typeof item === "object").slice(0, 100).map((item) => ({ ...item })) : [];
+  }
+  function normalizeDownloadRequestContext(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    return {
+      requestUrl: optionalString2(value.requestUrl),
+      finalUrl: optionalString2(value.finalUrl),
+      documentUrl: optionalString2(value.documentUrl),
+      referrer: optionalString2(value.referrer),
+      method: typeof value.method === "string" ? value.method : "GET",
+      credentials: ["omit", "same-origin", "include", "unknown"].includes(
+        value.credentials
+      ) ? value.credentials : "unknown",
+      requiresBrowserSession: value.requiresBrowserSession === true
+    };
   }
 
   // src/media/helper-contract.js
@@ -3022,8 +3282,11 @@ var AdsFriendlyBackground = (() => {
     if (typeof mediaId !== "string" || !mediaId)
       return { status: "invalid_media" };
     const response = await listDiscoveredMedia(tabId);
-    const candidate = response.items.find((item) => item.id === mediaId);
+    let candidate = response.items.find((item) => item.id === mediaId);
     if (!candidate) return { status: "media_not_found" };
+    if (candidate.kind === "hls" && candidate.selectedMediaId) {
+      candidate = response.items.find((item) => item.id === candidate.selectedMediaId) || candidate;
+    }
     const availability = getMediaDownloadAvailability(candidate);
     if (!availability.supported)
       return { status: "unsupported", reason: availability.reason };

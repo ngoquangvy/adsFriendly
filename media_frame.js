@@ -67,6 +67,12 @@ var AdsFriendlyMediaFrame = (() => {
       partialSegmentCount: optionalNonNegativeInteger(value.partialSegmentCount),
       skippedSegmentCount: optionalNonNegativeInteger(value.skippedSegmentCount),
       lowLatency: value.lowLatency === true,
+      mediaSequence: optionalNonNegativeInteger(value.mediaSequence),
+      discontinuitySequence: optionalNonNegativeInteger(
+        value.discontinuitySequence
+      ),
+      revisionId: optionalString(value.revisionId),
+      requestContexts: normalizeRequestContexts(value.requestContexts),
       encryptionMethods: normalizeStrings(value.encryptionMethods)
     };
     if (!candidate.sourceUrl && !candidate.manifestUrl) {
@@ -118,12 +124,42 @@ var AdsFriendlyMediaFrame = (() => {
       partialSegmentCount: optionalNonNegativeInteger(value.partialSegmentCount),
       skippedSegmentCount: optionalNonNegativeInteger(value.skippedSegmentCount),
       lowLatency: value.lowLatency === true,
+      mediaSequence: optionalNonNegativeInteger(value.mediaSequence),
+      discontinuitySequence: optionalNonNegativeInteger(
+        value.discontinuitySequence
+      ),
+      revisionId: optionalString(value.revisionId),
+      requestContext: normalizeMediaRequestContext(value.requestContext),
       encryptionMethods: normalizeStrings(value.encryptionMethods),
       drm: enumValue(
         value.drm || DRM_STATES.NONE,
         Object.values(DRM_STATES),
         "drm"
       )
+    };
+  }
+  function normalizeMediaRequestContext(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const credentials = optionalEnumValue(
+      value.credentials,
+      ["omit", "same-origin", "include", "unknown"],
+      "requestContext.credentials"
+    );
+    const transport = optionalEnumValue(
+      value.transport,
+      ["fetch", "xhr", "fallback"],
+      "requestContext.transport"
+    );
+    return {
+      requestUrl: optionalString(value.requestUrl),
+      finalUrl: optionalString(value.finalUrl),
+      documentUrl: optionalString(value.documentUrl),
+      referrer: optionalString(value.referrer),
+      method: typeof value.method === "string" && value.method ? value.method.toUpperCase().slice(0, 12) : "GET",
+      credentials: credentials || "unknown",
+      transport,
+      requiresBrowserSession: value.requiresBrowserSession === true,
+      observedAt: optionalFiniteNumber(value.observedAt)
     };
   }
   function normalizeVideoAdEvidence(value = {}) {
@@ -179,6 +215,10 @@ var AdsFriendlyMediaFrame = (() => {
         value.slice(0, 100).filter((item) => typeof item === "string" && item).map((item) => item.slice(0, 100))
       )
     ] : [];
+  }
+  function normalizeRequestContexts(value) {
+    if (!Array.isArray(value)) return [];
+    return value.slice(0, 8).map(normalizeMediaRequestContext).filter(Boolean);
   }
   function optionalFiniteNumber(value) {
     if (value === null || value === void 0) return null;

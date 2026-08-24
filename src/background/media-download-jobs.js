@@ -50,8 +50,13 @@ async function createJob({ tabId, mediaId } = {}) {
   if (typeof mediaId !== "string" || !mediaId)
     return { status: "invalid_media" };
   const response = await listDiscoveredMedia(tabId);
-  const candidate = response.items.find((item) => item.id === mediaId);
+  let candidate = response.items.find((item) => item.id === mediaId);
   if (!candidate) return { status: "media_not_found" };
+  if (candidate.kind === "hls" && candidate.selectedMediaId) {
+    candidate =
+      response.items.find((item) => item.id === candidate.selectedMediaId) ||
+      candidate;
+  }
   const availability = getMediaDownloadAvailability(candidate);
   if (!availability.supported)
     return { status: "unsupported", reason: availability.reason };

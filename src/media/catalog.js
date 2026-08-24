@@ -6,6 +6,7 @@ import {
   normalizeMediaCandidate,
 } from "./contracts.js";
 import { isLikelyMediaSegment } from "./detection.js";
+import { resolveHlsSources } from "./hls-resolver.js";
 
 export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
   const tabs = new Map();
@@ -43,6 +44,11 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
         ...(existing || {}),
         ...candidate,
         ...(preserveExistingProbe ? probeFields(existing) : {}),
+        requestContexts:
+          existing?.requestContexts || candidate.requestContexts || [],
+        probeCount: existing?.probeCount || 0,
+        lastProbeAt: existing?.lastProbeAt || null,
+        lastUsableProbeAt: existing?.lastUsableProbeAt || null,
         detectionSources: uniqueStrings([
           ...(existing?.detectionSources || []),
           candidate.detectedBy,
@@ -83,24 +89,24 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
           kind: probe.kind,
           detectedBy: MEDIA_DETECTION_SOURCES.NETWORK,
         });
+      const acceptProbe =
+        !existing || probeQuality(probe) >= probeQuality(existing);
+      const acceptedProbe = acceptProbe
+        ? probeFieldsFromProbe(probe)
+        : probeFields(existing);
       const item = {
         ...base,
-        variants: probe.variants,
-        iframeVariants: probe.iframeVariants,
-        audioTracks: probe.audioTracks,
-        subtitles: probe.subtitles,
-        drm: probe.drm,
-        probeStatus: probe.status,
-        probeError: probe.error,
-        playlistType: probe.playlistType,
-        streamType: probe.streamType,
-        duration: probe.duration,
-        targetDuration: probe.targetDuration,
-        segmentCount: probe.segmentCount,
-        partialSegmentCount: probe.partialSegmentCount,
-        skippedSegmentCount: probe.skippedSegmentCount,
-        lowLatency: probe.lowLatency,
-        encryptionMethods: probe.encryptionMethods,
+        ...acceptedProbe,
+        requestContexts: mergeRequestContexts(
+          existing?.requestContexts,
+          probe.requestContext,
+          event.timestamp,
+        ),
+        probeCount: (existing?.probeCount || 0) + 1,
+        lastProbeAt: event.timestamp,
+        lastUsableProbeAt: acceptProbe
+          ? event.timestamp
+          : existing?.lastUsableProbeAt || existing?.lastProbeAt || null,
         detectionSources: uniqueStrings([
           ...(existing?.detectionSources || []),
           MEDIA_DETECTION_SOURCES.NETWORK,
@@ -120,8 +126,8 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
       const items = [...tabCatalog.items.values()].sort(
         (left, right) => right.lastSeenAt - left.lastSeenAt,
       );
-      const relationships = linkManifestItems(items);
-      return items.map((item) => cloneItem(item, relationships.get(item.id)));
+      const resolutions = resolveHlsSources(items);
+      return items.map((item) => cloneItem(item, resolutions.get(item.id)));
     },
     clear(tabId) {
       assertTabId(tabId);
@@ -150,8 +156,69 @@ function probeFields(item) {
     partialSegmentCount: item.partialSegmentCount,
     skippedSegmentCount: item.skippedSegmentCount,
     lowLatency: item.lowLatency,
+    mediaSequence: item.mediaSequence,
+    discontinuitySequence: item.discontinuitySequence,
+    revisionId: item.revisionId,
     encryptionMethods: item.encryptionMethods,
   };
+}
+
+function probeFieldsFromProbe(probe) {
+  return {
+    variants: probe.variants,
+    iframeVariants: probe.iframeVariants,
+    audioTracks: probe.audioTracks,
+    subtitles: probe.subtitles,
+    drm: probe.drm,
+    probeStatus: probe.status,
+    probeError: probe.error,
+    playlistType: probe.playlistType,
+    streamType: probe.streamType,
+    duration: probe.duration,
+    targetDuration: probe.targetDuration,
+    segmentCount: probe.segmentCount,
+    partialSegmentCount: probe.partialSegmentCount,
+    skippedSegmentCount: probe.skippedSegmentCount,
+    lowLatency: probe.lowLatency,
+    mediaSequence: probe.mediaSequence,
+    discontinuitySequence: probe.discontinuitySequence,
+    revisionId: probe.revisionId,
+    encryptionMethods: probe.encryptionMethods,
+  };
+}
+
+function probeQuality(value) {
+  const status = value.probeStatus || value.status;
+  if (status !== MEDIA_PROBE_STATES.READY) return 0;
+  if (value.playlistType === "unknown") return 1;
+  if (value.playlistType === "master") return value.variants?.length ? 4 : 2;
+  if (value.playlistType !== "media") return 1;
+  if (value.streamType === "vod" && value.segmentCount > 0) return 5;
+  if (
+    value.streamType === "live" &&
+    (value.segmentCount > 0 || value.partialSegmentCount > 0)
+  )
+    return 4;
+  return 2;
+}
+
+function mergeRequestContexts(existing = [], incoming, observedAt) {
+  const contexts = [...(existing || [])];
+  if (incoming) contexts.push({ ...incoming, observedAt });
+  const unique = new Map();
+  for (const context of contexts) {
+    const key = [
+      context.requestUrl,
+      context.finalUrl,
+      context.documentUrl,
+      context.transport,
+      context.credentials,
+    ].join("\n");
+    unique.set(key, context);
+  }
+  return [...unique.values()]
+    .sort((left, right) => (right.observedAt || 0) - (left.observedAt || 0))
+    .slice(0, 8);
 }
 
 function trimOldest(items, maximum) {
@@ -173,7 +240,7 @@ function uniqueStrings(values) {
   return [...new Set(values.filter((value) => typeof value === "string"))];
 }
 
-function cloneItem(item, relationships = null) {
+function cloneItem(item, resolution = null) {
   return {
     ...item,
     variants: item.variants.map((variant) => ({
@@ -188,35 +255,29 @@ function cloneItem(item, relationships = null) {
     subtitles: item.subtitles.map((track) => ({ ...track })),
     detectionSources: [...item.detectionSources],
     encryptionMethods: [...(item.encryptionMethods || [])],
-    parentManifestIds: [...(relationships?.parents || [])],
-    childManifestIds: [...(relationships?.children || [])],
+    requestContexts: (item.requestContexts || []).map((context) => ({
+      ...context,
+    })),
+    parentManifestIds: [...(resolution?.parents || [])],
+    childManifestIds: [...(resolution?.children || [])],
+    resolutionStatus: resolution?.resolutionStatus || null,
+    resolvedMediaIds: [...(resolution?.resolvedMediaIds || [])],
+    selectedMediaId: resolution?.selectedMediaId || null,
+    resolvedStream: resolution?.resolvedStream
+      ? {
+          ...resolution.resolvedStream,
+          resolution: resolution.resolvedStream.resolution
+            ? { ...resolution.resolvedStream.resolution }
+            : null,
+          encryptionMethods: [
+            ...(resolution.resolvedStream.encryptionMethods || []),
+          ],
+        }
+      : null,
+    resolvedRequestContext: resolution?.resolvedRequestContext
+      ? { ...resolution.resolvedRequestContext }
+      : null,
   };
-}
-
-function linkManifestItems(items) {
-  const relationships = new Map(
-    items.map((item) => [item.id, { parents: new Set(), children: new Set() }]),
-  );
-  const byManifestUrl = new Map(
-    items
-      .filter((item) => item.kind === "hls" && item.manifestUrl)
-      .map((item) => [item.manifestUrl, item]),
-  );
-  for (const parent of items) {
-    if (parent.kind !== "hls" || parent.playlistType !== "master") continue;
-    const childUrls = [
-      ...(parent.variants || []).map((variant) => variant.url),
-      ...(parent.audioTracks || []).map((track) => track.url),
-      ...(parent.subtitles || []).map((track) => track.url),
-    ].filter(Boolean);
-    for (const childUrl of childUrls) {
-      const child = byManifestUrl.get(childUrl);
-      if (!child || child.id === parent.id) continue;
-      relationships.get(parent.id).children.add(child.id);
-      relationships.get(child.id).parents.add(parent.id);
-    }
-  }
-  return relationships;
 }
 
 function assertTabId(tabId) {

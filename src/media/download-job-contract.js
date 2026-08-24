@@ -51,6 +51,9 @@ export function normalizeMediaDownloadJob(value = {}) {
               candidate.skippedSegmentCount,
             ),
             lowLatency: candidate.lowLatency === true,
+            requestContext: normalizeDownloadRequestContext(
+              candidate.resolvedRequestContext || candidate.requestContext,
+            ),
           },
   };
 }
@@ -163,4 +166,21 @@ function objectArray(value) {
         .slice(0, 100)
         .map((item) => ({ ...item }))
     : [];
+}
+
+function normalizeDownloadRequestContext(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return {
+    requestUrl: optionalString(value.requestUrl),
+    finalUrl: optionalString(value.finalUrl),
+    documentUrl: optionalString(value.documentUrl),
+    referrer: optionalString(value.referrer),
+    method: typeof value.method === "string" ? value.method : "GET",
+    credentials: ["omit", "same-origin", "include", "unknown"].includes(
+      value.credentials,
+    )
+      ? value.credentials
+      : "unknown",
+    requiresBrowserSession: value.requiresBrowserSession === true,
+  };
 }

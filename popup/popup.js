@@ -516,6 +516,7 @@ var AdsFriendlyPopup = (() => {
     const visible = [];
     const blobGroups = /* @__PURE__ */ new Map();
     for (const item of sorted) {
+      if (item.kind === "hls" && item.parentManifestIds?.length) continue;
       if (item.kind !== "blob") {
         visible.push(item);
         continue;
@@ -549,9 +550,17 @@ ${item.title || "blob"}`;
       partialSegmentCount: item.partialSegmentCount,
       skippedSegmentCount: item.skippedSegmentCount,
       lowLatency: item.lowLatency,
+      mediaSequence: item.mediaSequence,
+      discontinuitySequence: item.discontinuitySequence,
+      revisionId: item.revisionId,
       relatedCount: item.relatedCount,
       parentManifestIds: item.parentManifestIds,
       childManifestIds: item.childManifestIds,
+      resolutionStatus: item.resolutionStatus,
+      resolvedMediaIds: item.resolvedMediaIds,
+      selectedMediaId: item.selectedMediaId,
+      resolvedStream: item.resolvedStream,
+      requiresBrowserSession: item.resolvedRequestContext?.requiresBrowserSession === true,
       drm: item.drm,
       encryptionMethods: item.encryptionMethods,
       variants: item.variants,
@@ -795,8 +804,9 @@ ${item.title || "blob"}`;
     setText(mediaStatus, status);
     if (signature === mediaRenderSignature) return;
     const fragment = document.createDocumentFragment();
+    const itemsById = new Map(items.map((item) => [item.id, item]));
     for (const item of visibleItems) {
-      fragment.append(createMediaItem(item, tab, helper));
+      fragment.append(createMediaItem(item, tab, helper, itemsById));
     }
     mediaList.replaceChildren(fragment);
     mediaList.hidden = visibleItems.length === 0;
@@ -819,7 +829,7 @@ ${item.title || "blob"}`;
       updateMediaCatalog();
     }, 120);
   }
-  function createMediaItem(item, tab, helper) {
+  function createMediaItem(item, tab, helper, itemsById) {
     const row = document.createElement("div");
     row.className = "media-item";
     const kind = document.createElement("span");
@@ -837,12 +847,14 @@ ${item.title || "blob"}`;
     details.textContent = mediaDetails(item);
     copy.append(name, details);
     row.append(kind, copy);
-    if (["direct", "hls"].includes(item.kind))
-      row.append(createMediaDownloadButton(item, tab, helper));
+    if (["direct", "hls"].includes(item.kind)) {
+      const downloadItem = itemsById.get(item.selectedMediaId) || item;
+      row.append(createMediaDownloadButton(item, downloadItem, tab, helper));
+    }
     return row;
   }
-  function createMediaDownloadButton(item, tab, helper) {
-    const availability = getMediaDownloadAvailability(item);
+  function createMediaDownloadButton(item, downloadItem, tab, helper) {
+    const availability = getMediaDownloadAvailability(downloadItem);
     const button = document.createElement("button");
     button.className = "media-download";
     const presentation = downloadButtonPresentation(availability, helper, item);
@@ -860,7 +872,7 @@ ${item.title || "blob"}`;
         const response = await chrome.runtime.sendMessage({
           type: "CREATE_MEDIA_DOWNLOAD_JOB",
           tabId: tab.id,
-          mediaId: item.id
+          mediaId: downloadItem.id
         });
         if (response?.status !== "started")
           throw new Error(
@@ -1082,6 +1094,8 @@ ${item.title || "blob"}`;
     if (item.kind === "direct") return "Direct video file";
     if (item.kind === "dash") return "DASH found \xB7 parser comes next";
     if (item.kind !== "hls") return "Media source found";
+    if (item.resolvedStream && item.selectedMediaId && item.selectedMediaId !== item.id)
+      return resolvedHlsDetails(item);
     if (item.probeStatus === "failed")
       return item.probeError === "fallback_fetch_blocked" ? "HLS \xB7 page/CORS blocked manifest reading" : "HLS \xB7 manifest request or parse failed";
     if (item.probeStatus === "unsupported")
@@ -1123,6 +1137,26 @@ ${item.title || "blob"}`;
     if (item.drm === "suspected") facts.push("DRM suspected");
     else if (item.encryptionMethods?.length) facts.push("Encrypted");
     return facts.filter(Boolean).join(" \xB7 ") || "HLS manifest ready";
+  }
+  function resolvedHlsDetails(item) {
+    const stream = item.resolvedStream;
+    const facts = ["Resolved"];
+    if (stream.resolution?.height) facts.push(`${stream.resolution.height}p`);
+    else if (stream.bandwidth)
+      facts.push(
+        stream.bandwidth >= 1e6 ? `${(stream.bandwidth / 1e6).toFixed(1)} Mbps` : `${Math.round(stream.bandwidth / 1e3)} Kbps`
+      );
+    facts.push(stream.streamType === "vod" ? "VOD" : "Live");
+    if (Number.isFinite(stream.duration) && stream.duration > 0)
+      facts.push(formatDuration(stream.duration));
+    if (stream.segmentCount > 0) facts.push(`${stream.segmentCount} segments`);
+    if (stream.partialSegmentCount > 0)
+      facts.push(`${stream.partialSegmentCount} parts`);
+    if (["suspected", "confirmed"].includes(stream.drm)) facts.push("DRM");
+    else if (stream.encryptionMethods?.length) facts.push("Encrypted");
+    if (item.resolvedRequestContext?.requiresBrowserSession)
+      facts.push("browser session");
+    return facts.join(" \xB7 ");
   }
   function compareVariantQuality(left, right) {
     return (right.resolution?.height || 0) - (left.resolution?.height || 0) || (right.averageBandwidth || right.bandwidth || 0) - (left.averageBandwidth || left.bandwidth || 0);

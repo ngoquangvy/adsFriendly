@@ -29,6 +29,7 @@ export function selectVisibleMediaItems(items = [], maximum = 8) {
   const visible = [];
   const blobGroups = new Map();
   for (const item of sorted) {
+    if (item.kind === "hls" && item.parentManifestIds?.length) continue;
     if (item.kind !== "blob") {
       visible.push(item);
       continue;
@@ -62,9 +63,18 @@ function mediaRenderFacts(item) {
     partialSegmentCount: item.partialSegmentCount,
     skippedSegmentCount: item.skippedSegmentCount,
     lowLatency: item.lowLatency,
+    mediaSequence: item.mediaSequence,
+    discontinuitySequence: item.discontinuitySequence,
+    revisionId: item.revisionId,
     relatedCount: item.relatedCount,
     parentManifestIds: item.parentManifestIds,
     childManifestIds: item.childManifestIds,
+    resolutionStatus: item.resolutionStatus,
+    resolvedMediaIds: item.resolvedMediaIds,
+    selectedMediaId: item.selectedMediaId,
+    resolvedStream: item.resolvedStream,
+    requiresBrowserSession:
+      item.resolvedRequestContext?.requiresBrowserSession === true,
     drm: item.drm,
     encryptionMethods: item.encryptionMethods,
     variants: item.variants,

@@ -6,6 +6,15 @@ export interface DownloadCandidate {
   manifestUrl: string | null;
   title: string | null;
   mimeType: string | null;
+  requestContext: {
+    requestUrl: string | null;
+    finalUrl: string | null;
+    documentUrl: string | null;
+    referrer: string | null;
+    method: string;
+    credentials: "omit" | "same-origin" | "include" | "unknown";
+    requiresBrowserSession: boolean;
+  } | null;
 }
 
 export interface DownloadJob {
