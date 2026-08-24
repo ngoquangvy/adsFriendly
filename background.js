@@ -1578,6 +1578,12 @@ var AdsFriendlyBackground = (() => {
     SUSPECTED: "suspected",
     CONFIRMED: "confirmed"
   });
+  var MEDIA_PROBE_STATES = Object.freeze({
+    DISCOVERED: "discovered",
+    READY: "ready",
+    UNSUPPORTED: "unsupported",
+    FAILED: "failed"
+  });
   function normalizeMediaCandidate(value = {}) {
     const candidate = {
       id: requiredString(value.id, "id"),
@@ -1599,7 +1605,27 @@ var AdsFriendlyBackground = (() => {
         value.drm || DRM_STATES.NONE,
         Object.values(DRM_STATES),
         "drm"
-      )
+      ),
+      probeStatus: enumValue(
+        value.probeStatus || MEDIA_PROBE_STATES.DISCOVERED,
+        Object.values(MEDIA_PROBE_STATES),
+        "probeStatus"
+      ),
+      probeError: optionalString(value.probeError),
+      playlistType: optionalEnumValue(
+        value.playlistType,
+        ["master", "media"],
+        "playlistType"
+      ),
+      streamType: optionalEnumValue(
+        value.streamType,
+        ["vod", "live"],
+        "streamType"
+      ),
+      duration: optionalFiniteNumber(value.duration),
+      targetDuration: optionalFiniteNumber(value.targetDuration),
+      segmentCount: optionalNonNegativeInteger(value.segmentCount),
+      encryptionMethods: normalizeStrings(value.encryptionMethods)
     };
     if (!candidate.sourceUrl && !candidate.manifestUrl) {
       throw new Error(
@@ -1607,6 +1633,52 @@ var AdsFriendlyBackground = (() => {
       );
     }
     return candidate;
+  }
+  function normalizeMediaProbe(value = {}) {
+    const kind = enumValue(
+      value.kind,
+      [MEDIA_KINDS.HLS, MEDIA_KINDS.DASH],
+      "kind"
+    );
+    const probeStatus = enumValue(
+      value.status,
+      [
+        MEDIA_PROBE_STATES.READY,
+        MEDIA_PROBE_STATES.UNSUPPORTED,
+        MEDIA_PROBE_STATES.FAILED
+      ],
+      "status"
+    );
+    return {
+      mediaId: requiredString(value.mediaId, "mediaId"),
+      pageUrl: requiredString(value.pageUrl, "pageUrl"),
+      manifestUrl: requiredString(value.manifestUrl, "manifestUrl"),
+      kind,
+      status: probeStatus,
+      error: optionalString(value.error),
+      playlistType: optionalEnumValue(
+        value.playlistType,
+        ["master", "media"],
+        "playlistType"
+      ),
+      streamType: optionalEnumValue(
+        value.streamType,
+        ["vod", "live"],
+        "streamType"
+      ),
+      variants: normalizeArray(value.variants),
+      audioTracks: normalizeArray(value.audioTracks),
+      subtitles: normalizeArray(value.subtitles),
+      duration: optionalFiniteNumber(value.duration),
+      targetDuration: optionalFiniteNumber(value.targetDuration),
+      segmentCount: optionalNonNegativeInteger(value.segmentCount),
+      encryptionMethods: normalizeStrings(value.encryptionMethods),
+      drm: enumValue(
+        value.drm || DRM_STATES.NONE,
+        Object.values(DRM_STATES),
+        "drm"
+      )
+    };
   }
   function normalizeVideoAdEvidence(value = {}) {
     const confidence = Number(value.confidence);
@@ -1648,8 +1720,19 @@ var AdsFriendlyBackground = (() => {
     }
     return value;
   }
+  function optionalEnumValue(value, allowed, field) {
+    if (value === null || value === void 0 || value === "") return null;
+    return enumValue(value, allowed, field);
+  }
   function normalizeArray(value) {
-    return Array.isArray(value) ? value.map((item) => ({ ...item })) : [];
+    return Array.isArray(value) ? value.slice(0, 100).map((item) => ({ ...item })) : [];
+  }
+  function normalizeStrings(value) {
+    return Array.isArray(value) ? [
+      ...new Set(
+        value.slice(0, 100).filter((item) => typeof item === "string" && item).map((item) => item.slice(0, 100))
+      )
+    ] : [];
   }
   function optionalFiniteNumber(value) {
     if (value === null || value === void 0) return null;
@@ -1659,10 +1742,19 @@ var AdsFriendlyBackground = (() => {
     }
     return number;
   }
+  function optionalNonNegativeInteger(value) {
+    if (value === null || value === void 0) return null;
+    const number = Number(value);
+    if (!Number.isInteger(number) || number < 0) {
+      throw new Error("[MediaContract] Expected a non-negative integer.");
+    }
+    return number;
+  }
 
   // src/runtime/event-catalog.js
   var EVENTS = Object.freeze({
     MEDIA_DISCOVERED: "media.discovered",
+    MEDIA_PROBED: "media.probed",
     MEDIA_CATALOG_UPDATED: "media.catalog.updated",
     VIDEO_AD_EVIDENCE_FOUND: "video_ad.evidence_found",
     VIDEO_AD_LABELLED: "video_ad.labelled"
@@ -1674,6 +1766,12 @@ var AdsFriendlyBackground = (() => {
       "media.observer",
       ["media.catalog"],
       normalizeMediaCandidate
+    ),
+    [E.MEDIA_PROBED]: event(
+      E.MEDIA_PROBED,
+      "media.probe",
+      ["media.catalog"],
+      normalizeMediaProbe
     ),
     [E.MEDIA_CATALOG_UPDATED]: event(
       E.MEDIA_CATALOG_UPDATED,
@@ -1791,9 +1889,11 @@ var AdsFriendlyBackground = (() => {
         }
         const now = event2.timestamp;
         const existing = tabCatalog.items.get(candidate.id);
+        const preserveExistingProbe = existing && existing.probeStatus !== MEDIA_PROBE_STATES.DISCOVERED && candidate.probeStatus === MEDIA_PROBE_STATES.DISCOVERED;
         const item = {
           ...existing || {},
           ...candidate,
+          ...preserveExistingProbe ? probeFields(existing) : {},
           detectionSources: uniqueStrings([
             ...existing?.detectionSources || [],
             candidate.detectedBy
@@ -1802,6 +1902,57 @@ var AdsFriendlyBackground = (() => {
           lastSeenAt: now
         };
         tabCatalog.items.set(candidate.id, item);
+        trimOldest(tabCatalog.items, maximumPerTab);
+        return cloneItem(item);
+      },
+      applyProbe(tabId, rawEvent) {
+        assertTabId(tabId);
+        const event2 = normalizeRegisteredEvent(rawEvent);
+        if (event2.type !== EVENTS.MEDIA_PROBED) {
+          throw new Error(
+            `[MediaCatalog] Cannot apply probe event "${event2.type}".`
+          );
+        }
+        const probe = event2.payload;
+        let tabCatalog = tabs.get(tabId);
+        if (tabCatalog && !samePageUrl(tabCatalog.pageUrl, probe.pageUrl)) {
+          tabs.delete(tabId);
+          tabCatalog = null;
+        }
+        if (!tabCatalog) {
+          tabCatalog = { pageUrl: probe.pageUrl, items: /* @__PURE__ */ new Map() };
+          tabs.set(tabId, tabCatalog);
+        }
+        const existing = tabCatalog.items.get(probe.mediaId);
+        const base = existing || normalizeMediaCandidate({
+          id: probe.mediaId,
+          pageUrl: probe.pageUrl,
+          manifestUrl: probe.manifestUrl,
+          kind: probe.kind,
+          detectedBy: MEDIA_DETECTION_SOURCES.NETWORK
+        });
+        const item = {
+          ...base,
+          variants: probe.variants,
+          audioTracks: probe.audioTracks,
+          subtitles: probe.subtitles,
+          drm: probe.drm,
+          probeStatus: probe.status,
+          probeError: probe.error,
+          playlistType: probe.playlistType,
+          streamType: probe.streamType,
+          duration: probe.duration,
+          targetDuration: probe.targetDuration,
+          segmentCount: probe.segmentCount,
+          encryptionMethods: probe.encryptionMethods,
+          detectionSources: uniqueStrings([
+            ...existing?.detectionSources || [],
+            MEDIA_DETECTION_SOURCES.NETWORK
+          ]),
+          firstSeenAt: existing?.firstSeenAt || event2.timestamp,
+          lastSeenAt: event2.timestamp
+        };
+        tabCatalog.items.set(probe.mediaId, item);
         trimOldest(tabCatalog.items, maximumPerTab);
         return cloneItem(item);
       },
@@ -1820,6 +1971,22 @@ var AdsFriendlyBackground = (() => {
         tabs.clear();
       }
     });
+  }
+  function probeFields(item) {
+    return {
+      variants: item.variants,
+      audioTracks: item.audioTracks,
+      subtitles: item.subtitles,
+      drm: item.drm,
+      probeStatus: item.probeStatus,
+      probeError: item.probeError,
+      playlistType: item.playlistType,
+      streamType: item.streamType,
+      duration: item.duration,
+      targetDuration: item.targetDuration,
+      segmentCount: item.segmentCount,
+      encryptionMethods: item.encryptionMethods
+    };
   }
   function trimOldest(items, maximum) {
     while (items.size > maximum) {
@@ -1841,10 +2008,14 @@ var AdsFriendlyBackground = (() => {
   function cloneItem(item) {
     return {
       ...item,
-      variants: item.variants.map((variant) => ({ ...variant })),
+      variants: item.variants.map((variant) => ({
+        ...variant,
+        resolution: variant.resolution ? { ...variant.resolution } : null
+      })),
       audioTracks: item.audioTracks.map((track) => ({ ...track })),
       subtitles: item.subtitles.map((track) => ({ ...track })),
-      detectionSources: [...item.detectionSources]
+      detectionSources: [...item.detectionSources],
+      encryptionMethods: [...item.encryptionMethods || []]
     };
   }
   function assertTabId(tabId) {
@@ -1896,6 +2067,13 @@ var AdsFriendlyBackground = (() => {
   async function recordDiscoveredMedia(tabId, event2) {
     if (!active) return { status: "catalog_disabled" };
     const item = catalog.add(tabId, event2);
+    await persistTab(tabId).catch(() => {
+    });
+    return { status: "recorded", item };
+  }
+  async function recordMediaProbe(tabId, event2) {
+    if (!active) return { status: "catalog_disabled" };
+    const item = catalog.applyProbe(tabId, event2);
     await persistTab(tabId).catch(() => {
     });
     return { status: "recorded", item };
@@ -1989,6 +2167,7 @@ var AdsFriendlyBackground = (() => {
     GET_STORAGE_HEALTH: CAPABILITIES.CORE_MAINTENANCE,
     RECORD_DOM_SAMPLE: CAPABILITIES.LEARNING_FEEDBACK,
     MEDIA_DISCOVERED: CAPABILITIES.MEDIA_CATALOG,
+    MEDIA_PROBED: CAPABILITIES.MEDIA_CATALOG,
     GET_MEDIA_CATALOG: CAPABILITIES.MEDIA_CATALOG
   });
   function registerMessageRouter(policy) {
@@ -2063,6 +2242,22 @@ var AdsFriendlyBackground = (() => {
       const tabId = sender?.tab?.id;
       if (!Number.isInteger(tabId)) return { status: "ignored" };
       return recordDiscoveredMedia(tabId, {
+        ...message.event,
+        payload: {
+          ...message.event?.payload,
+          pageUrl: sender.tab.url || message.event?.payload?.pageUrl
+        },
+        metadata: {
+          ...message.event?.metadata,
+          frameId: sender.frameId ?? null,
+          frameUrl: message.event?.payload?.pageUrl || null
+        }
+      });
+    }
+    if (message.type === "MEDIA_PROBED") {
+      const tabId = sender?.tab?.id;
+      if (!Number.isInteger(tabId)) return { status: "ignored" };
+      return recordMediaProbe(tabId, {
         ...message.event,
         payload: {
           ...message.event?.payload,

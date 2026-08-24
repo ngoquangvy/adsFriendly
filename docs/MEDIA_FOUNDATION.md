@@ -43,4 +43,13 @@ does not erase the test view. The session catalog is cleared when its tab
 navigates or closes, and it is not part of Settings Packages or training data.
 
 The popup exposes the catalog as a read-only test surface in Assist and Auto
-modes. It does not yet download, parse variants, or classify an item as an ad.
+modes. HLS response bodies already available to the page are parsed without a
+second network request. Master playlists expose quality variants, audio and
+subtitle tracks; media playlists expose VOD/live state, duration, segment count,
+encryption methods, and suspected DRM. Full manifest bodies, signed URLs outside
+the per-tab session catalog, and segment lists are not persisted.
+
+Blob sources (including the common YouTube player case) remain discovery-only:
+the blob URL does not reveal the underlying adaptive streams. DASH probing and
+download output are separate later slices. None of these probe results are
+training labels or video-ad classifications.

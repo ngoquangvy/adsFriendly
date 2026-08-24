@@ -91,6 +91,22 @@ test("registered media events normalize a content-neutral candidate", () => {
   assert.equal(event.type, EVENTS.MEDIA_DISCOVERED);
   assert.equal(event.payload.drm, "none");
   assert.deepEqual(event.payload.variants, []);
+  assert.equal(event.payload.probeStatus, "discovered");
+});
+
+test("registered media probe events normalize manifest metadata", () => {
+  const event = createRegisteredEvent(EVENTS.MEDIA_PROBED, {
+    mediaId: "media-1",
+    pageUrl: "https://video.example/watch",
+    manifestUrl: "https://cdn.example/master.m3u8",
+    kind: "hls",
+    status: "ready",
+    playlistType: "master",
+    variants: [{ id: "720p", bandwidth: 2_000_000 }],
+  });
+  assert.equal(event.type, EVENTS.MEDIA_PROBED);
+  assert.equal(event.payload.status, "ready");
+  assert.equal(event.payload.variants[0].bandwidth, 2_000_000);
 });
 
 test("event registry rejects unknown or malformed media events", () => {

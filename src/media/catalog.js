@@ -1,5 +1,10 @@
 import { normalizeRegisteredEvent } from "../runtime/event-catalog.js";
 import { EVENTS } from "../runtime/event-catalog.js";
+import {
+  MEDIA_DETECTION_SOURCES,
+  MEDIA_PROBE_STATES,
+  normalizeMediaCandidate,
+} from "./contracts.js";
 
 export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
   const tabs = new Map();
@@ -24,9 +29,14 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
 
       const now = event.timestamp;
       const existing = tabCatalog.items.get(candidate.id);
+      const preserveExistingProbe =
+        existing &&
+        existing.probeStatus !== MEDIA_PROBE_STATES.DISCOVERED &&
+        candidate.probeStatus === MEDIA_PROBE_STATES.DISCOVERED;
       const item = {
         ...(existing || {}),
         ...candidate,
+        ...(preserveExistingProbe ? probeFields(existing) : {}),
         detectionSources: uniqueStrings([
           ...(existing?.detectionSources || []),
           candidate.detectedBy,
@@ -35,6 +45,60 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
         lastSeenAt: now,
       };
       tabCatalog.items.set(candidate.id, item);
+      trimOldest(tabCatalog.items, maximumPerTab);
+      return cloneItem(item);
+    },
+    applyProbe(tabId, rawEvent) {
+      assertTabId(tabId);
+      const event = normalizeRegisteredEvent(rawEvent);
+      if (event.type !== EVENTS.MEDIA_PROBED) {
+        throw new Error(
+          `[MediaCatalog] Cannot apply probe event "${event.type}".`,
+        );
+      }
+      const probe = event.payload;
+      let tabCatalog = tabs.get(tabId);
+      if (tabCatalog && !samePageUrl(tabCatalog.pageUrl, probe.pageUrl)) {
+        tabs.delete(tabId);
+        tabCatalog = null;
+      }
+      if (!tabCatalog) {
+        tabCatalog = { pageUrl: probe.pageUrl, items: new Map() };
+        tabs.set(tabId, tabCatalog);
+      }
+
+      const existing = tabCatalog.items.get(probe.mediaId);
+      const base =
+        existing ||
+        normalizeMediaCandidate({
+          id: probe.mediaId,
+          pageUrl: probe.pageUrl,
+          manifestUrl: probe.manifestUrl,
+          kind: probe.kind,
+          detectedBy: MEDIA_DETECTION_SOURCES.NETWORK,
+        });
+      const item = {
+        ...base,
+        variants: probe.variants,
+        audioTracks: probe.audioTracks,
+        subtitles: probe.subtitles,
+        drm: probe.drm,
+        probeStatus: probe.status,
+        probeError: probe.error,
+        playlistType: probe.playlistType,
+        streamType: probe.streamType,
+        duration: probe.duration,
+        targetDuration: probe.targetDuration,
+        segmentCount: probe.segmentCount,
+        encryptionMethods: probe.encryptionMethods,
+        detectionSources: uniqueStrings([
+          ...(existing?.detectionSources || []),
+          MEDIA_DETECTION_SOURCES.NETWORK,
+        ]),
+        firstSeenAt: existing?.firstSeenAt || event.timestamp,
+        lastSeenAt: event.timestamp,
+      };
+      tabCatalog.items.set(probe.mediaId, item);
       trimOldest(tabCatalog.items, maximumPerTab);
       return cloneItem(item);
     },
@@ -55,6 +119,23 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
       tabs.clear();
     },
   });
+}
+
+function probeFields(item) {
+  return {
+    variants: item.variants,
+    audioTracks: item.audioTracks,
+    subtitles: item.subtitles,
+    drm: item.drm,
+    probeStatus: item.probeStatus,
+    probeError: item.probeError,
+    playlistType: item.playlistType,
+    streamType: item.streamType,
+    duration: item.duration,
+    targetDuration: item.targetDuration,
+    segmentCount: item.segmentCount,
+    encryptionMethods: item.encryptionMethods,
+  };
 }
 
 function trimOldest(items, maximum) {
@@ -79,10 +160,14 @@ function uniqueStrings(values) {
 function cloneItem(item) {
   return {
     ...item,
-    variants: item.variants.map((variant) => ({ ...variant })),
+    variants: item.variants.map((variant) => ({
+      ...variant,
+      resolution: variant.resolution ? { ...variant.resolution } : null,
+    })),
     audioTracks: item.audioTracks.map((track) => ({ ...track })),
     subtitles: item.subtitles.map((track) => ({ ...track })),
     detectionSources: [...item.detectionSources],
+    encryptionMethods: [...(item.encryptionMethods || [])],
   };
 }
 

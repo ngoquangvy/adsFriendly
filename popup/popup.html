@@ -205,7 +205,7 @@
         display: flex;
         flex-direction: column;
         gap: 6px;
-        max-height: 150px;
+        max-height: 230px;
         overflow-y: auto;
       }
 
@@ -213,7 +213,7 @@
         display: grid;
         grid-template-columns: auto minmax(0, 1fr);
         gap: 8px;
-        align-items: center;
+        align-items: start;
         padding: 7px;
         background: rgba(15, 23, 42, 0.75);
         border-radius: 8px;
@@ -228,12 +228,27 @@
         font-weight: 800;
       }
 
+      .media-copy {
+        display: flex;
+        min-width: 0;
+        flex-direction: column;
+        gap: 3px;
+      }
+
       .media-name {
         overflow: hidden;
         color: #cbd5e1;
         font-size: 0.68rem;
         text-overflow: ellipsis;
         white-space: nowrap;
+      }
+
+      .media-details {
+        overflow: hidden;
+        color: #60a5fa;
+        font-size: 0.61rem;
+        line-height: 1.35;
+        text-overflow: ellipsis;
       }
 
       @keyframes slideIn {

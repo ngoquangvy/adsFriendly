@@ -2104,6 +2104,12 @@ var AdsFriendlyContent = (() => {
     SUSPECTED: "suspected",
     CONFIRMED: "confirmed"
   });
+  var MEDIA_PROBE_STATES = Object.freeze({
+    DISCOVERED: "discovered",
+    READY: "ready",
+    UNSUPPORTED: "unsupported",
+    FAILED: "failed"
+  });
   function normalizeMediaCandidate(value = {}) {
     const candidate = {
       id: requiredString(value.id, "id"),
@@ -2125,7 +2131,27 @@ var AdsFriendlyContent = (() => {
         value.drm || DRM_STATES.NONE,
         Object.values(DRM_STATES),
         "drm"
-      )
+      ),
+      probeStatus: enumValue(
+        value.probeStatus || MEDIA_PROBE_STATES.DISCOVERED,
+        Object.values(MEDIA_PROBE_STATES),
+        "probeStatus"
+      ),
+      probeError: optionalString(value.probeError),
+      playlistType: optionalEnumValue(
+        value.playlistType,
+        ["master", "media"],
+        "playlistType"
+      ),
+      streamType: optionalEnumValue(
+        value.streamType,
+        ["vod", "live"],
+        "streamType"
+      ),
+      duration: optionalFiniteNumber(value.duration),
+      targetDuration: optionalFiniteNumber(value.targetDuration),
+      segmentCount: optionalNonNegativeInteger(value.segmentCount),
+      encryptionMethods: normalizeStrings(value.encryptionMethods)
     };
     if (!candidate.sourceUrl && !candidate.manifestUrl) {
       throw new Error(
@@ -2133,6 +2159,52 @@ var AdsFriendlyContent = (() => {
       );
     }
     return candidate;
+  }
+  function normalizeMediaProbe(value = {}) {
+    const kind = enumValue(
+      value.kind,
+      [MEDIA_KINDS.HLS, MEDIA_KINDS.DASH],
+      "kind"
+    );
+    const probeStatus = enumValue(
+      value.status,
+      [
+        MEDIA_PROBE_STATES.READY,
+        MEDIA_PROBE_STATES.UNSUPPORTED,
+        MEDIA_PROBE_STATES.FAILED
+      ],
+      "status"
+    );
+    return {
+      mediaId: requiredString(value.mediaId, "mediaId"),
+      pageUrl: requiredString(value.pageUrl, "pageUrl"),
+      manifestUrl: requiredString(value.manifestUrl, "manifestUrl"),
+      kind,
+      status: probeStatus,
+      error: optionalString(value.error),
+      playlistType: optionalEnumValue(
+        value.playlistType,
+        ["master", "media"],
+        "playlistType"
+      ),
+      streamType: optionalEnumValue(
+        value.streamType,
+        ["vod", "live"],
+        "streamType"
+      ),
+      variants: normalizeArray(value.variants),
+      audioTracks: normalizeArray(value.audioTracks),
+      subtitles: normalizeArray(value.subtitles),
+      duration: optionalFiniteNumber(value.duration),
+      targetDuration: optionalFiniteNumber(value.targetDuration),
+      segmentCount: optionalNonNegativeInteger(value.segmentCount),
+      encryptionMethods: normalizeStrings(value.encryptionMethods),
+      drm: enumValue(
+        value.drm || DRM_STATES.NONE,
+        Object.values(DRM_STATES),
+        "drm"
+      )
+    };
   }
   function normalizeVideoAdEvidence(value = {}) {
     const confidence = Number(value.confidence);
@@ -2174,14 +2246,33 @@ var AdsFriendlyContent = (() => {
     }
     return value;
   }
+  function optionalEnumValue(value, allowed, field) {
+    if (value === null || value === void 0 || value === "") return null;
+    return enumValue(value, allowed, field);
+  }
   function normalizeArray(value) {
-    return Array.isArray(value) ? value.map((item) => ({ ...item })) : [];
+    return Array.isArray(value) ? value.slice(0, 100).map((item) => ({ ...item })) : [];
+  }
+  function normalizeStrings(value) {
+    return Array.isArray(value) ? [
+      ...new Set(
+        value.slice(0, 100).filter((item) => typeof item === "string" && item).map((item) => item.slice(0, 100))
+      )
+    ] : [];
   }
   function optionalFiniteNumber(value) {
     if (value === null || value === void 0) return null;
     const number = Number(value);
     if (!Number.isFinite(number)) {
       throw new Error("[MediaContract] Timeline values must be finite numbers.");
+    }
+    return number;
+  }
+  function optionalNonNegativeInteger(value) {
+    if (value === null || value === void 0) return null;
+    const number = Number(value);
+    if (!Number.isInteger(number) || number < 0) {
+      throw new Error("[MediaContract] Expected a non-negative integer.");
     }
     return number;
   }
@@ -2251,6 +2342,7 @@ var AdsFriendlyContent = (() => {
   // src/runtime/event-catalog.js
   var EVENTS = Object.freeze({
     MEDIA_DISCOVERED: "media.discovered",
+    MEDIA_PROBED: "media.probed",
     MEDIA_CATALOG_UPDATED: "media.catalog.updated",
     VIDEO_AD_EVIDENCE_FOUND: "video_ad.evidence_found",
     VIDEO_AD_LABELLED: "video_ad.labelled"
@@ -2262,6 +2354,12 @@ var AdsFriendlyContent = (() => {
       "media.observer",
       ["media.catalog"],
       normalizeMediaCandidate
+    ),
+    [E.MEDIA_PROBED]: event(
+      E.MEDIA_PROBED,
+      "media.probe",
+      ["media.catalog"],
+      normalizeMediaProbe
     ),
     [E.MEDIA_CATALOG_UPDATED]: event(
       E.MEDIA_CATALOG_UPDATED,
@@ -2380,7 +2478,9 @@ var AdsFriendlyContent = (() => {
       subtree: true
     });
     const onMainWorldMessage = (messageEvent) => {
-      if (messageEvent.source !== window || messageEvent.data?.source !== "adsfriendly-spy" || messageEvent.data?.type !== "REGISTERED_EVENT" || messageEvent.data.event?.type !== EVENTS.MEDIA_DISCOVERED)
+      if (messageEvent.source !== window || messageEvent.data?.source !== "adsfriendly-spy" || messageEvent.data?.type !== "REGISTERED_EVENT" || ![EVENTS.MEDIA_DISCOVERED, EVENTS.MEDIA_PROBED].includes(
+        messageEvent.data.event?.type
+      ))
         return;
       try {
         reportEvent(normalizeRegisteredEvent(messageEvent.data.event));
@@ -2447,10 +2547,15 @@ var AdsFriendlyContent = (() => {
     }
     function reportEvent(event2) {
       if (stopped) return;
-      const reportKey = `${event2.payload.id}:${event2.payload.detectedBy}`;
+      const mediaId = event2.payload.id || event2.payload.mediaId;
+      const discriminator = event2.type === EVENTS.MEDIA_DISCOVERED ? event2.payload.detectedBy : event2.payload.status;
+      const reportKey = `${event2.type}:${mediaId}:${discriminator}`;
       if (reported.has(reportKey) || pending.has(reportKey)) return;
       pending.add(reportKey);
-      chrome.runtime.sendMessage({ type: "MEDIA_DISCOVERED", event: event2 }).then((response) => {
+      chrome.runtime.sendMessage({
+        type: event2.type === EVENTS.MEDIA_PROBED ? "MEDIA_PROBED" : "MEDIA_DISCOVERED",
+        event: event2
+      }).then((response) => {
         pending.delete(reportKey);
         if (response?.status === "recorded") {
           reported.add(reportKey);

@@ -1,10 +1,12 @@
 import {
   normalizeMediaCandidate,
+  normalizeMediaProbe,
   normalizeVideoAdEvidence,
 } from "../media/contracts.js";
 
 export const EVENTS = Object.freeze({
   MEDIA_DISCOVERED: "media.discovered",
+  MEDIA_PROBED: "media.probed",
   MEDIA_CATALOG_UPDATED: "media.catalog.updated",
   VIDEO_AD_EVIDENCE_FOUND: "video_ad.evidence_found",
   VIDEO_AD_LABELLED: "video_ad.labelled",
@@ -18,6 +20,12 @@ export const EVENT_CATALOG = Object.freeze({
     "media.observer",
     ["media.catalog"],
     normalizeMediaCandidate,
+  ),
+  [E.MEDIA_PROBED]: event(
+    E.MEDIA_PROBED,
+    "media.probe",
+    ["media.catalog"],
+    normalizeMediaProbe,
   ),
   [E.MEDIA_CATALOG_UPDATED]: event(
     E.MEDIA_CATALOG_UPDATED,

@@ -37,6 +37,13 @@ export async function recordDiscoveredMedia(tabId, event) {
   return { status: "recorded", item };
 }
 
+export async function recordMediaProbe(tabId, event) {
+  if (!active) return { status: "catalog_disabled" };
+  const item = catalog.applyProbe(tabId, event);
+  await persistTab(tabId).catch(() => {});
+  return { status: "recorded", item };
+}
+
 export async function listDiscoveredMedia(tabId, pageUrl = null) {
   if (!active) return { status: "catalog_disabled", items: [] };
   return { status: "ok", items: catalog.list(tabId, pageUrl) };

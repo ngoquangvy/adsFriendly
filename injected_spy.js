@@ -42,6 +42,12 @@ var AdsFriendlyMainWorld = (() => {
     SUSPECTED: "suspected",
     CONFIRMED: "confirmed"
   });
+  var MEDIA_PROBE_STATES = Object.freeze({
+    DISCOVERED: "discovered",
+    READY: "ready",
+    UNSUPPORTED: "unsupported",
+    FAILED: "failed"
+  });
   function normalizeMediaCandidate(value = {}) {
     const candidate = {
       id: requiredString(value.id, "id"),
@@ -63,7 +69,27 @@ var AdsFriendlyMainWorld = (() => {
         value.drm || DRM_STATES.NONE,
         Object.values(DRM_STATES),
         "drm"
-      )
+      ),
+      probeStatus: enumValue(
+        value.probeStatus || MEDIA_PROBE_STATES.DISCOVERED,
+        Object.values(MEDIA_PROBE_STATES),
+        "probeStatus"
+      ),
+      probeError: optionalString(value.probeError),
+      playlistType: optionalEnumValue(
+        value.playlistType,
+        ["master", "media"],
+        "playlistType"
+      ),
+      streamType: optionalEnumValue(
+        value.streamType,
+        ["vod", "live"],
+        "streamType"
+      ),
+      duration: optionalFiniteNumber(value.duration),
+      targetDuration: optionalFiniteNumber(value.targetDuration),
+      segmentCount: optionalNonNegativeInteger(value.segmentCount),
+      encryptionMethods: normalizeStrings(value.encryptionMethods)
     };
     if (!candidate.sourceUrl && !candidate.manifestUrl) {
       throw new Error(
@@ -71,6 +97,52 @@ var AdsFriendlyMainWorld = (() => {
       );
     }
     return candidate;
+  }
+  function normalizeMediaProbe(value = {}) {
+    const kind = enumValue(
+      value.kind,
+      [MEDIA_KINDS.HLS, MEDIA_KINDS.DASH],
+      "kind"
+    );
+    const probeStatus = enumValue(
+      value.status,
+      [
+        MEDIA_PROBE_STATES.READY,
+        MEDIA_PROBE_STATES.UNSUPPORTED,
+        MEDIA_PROBE_STATES.FAILED
+      ],
+      "status"
+    );
+    return {
+      mediaId: requiredString(value.mediaId, "mediaId"),
+      pageUrl: requiredString(value.pageUrl, "pageUrl"),
+      manifestUrl: requiredString(value.manifestUrl, "manifestUrl"),
+      kind,
+      status: probeStatus,
+      error: optionalString(value.error),
+      playlistType: optionalEnumValue(
+        value.playlistType,
+        ["master", "media"],
+        "playlistType"
+      ),
+      streamType: optionalEnumValue(
+        value.streamType,
+        ["vod", "live"],
+        "streamType"
+      ),
+      variants: normalizeArray(value.variants),
+      audioTracks: normalizeArray(value.audioTracks),
+      subtitles: normalizeArray(value.subtitles),
+      duration: optionalFiniteNumber(value.duration),
+      targetDuration: optionalFiniteNumber(value.targetDuration),
+      segmentCount: optionalNonNegativeInteger(value.segmentCount),
+      encryptionMethods: normalizeStrings(value.encryptionMethods),
+      drm: enumValue(
+        value.drm || DRM_STATES.NONE,
+        Object.values(DRM_STATES),
+        "drm"
+      )
+    };
   }
   function normalizeVideoAdEvidence(value = {}) {
     const confidence = Number(value.confidence);
@@ -112,14 +184,33 @@ var AdsFriendlyMainWorld = (() => {
     }
     return value;
   }
+  function optionalEnumValue(value, allowed, field) {
+    if (value === null || value === void 0 || value === "") return null;
+    return enumValue(value, allowed, field);
+  }
   function normalizeArray(value) {
-    return Array.isArray(value) ? value.map((item) => ({ ...item })) : [];
+    return Array.isArray(value) ? value.slice(0, 100).map((item) => ({ ...item })) : [];
+  }
+  function normalizeStrings(value) {
+    return Array.isArray(value) ? [
+      ...new Set(
+        value.slice(0, 100).filter((item) => typeof item === "string" && item).map((item) => item.slice(0, 100))
+      )
+    ] : [];
   }
   function optionalFiniteNumber(value) {
     if (value === null || value === void 0) return null;
     const number = Number(value);
     if (!Number.isFinite(number)) {
       throw new Error("[MediaContract] Timeline values must be finite numbers.");
+    }
+    return number;
+  }
+  function optionalNonNegativeInteger(value) {
+    if (value === null || value === void 0) return null;
+    const number = Number(value);
+    if (!Number.isInteger(number) || number < 0) {
+      throw new Error("[MediaContract] Expected a non-negative integer.");
     }
     return number;
   }
@@ -186,9 +277,233 @@ var AdsFriendlyMainWorld = (() => {
     }
   }
 
+  // src/media/hls-parser.js
+  var MAX_MANIFEST_LENGTH = 2 * 1024 * 1024;
+  var MAX_LINES = 2e4;
+  var MAX_VARIANTS = 100;
+  var MAX_TRACKS = 100;
+  function parseHlsManifest(manifestUrl, body) {
+    const source = typeof body === "string" ? body.replace(/^\uFEFF/, "") : "";
+    if (!source.trimStart().startsWith("#EXTM3U")) {
+      return unsupported("not_hls_manifest");
+    }
+    if (source.length > MAX_MANIFEST_LENGTH) {
+      return unsupported("manifest_too_large");
+    }
+    const lines = source.split(/\r?\n/).map((line) => line.trim());
+    if (lines.length > MAX_LINES) return unsupported("too_many_manifest_lines");
+    try {
+      const variants = [];
+      const audioTracks = [];
+      const subtitles = [];
+      const encryptionMethods = /* @__PURE__ */ new Set();
+      let pendingVariant = null;
+      let segmentCount = 0;
+      let duration = 0;
+      let targetDuration = null;
+      let hasEndList = false;
+      let declaredPlaylistType = null;
+      for (const line of lines) {
+        if (!line) continue;
+        if (pendingVariant && !line.startsWith("#")) {
+          if (variants.length < MAX_VARIANTS) {
+            variants.push(normalizeVariant(pendingVariant, line, manifestUrl));
+          }
+          pendingVariant = null;
+          continue;
+        }
+        if (line.startsWith("#EXT-X-STREAM-INF:")) {
+          pendingVariant = parseAttributeList(valueAfterColon(line));
+          continue;
+        }
+        if (line.startsWith("#EXT-X-MEDIA:")) {
+          const track = normalizeTrack(
+            parseAttributeList(valueAfterColon(line)),
+            manifestUrl
+          );
+          if (!track) continue;
+          if (track.type === "audio" && audioTracks.length < MAX_TRACKS)
+            audioTracks.push(track);
+          if (track.type === "subtitles" && subtitles.length < MAX_TRACKS)
+            subtitles.push(track);
+          continue;
+        }
+        if (line.startsWith("#EXT-X-KEY:") || line.startsWith("#EXT-X-SESSION-KEY:")) {
+          const method = parseAttributeList(valueAfterColon(line)).METHOD;
+          if (method && method.toUpperCase() !== "NONE")
+            encryptionMethods.add(method.toUpperCase());
+          continue;
+        }
+        if (line.startsWith("#EXTINF:")) {
+          const value = Number(valueAfterColon(line).split(",", 1)[0]);
+          if (Number.isFinite(value) && value >= 0) duration += value;
+          segmentCount += 1;
+          continue;
+        }
+        if (line.startsWith("#EXT-X-TARGETDURATION:")) {
+          const value = Number(valueAfterColon(line));
+          if (Number.isFinite(value) && value >= 0) targetDuration = value;
+          continue;
+        }
+        if (line === "#EXT-X-ENDLIST") {
+          hasEndList = true;
+          continue;
+        }
+        if (line.startsWith("#EXT-X-PLAYLIST-TYPE:")) {
+          declaredPlaylistType = valueAfterColon(line).toUpperCase();
+        }
+      }
+      const playlistType = variants.length ? "master" : "media";
+      const streamType = playlistType === "master" ? null : hasEndList || declaredPlaylistType === "VOD" ? "vod" : "live";
+      const methods = [...encryptionMethods];
+      return {
+        status: "ready",
+        error: null,
+        playlistType,
+        streamType,
+        variants,
+        audioTracks,
+        subtitles,
+        duration: playlistType === "media" ? round(duration, 3) : null,
+        targetDuration: playlistType === "media" ? targetDuration : null,
+        segmentCount: playlistType === "media" ? segmentCount : null,
+        encryptionMethods: methods,
+        drm: methods.some(isDrmLikeMethod) ? "suspected" : "none"
+      };
+    } catch (error) {
+      return {
+        ...unsupported("manifest_parse_failed"),
+        status: "failed",
+        error: error?.message || "Could not parse HLS manifest."
+      };
+    }
+  }
+  function normalizeVariant(attributes, uri, manifestUrl) {
+    const bandwidth = optionalPositiveNumber(attributes.BANDWIDTH);
+    const averageBandwidth = optionalPositiveNumber(
+      attributes["AVERAGE-BANDWIDTH"]
+    );
+    return {
+      id: stableVariantId(uri, bandwidth, attributes.RESOLUTION),
+      url: resolveUrl(uri, manifestUrl),
+      bandwidth,
+      averageBandwidth,
+      resolution: parseResolution(attributes.RESOLUTION),
+      codecs: optionalText(attributes.CODECS),
+      frameRate: optionalPositiveNumber(attributes["FRAME-RATE"]),
+      audioGroup: optionalText(attributes.AUDIO),
+      subtitlesGroup: optionalText(attributes.SUBTITLES)
+    };
+  }
+  function normalizeTrack(attributes, manifestUrl) {
+    const type = String(attributes.TYPE || "").toLowerCase();
+    if (!["audio", "subtitles"].includes(type)) return null;
+    const name = optionalText(attributes.NAME);
+    const groupId = optionalText(attributes["GROUP-ID"]);
+    return {
+      id: stableVariantId(attributes.URI || name || type, null, groupId),
+      type,
+      groupId,
+      name,
+      language: optionalText(attributes.LANGUAGE),
+      url: attributes.URI ? resolveUrl(attributes.URI, manifestUrl) : null,
+      default: yesNo(attributes.DEFAULT),
+      autoselect: yesNo(attributes.AUTOSELECT),
+      forced: yesNo(attributes.FORCED),
+      channels: optionalText(attributes.CHANNELS)
+    };
+  }
+  function parseAttributeList(value) {
+    const attributes = {};
+    let index = 0;
+    while (index < value.length) {
+      while (value[index] === "," || /\s/.test(value[index] || "")) index++;
+      const equals = value.indexOf("=", index);
+      if (equals < 0) break;
+      const key = value.slice(index, equals).trim().toUpperCase();
+      index = equals + 1;
+      let parsed = "";
+      if (value[index] === '"') {
+        index++;
+        while (index < value.length) {
+          const character = value[index++];
+          if (character === '"') break;
+          parsed += character;
+        }
+      } else {
+        const comma = value.indexOf(",", index);
+        const end = comma < 0 ? value.length : comma;
+        parsed = value.slice(index, end).trim();
+        index = end;
+      }
+      if (key) attributes[key] = parsed;
+      while (index < value.length && value[index] !== ",") index++;
+      if (value[index] === ",") index++;
+    }
+    return attributes;
+  }
+  function parseResolution(value) {
+    const match = /^(\d+)x(\d+)$/i.exec(String(value || "").trim());
+    if (!match) return null;
+    return { width: Number(match[1]), height: Number(match[2]) };
+  }
+  function unsupported(error) {
+    return {
+      status: "unsupported",
+      error,
+      playlistType: null,
+      streamType: null,
+      variants: [],
+      audioTracks: [],
+      subtitles: [],
+      duration: null,
+      targetDuration: null,
+      segmentCount: null,
+      encryptionMethods: [],
+      drm: "none"
+    };
+  }
+  function isDrmLikeMethod(method) {
+    return method.startsWith("SAMPLE-AES");
+  }
+  function valueAfterColon(line) {
+    return line.slice(line.indexOf(":") + 1);
+  }
+  function resolveUrl(value, baseUrl) {
+    try {
+      return new URL(value, baseUrl).href;
+    } catch {
+      return value;
+    }
+  }
+  function optionalPositiveNumber(value) {
+    const number = Number(value);
+    return Number.isFinite(number) && number >= 0 ? number : null;
+  }
+  function optionalText(value) {
+    return typeof value === "string" && value ? value : null;
+  }
+  function yesNo(value) {
+    return String(value || "").toUpperCase() === "YES";
+  }
+  function round(value, precision) {
+    const factor = 10 ** precision;
+    return Math.round(value * factor) / factor;
+  }
+  function stableVariantId(...parts) {
+    const input = parts.filter((part) => part !== null).join(":");
+    let hash = 2166136261;
+    for (let index = 0; index < input.length; index++) {
+      hash ^= input.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return `stream-${(hash >>> 0).toString(36)}`;
+  }
+
   // src/runtime/event-catalog.js
   var EVENTS = Object.freeze({
     MEDIA_DISCOVERED: "media.discovered",
+    MEDIA_PROBED: "media.probed",
     MEDIA_CATALOG_UPDATED: "media.catalog.updated",
     VIDEO_AD_EVIDENCE_FOUND: "video_ad.evidence_found",
     VIDEO_AD_LABELLED: "video_ad.labelled"
@@ -200,6 +515,12 @@ var AdsFriendlyMainWorld = (() => {
       "media.observer",
       ["media.catalog"],
       normalizeMediaCandidate
+    ),
+    [E.MEDIA_PROBED]: event(
+      E.MEDIA_PROBED,
+      "media.probe",
+      ["media.catalog"],
+      normalizeMediaProbe
     ),
     [E.MEDIA_CATALOG_UPDATED]: event(
       E.MEDIA_CATALOG_UPDATED,
@@ -542,9 +863,10 @@ var AdsFriendlyMainWorld = (() => {
       const response = await originalFetch.apply(this, args);
       if (!policy.can(CAPABILITIES.MEDIA_OBSERVE)) return response;
       const finalUrl = response.url || url;
-      reportMediaSource(finalUrl, response.headers.get("content-type"));
-      if (isManifestLike(finalUrl)) {
-        response.clone().text().then((body) => analyzeManifest(finalUrl, body)).catch(() => {
+      const mimeType = response.headers.get("content-type");
+      const candidate = reportMediaSource(finalUrl, mimeType);
+      if (isManifestLike(finalUrl) || candidate?.kind === MEDIA_KINDS.HLS) {
+        response.clone().text().then((body) => inspectManifest(finalUrl, body, candidate)).catch(() => {
         });
       }
       return response;
@@ -565,11 +887,14 @@ var AdsFriendlyMainWorld = (() => {
       this.addEventListener("load", () => {
         if (!policy.can(CAPABILITIES.MEDIA_OBSERVE)) return;
         const url = this.responseURL || this.__adsfriendly_url || "";
-        reportMediaSource(url, this.getResponseHeader("content-type"));
-        if (!isManifestLike(url)) return;
+        const candidate = reportMediaSource(
+          url,
+          this.getResponseHeader("content-type")
+        );
+        if (!isManifestLike(url) && candidate?.kind !== MEDIA_KINDS.HLS) return;
         try {
           if (typeof this.responseText === "string")
-            analyzeManifest(url, this.responseText);
+            inspectManifest(url, this.responseText, candidate);
         } catch {
         }
       });
@@ -592,10 +917,33 @@ var AdsFriendlyMainWorld = (() => {
       title: document.title || null,
       detectedBy: MEDIA_DETECTION_SOURCES.NETWORK
     });
-    if (!candidate) return;
+    if (!candidate) return null;
     notifyContentScript({
       type: "REGISTERED_EVENT",
       event: createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, candidate)
+    });
+    return candidate;
+  }
+  function inspectManifest(manifestUrl, body, candidate) {
+    analyzeManifest(manifestUrl, body);
+    let hlsCandidate = candidate;
+    if (hlsCandidate?.kind !== MEDIA_KINDS.HLS && typeof body === "string" && body.replace(/^\uFEFF/, "").trimStart().startsWith("#EXTM3U")) {
+      hlsCandidate = reportMediaSource(
+        manifestUrl,
+        "application/vnd.apple.mpegurl"
+      );
+    }
+    if (hlsCandidate?.kind !== MEDIA_KINDS.HLS) return;
+    const probe = parseHlsManifest(manifestUrl, body);
+    notifyContentScript({
+      type: "REGISTERED_EVENT",
+      event: createRegisteredEvent(EVENTS.MEDIA_PROBED, {
+        mediaId: hlsCandidate.id,
+        pageUrl: location.href,
+        manifestUrl: hlsCandidate.manifestUrl,
+        kind: MEDIA_KINDS.HLS,
+        ...probe
+      })
     });
   }
   function requestUrl(input) {

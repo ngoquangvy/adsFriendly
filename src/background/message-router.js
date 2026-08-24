@@ -17,7 +17,11 @@ import {
   getStorageHealth,
 } from "./settings-mutations.js";
 import { addDomTrainingSample } from "../storage/training-store.js";
-import { listDiscoveredMedia, recordDiscoveredMedia } from "./media-catalog.js";
+import {
+  listDiscoveredMedia,
+  recordDiscoveredMedia,
+  recordMediaProbe,
+} from "./media-catalog.js";
 
 const MESSAGE_CAPABILITIES = Object.freeze({
   TRUSTED_CLICK: CAPABILITIES.NAVIGATION_INTENT,
@@ -44,6 +48,7 @@ const MESSAGE_CAPABILITIES = Object.freeze({
   GET_STORAGE_HEALTH: CAPABILITIES.CORE_MAINTENANCE,
   RECORD_DOM_SAMPLE: CAPABILITIES.LEARNING_FEEDBACK,
   MEDIA_DISCOVERED: CAPABILITIES.MEDIA_CATALOG,
+  MEDIA_PROBED: CAPABILITIES.MEDIA_CATALOG,
   GET_MEDIA_CATALOG: CAPABILITIES.MEDIA_CATALOG,
 });
 
@@ -123,6 +128,22 @@ async function route(message, sender) {
     const tabId = sender?.tab?.id;
     if (!Number.isInteger(tabId)) return { status: "ignored" };
     return recordDiscoveredMedia(tabId, {
+      ...message.event,
+      payload: {
+        ...message.event?.payload,
+        pageUrl: sender.tab.url || message.event?.payload?.pageUrl,
+      },
+      metadata: {
+        ...message.event?.metadata,
+        frameId: sender.frameId ?? null,
+        frameUrl: message.event?.payload?.pageUrl || null,
+      },
+    });
+  }
+  if (message.type === "MEDIA_PROBED") {
+    const tabId = sender?.tab?.id;
+    if (!Number.isInteger(tabId)) return { status: "ignored" };
+    return recordMediaProbe(tabId, {
       ...message.event,
       payload: {
         ...message.event?.payload,

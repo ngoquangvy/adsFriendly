@@ -34,7 +34,9 @@ export function startMediaObserver() {
       messageEvent.source !== window ||
       messageEvent.data?.source !== "adsfriendly-spy" ||
       messageEvent.data?.type !== "REGISTERED_EVENT" ||
-      messageEvent.data.event?.type !== EVENTS.MEDIA_DISCOVERED
+      ![EVENTS.MEDIA_DISCOVERED, EVENTS.MEDIA_PROBED].includes(
+        messageEvent.data.event?.type,
+      )
     )
       return;
     try {
@@ -115,11 +117,22 @@ export function startMediaObserver() {
 
   function reportEvent(event) {
     if (stopped) return;
-    const reportKey = `${event.payload.id}:${event.payload.detectedBy}`;
+    const mediaId = event.payload.id || event.payload.mediaId;
+    const discriminator =
+      event.type === EVENTS.MEDIA_DISCOVERED
+        ? event.payload.detectedBy
+        : event.payload.status;
+    const reportKey = `${event.type}:${mediaId}:${discriminator}`;
     if (reported.has(reportKey) || pending.has(reportKey)) return;
     pending.add(reportKey);
     chrome.runtime
-      .sendMessage({ type: "MEDIA_DISCOVERED", event })
+      .sendMessage({
+        type:
+          event.type === EVENTS.MEDIA_PROBED
+            ? "MEDIA_PROBED"
+            : "MEDIA_DISCOVERED",
+        event,
+      })
       .then((response) => {
         pending.delete(reportKey);
         if (response?.status === "recorded") {
