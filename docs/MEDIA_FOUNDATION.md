@@ -4,6 +4,12 @@ AdsFriendly's media layer is content-neutral. It discovers, describes, and can
 download explicitly selected supported media; it does not decide whether that
 media is an advertisement.
 
+The media layer is shared browser infrastructure, not a requirement to install
+the local helper. The existing browser download path remains available for
+simple supported HLS. The optional Node.js/TypeScript helper is a separate
+backend for large files, FFmpeg muxing, separate tracks, and discontinuities.
+Ad protection and future video-ad classification must continue without it.
+
 ## Shared foundation
 
 The future `media.observer`, `media.catalog`, manifest parsers, and timeline
@@ -80,3 +86,16 @@ Blob sources (including the common YouTube player case) remain discovery-only:
 the blob URL does not reveal the underlying adaptive streams. DASH probing and
 blob resolution are later slices. Probe results and download jobs are not
 training labels or video-ad classifications.
+
+## Optional helper boundary
+
+`src/media/helper-contract.js` is the versioned, language-neutral protocol
+contract shared by the extension and `packages/media-helper/`. The first helper
+slice implements only Native Messaging framing, a handshake, and FFmpeg
+capability inspection. It deliberately reports HLS execution as unavailable
+until the native job runner and extension bridge are implemented.
+
+The extension sends only bounded job metadata and receives status/progress
+events. Media bytes never travel through Native Messaging; the helper will
+stream them directly to disk. The helper is optional for the `media-tools`
+product and is never a dependency of the `ad-protection` product.

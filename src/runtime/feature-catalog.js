@@ -1,3 +1,10 @@
+import {
+  COMPONENT_IDS,
+  PRODUCT_IDS,
+  assertRegisteredComponent,
+  assertRegisteredProduct,
+} from "./ecosystem-catalog.js";
+
 export const PROTECTION_MODES = Object.freeze({
   SAFE: "safe",
   ASSIST: "assist",
@@ -32,6 +39,7 @@ export const CAPABILITIES = Object.freeze({
   MEDIA_OBSERVE: "media.observe",
   MEDIA_CATALOG: "media.catalog",
   MEDIA_DOWNLOAD: "media.download",
+  MEDIA_NATIVE_DOWNLOAD: "media.native_download",
   VIDEO_OBSERVE: "video.observe",
   VIDEO_RESTORE_STATE: "video.restore_state",
   VIDEO_USER_ACTION: "video.user_action",
@@ -40,6 +48,8 @@ export const CAPABILITIES = Object.freeze({
 
 const C = CAPABILITIES;
 const T = CAPABILITY_TRIGGERS;
+const P = PRODUCT_IDS;
+const R = COMPONENT_IDS;
 
 const MODE_RANK = Object.freeze({
   [PROTECTION_MODES.SAFE]: 0,
@@ -50,38 +60,86 @@ const MODE_RANK = Object.freeze({
 export const CAPABILITY_CATALOG = Object.freeze({
   [C.CORE_MESSAGING]: capability(C.CORE_MESSAGING, "safe", T.CORE, {
     availableWhenDisabled: true,
+    productIds: [P.AD_PROTECTION, P.MEDIA_TOOLS],
   }),
   [C.CORE_MAINTENANCE]: capability(C.CORE_MAINTENANCE, "safe", T.CORE, {
     availableWhenDisabled: true,
+    productIds: [P.AD_PROTECTION, P.MEDIA_TOOLS],
   }),
-  [C.NAVIGATION_GUARD]: capability(C.NAVIGATION_GUARD, "safe", T.AUTOMATIC),
+  [C.NAVIGATION_GUARD]: capability(C.NAVIGATION_GUARD, "safe", T.AUTOMATIC, {
+    productIds: [P.AD_PROTECTION],
+  }),
   [C.NAVIGATION_REVERSE_POPUNDER]: capability(
     C.NAVIGATION_REVERSE_POPUNDER,
     "safe",
     T.AUTOMATIC,
+    { productIds: [P.AD_PROTECTION] },
   ),
-  [C.NAVIGATION_INTENT]: capability(C.NAVIGATION_INTENT, "safe", T.PASSIVE),
-  [C.NAVIGATION_FEEDBACK]: capability(C.NAVIGATION_FEEDBACK, "safe", T.USER),
-  [C.DOM_STATIC_RULES]: capability(C.DOM_STATIC_RULES, "safe", T.AUTOMATIC),
-  [C.DOM_OBSERVE]: capability(C.DOM_OBSERVE, "assist", T.PASSIVE),
-  [C.DOM_SUGGEST]: capability(C.DOM_SUGGEST, "assist", T.SUGGESTION),
-  [C.DOM_AUTO_HIDE]: capability(C.DOM_AUTO_HIDE, "auto", T.AUTOMATIC),
-  [C.DOM_MANUAL_PICKER]: capability(C.DOM_MANUAL_PICKER, "safe", T.USER),
-  [C.LEARNING_SEED]: capability(C.LEARNING_SEED, "safe", T.STORAGE),
-  [C.LEARNING_FEEDBACK]: capability(C.LEARNING_FEEDBACK, "safe", T.USER),
-  [C.LEARNING_APPLY]: capability(C.LEARNING_APPLY, "auto", T.AUTOMATIC),
-  [C.TELEMETRY_QUEUE]: capability(C.TELEMETRY_QUEUE, "safe", T.STORAGE),
-  [C.MEDIA_OBSERVE]: capability(C.MEDIA_OBSERVE, "assist", T.PASSIVE),
-  [C.MEDIA_CATALOG]: capability(C.MEDIA_CATALOG, "assist", T.PASSIVE),
+  [C.NAVIGATION_INTENT]: capability(C.NAVIGATION_INTENT, "safe", T.PASSIVE, {
+    productIds: [P.AD_PROTECTION],
+  }),
+  [C.NAVIGATION_FEEDBACK]: capability(C.NAVIGATION_FEEDBACK, "safe", T.USER, {
+    productIds: [P.AD_PROTECTION],
+  }),
+  [C.DOM_STATIC_RULES]: capability(C.DOM_STATIC_RULES, "safe", T.AUTOMATIC, {
+    productIds: [P.AD_PROTECTION],
+  }),
+  [C.DOM_OBSERVE]: capability(C.DOM_OBSERVE, "assist", T.PASSIVE, {
+    productIds: [P.AD_PROTECTION],
+  }),
+  [C.DOM_SUGGEST]: capability(C.DOM_SUGGEST, "assist", T.SUGGESTION, {
+    productIds: [P.AD_PROTECTION],
+  }),
+  [C.DOM_AUTO_HIDE]: capability(C.DOM_AUTO_HIDE, "auto", T.AUTOMATIC, {
+    productIds: [P.AD_PROTECTION],
+  }),
+  [C.DOM_MANUAL_PICKER]: capability(C.DOM_MANUAL_PICKER, "safe", T.USER, {
+    productIds: [P.AD_PROTECTION],
+  }),
+  [C.LEARNING_SEED]: capability(C.LEARNING_SEED, "safe", T.STORAGE, {
+    productIds: [P.AD_PROTECTION],
+  }),
+  [C.LEARNING_FEEDBACK]: capability(C.LEARNING_FEEDBACK, "safe", T.USER, {
+    productIds: [P.AD_PROTECTION],
+  }),
+  [C.LEARNING_APPLY]: capability(C.LEARNING_APPLY, "auto", T.AUTOMATIC, {
+    productIds: [P.AD_PROTECTION],
+  }),
+  [C.TELEMETRY_QUEUE]: capability(C.TELEMETRY_QUEUE, "safe", T.STORAGE, {
+    productIds: [P.AD_PROTECTION],
+  }),
+  [C.MEDIA_OBSERVE]: capability(C.MEDIA_OBSERVE, "assist", T.PASSIVE, {
+    productIds: [P.AD_PROTECTION, P.MEDIA_TOOLS],
+  }),
+  [C.MEDIA_CATALOG]: capability(C.MEDIA_CATALOG, "assist", T.PASSIVE, {
+    productIds: [P.AD_PROTECTION, P.MEDIA_TOOLS],
+  }),
   [C.MEDIA_DOWNLOAD]: capability(C.MEDIA_DOWNLOAD, "assist", T.USER, {
     browserPermissions: ["storage", "tabs"],
+    productIds: [P.MEDIA_TOOLS],
   }),
-  [C.VIDEO_OBSERVE]: capability(C.VIDEO_OBSERVE, "assist", T.PASSIVE),
+  [C.MEDIA_NATIVE_DOWNLOAD]: capability(
+    C.MEDIA_NATIVE_DOWNLOAD,
+    "assist",
+    T.USER,
+    {
+      productIds: [P.MEDIA_TOOLS],
+      requiredComponents: [R.BROWSER_EXTENSION, R.MEDIA_HELPER],
+    },
+  ),
+  [C.VIDEO_OBSERVE]: capability(C.VIDEO_OBSERVE, "assist", T.PASSIVE, {
+    productIds: [P.AD_PROTECTION],
+  }),
   [C.VIDEO_RESTORE_STATE]: capability(C.VIDEO_RESTORE_STATE, "safe", T.CORE, {
     availableWhenDisabled: true,
+    productIds: [P.AD_PROTECTION],
   }),
-  [C.VIDEO_USER_ACTION]: capability(C.VIDEO_USER_ACTION, "assist", T.USER),
-  [C.VIDEO_AUTO_ACTION]: capability(C.VIDEO_AUTO_ACTION, "auto", T.AUTOMATIC),
+  [C.VIDEO_USER_ACTION]: capability(C.VIDEO_USER_ACTION, "assist", T.USER, {
+    productIds: [P.AD_PROTECTION],
+  }),
+  [C.VIDEO_AUTO_ACTION]: capability(C.VIDEO_AUTO_ACTION, "auto", T.AUTOMATIC, {
+    productIds: [P.AD_PROTECTION],
+  }),
 });
 
 export const FEATURE_CATALOG = Object.freeze([
@@ -196,6 +254,20 @@ export function getCapabilitiesForMode(mode) {
   return MODE_CAPABILITIES[mode];
 }
 
+export function getCapabilitiesForProduct(productId) {
+  assertRegisteredProduct(productId);
+  return Object.values(CAPABILITY_CATALOG)
+    .filter((definition) => definition.productIds.includes(productId))
+    .map((definition) => definition.id);
+}
+
+export function doesCapabilityRequireComponent(capabilityId, componentId) {
+  assertRegisteredComponent(componentId);
+  return getCapabilityDefinition(capabilityId).requiredComponents.includes(
+    componentId,
+  );
+}
+
 export function isCapabilityEnabled(capabilityId, settings = {}) {
   const definition = getCapabilityDefinition(capabilityId);
   const mode = settings.protectionMode || PROTECTION_MODES.SAFE;
@@ -208,7 +280,12 @@ function capability(
   id,
   minMode,
   trigger,
-  { availableWhenDisabled = false, browserPermissions = [] } = {},
+  {
+    availableWhenDisabled = false,
+    browserPermissions = [],
+    productIds = [P.AD_PROTECTION, P.MEDIA_TOOLS],
+    requiredComponents = [R.BROWSER_EXTENSION],
+  } = {},
 ) {
   return Object.freeze({
     id,
@@ -216,6 +293,8 @@ function capability(
     trigger,
     availableWhenDisabled,
     browserPermissions: Object.freeze([...browserPermissions]),
+    productIds: Object.freeze([...productIds]),
+    requiredComponents: Object.freeze([...requiredComponents]),
   });
 }
 
@@ -258,6 +337,22 @@ function validateCatalog() {
       throw new Error(
         `[FeatureRegistry] Capability "${capabilityId}" has unknown trigger "${definition.trigger}".`,
       );
+    }
+    if (!definition.productIds.length) {
+      throw new Error(
+        `[FeatureRegistry] Capability "${capabilityId}" must belong to at least one product.`,
+      );
+    }
+    for (const productId of definition.productIds) {
+      assertRegisteredProduct(productId);
+    }
+    if (!definition.requiredComponents.length) {
+      throw new Error(
+        `[FeatureRegistry] Capability "${capabilityId}" must require at least one component.`,
+      );
+    }
+    for (const componentId of definition.requiredComponents) {
+      assertRegisteredComponent(componentId);
     }
   }
 

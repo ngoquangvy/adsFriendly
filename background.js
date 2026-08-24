@@ -703,6 +703,86 @@ var AdsFriendlyBackground = (() => {
     return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   }
 
+  // src/runtime/ecosystem-catalog.js
+  var PRODUCT_IDS = Object.freeze({
+    AD_PROTECTION: "ad-protection",
+    MEDIA_TOOLS: "media-tools"
+  });
+  var COMPONENT_IDS = Object.freeze({
+    BROWSER_EXTENSION: "browser-extension",
+    MEDIA_HELPER: "media-helper"
+  });
+  var P = PRODUCT_IDS;
+  var C = COMPONENT_IDS;
+  var PRODUCT_CATALOG = Object.freeze({
+    [P.AD_PROTECTION]: product(P.AD_PROTECTION, {
+      name: "AdsFriendly Protection",
+      requiredComponents: [C.BROWSER_EXTENSION],
+      optionalComponents: []
+    }),
+    [P.MEDIA_TOOLS]: product(P.MEDIA_TOOLS, {
+      name: "AdsFriendly Media Tools",
+      requiredComponents: [C.BROWSER_EXTENSION],
+      optionalComponents: [C.MEDIA_HELPER]
+    })
+  });
+  validateProductCatalog();
+  function getProductDefinition(productId) {
+    const definition = PRODUCT_CATALOG[productId];
+    if (!definition) {
+      throw new Error(
+        `[EcosystemRegistry] Unknown product "${productId}". Register it in ecosystem-catalog.js before use.`
+      );
+    }
+    return definition;
+  }
+  function assertRegisteredProduct(productId) {
+    getProductDefinition(productId);
+    return productId;
+  }
+  function assertRegisteredComponent(componentId) {
+    if (!Object.values(COMPONENT_IDS).includes(componentId)) {
+      throw new Error(
+        `[EcosystemRegistry] Unknown component "${componentId}". Register it in ecosystem-catalog.js before use.`
+      );
+    }
+    return componentId;
+  }
+  function product(id, { name, requiredComponents = [], optionalComponents = [] }) {
+    return Object.freeze({
+      id,
+      name,
+      requiredComponents: Object.freeze([...requiredComponents]),
+      optionalComponents: Object.freeze([...optionalComponents])
+    });
+  }
+  function validateProductCatalog() {
+    const productIds = Object.values(PRODUCT_IDS);
+    if (new Set(productIds).size !== productIds.length) {
+      throw new Error("[EcosystemRegistry] Duplicate product ID.");
+    }
+    for (const productId of productIds) {
+      const definition = PRODUCT_CATALOG[productId];
+      if (!definition || definition.id !== productId) {
+        throw new Error(
+          `[EcosystemRegistry] Product "${productId}" has no metadata definition.`
+        );
+      }
+      const components = [
+        ...definition.requiredComponents,
+        ...definition.optionalComponents
+      ];
+      if (new Set(components).size !== components.length) {
+        throw new Error(
+          `[EcosystemRegistry] Product "${productId}" declares a component more than once.`
+        );
+      }
+      for (const componentId of components) {
+        assertRegisteredComponent(componentId);
+      }
+    }
+  }
+
   // src/runtime/feature-catalog.js
   var PROTECTION_MODES = Object.freeze({
     SAFE: "safe",
@@ -736,111 +816,162 @@ var AdsFriendlyBackground = (() => {
     MEDIA_OBSERVE: "media.observe",
     MEDIA_CATALOG: "media.catalog",
     MEDIA_DOWNLOAD: "media.download",
+    MEDIA_NATIVE_DOWNLOAD: "media.native_download",
     VIDEO_OBSERVE: "video.observe",
     VIDEO_RESTORE_STATE: "video.restore_state",
     VIDEO_USER_ACTION: "video.user_action",
     VIDEO_AUTO_ACTION: "video.auto_action"
   });
-  var C = CAPABILITIES;
+  var C2 = CAPABILITIES;
   var T = CAPABILITY_TRIGGERS;
+  var P2 = PRODUCT_IDS;
+  var R = COMPONENT_IDS;
   var MODE_RANK = Object.freeze({
     [PROTECTION_MODES.SAFE]: 0,
     [PROTECTION_MODES.ASSIST]: 1,
     [PROTECTION_MODES.AUTO]: 2
   });
   var CAPABILITY_CATALOG = Object.freeze({
-    [C.CORE_MESSAGING]: capability(C.CORE_MESSAGING, "safe", T.CORE, {
-      availableWhenDisabled: true
+    [C2.CORE_MESSAGING]: capability(C2.CORE_MESSAGING, "safe", T.CORE, {
+      availableWhenDisabled: true,
+      productIds: [P2.AD_PROTECTION, P2.MEDIA_TOOLS]
     }),
-    [C.CORE_MAINTENANCE]: capability(C.CORE_MAINTENANCE, "safe", T.CORE, {
-      availableWhenDisabled: true
+    [C2.CORE_MAINTENANCE]: capability(C2.CORE_MAINTENANCE, "safe", T.CORE, {
+      availableWhenDisabled: true,
+      productIds: [P2.AD_PROTECTION, P2.MEDIA_TOOLS]
     }),
-    [C.NAVIGATION_GUARD]: capability(C.NAVIGATION_GUARD, "safe", T.AUTOMATIC),
-    [C.NAVIGATION_REVERSE_POPUNDER]: capability(
-      C.NAVIGATION_REVERSE_POPUNDER,
+    [C2.NAVIGATION_GUARD]: capability(C2.NAVIGATION_GUARD, "safe", T.AUTOMATIC, {
+      productIds: [P2.AD_PROTECTION]
+    }),
+    [C2.NAVIGATION_REVERSE_POPUNDER]: capability(
+      C2.NAVIGATION_REVERSE_POPUNDER,
       "safe",
-      T.AUTOMATIC
+      T.AUTOMATIC,
+      { productIds: [P2.AD_PROTECTION] }
     ),
-    [C.NAVIGATION_INTENT]: capability(C.NAVIGATION_INTENT, "safe", T.PASSIVE),
-    [C.NAVIGATION_FEEDBACK]: capability(C.NAVIGATION_FEEDBACK, "safe", T.USER),
-    [C.DOM_STATIC_RULES]: capability(C.DOM_STATIC_RULES, "safe", T.AUTOMATIC),
-    [C.DOM_OBSERVE]: capability(C.DOM_OBSERVE, "assist", T.PASSIVE),
-    [C.DOM_SUGGEST]: capability(C.DOM_SUGGEST, "assist", T.SUGGESTION),
-    [C.DOM_AUTO_HIDE]: capability(C.DOM_AUTO_HIDE, "auto", T.AUTOMATIC),
-    [C.DOM_MANUAL_PICKER]: capability(C.DOM_MANUAL_PICKER, "safe", T.USER),
-    [C.LEARNING_SEED]: capability(C.LEARNING_SEED, "safe", T.STORAGE),
-    [C.LEARNING_FEEDBACK]: capability(C.LEARNING_FEEDBACK, "safe", T.USER),
-    [C.LEARNING_APPLY]: capability(C.LEARNING_APPLY, "auto", T.AUTOMATIC),
-    [C.TELEMETRY_QUEUE]: capability(C.TELEMETRY_QUEUE, "safe", T.STORAGE),
-    [C.MEDIA_OBSERVE]: capability(C.MEDIA_OBSERVE, "assist", T.PASSIVE),
-    [C.MEDIA_CATALOG]: capability(C.MEDIA_CATALOG, "assist", T.PASSIVE),
-    [C.MEDIA_DOWNLOAD]: capability(C.MEDIA_DOWNLOAD, "assist", T.USER, {
-      browserPermissions: ["storage", "tabs"]
+    [C2.NAVIGATION_INTENT]: capability(C2.NAVIGATION_INTENT, "safe", T.PASSIVE, {
+      productIds: [P2.AD_PROTECTION]
     }),
-    [C.VIDEO_OBSERVE]: capability(C.VIDEO_OBSERVE, "assist", T.PASSIVE),
-    [C.VIDEO_RESTORE_STATE]: capability(C.VIDEO_RESTORE_STATE, "safe", T.CORE, {
-      availableWhenDisabled: true
+    [C2.NAVIGATION_FEEDBACK]: capability(C2.NAVIGATION_FEEDBACK, "safe", T.USER, {
+      productIds: [P2.AD_PROTECTION]
     }),
-    [C.VIDEO_USER_ACTION]: capability(C.VIDEO_USER_ACTION, "assist", T.USER),
-    [C.VIDEO_AUTO_ACTION]: capability(C.VIDEO_AUTO_ACTION, "auto", T.AUTOMATIC)
+    [C2.DOM_STATIC_RULES]: capability(C2.DOM_STATIC_RULES, "safe", T.AUTOMATIC, {
+      productIds: [P2.AD_PROTECTION]
+    }),
+    [C2.DOM_OBSERVE]: capability(C2.DOM_OBSERVE, "assist", T.PASSIVE, {
+      productIds: [P2.AD_PROTECTION]
+    }),
+    [C2.DOM_SUGGEST]: capability(C2.DOM_SUGGEST, "assist", T.SUGGESTION, {
+      productIds: [P2.AD_PROTECTION]
+    }),
+    [C2.DOM_AUTO_HIDE]: capability(C2.DOM_AUTO_HIDE, "auto", T.AUTOMATIC, {
+      productIds: [P2.AD_PROTECTION]
+    }),
+    [C2.DOM_MANUAL_PICKER]: capability(C2.DOM_MANUAL_PICKER, "safe", T.USER, {
+      productIds: [P2.AD_PROTECTION]
+    }),
+    [C2.LEARNING_SEED]: capability(C2.LEARNING_SEED, "safe", T.STORAGE, {
+      productIds: [P2.AD_PROTECTION]
+    }),
+    [C2.LEARNING_FEEDBACK]: capability(C2.LEARNING_FEEDBACK, "safe", T.USER, {
+      productIds: [P2.AD_PROTECTION]
+    }),
+    [C2.LEARNING_APPLY]: capability(C2.LEARNING_APPLY, "auto", T.AUTOMATIC, {
+      productIds: [P2.AD_PROTECTION]
+    }),
+    [C2.TELEMETRY_QUEUE]: capability(C2.TELEMETRY_QUEUE, "safe", T.STORAGE, {
+      productIds: [P2.AD_PROTECTION]
+    }),
+    [C2.MEDIA_OBSERVE]: capability(C2.MEDIA_OBSERVE, "assist", T.PASSIVE, {
+      productIds: [P2.AD_PROTECTION, P2.MEDIA_TOOLS]
+    }),
+    [C2.MEDIA_CATALOG]: capability(C2.MEDIA_CATALOG, "assist", T.PASSIVE, {
+      productIds: [P2.AD_PROTECTION, P2.MEDIA_TOOLS]
+    }),
+    [C2.MEDIA_DOWNLOAD]: capability(C2.MEDIA_DOWNLOAD, "assist", T.USER, {
+      browserPermissions: ["storage", "tabs"],
+      productIds: [P2.MEDIA_TOOLS]
+    }),
+    [C2.MEDIA_NATIVE_DOWNLOAD]: capability(
+      C2.MEDIA_NATIVE_DOWNLOAD,
+      "assist",
+      T.USER,
+      {
+        productIds: [P2.MEDIA_TOOLS],
+        requiredComponents: [R.BROWSER_EXTENSION, R.MEDIA_HELPER]
+      }
+    ),
+    [C2.VIDEO_OBSERVE]: capability(C2.VIDEO_OBSERVE, "assist", T.PASSIVE, {
+      productIds: [P2.AD_PROTECTION]
+    }),
+    [C2.VIDEO_RESTORE_STATE]: capability(C2.VIDEO_RESTORE_STATE, "safe", T.CORE, {
+      availableWhenDisabled: true,
+      productIds: [P2.AD_PROTECTION]
+    }),
+    [C2.VIDEO_USER_ACTION]: capability(C2.VIDEO_USER_ACTION, "assist", T.USER, {
+      productIds: [P2.AD_PROTECTION]
+    }),
+    [C2.VIDEO_AUTO_ACTION]: capability(C2.VIDEO_AUTO_ACTION, "auto", T.AUTOMATIC, {
+      productIds: [P2.AD_PROTECTION]
+    })
   });
   var FEATURE_CATALOG = Object.freeze([
-    feature("background.message-router", "background", C.CORE_MESSAGING, [
-      C.CORE_MAINTENANCE,
-      C.NAVIGATION_INTENT,
-      C.NAVIGATION_FEEDBACK,
-      C.LEARNING_FEEDBACK,
-      C.TELEMETRY_QUEUE,
-      C.MEDIA_CATALOG,
-      C.MEDIA_DOWNLOAD
+    feature("background.message-router", "background", C2.CORE_MESSAGING, [
+      C2.CORE_MAINTENANCE,
+      C2.NAVIGATION_INTENT,
+      C2.NAVIGATION_FEEDBACK,
+      C2.LEARNING_FEEDBACK,
+      C2.TELEMETRY_QUEUE,
+      C2.MEDIA_CATALOG,
+      C2.MEDIA_DOWNLOAD
     ]),
-    feature("background.media-catalog", "background", C.MEDIA_CATALOG),
-    feature("background.media-download-jobs", "background", C.MEDIA_DOWNLOAD),
-    feature("background.navigation-guard", "background", C.NAVIGATION_GUARD, [
-      C.NAVIGATION_REVERSE_POPUNDER,
-      C.NAVIGATION_FEEDBACK,
-      C.TELEMETRY_QUEUE
+    feature("background.media-catalog", "background", C2.MEDIA_CATALOG),
+    feature("background.media-download-jobs", "background", C2.MEDIA_DOWNLOAD),
+    feature("background.navigation-guard", "background", C2.NAVIGATION_GUARD, [
+      C2.NAVIGATION_REVERSE_POPUNDER,
+      C2.NAVIGATION_FEEDBACK,
+      C2.TELEMETRY_QUEUE
     ]),
-    feature("background.telemetry-flush", "background", C.TELEMETRY_QUEUE),
-    feature("background.memory-cleanup", "background", C.CORE_MAINTENANCE),
-    feature("background.pattern-seed", "background", C.LEARNING_SEED),
+    feature("background.telemetry-flush", "background", C2.TELEMETRY_QUEUE),
+    feature("background.memory-cleanup", "background", C2.CORE_MAINTENANCE),
+    feature("background.pattern-seed", "background", C2.LEARNING_SEED),
     feature(
       "background.training-store-migration",
       "background",
-      C.CORE_MAINTENANCE
+      C2.CORE_MAINTENANCE
     ),
-    feature("background.settings-package-seed", "background", C.CORE_MAINTENANCE),
-    feature("content.media-observer", "content", C.MEDIA_OBSERVE, [
-      C.MEDIA_CATALOG
+    feature("background.settings-package-seed", "background", C2.CORE_MAINTENANCE),
+    feature("content.media-observer", "content", C2.MEDIA_OBSERVE, [
+      C2.MEDIA_CATALOG
     ]),
-    feature("content.youtube-cleaner", "content", C.DOM_STATIC_RULES),
-    feature("content.navigation-intent", "content", C.NAVIGATION_INTENT),
-    feature("content.navigation-toast", "content", C.NAVIGATION_FEEDBACK),
-    feature("content.dom-static-blocker", "content", C.DOM_STATIC_RULES, [
-      C.LEARNING_FEEDBACK,
-      C.TELEMETRY_QUEUE
+    feature("content.youtube-cleaner", "content", C2.DOM_STATIC_RULES),
+    feature("content.navigation-intent", "content", C2.NAVIGATION_INTENT),
+    feature("content.navigation-toast", "content", C2.NAVIGATION_FEEDBACK),
+    feature("content.dom-static-blocker", "content", C2.DOM_STATIC_RULES, [
+      C2.LEARNING_FEEDBACK,
+      C2.TELEMETRY_QUEUE
     ]),
-    feature("content.dom-candidate-collector", "content", C.DOM_OBSERVE, [
-      C.DOM_SUGGEST,
-      C.DOM_AUTO_HIDE,
-      C.LEARNING_FEEDBACK
+    feature("content.dom-candidate-collector", "content", C2.DOM_OBSERVE, [
+      C2.DOM_SUGGEST,
+      C2.DOM_AUTO_HIDE,
+      C2.LEARNING_FEEDBACK
     ]),
-    feature("content.dom-learned-blocker", "content", C.LEARNING_APPLY, [
-      C.DOM_AUTO_HIDE
+    feature("content.dom-learned-blocker", "content", C2.LEARNING_APPLY, [
+      C2.DOM_AUTO_HIDE
     ]),
-    feature("media-frame.observer", "media-frame", C.MEDIA_OBSERVE, [
-      C.MEDIA_CATALOG
+    feature("media-frame.observer", "media-frame", C2.MEDIA_OBSERVE, [
+      C2.MEDIA_CATALOG
     ]),
-    feature("video.surgeon", "video", C.VIDEO_OBSERVE, [
-      C.VIDEO_RESTORE_STATE,
-      C.VIDEO_USER_ACTION,
-      C.VIDEO_AUTO_ACTION
+    feature("video.surgeon", "video", C2.VIDEO_OBSERVE, [
+      C2.VIDEO_RESTORE_STATE,
+      C2.VIDEO_USER_ACTION,
+      C2.VIDEO_AUTO_ACTION
     ]),
-    feature("picker.controller", "picker", C.DOM_MANUAL_PICKER, [
-      C.LEARNING_FEEDBACK
+    feature("picker.controller", "picker", C2.DOM_MANUAL_PICKER, [
+      C2.LEARNING_FEEDBACK
     ]),
-    feature("main-world.network-capture", "main-world", C.MEDIA_OBSERVE),
-    feature("main-world.timer-control", "main-world", C.VIDEO_AUTO_ACTION)
+    feature("main-world.network-capture", "main-world", C2.MEDIA_OBSERVE),
+    feature("main-world.timer-control", "main-world", C2.VIDEO_AUTO_ACTION)
   ]);
   var CAPABILITY_SET = new Set(Object.values(CAPABILITIES));
   var FEATURE_BY_ID = new Map(FEATURE_CATALOG.map((item) => [item.id, item]));
@@ -886,13 +1017,20 @@ var AdsFriendlyBackground = (() => {
     if (settings.enabled === false) return definition.availableWhenDisabled;
     return MODE_RANK[mode] >= MODE_RANK[definition.minMode];
   }
-  function capability(id, minMode, trigger, { availableWhenDisabled = false, browserPermissions = [] } = {}) {
+  function capability(id, minMode, trigger, {
+    availableWhenDisabled = false,
+    browserPermissions = [],
+    productIds = [P2.AD_PROTECTION, P2.MEDIA_TOOLS],
+    requiredComponents = [R.BROWSER_EXTENSION]
+  } = {}) {
     return Object.freeze({
       id,
       minMode,
       trigger,
       availableWhenDisabled,
-      browserPermissions: Object.freeze([...browserPermissions])
+      browserPermissions: Object.freeze([...browserPermissions]),
+      productIds: Object.freeze([...productIds]),
+      requiredComponents: Object.freeze([...requiredComponents])
     });
   }
   function feature(id, context, startCapability, extraCapabilities = []) {
@@ -929,6 +1067,22 @@ var AdsFriendlyBackground = (() => {
         throw new Error(
           `[FeatureRegistry] Capability "${capabilityId}" has unknown trigger "${definition.trigger}".`
         );
+      }
+      if (!definition.productIds.length) {
+        throw new Error(
+          `[FeatureRegistry] Capability "${capabilityId}" must belong to at least one product.`
+        );
+      }
+      for (const productId of definition.productIds) {
+        assertRegisteredProduct(productId);
+      }
+      if (!definition.requiredComponents.length) {
+        throw new Error(
+          `[FeatureRegistry] Capability "${capabilityId}" must require at least one component.`
+        );
+      }
+      for (const componentId of definition.requiredComponents) {
+        assertRegisteredComponent(componentId);
       }
     }
     const ids = /* @__PURE__ */ new Set();
@@ -2177,32 +2331,32 @@ var AdsFriendlyBackground = (() => {
     VIDEO_SKIP_AUTOMATIC: "video.skip.automatic"
   });
   var A = ACTIONS;
-  var C2 = CAPABILITIES;
+  var C3 = CAPABILITIES;
   var ACTION_CATALOG = Object.freeze({
     [A.MEDIA_DOWNLOAD_CREATE]: action(
       A.MEDIA_DOWNLOAD_CREATE,
       "background.media-download-jobs",
-      C2.MEDIA_DOWNLOAD
+      C3.MEDIA_DOWNLOAD
     ),
     [A.VIDEO_ACCELERATE_AUTOMATIC]: action(
       A.VIDEO_ACCELERATE_AUTOMATIC,
       "video.surgeon",
-      C2.VIDEO_AUTO_ACTION
+      C3.VIDEO_AUTO_ACTION
     ),
     [A.VIDEO_ACCELERATE_USER]: action(
       A.VIDEO_ACCELERATE_USER,
       "video.surgeon",
-      C2.VIDEO_USER_ACTION
+      C3.VIDEO_USER_ACTION
     ),
     [A.VIDEO_RESTORE_PLAYBACK]: action(
       A.VIDEO_RESTORE_PLAYBACK,
       "video.surgeon",
-      C2.VIDEO_RESTORE_STATE
+      C3.VIDEO_RESTORE_STATE
     ),
     [A.VIDEO_SKIP_AUTOMATIC]: action(
       A.VIDEO_SKIP_AUTOMATIC,
       "video.surgeon",
-      C2.VIDEO_AUTO_ACTION
+      C3.VIDEO_AUTO_ACTION
     )
   });
   validateActionCatalog();

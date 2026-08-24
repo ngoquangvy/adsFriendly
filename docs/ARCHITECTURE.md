@@ -1,5 +1,31 @@
 ﻿# AdsFriendly Extension Architecture
 
+## Ecosystem Products and Components
+
+AdsFriendly is one ecosystem with independently installable components:
+
+- `ad-protection` is the browser protection product. It requires only the
+  extension and must keep navigation, DOM, rules, learning, and future video-ad
+  protection working when the media helper is absent or broken.
+- `media-tools` provides media discovery and user-initiated downloads. Its
+  browser backend remains available without another installation. The optional
+  `media-helper` component adds Node.js/TypeScript download orchestration and
+  FFmpeg-backed output for jobs the browser cannot finish reliably.
+- Media observation and normalized timelines form a browser-resident shared
+  core. Downloader jobs consume that core without becoming ad labels. Future
+  video-ad classification can consume the same core without acquiring a helper
+  dependency.
+
+`src/runtime/ecosystem-catalog.js` registers product/component relationships.
+Capability ownership and component requirements are declared centrally in
+`src/runtime/feature-catalog.js`. `media.download` is browser-only;
+`media.native_download` is the explicit helper boundary. No protection
+capability may require `media-helper`.
+
+The helper lives in `packages/media-helper/` and is released separately from the
+extension. Installing or updating the extension must never install, launch, or
+require the helper without an explicit media-tools action from the user.
+
 ## Source vs Runtime Bundles
 
 Development source lives in `src/`. The root runtime files are generated bundles used by the Chrome extension manifest:
@@ -21,6 +47,8 @@ Run `pnpm build` before packaging or loading the extension.
 - `src/dataset/`: label schema and sample builders for future AI training data. This is intentionally separate from runtime rule caches.
 - `src/storage/`: physical persistence boundaries. Settings stay in Chrome local storage; training samples and telemetry queues live in IndexedDB.
 - `src/shared/`: small cross-context helpers and constants.
+- `packages/media-helper/`: optional Node.js/TypeScript Native Messaging host;
+  it is not part of the extension bundle.
 - `server/`: local telemetry intake server, JSONL storage, and dataset inspection dashboard.
 
 ## Data Principle
