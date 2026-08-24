@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>AdsFriendly hidden candidate browser test</title>
+  </head>
+  <body>
+    <a id="candidate" href="https://ads.example/">
+      <img id="hidden-child" alt="Advertisement" width="320" height="100" />
+    </a>
+    <output id="test-result">{"passed":false,"stage":"loading"}</output>
+    <script>
+      window.addEventListener("error", (event) => {
+        document.querySelector("#test-result").textContent = JSON.stringify({
+          passed: false,
+          stage: "module-error",
+          error: event.error?.stack || event.message,
+        });
+      });
+    </script>
+    <script type="module">
+      import {
+        BLOCKING_STRATEGIES,
+        captureInlineVisibility,
+        isHiddenByAdsFriendly,
+        restoreInlineVisibility,
+      } from "../src/dom/actions.js";
+      import { showDomCandidateToast } from "../src/dom/toast.js";
+
+      const setResult = (result) => {
+        document.querySelector("#test-result").textContent =
+          JSON.stringify(result);
+      };
+      setResult({ passed: false, stage: "started" });
+      try {
+        const link = document.querySelector("#candidate");
+        const image = document.querySelector("#hidden-child");
+        const snapshot = captureInlineVisibility(image);
+        const candidate = {
+          element: link,
+          target: link,
+          features: { tag: "a" },
+          decision: { confidence: 0.93, reasons: ["browser_fixture"] },
+        };
+
+        BLOCKING_STRATEGIES.STEALTH(image);
+        showDomCandidateToast(candidate, {});
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        const skippedHiddenRelation =
+          isHiddenByAdsFriendly(link) &&
+          !document.querySelector("#adsfriendly-dom-toast");
+        setResult({ passed: false, stage: "hidden-relation-checked" });
+
+        restoreInlineVisibility(image, snapshot);
+        showDomCandidateToast(candidate, {});
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        const visibleCandidateShown =
+          !!document.querySelector("#adsfriendly-dom-toast") &&
+          !!document.querySelector("#adsfriendly-dom-highlight");
+        setResult({ passed: false, stage: "visible-candidate-checked" });
+
+        BLOCKING_STRATEGIES.STEALTH(link);
+        await new Promise((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(resolve)),
+        );
+        const staleReviewDismissed =
+          document
+            .querySelector("#adsfriendly-dom-toast")
+            ?.classList.contains("adsfriendly-dom-hidden") &&
+          !document.querySelector("#adsfriendly-dom-highlight");
+
+        setResult({
+          passed:
+            skippedHiddenRelation &&
+            visibleCandidateShown &&
+            staleReviewDismissed,
+          skippedHiddenRelation,
+          visibleCandidateShown,
+          staleReviewDismissed,
+          stage: "complete",
+        });
+      } catch (error) {
+        setResult({
+          passed: false,
+          stage: "error",
+          error: error?.stack || error?.message || String(error),
+        });
+      }
+    </script>
+  </body>
+</html>

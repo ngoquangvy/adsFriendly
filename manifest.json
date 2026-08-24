@@ -1,30 +1,43 @@
 {
   "manifest_version": 3,
   "name": "AdsFriendly",
-  "version": "2.0",
-  "description": "Chặn các tab quảng cáo tự động mở (Pop-under) và đảm bảo trải nghiệm không bị gián đoạn mà không can thiệp vào mã nguồn trang web hiện tại.",
+  "version": "2.2.0",
+  "description": "Friendly protection against pop-unders, intrusive ad tabs, and disruptive ad behavior.",
   "permissions": [
     "declarativeNetRequest",
     "webNavigation",
     "tabs",
     "storage",
+    "unlimitedStorage",
     "scripting"
   ],
+  "optional_permissions": ["nativeMessaging"],
   "options_ui": {
     "page": "options/options.html",
     "open_in_tab": true
   },
-  "host_permissions": [
-    "<all_urls>"
-  ],
+  "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js"
   },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
+      "js": ["injected_spy.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    },
+    {
+      "matches": ["<all_urls>"],
       "js": ["content.js", "picker.js", "video_surgeon.js"],
       "run_at": "document_start"
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["media_frame.js"],
+      "run_at": "document_start",
+      "all_frames": true
     }
   ],
   "action": {
@@ -46,7 +59,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["ui/blocked.html", "injected_spy.js"],
+      "resources": ["ui/blocked.html"],
       "matches": ["<all_urls>"]
     }
   ]

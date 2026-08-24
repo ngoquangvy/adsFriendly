@@ -1,236 +1,602 @@
-<!DOCTYPE html>
-<html lang="vi">
-<head>
-    <meta charset="UTF-8">
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
     <title>AdsFriendly - Settings</title>
     <style>
-        :root {
-            --primary: #22c55e;
-            --secondary: #16a34a;
-            --danger: #ff4d4d;
-            --bg: #0f172a;
-            --text: #f8fafc;
-        }
+      :root {
+        --primary: #22c55e;
+        --secondary: #16a34a;
+        --danger: #ff4d4d;
+        --bg: #0f172a;
+        --text: #f8fafc;
+      }
 
-        body {
-            font-family: 'Inter', sans-serif;
-            background: var(--bg);
-            color: var(--text);
-            margin: 0;
-            padding: 2rem;
-            display: flex;
-            justify-content: center;
-        }
+      body {
+        font-family: "Inter", sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        margin: 0;
+        padding: 2rem;
+        display: flex;
+        justify-content: center;
+      }
 
-        .container {
-            max-width: 800px;
-            width: 100%;
-        }
+      .container {
+        max-width: 800px;
+        width: 100%;
+      }
 
-        header {
-            margin-bottom: 3rem;
-            text-align: center;
-        }
+      header {
+        margin-bottom: 3rem;
+        text-align: center;
+      }
 
-        h1 {
-            font-size: 2.5rem;
-            background: linear-gradient(to right, var(--primary), var(--secondary));
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
+      h1 {
+        font-size: 2.5rem;
+        background: linear-gradient(to right, var(--primary), var(--secondary));
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+      }
 
-        .grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 2rem;
-        }
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 2rem;
+      }
 
-        .card {
-            background: rgba(30, 41, 59, 0.7);
-            border-radius: 20px;
-            padding: 1.5rem;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            backdrop-filter: blur(10px);
-        }
+      .card {
+        background: rgba(30, 41, 59, 0.7);
+        border-radius: 20px;
+        padding: 1.5rem;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        backdrop-filter: blur(10px);
+      }
 
-        h2 {
-            font-size: 1.2rem;
-            margin-top: 0;
-            margin-bottom: 1.5rem;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
+      h2 {
+        font-size: 1.2rem;
+        margin-top: 0;
+        margin-bottom: 1.5rem;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
 
-        .list-container {
-            max-height: 400px;
-            overflow-y: auto;
-            border-radius: 12px;
-        }
+      .list-container {
+        max-height: 400px;
+        overflow-y: auto;
+        border-radius: 12px;
+      }
 
-        .item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 0.75rem 1rem;
-            background: rgba(255, 255, 255, 0.03);
-            margin-bottom: 0.5rem;
-            border-radius: 8px;
-            transition: background 0.2s;
-        }
+      .item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.75rem 1rem;
+        background: rgba(255, 255, 255, 0.03);
+        margin-bottom: 0.5rem;
+        border-radius: 8px;
+        transition: background 0.2s;
+      }
 
-        .item:hover {
-            background: rgba(255, 255, 255, 0.08);
-        }
+      .item:hover {
+        background: rgba(255, 255, 255, 0.08);
+      }
 
-        .item span {
-            font-family: monospace;
-            font-size: 0.9rem;
-        }
+      .item span {
+        font-family: monospace;
+        font-size: 0.9rem;
+      }
 
-        .btn-delete {
-            background: transparent;
-            border: none;
-            color: #64748b;
-            cursor: pointer;
-            padding: 5px;
-            border-radius: 5px;
-        }
+      .btn-delete {
+        background: transparent;
+        border: none;
+        color: #64748b;
+        cursor: pointer;
+        padding: 5px;
+        border-radius: 5px;
+      }
 
-        .btn-delete:hover {
-            color: var(--danger);
-            background: rgba(255, 77, 77, 0.1);
-        }
+      .btn-delete:hover {
+        color: var(--danger);
+        background: rgba(255, 77, 77, 0.1);
+      }
 
-        .empty-msg {
-            text-align: center;
-            color: #475569;
-            padding: 2rem;
-            font-style: italic;
-        }
+      .empty-msg {
+        text-align: center;
+        color: #475569;
+        padding: 2rem;
+        font-style: italic;
+      }
 
-        .reset-section {
-            margin-top: 3rem;
-            text-align: center;
-        }
+      .reset-section {
+        margin-top: 3rem;
+        text-align: center;
+      }
 
-        .btn-reset {
-            background: rgba(255, 77, 77, 0.1);
-            color: var(--danger);
-            border: 1px solid var(--danger);
-            padding: 0.75rem 1.5rem;
-            border-radius: 10px;
-            cursor: pointer;
-            font-weight: 600;
-        }
+      .btn-reset {
+        background: rgba(255, 77, 77, 0.1);
+        color: var(--danger);
+        border: 1px solid var(--danger);
+        padding: 0.75rem 1.5rem;
+        border-radius: 10px;
+        cursor: pointer;
+        font-weight: 600;
+      }
 
-        .btn-reset:hover {
-            background: var(--danger);
-            color: white;
+      .btn-reset:hover {
+        background: var(--danger);
+        color: white;
+      }
+
+      .btn-secondary {
+        background: rgba(96, 165, 250, 0.12);
+        color: #93c5fd;
+        border: 1px solid rgba(96, 165, 250, 0.3);
+        padding: 0.5rem 0.8rem;
+        border-radius: 8px;
+        cursor: pointer;
+        font-weight: 600;
+        font-size: 0.78rem;
+      }
+
+      .package-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.75rem;
+      }
+
+      .field-label {
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+        color: #94a3b8;
+        font-size: 0.75rem;
+      }
+
+      .field-input,
+      .field-select {
+        box-sizing: border-box;
+        width: 100%;
+        padding: 0.65rem 0.75rem;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 8px;
+        background: rgba(15, 23, 42, 0.8);
+        color: #f8fafc;
+        font: inherit;
+      }
+
+      .inline-add {
+        display: flex;
+        gap: 0.5rem;
+        margin-top: 0.75rem;
+      }
+
+      .package-status {
+        margin-top: 0.9rem;
+        padding: 0.65rem 0.75rem;
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.04);
+        color: #94a3b8;
+        font-size: 0.78rem;
+      }
+
+      @media (max-width: 680px) {
+        .grid,
+        .package-grid {
+          grid-template-columns: 1fr;
         }
+      }
+
+      .sample-row {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 0.35rem;
+      }
+
+      .sample-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+      }
+
+      .sample-chip {
+        background: rgba(255, 255, 255, 0.06);
+        color: #cbd5e1;
+        padding: 2px 6px;
+        border-radius: 999px;
+        font-size: 0.68rem;
+        font-family: monospace;
+      }
     </style>
-</head>
-<body>
+  </head>
+  <body>
     <div class="container">
-        <header>
-            <h1>AdsFriendly Settings</h1>
-            <p style="color: #94a3b8;">Manage your trusted and blocked domains</p>
-        </header>
+      <header>
+        <h1>AdsFriendly Settings</h1>
+        <p style="color: #94a3b8">Manage your trusted and blocked domains</p>
+      </header>
 
-        <div class="grid">
-            <!-- Whitelist -->
-            <div class="card">
-                <h2 style="color: #22c55e;">
-                    <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
-                    Trusted Sites (Whitelist)
-                </h2>
-                <div id="whitelist-list" class="list-container">
-                    <div class="empty-msg">No sites added yet</div>
-                </div>
+      <section class="config-section" style="margin-bottom: 2rem">
+        <div class="card" style="border-left: 4px solid #22c55e">
+          <div style="display: flex; justify-content: space-between; gap: 1rem">
+            <div>
+              <h2 style="color: #22c55e; margin-bottom: 0.45rem">
+                Settings Package
+              </h2>
+              <p style="color: #94a3b8; font-size: 0.82rem; margin: 0 0 1rem">
+                Export or install an editable snapshot of protection settings,
+                site lists, Magic Wand rules, and trusted workflows.
+              </p>
             </div>
+            <span
+              id="package-source"
+              class="sample-chip"
+              style="height: fit-content"
+              >LOCAL</span
+            >
+          </div>
 
-            <!-- Blacklist -->
-            <div class="card">
-                <h2 style="color: var(--danger);">
-                    <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/></svg>
-                    Always Blocked (Blacklist)
-                </h2>
-                <div id="blacklist-list" class="list-container">
-                    <div class="empty-msg">No sites added yet</div>
-                </div>
-            </div>
-        </section>
+          <div class="package-grid">
+            <label class="field-label">
+              Package name
+              <input
+                id="package-name"
+                class="field-input"
+                value="My AdsFriendly Settings"
+                maxlength="120"
+              />
+            </label>
+            <label class="field-label">
+              Author
+              <input
+                id="package-author"
+                class="field-input"
+                value="AdsFriendly User"
+                maxlength="120"
+              />
+            </label>
+            <label class="field-label">
+              Protection mode
+              <select id="settings-mode" class="field-select">
+                <option value="safe">Safe</option>
+                <option value="assist">Assist</option>
+                <option value="auto">Auto</option>
+              </select>
+            </label>
+            <label
+              class="field-label"
+              style="justify-content: flex-end; padding-bottom: 0.65rem"
+            >
+              <span>
+                <input id="settings-enabled" type="checkbox" checked />
+                General protection enabled
+              </span>
+            </label>
+          </div>
 
-        <!-- Custom Rules Management Section -->
-        <section class="config-section" style="margin-top: 3rem;">
-            <div class="card">
-                <h2 style="color: #60a5fa;">
-                    <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
-                    Rule Inspector (Learned by AI)
-                </h2>
-                <p style="color: #94a3b8; font-size: 0.85rem; margin-bottom: 1.5rem;">See exactly what technical selectors the extension is using to protect your experience.</p>
-                <div id="custom-rules-container">
-                    <p style="color: #475569; font-style: italic;">No custom rules found yet.</p>
-                </div>
-            </div>
-        </section>
-
-        <!-- Deep Pulse: Learned Workflows Section -->
-        <section class="config-section" style="margin-top: 2rem;">
-            <div class="card" style="border-left: 4px solid #a855f7;">
-                <h2 style="color: #a855f7;">
-                    <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>
-                    Deep Pulse: Learned Workflows
-                </h2>
-                <p style="color: #94a3b8; font-size: 0.85rem; margin-bottom: 1.5rem;">Navigation patterns authorized autonomously by the AI based on your habits.</p>
-                <div id="learned-paths-container" class="list-container" style="max-height: 250px;">
-                    <div class="empty-msg">No learned workflows yet. Try navigating between your favorite sites!</div>
-                </div>
-            </div>
-        </section>
-
-        <!-- Blocked Navigation History -->
-        <section class="config-section" style="margin-top: 2rem;">
-            <div class="card">
-                <h2 style="color: #fbd38d;">
-                    <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M13 3c-4.97 0-9 4.03-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42C8.27 19.99 10.51 21 13 21c4.97 0 9-4.03 9-9s-4.03-9-9-9zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/></svg>
-                    Recent Navigation Blocks
-                </h2>
-                <div id="blocked-logs-container" class="list-container" style="max-height: 250px;">
-                    <div class="empty-msg">Clean history. No suspicious navigations blocked recently.</div>
-                </div>
-            </div>
-        </section>
-
-        <section class="reset-section">
-            <button class="btn-reset" id="btn-reset">Factory Reset (Wipe All Memory)</button>
-        </section>
-
-        <!-- Feedback Section -->
-        <div class="card" style="margin-top: 3rem; max-width: 600px; margin-left: auto; margin-right: auto;">
-            <h2 style="color: var(--primary);">
-                <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-7 12h-2v-2h2v2zm0-4h-2V6h2v4z"/></svg>
-                Feedback & Bug Reports
-            </h2>
-            <form id="feedback-form">
-                <div style="margin-bottom: 1rem; display: flex; align-items: center; gap: 1rem;">
-                    <span style="font-size: 0.9rem; color: #94a3b8;">Rating:</span>
-                    <div class="rating-stars" style="display: flex; gap: 5px;">
-                        <input type="radio" name="rating" value="5" id="r5" checked><label for="r5">⭐</label>
-                        <input type="radio" name="rating" value="4" id="r4"><label for="r4">⭐</label>
-                        <input type="radio" name="rating" value="3" id="r3"><label for="r3">⭐</label>
-                        <input type="radio" name="rating" value="2" id="r2"><label for="r2">⭐</label>
-                        <input type="radio" name="rating" value="1" id="r1"><label for="r1">⭐</label>
-                    </div>
-                </div>
-
-                <textarea id="fb-body" placeholder="Tell me about your experience or report a bug..." required maxlength="1000" style="width: 100%; height: 120px; padding: 0.8rem; margin-bottom: 1rem; border-radius: 10px; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.2); color: white; resize: none; box-sizing: border-box;"></textarea>
-                
-                <button type="submit" id="fb-submit" style="width: 100%; background: var(--primary); color: white; border: none; padding: 0.8rem; border-radius: 10px; font-weight: 600; cursor: pointer;">Send Feedback</button>
-            </form>
-            <div id="fb-status" style="margin-top: 1rem; text-align: center; font-size: 0.9rem; display: none;"></div>
+          <div
+            style="
+              display: flex;
+              gap: 0.55rem;
+              flex-wrap: wrap;
+              margin-top: 1rem;
+            "
+          >
+            <button class="btn-secondary" id="btn-package-export">
+              Export package
+            </button>
+            <button class="btn-secondary" id="btn-package-import">
+              Import package
+            </button>
+            <button class="btn-secondary" id="btn-package-default">
+              Restore bundled default
+            </button>
+            <input
+              id="package-file-input"
+              type="file"
+              accept="application/json,.json,.afsettings"
+              hidden
+            />
+          </div>
+          <div id="package-status" class="package-status">
+            Loading current settings…
+          </div>
+          <div id="storage-health" class="package-status">
+            Checking settings storage…
+          </div>
+          <p style="color: #64748b; font-size: 0.72rem; margin: 0.7rem 0 0">
+            Training and telemetry use a separate local database. Block history,
+            counters, and private identifiers are never included in a package.
+          </p>
         </div>
+      </section>
+
+      <div class="grid">
+        <!-- Whitelist -->
+        <div class="card">
+          <h2 style="color: #22c55e">
+            <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
+            </svg>
+            Trusted Sites (Whitelist)
+          </h2>
+          <div id="whitelist-list" class="list-container">
+            <div class="empty-msg">No sites added yet</div>
+          </div>
+          <div class="inline-add">
+            <input
+              id="whitelist-input"
+              class="field-input"
+              placeholder="example.com"
+            />
+            <button class="btn-secondary" id="btn-whitelist-add">Add</button>
+          </div>
+        </div>
+
+        <!-- Blacklist -->
+        <div class="card">
+          <h2 style="color: var(--danger)">
+            <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24">
+              <path
+                d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"
+              />
+            </svg>
+            Always Blocked (Blacklist)
+          </h2>
+          <div id="blacklist-list" class="list-container">
+            <div class="empty-msg">No sites added yet</div>
+          </div>
+          <div class="inline-add">
+            <input
+              id="blacklist-input"
+              class="field-input"
+              placeholder="ads.example.com"
+            />
+            <button class="btn-secondary" id="btn-blacklist-add">Add</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Custom Rules Management Section -->
+      <section class="config-section" style="margin-top: 3rem">
+        <div class="card">
+          <h2 style="color: #60a5fa">
+            <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24">
+              <path
+                d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"
+              />
+            </svg>
+            Magic Wand &amp; Hidden Element Rules
+          </h2>
+          <p style="color: #94a3b8; font-size: 0.85rem; margin-bottom: 1.5rem">
+            These editable rules are included when you export a Settings
+            Package.
+          </p>
+          <div id="custom-rules-container">
+            <p style="color: #475569; font-style: italic">
+              No custom rules found yet.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- DOM Training Samples -->
+      <section class="config-section" style="margin-top: 2rem">
+        <div class="card" style="border-left: 4px solid #38bdf8">
+          <div
+            style="
+              display: flex;
+              justify-content: space-between;
+              gap: 1rem;
+              align-items: flex-start;
+            "
+          >
+            <div>
+              <h2 style="color: #38bdf8; margin-bottom: 0.5rem">
+                <svg
+                  width="20"
+                  height="20"
+                  fill="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    d="M3 3h18v18H3V3zm2 2v14h14V5H5zm2 2h10v2H7V7zm0 4h10v2H7v-2zm0 4h6v2H7v-2z"
+                  />
+                </svg>
+                DOM Training Samples
+              </h2>
+              <p style="color: #94a3b8; font-size: 0.85rem; margin: 0 0 1rem">
+                Inspect local labels and evidence collected from DOM banner
+                decisions.
+              </p>
+            </div>
+            <div
+              style="
+                display: flex;
+                gap: 0.5rem;
+                flex-wrap: wrap;
+                justify-content: flex-end;
+              "
+            >
+              <button class="btn-secondary" id="btn-dom-refresh">
+                Refresh
+              </button>
+              <button class="btn-secondary" id="btn-dom-export">
+                Export JSONL
+              </button>
+              <button class="btn-secondary" id="btn-dom-clear">Clear</button>
+            </div>
+          </div>
+          <div
+            id="dom-samples-container"
+            class="list-container"
+            style="max-height: 320px"
+          >
+            <div class="empty-msg">No DOM samples yet.</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Deep Pulse: Learned Workflows Section -->
+      <section class="config-section" style="margin-top: 2rem">
+        <div class="card" style="border-left: 4px solid #a855f7">
+          <h2 style="color: #a855f7">
+            <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24">
+              <path
+                d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"
+              />
+            </svg>
+            Deep Pulse: Learned Workflows
+          </h2>
+          <p style="color: #94a3b8; font-size: 0.85rem; margin-bottom: 1.5rem">
+            Navigation patterns authorized autonomously by the AI based on your
+            habits.
+          </p>
+          <div
+            id="learned-paths-container"
+            class="list-container"
+            style="max-height: 250px"
+          >
+            <div class="empty-msg">
+              No learned workflows yet. Try navigating between your favorite
+              sites!
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Blocked Navigation History -->
+      <section class="config-section" style="margin-top: 2rem">
+        <div class="card">
+          <h2 style="color: #fbd38d">
+            <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24">
+              <path
+                d="M13 3c-4.97 0-9 4.03-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42C8.27 19.99 10.51 21 13 21c4.97 0 9-4.03 9-9s-4.03-9-9-9zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"
+              />
+            </svg>
+            Recent Navigation Blocks
+          </h2>
+          <div
+            id="blocked-logs-container"
+            class="list-container"
+            style="max-height: 250px"
+          >
+            <div class="empty-msg">
+              Clean history. No suspicious navigations blocked recently.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="reset-section">
+        <button class="btn-reset" id="btn-reset">
+          Factory Reset (Wipe All Memory)
+        </button>
+      </section>
+
+      <!-- Feedback Section -->
+      <div
+        class="card"
+        style="
+          margin-top: 3rem;
+          max-width: 600px;
+          margin-left: auto;
+          margin-right: auto;
+        "
+      >
+        <h2 style="color: var(--primary)">
+          <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24">
+            <path
+              d="M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-7 12h-2v-2h2v2zm0-4h-2V6h2v4z"
+            />
+          </svg>
+          Feedback & Bug Reports
+        </h2>
+        <form id="feedback-form">
+          <div
+            style="
+              margin-bottom: 1rem;
+              display: flex;
+              align-items: center;
+              gap: 1rem;
+            "
+          >
+            <span style="font-size: 0.9rem; color: #94a3b8">Rating:</span>
+            <div class="rating-stars" style="display: flex; gap: 5px">
+              <input
+                type="radio"
+                name="rating"
+                value="5"
+                id="r5"
+                checked
+              /><label for="r5">5</label>
+              <input type="radio" name="rating" value="4" id="r4" /><label
+                for="r4"
+                >4</label
+              >
+              <input type="radio" name="rating" value="3" id="r3" /><label
+                for="r3"
+                >3</label
+              >
+              <input type="radio" name="rating" value="2" id="r2" /><label
+                for="r2"
+                >2</label
+              >
+              <input type="radio" name="rating" value="1" id="r1" /><label
+                for="r1"
+                >1</label
+              >
+            </div>
+          </div>
+
+          <textarea
+            id="fb-body"
+            placeholder="Tell me about your experience or report a bug..."
+            required
+            maxlength="1000"
+            style="
+              width: 100%;
+              height: 120px;
+              padding: 0.8rem;
+              margin-bottom: 1rem;
+              border-radius: 10px;
+              border: 1px solid rgba(255, 255, 255, 0.1);
+              background: rgba(0, 0, 0, 0.2);
+              color: white;
+              resize: none;
+              box-sizing: border-box;
+            "
+          ></textarea>
+
+          <button
+            type="submit"
+            id="fb-submit"
+            style="
+              width: 100%;
+              background: var(--primary);
+              color: white;
+              border: none;
+              padding: 0.8rem;
+              border-radius: 10px;
+              font-weight: 600;
+              cursor: pointer;
+            "
+          >
+            Send Feedback
+          </button>
+        </form>
+        <div
+          id="fb-status"
+          style="
+            margin-top: 1rem;
+            text-align: center;
+            font-size: 0.9rem;
+            display: none;
+          "
+        ></div>
+      </div>
     </div>
     <script src="options.js"></script>
-</body>
+  </body>
 </html>

@@ -9,6 +9,20 @@ function isWhitelisted(url) {
   } catch(e) { return false; }
 }
 
+function isProtectionEnabled() {
+  return !AF_CONFIG.appSettings || AF_CONFIG.appSettings.enabled !== false;
+}
+
+function getProtectionMode() {
+  return (AF_CONFIG.appSettings && AF_CONFIG.appSettings.protectionMode) || "safe";
+}
+
+function getResponsiveLayout() {
+  var screenWidth = typeof screen !== "undefined" && screen.width ? screen.width : 1024;
+  return Math.min(window.innerWidth || 1024, screenWidth) <= 767
+    ? "compact" : "wide";
+}
+
 function normalizeHost(hostname) {
   return (hostname || '').toLowerCase().replace(/\.$/, '');
 }
@@ -90,6 +104,12 @@ function isAdLikeUrl(url) {
     }
   } catch(e) {}
   return false;
+}
+
+function hasAdTokenSignal(value) {
+  return /(^|[\s_-])(?:ad|ads|adv|advert|banner|promo|sponsor|popup)(?=$|[\s_-])/i.test(
+    String(value || '')
+  );
 }
 
 function log() {

@@ -3,6 +3,31 @@
 
   window.neutralizeTab = function(tabId, openerTabId, url) {
     console.log("[AdsFriendly BG] neutralizeTab:", tabId, "url:", url);
+    if (typeof bgRecordAdEvent === "function") {
+      bgRecordAdEvent({
+        unit: "navigation",
+        label: "ad",
+        label_source: "heuristic_blocked",
+        ad_type: "popup",
+        targetUrl: url,
+        action: "block",
+        outcome: "neutralized_tab",
+        surface: "background_tab_guard",
+        evidence: {
+          tab_id_present: !!tabId,
+          opener_tab_id_present: !!openerTabId
+        }
+      });
+    }
+    if (typeof bgRecordBlock === "function") {
+      if (openerTabId) {
+        bgApi.tabs.get(openerTabId, function(sourceTab) {
+          bgRecordBlock(sourceTab && sourceTab.url ? sourceTab.url : url, "popup", 1);
+        });
+      } else {
+        bgRecordBlock(url, "popup", 1);
+      }
+    }
     bgApi.tabs.update(tabId, { url: 'about:blank' }, function() {
       if (bgApi.runtime.lastError) {
         console.log("[AdsFriendly BG] update to blank FAILED:", bgApi.runtime.lastError.message);

@@ -1,0 +1,28 @@
+{
+  "name": "adsfriendly-extension",
+  "version": "2.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check": "node scripts/build.mjs --check",
+    "helper:build": "node packages/media-helper/scripts/build.mjs",
+    "helper:check": "node packages/media-helper/scripts/build.mjs --check",
+    "helper:package:windows": "pnpm --filter @adsfriendly/media-helper package:windows",
+    "helper:register:windows": "pnpm --filter @adsfriendly/media-helper register:windows",
+    "helper:test": "node packages/media-helper/scripts/build.mjs && node --test tests/media-helper.test.js",
+    "test:unit": "node --test tests/feature-registry.test.js tests/runtime-contracts.test.js tests/media-foundation.test.js tests/media-helper-contract.test.js tests/navigation-guard.test.js tests/settings-package.test.js tests/settings-mutations.test.js tests/dom-selector.test.js server/src/schema.test.js",
+    "test:e2e:dom": "node scripts/e2e-dom.mjs",
+    "test:e2e:live": "node scripts/e2e-live-sites.mjs",
+    "test:e2e:nav": "node scripts/e2e-nav-safety.mjs",
+    "test:ios-nav": "node scripts/test-ios-navigation-policy.mjs",
+    "ios:settings:sync": "node scripts/sync-ios-settings-package.mjs",
+    "ios:settings:check": "node scripts/sync-ios-settings-package.mjs --check",
+    "server": "npm --prefix server start",
+    "server:test": "npm --prefix server test"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "prettier": "^3.6.0"
+  }
+}

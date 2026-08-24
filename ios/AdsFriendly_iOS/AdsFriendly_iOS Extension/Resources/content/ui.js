@@ -2,6 +2,8 @@ var blockedUrls = [];
 var hideTimeout = null;
 var container = null;
 var _throttleTimer = null;
+var rememberedBlock = false;
+var bannerReview = null;
 
 function createUI() {
   if (container) return;
@@ -14,11 +16,19 @@ function createUI() {
   messageSpan.className = "adsfriendly-message";
 
   var openBtn = document.createElement("button");
-  openBtn.className = "adsfriendly-btn";
-  openBtn.innerText = "\u2192";
+  openBtn.className = "adsfriendly-btn adsfriendly-primary";
+  openBtn.innerText = "Allow";
   openBtn.addEventListener("click", function(e) {
     e.stopPropagation();
-    openAllBlocked();
+    runPrimaryAction();
+  });
+
+  var blockBtn = document.createElement("button");
+  blockBtn.className = "adsfriendly-btn adsfriendly-danger";
+  blockBtn.innerText = "Block";
+  blockBtn.addEventListener("click", function(e) {
+    e.stopPropagation();
+    rememberBlocked();
   });
 
   var closeBtn = document.createElement("button");
@@ -31,6 +41,7 @@ function createUI() {
 
   container.appendChild(messageSpan);
   container.appendChild(openBtn);
+  container.appendChild(blockBtn);
   container.appendChild(closeBtn);
 
   function appendToBody() {
@@ -63,17 +74,32 @@ function updateUI() {
   }
 
   var messageSpan = container.querySelector(".adsfriendly-message");
+  var primaryBtn = container.querySelector(".adsfriendly-primary");
+  var blockBtn = container.querySelector(".adsfriendly-danger");
   var fullMsg = "";
 
-  if (blockedUrls.length === 1) {
+  if (rememberedBlock && blockedUrls.length === 1) {
     try {
       var hostname = new URL(blockedUrls[0]).hostname;
-      fullMsg = "\u26D4 " + truncateHostname(hostname, 24);
+      fullMsg = "Blocked " + truncateHostname(hostname, 20);
     } catch(e) {
-      fullMsg = "\u26D4 1 popup";
+      fullMsg = "Blocked popup";
     }
+    primaryBtn.innerText = "Open once";
+    blockBtn.style.display = "none";
+  } else if (blockedUrls.length === 1) {
+    try {
+      var candidateHost = new URL(blockedUrls[0]).hostname;
+      fullMsg = "Popup from " + truncateHostname(candidateHost, 20);
+    } catch(e) {
+      fullMsg = "Allow this popup source?";
+    }
+    primaryBtn.innerText = "Allow";
+    blockBtn.style.display = "inline-block";
   } else {
-    fullMsg = "\u26D4 " + blockedUrls.length + " popups";
+    fullMsg = blockedUrls.length + " popup requests";
+    primaryBtn.innerText = "Allow";
+    blockBtn.style.display = "inline-block";
   }
 
   messageSpan.innerText = fullMsg;
@@ -81,7 +107,7 @@ function updateUI() {
   container.classList.remove("adsfriendly-hidden");
 
   if (hideTimeout) clearTimeout(hideTimeout);
-  hideTimeout = setTimeout(hideUI, 5000);
+  hideTimeout = setTimeout(hideUI, rememberedBlock ? 5000 : 8000);
 }
 
 function hideUI() {
@@ -91,17 +117,31 @@ function hideUI() {
   if (hideTimeout) clearTimeout(hideTimeout);
   hideTimeout = null;
   blockedUrls = [];
+  rememberedBlock = false;
 }
 
-function openAllBlocked() {
-  if (blockedUrls.length > 0) {
-    api.runtime.sendMessage({ action: "open_tabs", urls: blockedUrls });
+function runPrimaryAction() {
+  if (rememberedBlock && blockedUrls.length === 1) {
+    api.runtime.sendMessage({ action: "open_once", url: blockedUrls[0] });
+  } else if (blockedUrls.length > 0) {
+    api.runtime.sendMessage({
+      action: "allow_popups",
+      urls: blockedUrls
+    });
   }
   hideUI();
 }
 
-function notifyBlocked(url) {
+function rememberBlocked() {
+  if (blockedUrls.length > 0) {
+    api.runtime.sendMessage({ action: "block_popups", urls: blockedUrls });
+  }
+  hideUI();
+}
+
+function notifyBlocked(url, wasRemembered) {
   if (!url) return;
+  rememberedBlock = wasRemembered === true;
   if (!blockedUrls.includes(url)) {
     blockedUrls.push(url);
   }
@@ -111,4 +151,33 @@ function notifyBlocked(url) {
     updateUI();
   }, 500);
   updateUI();
+}
+
+function notifyBannerCandidate(element, reason, handlers) {
+  if (bannerReview || !element || !document.body) return false;
+  handlers = handlers || {};
+  var review = document.createElement("div");
+  review.id = "adsfriendly-banner-review";
+  review.innerHTML = '<span class="adsfriendly-message">Suspected ad banner</span>' +
+    '<button class="adsfriendly-btn adsfriendly-primary" type="button">Hide</button>' +
+    '<button class="adsfriendly-btn adsfriendly-show" type="button">Show</button>' +
+    '<button class="adsfriendly-btn close" type="button">\u2715</button>';
+  review.title = reason || "Suspected banner";
+  document.body.appendChild(review);
+  bannerReview = review;
+
+  function finish(action) {
+    if (!bannerReview) return;
+    bannerReview.remove();
+    bannerReview = null;
+    if (action === "hide" && handlers.hide) handlers.hide();
+    else if (action === "show" && handlers.show) handlers.show();
+    else if (handlers.dismiss) handlers.dismiss();
+  }
+
+  review.querySelector(".adsfriendly-primary").onclick = function() { finish("hide"); };
+  review.querySelector(".adsfriendly-show").onclick = function() { finish("show"); };
+  review.querySelector(".close").onclick = function() { finish("dismiss"); };
+  setTimeout(function() { if (bannerReview === review) finish("dismiss"); }, 8000);
+  return true;
 }

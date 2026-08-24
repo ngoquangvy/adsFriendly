@@ -1,0 +1,26 @@
+﻿export const STATIC_AD_SELECTORS = [
+  '[id*="google_ads"]',
+  '[class*="adsbygoogle"]',
+  "ins.adsbygoogle",
+  'iframe[src*="doubleclick"]',
+  'a[href*="googleadservices.com"]',
+  'a[href*="utm_"]',
+  'a[href*="clickid="]',
+  'a[href*="aff_id="]',
+  'a[href*="javascript:hide_"]',
+  'img[src*="googleusercontent.com"][title]',
+  'img[src*="googleusercontent.com"][alt*="bet"]',
+  'img[src*="googleusercontent.com"][alt*="win"]',
+  'div[class*="popup-ad"]',
+  'div[id*="popup-ad"]',
+];
+export const DANGEROUS_SELECTOR_TAGS = [
+  "div",
+  "span",
+  "p",
+  "a",
+  "li",
+  "ul",
+  "img",
+  "section",
+];

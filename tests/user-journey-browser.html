@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>AdsFriendly user journey</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+      }
+      .fixture-ad {
+        width: 320px;
+        height: 90px;
+        background: #f59e0b;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div id="ad-a1b2c3" class="fixture-ad">Promotional fixture</div>
+      <div id="keep-candidate" class="fixture-ad">Content fixture</div>
+      <a
+        id="static-candidate"
+        class="personal-choice"
+        href="https://ads.example/?utm_source=fixture"
+        >Static rule fixture</a
+      >
+      <video id="video-fixture"></video>
+      <pre id="test-result">{"passed":false,"stage":"loading"}</pre>
+    </main>
+    <script type="module">
+      import {
+        BLOCKING_STRATEGIES,
+        captureInlineVisibility,
+        isHiddenByAdsFriendly,
+        restoreInlineVisibility,
+      } from "../src/dom/actions.js";
+      import { STATIC_AD_SELECTORS } from "../src/dom/ad-selectors.js";
+      import {
+        showDomCandidateToast,
+        showDomHiddenToast,
+      } from "../src/dom/toast.js";
+      import {
+        buildDomSelector,
+        buildDynamicAdIdSelector,
+      } from "../src/dom/features.js";
+      import { createSettingsMutationStore } from "../src/background/settings-mutations.js";
+      import {
+        CAPABILITIES,
+        getCapabilitiesForMode,
+      } from "../src/runtime/feature-catalog.js";
+      import {
+        loadSettings,
+        saveSettings,
+      } from "../src/runtime/settings-store.js";
+      import {
+        NEW_TAB_DECISIONS,
+        NEW_TAB_REVIEW_SURFACES,
+        chooseNewTabReviewSurface,
+        decideNewTabNavigation,
+      } from "../src/navigation/background/new-tab-policy.js";
+      import { isReversePopunderSequence } from "../src/navigation/background/reverse-popunder.js";
+      import {
+        createSettingsPackage,
+        replaceSettingsWithPackage,
+      } from "../src/settings-package/schema.js";
+      import {
+        accelerate,
+        restore as restoreVideo,
+      } from "../src/video/actions.js";
+      import {
+        addDomTrainingSample,
+        clearAllTrainingData,
+        enqueueTelemetryEvent,
+        listDomTrainingSamples,
+        listTelemetryBatch,
+      } from "../src/storage/training-store.js";
+
+      const output = document.querySelector("#test-result");
+      const results = {};
+      const tick = (delay = 30) =>
+        new Promise((resolve) => setTimeout(resolve, delay));
+      const record = (name, passed, details = null) => {
+        results[name] = { passed: !!passed, details };
+      };
+      const finish = (stage = "complete") => {
+        const passed = Object.values(results).every((item) => item.passed);
+        output.textContent = JSON.stringify(
+          { passed, stage, results },
+          null,
+          2,
+        );
+      };
+
+      function createStorage(initial = {}) {
+        const data = structuredClone(initial);
+        return {
+          async get(keys) {
+            if (keys === null) return structuredClone(data);
+            const list = Array.isArray(keys) ? keys : [keys];
+            return Object.fromEntries(
+              list
+                .filter((key) => key in data)
+                .map((key) => [key, structuredClone(data[key])]),
+            );
+          },
+          async set(values) {
+            Object.assign(data, structuredClone(values));
+          },
+          async remove(keys) {
+            for (const key of Array.isArray(keys) ? keys : [keys])
+              delete data[key];
+          },
+        };
+      }
+
+      try {
+        const storage = createStorage({
+          userCustomRules: {},
+          whitelist: [],
+          blacklist: [],
+        });
+        const mutations = createSettingsMutationStore(storage);
+        const ad = document.querySelector("#ad-a1b2c3");
+        const selector = buildDomSelector(ad);
+        let adSnapshot;
+        const candidate = {
+          element: ad,
+          target: ad,
+          selector,
+          features: { tag: "div" },
+          decision: { confidence: 0.93, reasons: ["fixture"] },
+        };
+        const handlers = {
+          async onHide() {
+            adSnapshot = captureInlineVisibility(ad);
+            BLOCKING_STRATEGIES.STEALTH(ad);
+            await mutations.upsertCustomRules("127.0.0.1", [
+              { selector, fingerprint: { tag: "div", id: ad.id } },
+            ]);
+          },
+          async onShow() {
+            restoreInlineVisibility(ad, adSnapshot);
+            await mutations.restoreCustomRules("127.0.0.1", [selector]);
+          },
+        };
+
+        showDomCandidateToast(candidate, handlers);
+        document.querySelector(".adsfriendly-dom-hide").click();
+        await tick();
+        let snapshot = await storage.get("userCustomRules");
+        record(
+          "assist_hide_saved",
+          isHiddenByAdsFriendly(ad) &&
+            snapshot.userCustomRules["127.0.0.1"]?.[0]?.selector === selector &&
+            document
+              .querySelector(".adsfriendly-dom-message")
+              .textContent.includes("saved"),
+          selector,
+        );
+
+        document.querySelector(".adsfriendly-dom-allow").click();
+        await tick();
+        snapshot = await storage.get("userCustomRules");
+        record(
+          "show_restores_dom_and_storage",
+          !isHiddenByAdsFriendly(ad) &&
+            !snapshot.userCustomRules?.["127.0.0.1"],
+        );
+
+        await tick(220);
+        showDomCandidateToast(candidate, handlers);
+        document.querySelector(".adsfriendly-dom-hide").click();
+        await tick();
+        document.querySelector(".adsfriendly-dom-close").click();
+        const reloadTarget = document.createElement("div");
+        reloadTarget.id = "ad-z9y8x7";
+        reloadTarget.className = "fixture-ad";
+        reloadTarget.textContent = "Reloaded random id";
+        document.querySelector("main").appendChild(reloadTarget);
+        const reloadSnapshot = captureInlineVisibility(reloadTarget);
+        snapshot = await storage.get("userCustomRules");
+        const savedRule = snapshot.userCustomRules["127.0.0.1"][0];
+        document
+          .querySelectorAll(savedRule.selector)
+          .forEach((element) => BLOCKING_STRATEGIES.STEALTH(element));
+        record(
+          "reload_and_random_id_persistence",
+          savedRule.selector === 'div[id^="ad-"]' &&
+            isHiddenByAdsFriendly(reloadTarget),
+        );
+        record(
+          "magic_wand_random_id_pipeline",
+          buildDynamicAdIdSelector(reloadTarget) === savedRule.selector,
+        );
+
+        await tick(220);
+        showDomHiddenToast(
+          {
+            target: reloadTarget,
+            hiddenCount: 2,
+            savedRuleCount: 1,
+            isSavedRuleSummary: true,
+            features: { tag: "page" },
+            decision: { confidence: 1, reasons: ["saved"] },
+          },
+          {
+            async onShow() {
+              restoreInlineVisibility(ad, adSnapshot);
+              restoreInlineVisibility(reloadTarget, reloadSnapshot);
+              await mutations.restoreCustomRules("127.0.0.1", [selector]);
+            },
+          },
+        );
+        document.querySelector(".adsfriendly-dom-allow").click();
+        await tick();
+        snapshot = await storage.get("userCustomRules");
+        record(
+          "show_all_restores_saved_rule",
+          !isHiddenByAdsFriendly(ad) &&
+            !isHiddenByAdsFriendly(reloadTarget) &&
+            !snapshot.userCustomRules?.["127.0.0.1"],
+        );
+
+        await tick(220);
+        let restoreAttempts = 0;
+        showDomHiddenToast(
+          {
+            target: ad,
+            features: { tag: "div" },
+            decision: { confidence: 1, reasons: ["saved"] },
+          },
+          {
+            async onShow() {
+              restoreAttempts++;
+              if (restoreAttempts === 1) throw new Error("storage unavailable");
+            },
+          },
+        );
+        document.querySelector(".adsfriendly-dom-allow").click();
+        await tick();
+        const retryShown =
+          document.querySelector(".adsfriendly-dom-allow").textContent ===
+            "Retry" &&
+          document
+            .querySelector(".adsfriendly-dom-message")
+            .textContent.includes("Restore failed");
+        document.querySelector(".adsfriendly-dom-allow").click();
+        await tick();
+        record(
+          "restore_failure_is_visible_and_retryable",
+          retryShown &&
+            restoreAttempts === 2 &&
+            document
+              .querySelector("#adsfriendly-dom-toast")
+              .classList.contains("adsfriendly-dom-hidden"),
+        );
+
+        await tick(220);
+        const keepTarget = document.querySelector("#keep-candidate");
+        let kept = false;
+        showDomCandidateToast(
+          {
+            element: keepTarget,
+            target: keepTarget,
+            features: { tag: "div" },
+            decision: { confidence: 0.65, reasons: ["fixture"] },
+          },
+          { onAllow: () => (kept = true) },
+        );
+        document.querySelector(".adsfriendly-dom-allow").click();
+        await tick();
+        record(
+          "keep_leaves_content_visible",
+          kept && !isHiddenByAdsFriendly(keepTarget),
+        );
+
+        await mutations.upsertCustomRules("127.0.0.1", [
+          { selector: "#first" },
+          { selector: ".second" },
+        ]);
+        await mutations.restoreCustomRules("127.0.0.1", [".second"]);
+        snapshot = await storage.get(["userCustomRules", "siteResetHistory"]);
+        record(
+          "popup_restore_only_undoes_last_personal_rule",
+          snapshot.userCustomRules["127.0.0.1"].length === 1 &&
+            snapshot.userCustomRules["127.0.0.1"][0].selector === "#first" &&
+            !snapshot.siteResetHistory,
+        );
+
+        const staticTarget = document.querySelector("#static-candidate");
+        const staticSnapshot = captureInlineVisibility(staticTarget);
+        await mutations.upsertCustomRules("127.0.0.1", [
+          { selector: ".personal-choice" },
+        ]);
+        BLOCKING_STRATEGIES.STEALTH(staticTarget);
+        restoreInlineVisibility(staticTarget, staticSnapshot);
+        await mutations.restoreCustomRules("127.0.0.1", [".personal-choice"]);
+        const staticSelector = STATIC_AD_SELECTORS.find((item) =>
+          staticTarget.matches(item),
+        );
+        if (staticSelector) BLOCKING_STRATEGIES.STEALTH(staticTarget);
+        record(
+          "restore_keeps_static_heuristic_independent",
+          !!staticSelector && isHiddenByAdsFriendly(staticTarget),
+          staticSelector,
+        );
+
+        const safe = getCapabilitiesForMode("safe");
+        const assist = getCapabilitiesForMode("assist");
+        const auto = getCapabilitiesForMode("auto");
+        record(
+          "safe_assist_auto_capabilities",
+          !safe.includes(CAPABILITIES.DOM_OBSERVE) &&
+            assist.includes(CAPABILITIES.DOM_SUGGEST) &&
+            !assist.includes(CAPABILITIES.DOM_AUTO_HIDE) &&
+            auto.includes(CAPABILITIES.DOM_AUTO_HIDE),
+        );
+
+        const settingsStorage = createStorage();
+        await saveSettings(
+          { enabled: false, protectionMode: "assist" },
+          settingsStorage,
+        );
+        const disabledSettings = await loadSettings(settingsStorage);
+        await saveSettings(
+          { enabled: true, protectionMode: "safe" },
+          settingsStorage,
+        );
+        const enabledSettings = await loadSettings(settingsStorage);
+        record(
+          "enable_disable_and_mode_persist",
+          disabledSettings.enabled === false &&
+            disabledSettings.protectionMode === "assist" &&
+            enabledSettings.enabled === true &&
+            enabledSettings.protectionMode === "safe",
+        );
+
+        await mutations.saveDomainDecision("BLACKLIST", "ads.example");
+        await mutations.saveDomainDecision("WHITELIST", "ads.example");
+        let domains = await storage.get(["whitelist", "blacklist"]);
+        const exclusive =
+          domains.whitelist[0] === "ads.example" &&
+          domains.blacklist.length === 0;
+        await mutations.removeDomainDecision("whitelist", "ads.example");
+        domains = await storage.get(["whitelist", "blacklist"]);
+        record(
+          "whitelist_blacklist_add_remove",
+          exclusive && domains.whitelist.length === 0,
+        );
+
+        record(
+          "new_tab_three_levels",
+          chooseNewTabReviewSurface({}) === NEW_TAB_REVIEW_SURFACES.TOAST &&
+            chooseNewTabReviewSurface({ promotionalIntent: true }) ===
+              NEW_TAB_REVIEW_SURFACES.FULL_PAGE &&
+            chooseNewTabReviewSurface({
+              promotionalIntent: true,
+              intentReasons: [
+                "strong_tracking_parameter",
+                "multiple_campaign_parameters",
+              ],
+            }) === NEW_TAB_REVIEW_SURFACES.CLOSE &&
+            decideNewTabNavigation({ blacklisted: true }) ===
+              NEW_TAB_DECISIONS.CLOSE &&
+            decideNewTabNavigation({ whitelisted: true }) ===
+              NEW_TAB_DECISIONS.ALLOW,
+        );
+        record(
+          "reverse_popunder_detection",
+          isReversePopunderSequence({
+            originalUrl: "https://video.example/watch/1",
+            cloneUrl: "https://video.example/watch/1",
+            redirectedUrl: "https://ads.example/landing",
+            elapsedMs: 500,
+          }),
+        );
+
+        const packageStorage = createStorage({
+          appSettings: { enabled: true, protectionMode: "assist" },
+          whitelist: ["trusted.example"],
+          blacklist: ["||ads.example^"],
+          userCustomRules: { "video.example": ["div.promo"] },
+          blockedLogs: [{ keep: true }],
+          domTrainingSamples: [{ private: true }],
+        });
+        const settingsPackage = createSettingsPackage(
+          await packageStorage.get(null),
+        );
+        await replaceSettingsWithPackage(
+          settingsPackage,
+          packageStorage,
+          "browser-test",
+        );
+        const packageSnapshot = await packageStorage.get(null);
+        record(
+          "settings_package_round_trip",
+          settingsPackage.settings.custom_rules["video.example"].length === 1 &&
+            !("domTrainingSamples" in settingsPackage.settings) &&
+            packageSnapshot.blockedLogs[0].keep === true,
+        );
+        const bundledPackage = await (
+          await fetch("../packages/default-settings-package.json")
+        ).json();
+        await replaceSettingsWithPackage(
+          bundledPackage,
+          packageStorage,
+          "bundled",
+        );
+        const bundledSnapshot = await packageStorage.get(null);
+        record(
+          "bundled_default_restore",
+          bundledSnapshot.appSettings.protectionMode === "safe" &&
+            Object.keys(bundledSnapshot.userCustomRules).length === 0 &&
+            bundledSnapshot.blockedLogs[0].keep === true,
+        );
+
+        const video = document.querySelector("#video-fixture");
+        accelerate(video);
+        const accelerated = video.playbackRate === 16 && video.muted;
+        restoreVideo(video);
+        record(
+          "video_accelerate_and_restore",
+          accelerated && video.playbackRate === 1 && !video.muted,
+        );
+
+        await clearAllTrainingData();
+        await addDomTrainingSample({
+          sample_id: "journey-dom",
+          timestamp: 1,
+          label: "ad",
+        });
+        await enqueueTelemetryEvent({
+          sample_id: "journey-telemetry",
+          timestamp: 2,
+          label: "ad",
+        });
+        const domSamples = await listDomTrainingSamples(10);
+        const telemetry = await listTelemetryBatch(10);
+        record(
+          "training_database_is_separate",
+          domSamples[0]?.sample_id === "journey-dom" &&
+            telemetry[0]?.sample_id === "journey-telemetry",
+        );
+        await clearAllTrainingData();
+
+        finish();
+      } catch (error) {
+        results.uncaught = {
+          passed: false,
+          details: error?.stack || error?.message || String(error),
+        };
+        finish("error");
+      }
+    </script>
+  </body>
+</html>

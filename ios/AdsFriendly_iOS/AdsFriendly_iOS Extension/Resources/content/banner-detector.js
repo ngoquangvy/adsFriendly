@@ -1,6 +1,50 @@
 (function() {
   var hiddenBanners = new WeakSet();
   var toggledElements = new WeakSet();
+  var reviewedBanners = new WeakSet();
+
+  function escapeCss(value) {
+    if (window.CSS && typeof window.CSS.escape === "function") return window.CSS.escape(value);
+    return String(value || "").replace(/[^a-zA-Z0-9_-]/g, "\\$&");
+  }
+
+  function buildBannerSelector(el) {
+    if (!el || !el.tagName) return "";
+    var tag = el.tagName.toLowerCase();
+    if (el.id && el.id.length <= 100) return tag + "#" + escapeCss(el.id);
+    var classes = String(el.className || "").split(/\s+/).filter(function(token) {
+      return token && token.length <= 80 && hasAdTokenSignal(token);
+    });
+    if (classes.length) return tag + "." + escapeCss(classes[0]);
+    var ariaLabel = el.getAttribute && el.getAttribute("aria-label");
+    var title = el.getAttribute && el.getAttribute("title");
+    var label = ariaLabel || title;
+    if (label && /ad|advert|banner|sponsor|promo/i.test(label) && label.length <= 100) {
+      var attribute = ariaLabel ? "aria-label" : "title";
+      return tag + '[' + attribute + '="' + String(label).replace(/"/g, '\\"') + '"]';
+    }
+    return "";
+  }
+
+  function isAllowedCandidate(selector) {
+    if (!selector) return false;
+    var hostname = window.location.hostname.toLowerCase();
+    var layout = getResponsiveLayout();
+    return (AF_CONFIG.allowedDomSelectors[hostname] || []).some(function(rule) {
+      return rule.selector === selector && (!rule.layout || rule.layout === "any" || rule.layout === layout);
+    });
+  }
+
+  function saveDomDecision(selector, decision) {
+    if (!selector) return;
+    api.runtime.sendMessage({
+      action: "save_dom_decision",
+      hostname: window.location.hostname,
+      selector: selector,
+      layout: getResponsiveLayout(),
+      decision: decision
+    });
+  }
 
   function isPositionedBanner(el) {
     var style = window.getComputedStyle(el);
@@ -53,11 +97,7 @@
       if (text.indexOf(adKeywords[i]) !== -1) return true;
     }
     var cls = (el.className + " " + el.id).toLowerCase();
-    var clsPatterns = AF_CONFIG.bannerDetection.adClassPatterns;
-    for (var i = 0; i < clsPatterns.length; i++) {
-      if (cls.indexOf(clsPatterns[i]) !== -1) return true;
-    }
-    return false;
+    return hasAdTokenSignal(cls);
   }
 
   function linkLooksLikeAd(a) {
@@ -70,11 +110,7 @@
       (a.getAttribute('aria-label') || '') + ' ' +
       (a.getAttribute('title') || '')
     ).toLowerCase();
-    var clsPatterns = AF_CONFIG.bannerDetection.adClassPatterns;
-    for (var i = 0; i < clsPatterns.length; i++) {
-      if (sig.indexOf(clsPatterns[i]) !== -1) return true;
-    }
-    return false;
+    return hasAdTokenSignal(sig);
   }
 
   function getAdLinkStats(el) {
@@ -105,9 +141,7 @@
 
   function isProtectedNavigation(el) {
     if (!el || !el.closest) return false;
-    var nav = el.closest('nav, header, [role="navigation"]');
-    if (!nav) return false;
-    return !hasHighAdLinkRatio(nav) && !hasAdContent(nav);
+    return !!el.closest('nav, header, [role="navigation"]');
   }
 
   function isLoginForm(el) {
@@ -175,27 +209,67 @@
     return null;
   }
 
-  function hideBanner(el, reason) {
-    if (hiddenBanners.has(el)) return;
-    hiddenBanners.add(el);
-    el.style.setProperty('display', 'none', 'important');
-    log("Banner:", reason, "-", el.tagName + (el.id ? "#" + el.id : "") + (el.className ? "." + el.className : ""));
+  function hideBanner(el, reason, hideAction) {
+    if (!isProtectionEnabled() || isWhitelisted(window.location.href)) return;
+    if (hiddenBanners.has(el) || reviewedBanners.has(el)) return;
+    var selector = buildBannerSelector(el);
+    if (isAllowedCandidate(selector)) {
+      reviewedBanners.add(el);
+      return;
+    }
+    if (typeof notifyBannerCandidate !== "function") return;
+    var accepted = notifyBannerCandidate(el, reason, {
+      hide: function() {
+        hiddenBanners.add(el);
+        if (hideAction) hideAction();
+        else el.style.setProperty('display', 'none', 'important');
+        saveDomDecision(selector, "hide");
+        if (typeof afsRecordTelemetry === 'function') {
+          afsRecordTelemetry({
+            unit: "ui_overlay",
+            label: "ad",
+            label_source: "user_hide",
+            ad_type: "banner",
+            reason: reason,
+            element: el,
+            action: "hide",
+            outcome: "hidden_element",
+            evidence: {
+              count: 1,
+              layout: getResponsiveLayout(),
+              has_close_button: hasCloseButton(el),
+              high_ad_link_ratio: hasHighAdLinkRatio(el),
+              large_overlay: isLargeOverlay(el)
+            }
+          });
+        }
+      },
+      show: function() {
+        reviewedBanners.add(el);
+        saveDomDecision(selector, "show");
+      },
+      dismiss: function() { reviewedBanners.add(el); }
+    });
+    if (accepted) reviewedBanners.add(el);
   }
 
   function toggleCollapse(el, toggleBtn) {
     if (toggledElements.has(el)) return;
-    toggledElements.add(el);
-    toggleBtn.click();
-    log("Banner: collapsed via toggle");
+    hideBanner(el, "toggle collapse", function() {
+      toggledElements.add(el);
+      toggleBtn.click();
+      log("Banner: collapsed via toggle");
+    });
   }
 
   function scanBanners() {
+    if (!isProtectionEnabled() || isWhitelisted(window.location.href)) return;
     var allEls = document.querySelectorAll('body *');
     var positioned = [];
 
     for (var i = 0; i < allEls.length; i++) {
       var el = allEls[i];
-      if (hiddenBanners.has(el)) continue;
+      if (hiddenBanners.has(el) || reviewedBanners.has(el)) continue;
       if (!isPositionedBanner(el)) continue;
       if (el.offsetWidth === 0 && el.offsetHeight === 0) continue;
       if (el.style.display === 'none') continue;
@@ -241,6 +315,7 @@
 
   // Re-scan via direct close selectors (faster first pass)
   function scanCloseSelectors() {
+    if (!isProtectionEnabled() || isWhitelisted(window.location.href)) return;
     var sel = AF_CONFIG.bannerDetection.closeSelectors.join(',');
     try {
       var candidates = document.querySelectorAll(sel);

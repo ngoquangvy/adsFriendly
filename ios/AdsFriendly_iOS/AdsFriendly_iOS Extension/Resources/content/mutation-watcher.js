@@ -2,8 +2,6 @@
   function elementHasAdSignal(el) {
     if (!el) return false;
     var current = el;
-    var clsPatterns = AF_CONFIG.bannerDetection.adClassPatterns || [];
-
     while (current && current !== document.body) {
       var sig = (
         (current.className || '') + ' ' +
@@ -11,9 +9,7 @@
         (current.getAttribute ? (current.getAttribute('aria-label') || '') : '') + ' ' +
         (current.getAttribute ? (current.getAttribute('title') || '') : '')
       ).toLowerCase();
-      for (var i = 0; i < clsPatterns.length; i++) {
-        if (sig.indexOf(clsPatterns[i]) !== -1) return true;
-      }
+      if (hasAdTokenSignal(sig)) return true;
       current = current.parentElement;
     }
 
@@ -26,6 +22,7 @@
 
   function processNewNode(node) {
     if (node.nodeType !== 1) return;
+    if (!isProtectionEnabled() || isWhitelisted(window.location.href)) return;
     if (isTrustedInitiatorPage()) return;
 
     var links = node.tagName === 'A' ? [node] : (node.querySelectorAll ? node.querySelectorAll('a[target="_blank"]') : []);
@@ -44,6 +41,23 @@
 
       if ((isHidden || isOverlay) && !isInsideProtectedNavigation(a) && (isAdLikeUrl(a.href) || elementHasAdSignal(a))) {
         var href = a.href;
+        if (typeof afsRecordTelemetry === 'function') {
+          afsRecordTelemetry({
+            unit: "navigation",
+            label: "ad",
+            label_source: "heuristic_blocked",
+            ad_type: "popup",
+            targetUrl: href,
+            reason: isHidden ? "hidden_target_blank_link" : "overlay_target_blank_link",
+            element: a,
+            action: "disable",
+            outcome: "removed_href",
+            evidence: {
+              hidden: isHidden,
+              overlay_position: isOverlay
+            }
+          });
+        }
         a.removeAttribute('href');
         a.setAttribute('data-afs-href', href);
         a.style.setProperty('pointer-events', 'none', 'important');

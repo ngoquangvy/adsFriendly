@@ -1,4 +1,61 @@
 (function() {
+  var lastTrustedIntent = { url: null, time: 0 };
+  var userAllowedPopupHosts = {};
+  var userBlockedPopupHosts = {};
+
+  function isBlankUrl(url) {
+    return !url || url === '' || url.indexOf('about:') === 0 || url.indexOf('javascript:') === 0;
+  }
+
+  function hostKey(url) {
+    try {
+      return new URL(url, window.location.href).hostname.toLowerCase().replace(/\.$/, '');
+    } catch(e) {
+      return '';
+    }
+  }
+
+  function isUserAllowedPopup(url) {
+    var key = hostKey(url);
+    return !!(key && userAllowedPopupHosts[key]);
+  }
+
+  function isUserBlockedPopup(url) {
+    var key = hostKey(url);
+    return !!(key && userBlockedPopupHosts[key]);
+  }
+
+  function refreshPopupRules() {
+    try {
+      api.runtime.sendMessage({ action: "get_popup_rules" }, function(rules) {
+        if (!rules) return;
+        userAllowedPopupHosts = rules.allowed || {};
+        userBlockedPopupHosts = rules.blocked || {};
+      });
+    } catch(e) {}
+  }
+
+  function isVisibleLink(a) {
+    if (!a || !a.getBoundingClientRect) return false;
+    var style = window.getComputedStyle(a);
+    if (style.display === 'none' || style.visibility === 'hidden') return false;
+    if (parseFloat(style.opacity || '1') <= 0.1) return false;
+    var rect = a.getBoundingClientRect();
+    if (rect.width < 4 || rect.height < 4) return false;
+    return true;
+  }
+
+  function isLikelyClickLayer(a) {
+    if (!a || !a.getBoundingClientRect) return false;
+    var style = window.getComputedStyle(a);
+    var rect = a.getBoundingClientRect();
+    var area = rect.width * rect.height;
+    var viewportArea = window.innerWidth * window.innerHeight;
+    var isHuge = viewportArea > 0 && area / viewportArea > 0.45;
+    var isLayer = style.position === 'fixed' || style.position === 'absolute';
+    return isLayer && isHuge && (parseFloat(style.opacity || '1') <= 0.2 || linkHasAdSignal(a));
+  }
+
   function linkHasAdSignal(a) {
     if (!a || !a.href) return false;
     if (isAdLikeUrl(a.href)) return true;
@@ -9,68 +66,91 @@
       (a.getAttribute('aria-label') || '') + ' ' +
       (a.getAttribute('title') || '')
     ).toLowerCase();
-    var patterns = AF_CONFIG.bannerDetection.adClassPatterns || [];
-    for (var i = 0; i < patterns.length; i++) {
-      if (sig.indexOf(patterns[i]) !== -1) return true;
-    }
-    return false;
+    return hasAdTokenSignal(sig);
   }
 
-  function onPopupEvent(url) {
-    if (!url || url === '') {
-      if (isTrustedInitiatorPage()) {
+  function rememberTrustedIntent(a) {
+    if (!a || !a.href || isBlankUrl(a.href)) return;
+    if (isTrustedInitiatorPage() || isWhitelisted(a.href)) return;
+    if (!isCrossOrigin(a.href)) return;
+    if (!isVisibleLink(a) || isLikelyClickLayer(a)) return;
+
+    lastTrustedIntent = { url: a.href, time: Date.now() };
+    api.runtime.sendMessage({
+      action: "trusted_click",
+      url: a.href
+    });
+  }
+
+  function matchesTrustedIntent(url) {
+    if (!url || !lastTrustedIntent.url) return false;
+    if (Date.now() - lastTrustedIntent.time > 2000) return false;
+    return areSameSite(url, lastTrustedIntent.url);
+  }
+
+  function onPopupEvent(url, userInitiated) {
+    if (typeof isProtectionEnabled === 'function' && !isProtectionEnabled()) {
+      document.documentElement.setAttribute('__afs_allow__', 'yes');
+      return;
+    }
+    if (isBlankUrl(url)) {
+      if (userInitiated || isTrustedInitiatorPage()) {
         document.documentElement.setAttribute('__afs_allow__', 'yes');
       }
       return;
     }
-    if (url.startsWith('javascript:')) return;
-    if (isTrustedInitiatorPage() || !isCrossOrigin(url) || isWhitelisted(url) || !isAdLikeUrl(url)) {
+    if (isUserBlockedPopup(url)) {
+      log("Chan popup theo user block-list:", url);
+      if (typeof afsRecordTelemetry === 'function') afsRecordTelemetry({
+        label: "ad",
+        label_source: "user_block",
+        targetUrl: url,
+        reason: "user_block_list",
+        action: "block",
+        outcome: "prevented_window_open"
+      });
+      notifyBlocked(url, true);
+      return;
+    }
+    if (isTrustedInitiatorPage() || !isCrossOrigin(url) || isWhitelisted(url) || isUserAllowedPopup(url) || matchesTrustedIntent(url)) {
       document.documentElement.setAttribute('__afs_allow__', 'yes');
       log("Cho phep popup:", url);
       return;
     }
     log("Chan popup:", url);
-    notifyBlocked(url);
+    if (typeof afsRecordTelemetry === 'function') afsRecordTelemetry({
+      label: "ad",
+      label_source: "heuristic_blocked",
+      targetUrl: url,
+      reason: "window_open_without_allowed_intent",
+      action: "block",
+      outcome: "prevented_window_open"
+    });
+    notifyBlocked(url, false);
   }
 
   window.addEventListener('__AFS_popup__', function(e) {
     try {
-      onPopupEvent(JSON.parse(e.detail).url);
+      var detail = JSON.parse(e.detail);
+      onPopupEvent(detail.url, detail.userInitiated === true);
     } catch(err) {}
   });
 
   document.addEventListener('mousedown', function(e) {
-    if (e.button !== 0) return;
     var a = e.target.closest('a');
-    if (!isTrustedInitiatorPage() && a && a.href && a.target === '_blank' && isCrossOrigin(a.href) && !isWhitelisted(a.href) && linkHasAdSignal(a)) {
-      e.preventDefault();
-      e.stopPropagation();
-      log("Chan mousedown -> a[target=_blank]:", a.href);
-      notifyBlocked(a.href);
-    }
+    rememberTrustedIntent(a);
   }, true);
 
   document.addEventListener('click', function(e) {
     var a = e.target.closest('a');
     if (!a || !a.href) return;
-    var opensNewTab = a.target === '_blank' || e.metaKey || e.ctrlKey;
-    if (!isTrustedInitiatorPage() && opensNewTab && isCrossOrigin(a.href) && !isWhitelisted(a.href) && linkHasAdSignal(a)) {
-      e.preventDefault();
-      e.stopPropagation();
-      log("Chan click -> a[target=_blank]:", a.href);
-      notifyBlocked(a.href);
-    }
+    rememberTrustedIntent(a);
   }, true);
 
   document.addEventListener('touchstart', function(e) {
     var a = e.target.closest('a');
-    if (!isTrustedInitiatorPage() && a && a.href && a.target === '_blank' && isCrossOrigin(a.href) && !isWhitelisted(a.href) && linkHasAdSignal(a)) {
-      e.preventDefault();
-      e.stopPropagation();
-      log("Chan touchstart -> a[target=_blank]:", a.href);
-      notifyBlocked(a.href);
-    }
-  }, { capture: true, passive: false });
+    rememberTrustedIntent(a);
+  }, { capture: true, passive: true });
 
   var pointerCount = 0;
   var pointerTimer = null;
@@ -80,18 +160,7 @@
     if (pointerTimer) clearTimeout(pointerTimer);
     pointerTimer = setTimeout(function() {
       if (pointerCount >= AF_CONFIG.popupBlocking.popUnderClickThreshold) {
-        log("Pop-under detected (" + pointerCount + " clicks)");
-        document.querySelectorAll('a[target="_blank"]').forEach(function(a) {
-          if (!isTrustedInitiatorPage() && a.href && isCrossOrigin(a.href) && !isWhitelisted(a.href) && linkHasAdSignal(a)) {
-            var href = a.href;
-            a.removeAttribute('href');
-            a.setAttribute('data-afs-href', href);
-            a.addEventListener('click', function(ev) {
-              ev.preventDefault();
-              notifyBlocked(href);
-            }, true);
-          }
-        });
+        log("Nhieu thao tac lien tiep; giu nguyen cac link do nguoi dung mo.");
       }
       pointerCount = 0;
     }, AF_CONFIG.popupBlocking.popUnderTimeWindowMs);
@@ -100,9 +169,12 @@
   api.runtime.onMessage.addListener(function(message) {
     if (message.action === "popup_blocked") {
       log("Background da chan tab:", message.url);
-      notifyBlocked(message.url);
+      notifyBlocked(message.url, isUserBlockedPopup(message.url));
+    } else if (message.action === "popup_rules_updated") {
+      refreshPopupRules();
     }
   });
 
+  refreshPopupRules();
   log("Popup-blocker da khoi dong.");
 })();
