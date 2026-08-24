@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   classifyMediaSource,
   createMediaCandidateFromSource,
+  isLikelyMediaSegment,
 } from "../src/media/detection.js";
 import { createMediaCatalog } from "../src/media/catalog.js";
 import {
@@ -33,6 +34,36 @@ test("classifies direct, HLS, DASH, and blob media without treating segments as 
   );
   assert.equal(classifyMediaSource("blob:https://video.example/id"), "blob");
   assert.equal(classifyMediaSource("https://cdn.example/segment.ts"), null);
+  assert.equal(
+    classifyMediaSource("https://cdn.example/random.ts", "video/mp2t"),
+    null,
+  );
+  assert.equal(
+    classifyMediaSource("https://cdn.example/42.m4s", "video/mp4"),
+    null,
+  );
+  assert.equal(
+    classifyMediaSource("https://cdn.example/no-extension", "video/mp2t"),
+    null,
+  );
+  assert.equal(
+    isLikelyMediaSegment("https://cdn.example/movie.mp4", "video/mp4"),
+    false,
+  );
+});
+
+test("catalog ignores a forged DIRECT candidate that is actually an HLS segment", () => {
+  const catalog = createMediaCatalog();
+  const event = createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, {
+    id: "segment-1",
+    pageUrl: "https://video.example/watch",
+    sourceUrl: "https://cdn.example/random.ts",
+    kind: "direct",
+    mimeType: "video/mp2t",
+    detectedBy: "network",
+  });
+  assert.equal(catalog.add(5, event), null);
+  assert.deepEqual(catalog.list(5), []);
 });
 
 test("creates a stable content-neutral candidate from a relative source", () => {

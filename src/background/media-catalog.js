@@ -1,5 +1,6 @@
 import { createMediaCatalog } from "../media/catalog.js";
 import { EVENTS, createRegisteredEvent } from "../runtime/event-catalog.js";
+import { isLikelyMediaSegment } from "../media/detection.js";
 
 const SESSION_PREFIX = "adsfriendly.mediaCatalog.";
 const catalog = createMediaCatalog();
@@ -58,6 +59,11 @@ async function hydrateCatalog() {
     const tabId = Number(key.slice(SESSION_PREFIX.length));
     if (!Number.isInteger(tabId)) continue;
     for (const item of items) {
+      if (
+        item.kind === "direct" &&
+        isLikelyMediaSegment(item.sourceUrl, item.mimeType)
+      )
+        continue;
       const sources = item.detectionSources?.length
         ? item.detectionSources
         : [item.detectedBy];
@@ -73,6 +79,9 @@ async function hydrateCatalog() {
         } catch {}
       }
     }
+    const cleanedItems = catalog.list(tabId);
+    if (cleanedItems.length) await storage.set({ [key]: cleanedItems });
+    else await storage.remove(key);
   }
 }
 

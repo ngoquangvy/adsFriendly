@@ -223,6 +223,13 @@ var AdsFriendlyMainWorld = (() => {
     "audio/x-mpegurl"
   ]);
   var DASH_MIME_TYPES = /* @__PURE__ */ new Set(["application/dash+xml"]);
+  var SEGMENT_MIME_TYPES = /* @__PURE__ */ new Set([
+    "video/mp2t",
+    "video/iso.segment",
+    "audio/aac",
+    "audio/aacp"
+  ]);
+  var SEGMENT_PATH_PATTERN = /\.(?:ts|m2ts|m4s|cmfv|cmfa|aac)$/i;
   function classifyMediaSource(sourceUrl = "", mimeType = "") {
     const normalizedUrl = String(sourceUrl).trim().toLowerCase();
     const normalizedMime = String(mimeType).split(";")[0].trim().toLowerCase();
@@ -232,9 +239,16 @@ var AdsFriendlyMainWorld = (() => {
       return MEDIA_KINDS.HLS;
     if (path.endsWith(".mpd") || DASH_MIME_TYPES.has(normalizedMime))
       return MEDIA_KINDS.DASH;
+    if (isLikelyMediaSegment(normalizedUrl, normalizedMime)) return null;
     if (/\.(mp4|webm|m4v|mov)$/.test(path) || normalizedMime.startsWith("video/"))
       return MEDIA_KINDS.DIRECT;
     return null;
+  }
+  function isLikelyMediaSegment(sourceUrl = "", mimeType = "") {
+    const normalizedUrl = String(sourceUrl).trim().toLowerCase();
+    const normalizedMime = String(mimeType).split(";", 1)[0].trim().toLowerCase();
+    const path = normalizedUrl.split(/[?#]/, 1)[0];
+    return SEGMENT_PATH_PATTERN.test(path) || SEGMENT_MIME_TYPES.has(normalizedMime);
   }
   function createMediaCandidateFromSource({
     pageUrl,

@@ -5,6 +5,7 @@ import {
   MEDIA_PROBE_STATES,
   normalizeMediaCandidate,
 } from "./contracts.js";
+import { isLikelyMediaSegment } from "./detection.js";
 
 export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
   const tabs = new Map();
@@ -17,6 +18,11 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
         throw new Error(`[MediaCatalog] Cannot add event "${event.type}".`);
       }
       const candidate = event.payload;
+      if (
+        candidate.kind === "direct" &&
+        isLikelyMediaSegment(candidate.sourceUrl, candidate.mimeType)
+      )
+        return null;
       let tabCatalog = tabs.get(tabId);
       if (tabCatalog && !samePageUrl(tabCatalog.pageUrl, candidate.pageUrl)) {
         tabs.delete(tabId);

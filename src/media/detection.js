@@ -11,6 +11,13 @@ const HLS_MIME_TYPES = new Set([
   "audio/x-mpegurl",
 ]);
 const DASH_MIME_TYPES = new Set(["application/dash+xml"]);
+const SEGMENT_MIME_TYPES = new Set([
+  "video/mp2t",
+  "video/iso.segment",
+  "audio/aac",
+  "audio/aacp",
+]);
+const SEGMENT_PATH_PATTERN = /\.(?:ts|m2ts|m4s|cmfv|cmfa|aac)$/i;
 
 export function classifyMediaSource(sourceUrl = "", mimeType = "") {
   const normalizedUrl = String(sourceUrl).trim().toLowerCase();
@@ -22,9 +29,19 @@ export function classifyMediaSource(sourceUrl = "", mimeType = "") {
     return MEDIA_KINDS.HLS;
   if (path.endsWith(".mpd") || DASH_MIME_TYPES.has(normalizedMime))
     return MEDIA_KINDS.DASH;
+  if (isLikelyMediaSegment(normalizedUrl, normalizedMime)) return null;
   if (/\.(mp4|webm|m4v|mov)$/.test(path) || normalizedMime.startsWith("video/"))
     return MEDIA_KINDS.DIRECT;
   return null;
+}
+
+export function isLikelyMediaSegment(sourceUrl = "", mimeType = "") {
+  const normalizedUrl = String(sourceUrl).trim().toLowerCase();
+  const normalizedMime = String(mimeType).split(";", 1)[0].trim().toLowerCase();
+  const path = normalizedUrl.split(/[?#]/, 1)[0];
+  return (
+    SEGMENT_PATH_PATTERN.test(path) || SEGMENT_MIME_TYPES.has(normalizedMime)
+  );
 }
 
 export function createMediaCandidateFromSource({

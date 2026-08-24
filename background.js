@@ -1872,6 +1872,21 @@ var AdsFriendlyBackground = (() => {
     return globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   }
 
+  // src/media/detection.js
+  var SEGMENT_MIME_TYPES = /* @__PURE__ */ new Set([
+    "video/mp2t",
+    "video/iso.segment",
+    "audio/aac",
+    "audio/aacp"
+  ]);
+  var SEGMENT_PATH_PATTERN = /\.(?:ts|m2ts|m4s|cmfv|cmfa|aac)$/i;
+  function isLikelyMediaSegment(sourceUrl = "", mimeType = "") {
+    const normalizedUrl = String(sourceUrl).trim().toLowerCase();
+    const normalizedMime = String(mimeType).split(";", 1)[0].trim().toLowerCase();
+    const path = normalizedUrl.split(/[?#]/, 1)[0];
+    return SEGMENT_PATH_PATTERN.test(path) || SEGMENT_MIME_TYPES.has(normalizedMime);
+  }
+
   // src/media/catalog.js
   function createMediaCatalog({ maximumPerTab = 50 } = {}) {
     const tabs = /* @__PURE__ */ new Map();
@@ -1883,6 +1898,8 @@ var AdsFriendlyBackground = (() => {
           throw new Error(`[MediaCatalog] Cannot add event "${event2.type}".`);
         }
         const candidate = event2.payload;
+        if (candidate.kind === "direct" && isLikelyMediaSegment(candidate.sourceUrl, candidate.mimeType))
+          return null;
         let tabCatalog = tabs.get(tabId);
         if (tabCatalog && !samePageUrl(tabCatalog.pageUrl, candidate.pageUrl)) {
           tabs.delete(tabId);
@@ -2096,6 +2113,8 @@ var AdsFriendlyBackground = (() => {
       const tabId = Number(key.slice(SESSION_PREFIX.length));
       if (!Number.isInteger(tabId)) continue;
       for (const item of items) {
+        if (item.kind === "direct" && isLikelyMediaSegment(item.sourceUrl, item.mimeType))
+          continue;
         const sources = item.detectionSources?.length ? item.detectionSources : [item.detectedBy];
         for (const detectedBy of sources) {
           try {
@@ -2110,6 +2129,9 @@ var AdsFriendlyBackground = (() => {
           }
         }
       }
+      const cleanedItems = catalog.list(tabId);
+      if (cleanedItems.length) await storage.set({ [key]: cleanedItems });
+      else await storage.remove(key);
     }
   }
   async function persistTab(tabId) {
