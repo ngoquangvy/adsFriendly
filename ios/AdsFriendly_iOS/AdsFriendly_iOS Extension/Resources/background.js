@@ -40,8 +40,7 @@ bgApi.runtime.onMessage.addListener(function (request, sender, sendResponse) {
 
   if (request.action === "allow_popups" && request.urls) {
     request.urls.forEach(function (url) {
-      var hostname = bgGetPopupHostKey(url);
-      bgSetSitePolicy(hostname, "allow", function () {
+      bgRememberAllowedPopup(url, function () {
         bgRecordAdEvent({
           unit: "feedback",
           label: "false_positive",
@@ -78,7 +77,7 @@ bgApi.runtime.onMessage.addListener(function (request, sender, sendResponse) {
           surface: "decision_toast",
         },
       });
-      bgSetSitePolicy(bgGetPopupHostKey(url), "block", function () {
+      bgRememberBlockedPopup(url, function () {
         notifyPopupRulesUpdated();
       });
     });

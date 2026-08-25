@@ -1,4 +1,14 @@
 (function() {
+  var bannerScanTimer = null;
+
+  function scheduleBannerScan() {
+    if (bannerScanTimer || typeof AF_scanBanners !== 'function') return;
+    bannerScanTimer = setTimeout(function() {
+      bannerScanTimer = null;
+      AF_scanBanners();
+    }, 180);
+  }
+
   function elementHasAdSignal(el) {
     if (!el) return false;
     var current = el;
@@ -61,22 +71,29 @@
         a.removeAttribute('href');
         a.setAttribute('data-afs-href', href);
         a.style.setProperty('pointer-events', 'none', 'important');
-        a.addEventListener('click', function(ev) {
-          ev.preventDefault();
-          notifyBlocked(href);
-        }, true);
+        (function(link, blockedHref) {
+          link.addEventListener('click', function(ev) {
+            ev.preventDefault();
+            notifyBlocked(blockedHref);
+          }, true);
+        })(a, href);
         log("Mutation watcher: vo hieu hoa a an/overlay:", href);
       }
     }
 
-    if (node.querySelectorAll && node.querySelectorAll('a[href]').length > 0) {
-      if (typeof AF_scanBanners === 'function') AF_scanBanners();
+    if ((node.matches && node.matches('a[href], img, iframe, [style], [class], [role="dialog"]')) ||
+        (node.querySelector && node.querySelector('a[href], img, iframe, [style], [class], [role="dialog"]'))) {
+      scheduleBannerScan();
     }
   }
 
   if (typeof MutationObserver !== 'undefined') {
     var observer = new MutationObserver(function(mutations) {
       for (var m = 0; m < mutations.length; m++) {
+        if (mutations[m].type === 'attributes') {
+          processNewNode(mutations[m].target);
+          continue;
+        }
         var added = mutations[m].addedNodes;
         for (var n = 0; n < added.length; n++) {
           processNewNode(added[n]);
@@ -86,11 +103,13 @@
 
     var target = document.documentElement || document.body;
     if (target) {
-      observer.observe(target, { childList: true, subtree: true });
+      observer.observe(target, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class', 'href', 'target', 'src'] });
+      processNewNode(target);
       log("Mutation watcher da bat dau.");
     } else {
       document.addEventListener('DOMContentLoaded', function() {
-        observer.observe(document.documentElement, { childList: true, subtree: true });
+        observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class', 'href', 'target', 'src'] });
+        processNewNode(document.documentElement);
         log("Mutation watcher da bat dau (sau DOMContentLoaded).");
       });
     }

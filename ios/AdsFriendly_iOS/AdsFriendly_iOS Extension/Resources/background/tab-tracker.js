@@ -190,9 +190,14 @@
     if (typeof bgIsProtectionEnabled === "function" && !bgIsProtectionEnabled()) return true;
     if (!targetUrl || targetUrl === "" || targetUrl.indexOf("about:") === 0) return true;
     if (isAllowedOnce(targetUrl)) return true;
+    if (typeof bgIsBlacklisted === "function" && bgIsBlacklisted(targetUrl)) return false;
     if (bgIsUserBlockedPopup(targetUrl)) return false;
+    var sourceHost = "";
+    try { sourceHost = new URL(sourceUrl).hostname; } catch(e) {}
+    var sourcePolicy = sourceHost && typeof bgGetSitePolicy === "function" ? bgGetSitePolicy(sourceHost) : "default";
+    if (sourcePolicy === "allow") return true;
     if (bgIsUserAllowedPopup(targetUrl)) return true;
-    if (bgIsTrustedInitiator(sourceUrl)) return true;
+    if (sourcePolicy !== "block" && bgIsTrustedInitiator(sourceUrl)) return true;
     if (bgIsWhitelisted(targetUrl)) return true;
     if (bgAreSameSite(sourceUrl, targetUrl)) return true;
     if (hasIntentFor(sourceTabId, targetUrl)) return true;
@@ -202,8 +207,12 @@
   function shouldBlockNavigation(sourceTabId, sourceUrl, targetUrl) {
     if (typeof bgIsProtectionEnabled === "function" && !bgIsProtectionEnabled()) return false;
     if (!targetUrl || targetUrl === "" || targetUrl.indexOf("about:") === 0) return false;
+    if (typeof bgIsBlacklisted === "function" && bgIsBlacklisted(targetUrl)) return true;
     if (bgIsUserBlockedPopup(targetUrl)) return true;
     if (shouldAllowNavigation(sourceTabId, sourceUrl, targetUrl)) return false;
+    var sourceHost = "";
+    try { sourceHost = new URL(sourceUrl).hostname; } catch(e) {}
+    if (sourceHost && typeof bgGetSitePolicy === "function" && bgGetSitePolicy(sourceHost) === "block") return true;
     return bgIsAdLikeUrl(targetUrl);
   }
 

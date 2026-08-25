@@ -53,6 +53,9 @@
   window.bgIsWhitelisted = function(url) {
     try {
       var hostname = new URL(url).hostname;
+      if (bgConfiguredBlacklist.some(function(entry) {
+        return hostMatchesDomain(hostname, String(entry || '').replace(/^\|\|/, '').replace(/\^$/, ''));
+      })) return false;
       return bgWhitelist.concat(bgConfiguredWhitelist).some(function(d) {
         return hostMatchesDomain(hostname, d);
       }) || isGoogleHost(hostname);
@@ -83,34 +86,29 @@
   window.bgGetPopupHostKey = popupHostKey;
 
   window.bgGetPopupRules = function() {
-    var allowed = Object.assign({}, bgUserAllowedPopupHosts);
-    var blocked = Object.assign({}, bgUserBlockedPopupHosts);
-    bgConfiguredWhitelist.forEach(function(entry) {
-      var host = normalizeHost(String(entry || '').replace(/^\|\|/, '').replace(/\^$/, ''));
-      if (host) allowed[host] = allowed[host] || { source: "settings_package" };
-    });
-    bgConfiguredBlacklist.forEach(function(entry) {
-      var host = normalizeHost(String(entry || '').replace(/^\|\|/, '').replace(/\^$/, ''));
-      if (host) blocked[host] = blocked[host] || { source: "settings_package" };
-    });
     return {
-      allowed: allowed,
-      blocked: blocked
+      allowed: Object.assign({}, bgUserAllowedPopupHosts),
+      blocked: Object.assign({}, bgUserBlockedPopupHosts)
     };
+  };
+
+  window.bgIsBlacklisted = function(url) {
+    try {
+      var hostname = new URL(url).hostname;
+      return bgConfiguredBlacklist.some(function(entry) {
+        return hostMatchesDomain(hostname, String(entry || '').replace(/^\|\|/, '').replace(/\^$/, ''));
+      });
+    } catch(e) { return false; }
   };
 
   window.bgIsUserAllowedPopup = function(url) {
     var key = popupHostKey(url);
-    return !!(key && (bgUserAllowedPopupHosts[key] || bgConfiguredWhitelist.some(function(entry) {
-      return hostMatchesDomain(key, entry);
-    })));
+    return !!(key && bgUserAllowedPopupHosts[key]);
   };
 
   window.bgIsUserBlockedPopup = function(url) {
     var key = popupHostKey(url);
-    return !!(key && (bgUserBlockedPopupHosts[key] || bgConfiguredBlacklist.some(function(entry) {
-      return hostMatchesDomain(key, String(entry || '').replace(/^\|\|/, '').replace(/\^$/, ''));
-    })));
+    return !!(key && bgUserBlockedPopupHosts[key]);
   };
 
   window.bgRememberAllowedPopup = function(url, callback) {
@@ -142,6 +140,9 @@
   window.bgIsTrustedInitiator = function(url) {
     try {
       var hostname = new URL(url).hostname;
+      if (bgConfiguredBlacklist.some(function(entry) {
+        return hostMatchesDomain(hostname, String(entry || '').replace(/^\|\|/, '').replace(/\^$/, ''));
+      })) return false;
       return bgTrustedInitiators.some(function(d) {
         return hostMatchesDomain(hostname, d);
       }) || isGoogleHost(hostname);
@@ -159,6 +160,13 @@
       for (var j = 0; j < bgAdLinkPathPatterns.length; j++) {
         if (full.indexOf(bgAdLinkPathPatterns[j].toLowerCase()) !== -1) return true;
       }
+      var campaignSignal = [
+        parsed.searchParams.get("utm_source"),
+        parsed.searchParams.get("utm_medium"),
+        parsed.searchParams.get("utm_campaign"),
+        parsed.searchParams.get("utm_content")
+      ].join(" ").toLowerCase();
+      if (/(advert|banner|display|popup|sponsor|cpc|cpd|(^|[^a-z])ads?([^a-z]|$))/.test(campaignSignal)) return true;
     } catch(e) {}
     return false;
   };

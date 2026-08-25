@@ -2,6 +2,7 @@ const api = (typeof browser !== 'undefined') ? browser : chrome;
 
 function isWhitelisted(url) {
   try {
+    if (typeof isBlacklisted === "function" && isBlacklisted(url)) return false;
     var hostname = new URL(url, window.location.href).hostname.toLowerCase();
     return AF_CONFIG.whitelist.some(function(d) {
       return hostMatchesDomain(hostname, d);
@@ -11,6 +12,30 @@ function isWhitelisted(url) {
 
 function isProtectionEnabled() {
   return !AF_CONFIG.appSettings || AF_CONFIG.appSettings.enabled !== false;
+}
+
+function normalizedPolicyDomain(value) {
+  return normalizeHost(String(value || '').replace(/^\|\|/, '').replace(/\^$/, ''));
+}
+
+function listMatchesUrl(url, values) {
+  try {
+    var hostname = new URL(url, window.location.href).hostname.toLowerCase();
+    return (values || []).some(function(value) {
+      var domain = normalizedPolicyDomain(value);
+      return domain && hostMatchesDomain(hostname, domain);
+    });
+  } catch(e) { return false; }
+}
+
+function isBlacklisted(url) {
+  return listMatchesUrl(url, AF_CONFIG.blacklist);
+}
+
+function getCurrentSitePolicy() {
+  if (isBlacklisted(window.location.href)) return "block";
+  var explicitWhitelist = (AF_CONFIG.whitelist || []).slice((AF_CONFIG.baseWhitelist || []).length);
+  return listMatchesUrl(window.location.href, explicitWhitelist) ? "allow" : "default";
 }
 
 function getProtectionMode() {
@@ -102,6 +127,13 @@ function isAdLikeUrl(url) {
     for (var j = 0; j < pathPatterns.length; j++) {
       if (full.indexOf(pathPatterns[j].toLowerCase()) !== -1) return true;
     }
+    var campaignSignal = [
+      parsed.searchParams.get("utm_source"),
+      parsed.searchParams.get("utm_medium"),
+      parsed.searchParams.get("utm_campaign"),
+      parsed.searchParams.get("utm_content")
+    ].join(" ").toLowerCase();
+    if (/(advert|banner|display|popup|sponsor|cpc|cpd|(^|[^a-z])ads?([^a-z]|$))/.test(campaignSignal)) return true;
   } catch(e) {}
   return false;
 }

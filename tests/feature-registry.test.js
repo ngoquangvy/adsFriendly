@@ -101,6 +101,7 @@ test("legacy settings migrate deterministically", () => {
     enabled: true,
     protectionMode: "safe",
     featureOverrides: {},
+    mediaDownloadConnections: 8,
   });
   assert.equal(
     migrateLegacySettings({ friendlyMode: false }).protectionMode,
@@ -109,6 +110,17 @@ test("legacy settings migrate deterministically", () => {
   assert.equal(
     normalizeSettings({ protectionMode: "invalid" }).protectionMode,
     "safe",
+  );
+  assert.equal(normalizeSettings({}).mediaDownloadConnections, 8);
+  assert.equal(
+    normalizeSettings({ mediaDownloadConnections: 12 })
+      .mediaDownloadConnections,
+    12,
+  );
+  assert.equal(
+    normalizeSettings({ mediaDownloadConnections: 99 })
+      .mediaDownloadConnections,
+    8,
   );
 });
 

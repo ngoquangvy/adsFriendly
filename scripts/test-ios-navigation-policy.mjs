@@ -22,6 +22,16 @@ async function testAdTokenMatching() {
   const context = {
     chrome: {},
     URL,
+    AF_CONFIG: {
+      appSettings: { enabled: true },
+      baseWhitelist: [],
+      whitelist: [],
+      blacklist: [],
+      bannerDetection: {
+        adLinkHostPatterns: [],
+        adLinkPathPatterns: [],
+      },
+    },
     window: {
       location: {
         href: "https://source.example/page",
@@ -34,7 +44,8 @@ async function testAdTokenMatching() {
       globalThis.tokenResults = {
         download: hasAdTokenSignal("download-button"),
         address: hasAdTokenSignal("address-link"),
-        explicitAd: hasAdTokenSignal("promo_ad_banner")
+        explicitAd: hasAdTokenSignal("promo_ad_banner"),
+        campaignBanner: isAdLikeUrl("https://hitclub.example/?utm_source=site&utm_medium=topbanner2&utm_campaign=cpd")
       };`,
     context,
   );
@@ -42,6 +53,7 @@ async function testAdTokenMatching() {
   assert.equal(context.tokenResults.download, false);
   assert.equal(context.tokenResults.address, false);
   assert.equal(context.tokenResults.explicitAd, true);
+  assert.equal(context.tokenResults.campaignBanner, true);
 }
 
 async function testBackgroundNewTabPolicy() {
@@ -59,6 +71,7 @@ async function testBackgroundNewTabPolicy() {
   };
   const tabs = new Map([[1, { id: 1, url: "https://source.example/article" }]]);
   const neutralized = [];
+  const sitePolicies = new Map();
   const add = (bucket) => ({
     addListener: (listener) => bucket.push(listener),
   });
@@ -98,6 +111,7 @@ async function testBackgroundNewTabPolicy() {
     bgAreSameSite: (left, right) =>
       new URL(left).hostname === new URL(right).hostname,
     bgIsAdLikeUrl: (url) => new URL(url).hostname.endsWith("doubleclick.net"),
+    bgGetSitePolicy: (hostname) => sitePolicies.get(hostname) || "default",
     neutralizeTab(tabId, sourceTabId, url) {
       neutralized.push({ tabId, sourceTabId, url });
     },
@@ -141,6 +155,25 @@ async function testBackgroundNewTabPolicy() {
     1,
     "a popup opened during a real user gesture must stay open",
   );
+
+  sitePolicies.set("source.example", "block");
+  tabs.set(7, { id: 7, url: "https://source.example/article" });
+  onCreatedTarget({
+    tabId: 5,
+    sourceTabId: 7,
+    url: "https://unknown.example/popup",
+  });
+  await wait(240);
+  assert.equal(neutralized.length, 2, "Block applies strictly to the source site");
+
+  sitePolicies.set("source.example", "allow");
+  onCreatedTarget({
+    tabId: 6,
+    sourceTabId: 7,
+    url: "https://ads.doubleclick.net/ad/",
+  });
+  await wait(240);
+  assert.equal(neutralized.length, 2, "Allow exempts tabs opened by the source site");
 }
 
 async function testMainWorldPopupPolicy() {
@@ -263,7 +296,7 @@ async function testIosDecisionUiContract() {
   assert.ok(popupBlocker.includes("notifyBlocked(url, true)"));
   assert.ok(popupBlocker.includes("notifyBlocked(url, false)"));
   assert.ok(ui.includes("notifyBannerCandidate"));
-  assert.ok(ui.includes("Suspected ad banner"));
+  assert.ok(ui.includes("Possible banner ad"));
   assert.ok(bannerDetector.includes('saveDomDecision(selector, "hide")'));
   assert.ok(bannerDetector.includes('saveDomDecision(selector, "show")'));
   assert.deepEqual(JSON.parse(iosPackage), JSON.parse(canonicalPackage));

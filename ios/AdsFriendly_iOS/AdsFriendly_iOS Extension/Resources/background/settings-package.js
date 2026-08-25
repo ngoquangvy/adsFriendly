@@ -70,8 +70,6 @@
       var blocked = Object.assign({}, snapshot.afsBlockedPopupHosts || {});
       delete allowed[hostname];
       delete blocked[hostname];
-      if (policy === "allow") allowed[hostname] = { url: "https://" + hostname, time: Date.now() };
-      if (policy === "block") blocked[hostname] = { url: "https://" + hostname, time: Date.now() };
       storage.set({
         whitelist: lists.whitelist,
         blacklist: lists.blacklist,

@@ -54,6 +54,20 @@ test("media download job creation is registered as a user action", () => {
     getActionDefinition(ACTIONS.MEDIA_DOWNLOAD_CANCEL).capability,
     CAPABILITIES.MEDIA_NATIVE_DOWNLOAD,
   );
+  for (const actionId of [
+    ACTIONS.MEDIA_DOWNLOAD_PAUSE,
+    ACTIONS.MEDIA_DOWNLOAD_RESUME,
+    ACTIONS.MEDIA_DOWNLOAD_RETRY,
+    ACTIONS.MEDIA_DOWNLOAD_OPEN,
+    ACTIONS.MEDIA_DOWNLOAD_REVEAL,
+    ACTIONS.MEDIA_DOWNLOAD_CLEAR_HISTORY,
+    ACTIONS.MEDIA_DOWNLOAD_REMOVE_HISTORY,
+  ]) {
+    assert.equal(
+      getActionDefinition(actionId).capability,
+      CAPABILITIES.MEDIA_NATIVE_DOWNLOAD,
+    );
+  }
 });
 
 test("action broker requires handlers for all actions owned by a feature", () => {

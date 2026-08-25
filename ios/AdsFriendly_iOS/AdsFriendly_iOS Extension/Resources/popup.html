@@ -26,11 +26,11 @@
     <div><strong id="total-count">0</strong><span>Total blocked</span></div>
   </section>
   <section class="policy" aria-label="Remembered action for this website">
-    <button data-policy="default">Default</button>
-    <button data-policy="allow">Allow</button>
-    <button data-policy="block">Block</button>
+    <button data-policy="default" aria-pressed="false">Default</button>
+    <button data-policy="allow" aria-pressed="false">Allow</button>
+    <button data-policy="block" aria-pressed="false">Block</button>
   </section>
-  <p id="hint">Unknown popup sources ask once before being remembered.</p>
+  <p id="hint" role="status" aria-live="polite">Default: block obvious ads and ask when uncertain.</p>
   <p id="error" role="alert" hidden></p>
   <script src="popup.js"></script>
 </body>

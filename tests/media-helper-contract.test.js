@@ -21,11 +21,20 @@ import {
   normalizeHelperDownloadPayload,
   normalizeHelperRequest,
 } from "../src/media/helper-contract.js";
+import { windowsRevealArguments } from "../packages/media-helper/src/output-action-arguments.js";
 import {
   MEDIA_HELPER_STATES,
   classifyNativeMessagingError,
   getMediaHelperStatus,
 } from "../src/background/media-helper-bridge.js";
+
+test("Windows reveal keeps the Explorer select switch and path together", () => {
+  const outputPath =
+    "C:\\Users\\Example User\\Downloads\\AdsFriendly\\funny video.mp4";
+  assert.deepEqual(windowsRevealArguments(outputPath), [
+    `/select,${outputPath}`,
+  ]);
+});
 
 test("ad protection is extension-only while the media helper stays optional", () => {
   assert.equal(
@@ -107,6 +116,24 @@ test("media helper messages are versioned and normalized", () => {
   assert.equal(event.protocolVersion, MEDIA_HELPER_PROTOCOL_VERSION);
   assert.equal(event.payload.helperVersion, "0.1.0");
   assert.equal(normalizeHelperEvent(event).type, MEDIA_HELPER_EVENTS.READY);
+
+  const openRequest = normalizeHelperRequest({
+    type: MEDIA_HELPER_REQUESTS.OUTPUT_OPEN,
+    requestId: "open-1",
+    protocolVersion: MEDIA_HELPER_PROTOCOL_VERSION,
+    payload: { outputPath: "C:\\Users\\Test\\Downloads\\video.mp4" },
+  });
+  assert.equal(openRequest.type, MEDIA_HELPER_REQUESTS.OUTPUT_OPEN);
+  assert.equal(
+    openRequest.payload.outputPath,
+    "C:\\Users\\Test\\Downloads\\video.mp4",
+  );
+  assert.equal(
+    createHelperEvent(MEDIA_HELPER_EVENTS.OUTPUT_OPENED, "open-1", {
+      action: "open",
+    }).type,
+    MEDIA_HELPER_EVENTS.OUTPUT_OPENED,
+  );
 });
 
 test("direct helper download payload is normalized at the protocol boundary", () => {
@@ -142,6 +169,8 @@ test("helper HLS context carries routing facts without arbitrary headers", () =>
       kind: "hls",
       pageUrl: "https://video.example/watch",
       manifestUrl: "https://cdn.example/master.m3u8",
+      duration: 5163.209,
+      segmentCount: 1726,
       requestContext: {
         documentUrl: "https://embed.example/player",
         referrer: "https://video.example/watch",
@@ -153,7 +182,34 @@ test("helper HLS context carries routing facts without arbitrary headers", () =>
   });
   assert.equal(payload.candidate.requestContext.credentials, "include");
   assert.equal(payload.candidate.requestContext.requiresBrowserSession, true);
+  assert.equal(payload.candidate.duration, 5163.209);
+  assert.equal(payload.candidate.segmentCount, 1726);
   assert.equal("headers" in payload.candidate.requestContext, false);
+});
+
+test("helper accepts a normalized static DASH download", () => {
+  const payload = normalizeHelperDownloadPayload({
+    jobId: "dash-1",
+    candidate: {
+      id: "media-dash",
+      kind: "dash",
+      pageUrl: "https://video.example/watch",
+      manifestUrl: "https://cdn.example/manifest.mpd",
+      duration: 120,
+      requestContext: {
+        documentUrl: "https://video.example/watch",
+        referrer: "https://video.example/",
+        credentials: "omit",
+      },
+    },
+  });
+  assert.equal(payload.candidate.kind, "dash");
+  assert.equal(
+    payload.candidate.manifestUrl,
+    "https://cdn.example/manifest.mpd",
+  );
+  assert.equal(payload.candidate.duration, 120);
+  assert.equal(payload.candidate.segmentCount, null);
 });
 
 test("native host errors distinguish a missing helper from a broken helper", () => {
@@ -199,6 +255,7 @@ test("helper status exposes only declared download capabilities", async () => {
           capabilities: {
             [MEDIA_HELPER_CAPABILITIES.DIRECT_HTTP_DOWNLOAD]: true,
             "download.hls_vod": false,
+            "download.dash_vod": true,
             "mux.ffmpeg": true,
             ignored: { nested: true },
           },
@@ -210,10 +267,12 @@ test("helper status exposes only declared download capabilities", async () => {
     assert.equal(status.status, MEDIA_HELPER_STATES.READY);
     assert.equal(status.canDownloadDirect, true);
     assert.equal(status.canDownloadHls, false);
+    assert.equal(status.canDownloadDash, true);
     assert.equal(status.canMuxWithFfmpeg, true);
     assert.deepEqual(status.capabilities, {
       "download.direct_http": true,
       "download.hls_vod": false,
+      "download.dash_vod": true,
       "mux.ffmpeg": true,
     });
   } finally {

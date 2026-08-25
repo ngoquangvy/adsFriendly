@@ -99,7 +99,7 @@
       }
       return;
     }
-    if (isUserBlockedPopup(url)) {
+    if (isUserBlockedPopup(url) || (typeof isBlacklisted === "function" && isBlacklisted(url))) {
       log("Chan popup theo user block-list:", url);
       if (typeof afsRecordTelemetry === 'function') afsRecordTelemetry({
         label: "ad",
@@ -110,6 +110,11 @@
         outcome: "prevented_window_open"
       });
       notifyBlocked(url, true);
+      return;
+    }
+    if (typeof getCurrentSitePolicy === "function" && getCurrentSitePolicy() === "allow") {
+      document.documentElement.setAttribute('__afs_allow__', 'yes');
+      log("Cho phep popup theo policy cua website nguon:", url);
       return;
     }
     if (isTrustedInitiatorPage() || !isCrossOrigin(url) || isWhitelisted(url) || isUserAllowedPopup(url) || matchesTrustedIntent(url)) {
@@ -172,6 +177,7 @@
       notifyBlocked(message.url, isUserBlockedPopup(message.url));
     } else if (message.action === "popup_rules_updated") {
       refreshPopupRules();
+      if (typeof AF_scanBanners === "function") setTimeout(AF_scanBanners, 0);
     }
   });
 

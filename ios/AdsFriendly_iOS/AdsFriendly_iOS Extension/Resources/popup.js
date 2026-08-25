@@ -1,6 +1,11 @@
 var popupApi = typeof browser !== "undefined" ? browser : chrome;
 var activeHostname = "";
 var currentState = null;
+var POLICY_HELP = {
+  default: "Default: block obvious ads and ask when uncertain.",
+  allow: "Allow: do not hide banners or block tabs opened by this site.",
+  block: "Block: strictly hide ad-like banners and block untrusted new tabs from this site."
+};
 
 function hostFromUrl(url) {
   try { return new URL(url).hostname.toLowerCase(); } catch (e) { return ""; }
@@ -10,6 +15,10 @@ function showError(message) {
   var element = document.getElementById("error");
   element.textContent = message;
   element.hidden = !message;
+}
+
+function showHint(message) {
+  document.getElementById("hint").textContent = message || POLICY_HELP.default;
 }
 
 function send(message, callback) {
@@ -38,26 +47,38 @@ function render(state) {
   else status.textContent = "Protected";
   document.querySelectorAll("[data-policy]").forEach(function(button) {
     button.classList.toggle("active", button.dataset.policy === (state.policy || "default"));
+    button.setAttribute("aria-pressed", button.dataset.policy === (state.policy || "default") ? "true" : "false");
+    button.title = POLICY_HELP[button.dataset.policy];
     button.disabled = !activeHostname;
   });
 }
 
-function loadState() {
+function loadState(feedback) {
   send({ action: "get_popup_state", hostname: activeHostname }, function(state) {
     if (state.error) { showError(state.error); return; }
     render(state);
+    showHint(feedback || POLICY_HELP[state.policy || "default"]);
   });
 }
 
 document.getElementById("protection-toggle").addEventListener("change", function(event) {
   var settings = Object.assign({}, currentState && currentState.appSettings || {}, { enabled: event.target.checked });
-  send({ action: "set_app_settings", settings: settings }, loadState);
+  send({ action: "set_app_settings", settings: settings }, function(response) {
+    if (response.error) { showError(response.error); return; }
+    loadState(event.target.checked ? "Protection is on." : "Protection is off on every site.");
+  });
 });
 
 document.querySelectorAll("[data-policy]").forEach(function(button) {
   button.addEventListener("click", function() {
     if (!activeHostname) return;
-    send({ action: "set_site_policy", hostname: activeHostname, policy: button.dataset.policy }, loadState);
+    var policy = button.dataset.policy;
+    showError("");
+    showHint("Saving… " + POLICY_HELP[policy]);
+    send({ action: "set_site_policy", hostname: activeHostname, policy: policy }, function(response) {
+      if (response.error) { showError(response.error); return; }
+      loadState(POLICY_HELP[policy]);
+    });
   });
 });
 

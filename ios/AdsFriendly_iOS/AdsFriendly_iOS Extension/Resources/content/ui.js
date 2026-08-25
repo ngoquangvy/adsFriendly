@@ -158,18 +158,32 @@ function notifyBannerCandidate(element, reason, handlers) {
   handlers = handlers || {};
   var review = document.createElement("div");
   review.id = "adsfriendly-banner-review";
-  review.innerHTML = '<span class="adsfriendly-message">Suspected ad banner</span>' +
+  review.innerHTML = '<span class="adsfriendly-message">Possible banner ad</span>' +
     '<button class="adsfriendly-btn adsfriendly-primary" type="button">Hide</button>' +
-    '<button class="adsfriendly-btn adsfriendly-show" type="button">Show</button>' +
+    '<button class="adsfriendly-btn adsfriendly-show" type="button">Keep</button>' +
     '<button class="adsfriendly-btn close" type="button">\u2715</button>';
   review.title = reason || "Suspected banner";
   document.body.appendChild(review);
   bannerReview = review;
+  var previousOutline = element.style.getPropertyValue("outline");
+  var previousOutlinePriority = element.style.getPropertyPriority("outline");
+  var previousOutlineOffset = element.style.getPropertyValue("outline-offset");
+  var previousOutlineOffsetPriority = element.style.getPropertyPriority("outline-offset");
+  element.style.setProperty("outline", "2px solid #f59e0b", "important");
+  element.style.setProperty("outline-offset", "-2px", "important");
+
+  function restoreOutline() {
+    if (previousOutline) element.style.setProperty("outline", previousOutline, previousOutlinePriority);
+    else element.style.removeProperty("outline");
+    if (previousOutlineOffset) element.style.setProperty("outline-offset", previousOutlineOffset, previousOutlineOffsetPriority);
+    else element.style.removeProperty("outline-offset");
+  }
 
   function finish(action) {
     if (!bannerReview) return;
     bannerReview.remove();
     bannerReview = null;
+    restoreOutline();
     if (action === "hide" && handlers.hide) handlers.hide();
     else if (action === "show" && handlers.show) handlers.show();
     else if (handlers.dismiss) handlers.dismiss();
