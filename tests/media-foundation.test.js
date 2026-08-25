@@ -38,10 +38,12 @@ import {
   selectVisibleMediaItems,
 } from "../src/media/catalog-view.js";
 import {
+  formatCompactMediaJobDetails,
   formatMediaJobDetails,
   getMediaJobPauseAvailability,
   getMediaJobPrimaryAction,
   getMediaJobProgress,
+  selectCompactMediaJobs,
 } from "../src/media/download-job-view.js";
 import { EVENTS, createRegisteredEvent } from "../src/runtime/event-catalog.js";
 import { normalizeMediaRequestContext } from "../src/media/contracts.js";
@@ -152,6 +154,28 @@ test("download job view exposes speed, connections, and resumable actions", () =
     reason:
       "HLS downloads run through FFmpeg and cannot resume partial output yet.",
   });
+});
+
+test("popup download history stays compact and prioritizes active jobs", () => {
+  const completed = {
+    id: "completed",
+    status: "completed",
+    progress: { totalBytes: 70 * 1024 * 1024 },
+  };
+  const cancelled = {
+    id: "cancelled",
+    status: "cancelled",
+    progress: { downloadedBytes: 11 * 1024 * 1024 },
+  };
+  assert.equal(formatCompactMediaJobDetails(completed), "Completed · 70.0 MB");
+  assert.equal(formatCompactMediaJobDetails(cancelled), "Cancelled");
+  assert.deepEqual(
+    selectCompactMediaJobs(
+      [completed, cancelled, { id: "active", status: "downloading" }],
+      2,
+    ).map((job) => job.id),
+    ["active", "completed"],
+  );
 });
 
 test("classifies direct, HLS, DASH, and blob media without treating segments as videos", () => {

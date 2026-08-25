@@ -14,7 +14,7 @@
       body {
         width: 300px;
         margin: 0;
-        padding: 1.5rem;
+        padding: 1rem;
         background: var(--bg);
         color: var(--text);
         font-family:
@@ -28,7 +28,7 @@
         display: flex;
         align-items: center;
         gap: 1rem;
-        margin-bottom: 2rem;
+        margin-bottom: 0.85rem;
       }
 
       .logo {
@@ -57,23 +57,80 @@
 
       .status-card {
         background: rgba(30, 41, 59, 0.7);
-        padding: 1rem;
-        border-radius: 16px;
+        padding: 0.7rem;
+        border-radius: 12px;
         border: 1px solid rgba(255, 255, 255, 0.1);
         margin-bottom: 1rem;
       }
 
       .stat-label {
         color: #94a3b8;
-        font-size: 0.8rem;
-        margin-bottom: 0.5rem;
-        display: block;
+        font-size: 0.65rem;
       }
 
       .stat-value {
-        font-size: 2rem;
+        font-size: 1.15rem;
         font-weight: 700;
         color: var(--primary);
+      }
+
+      .protection-summary,
+      .protection-toggle,
+      .protection-mode-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .blocked-summary,
+      .protection-mode-copy {
+        display: flex;
+        min-width: 0;
+        align-items: baseline;
+        gap: 6px;
+      }
+
+      .protection-toggle {
+        color: #cbd5e1;
+        font-size: 0.68rem;
+      }
+
+      .protection-actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+        margin-top: 8px;
+      }
+
+      .settings-btn.protection-action {
+        min-width: 0;
+        padding: 6px;
+        font-size: 0.68rem;
+      }
+
+      .protection-mode-row {
+        margin-top: 8px;
+        padding-top: 8px;
+        border-top: 1px solid rgba(255, 255, 255, 0.06);
+      }
+
+      .protection-mode-copy {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 1px;
+        color: #cbd5e1;
+        font-size: 0.68rem;
+      }
+
+      .undo-section {
+        display: none;
+        margin-top: 7px;
+        padding: 6px 7px;
+        border: 1px solid rgba(16, 185, 129, 0.2);
+        border-radius: 7px;
+        background: rgba(16, 185, 129, 0.1);
+        animation: slideIn 0.3s ease;
       }
 
       .toggle-container {
@@ -86,8 +143,8 @@
       .switch {
         position: relative;
         display: inline-block;
-        width: 50px;
-        height: 26px;
+        width: 38px;
+        height: 20px;
       }
 
       .switch input {
@@ -111,8 +168,8 @@
       .slider:before {
         position: absolute;
         content: "";
-        height: 20px;
-        width: 20px;
+        height: 14px;
+        width: 14px;
         left: 3px;
         bottom: 3px;
         background-color: white;
@@ -129,7 +186,7 @@
       }
 
       input:checked + .slider:before {
-        transform: translateX(24px);
+        transform: translateX(18px);
       }
 
       .footer {
@@ -164,8 +221,8 @@
       }
 
       .mode-select {
-        min-width: 108px;
-        padding: 7px 9px;
+        min-width: 86px;
+        padding: 5px 7px;
         border: 1px solid rgba(255, 255, 255, 0.15);
         border-radius: 8px;
         background: #1e293b;
@@ -289,9 +346,14 @@
         grid-template-columns: minmax(0, 1fr) auto;
         gap: 8px;
         align-items: center;
-        padding: 7px;
+        padding: 6px;
         background: rgba(30, 41, 59, 0.7);
         border-radius: 8px;
+      }
+
+      .media-job-terminal {
+        padding: 5px 6px;
+        background: rgba(30, 41, 59, 0.48);
       }
 
       .media-job-copy {
@@ -299,6 +361,27 @@
         min-width: 0;
         flex-direction: column;
         gap: 3px;
+      }
+
+      .media-job-actions {
+        display: flex;
+        align-items: center;
+        gap: 3px;
+      }
+
+      .media-job-action {
+        min-width: 0;
+        padding: 3px 5px;
+        font-size: 0.52rem;
+      }
+
+      .media-job-status-completed {
+        color: #86efac;
+      }
+
+      .media-job-status-failed,
+      .media-job-status-cancelled {
+        color: #fca5a5;
       }
 
       .media-cancel {
@@ -343,48 +426,47 @@
     </div>
 
     <div class="status-card">
-      <span class="stat-label">Ads Blocked</span>
-      <div class="stat-value" id="blocked-count">0</div>
+      <div class="protection-summary">
+        <div class="blocked-summary">
+          <span class="stat-value" id="blocked-count">0</span>
+          <span class="stat-label">Ads blocked</span>
+        </div>
+        <div class="protection-toggle">
+          <span>Protection</span>
+          <label class="switch" title="General protection">
+            <input type="checkbox" checked id="status-toggle" />
+            <span class="slider global"></span>
+          </label>
+        </div>
+      </div>
 
-      <button
-        class="settings-btn"
-        id="magic-wand-btn"
-        style="
-          background: rgba(16, 185, 129, 0.1);
-          border: 1px dashed rgba(16, 185, 129, 0.4);
-          margin-bottom: 8px;
-        "
-      >
-        <span style="font-size: 1rem">Target</span>
-        <span>Zap Ad (Magic Wand)</span>
-      </button>
-      <button
-        class="settings-btn"
-        id="reset-rules-btn"
-        style="
-          background: rgba(239, 68, 68, 0.05);
-          border: 1px solid rgba(239, 68, 68, 0.2);
-          margin-bottom: 8px;
-          color: #f87171;
-          font-size: 0.7rem;
-        "
-      >
-        <span>Reset</span>
-        <span>Reset Rules for this Site</span>
-      </button>
+      <div class="protection-actions">
+        <button
+          class="settings-btn protection-action"
+          id="magic-wand-btn"
+          title="Select an element to hide with Magic Wand"
+          style="
+            background: rgba(16, 185, 129, 0.1);
+            border: 1px dashed rgba(16, 185, 129, 0.4);
+          "
+        >
+          Magic Wand
+        </button>
+        <button
+          class="settings-btn protection-action"
+          id="reset-rules-btn"
+          title="Reset hidden element rules for this site"
+          style="
+            background: rgba(239, 68, 68, 0.05);
+            border: 1px solid rgba(239, 68, 68, 0.2);
+            color: #f87171;
+          "
+        >
+          Reset site
+        </button>
+      </div>
 
-      <div
-        id="undo-section"
-        style="
-          display: none;
-          background: rgba(16, 185, 129, 0.1);
-          border: 1px solid rgba(16, 185, 129, 0.2);
-          border-radius: 10px;
-          padding: 10px;
-          margin-bottom: 20px;
-          animation: slideIn 0.3s ease;
-        "
-      >
+      <div id="undo-section" class="undo-section">
         <div
           style="
             display: flex;
@@ -413,22 +495,8 @@
         </div>
       </div>
 
-      <div class="toggle-container">
-        <span>General Protection</span>
-        <label class="switch">
-          <input type="checkbox" checked id="status-toggle" />
-          <span class="slider global"></span>
-        </label>
-      </div>
-      <div
-        class="toggle-container"
-        style="
-          border-top: 1px solid rgba(255, 255, 255, 0.05);
-          padding-top: 15px;
-          margin-top: 15px;
-        "
-      >
-        <div style="display: flex; flex-direction: column; gap: 4px">
+      <div class="protection-mode-row">
+        <div class="protection-mode-copy">
           <span>Protection Mode</span>
           <span id="mode-description" style="font-size: 0.6rem; color: #64748b"
             >Safe rules only</span

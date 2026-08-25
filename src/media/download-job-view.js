@@ -145,6 +145,33 @@ export function formatMediaJobDetails(job = {}) {
   return facts.join(" · ");
 }
 
+export function formatCompactMediaJobDetails(job = {}) {
+  if (job.status === "completed") {
+    const progress = getMediaJobProgress(job);
+    const size = progress.totalBytes ?? progress.downloadedBytes;
+    return ["Completed", size !== null ? formatBytes(size) : null]
+      .filter(Boolean)
+      .join(" · ");
+  }
+  const terminalLabels = {
+    failed: "Failed",
+    cancelled: "Cancelled",
+    paused: "Paused",
+  };
+  return terminalLabels[job.status] || formatMediaJobDetails(job);
+}
+
+export function selectCompactMediaJobs(items, limit = 3) {
+  const jobs = Array.isArray(items) ? items : [];
+  const active = jobs.filter((job) => isMediaJobActive(job));
+  const recent = jobs.filter((job) => !isMediaJobActive(job));
+  return [...active, ...recent].slice(0, Math.max(0, limit));
+}
+
+export function isMediaJobActive(job = {}) {
+  return [...ACTIVE_STATUSES, "pausing", "cancelling"].includes(job.status);
+}
+
 export function formatBytes(bytes) {
   const value = Math.max(0, Number(bytes) || 0);
   if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(1)} GB`;

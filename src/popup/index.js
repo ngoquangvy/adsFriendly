@@ -8,9 +8,12 @@ import {
   getMediaDownloadAvailability,
 } from "../media/download-job-contract.js";
 import {
+  formatCompactMediaJobDetails,
   formatMediaJobDetails,
   getMediaJobPauseAvailability,
   getMediaJobPrimaryAction,
+  isMediaJobActive,
+  selectCompactMediaJobs,
 } from "../media/download-job-view.js";
 import {
   createMediaCatalogViewSignature,
@@ -203,9 +206,9 @@ async function render() {
   modeSelect.value = settings.protectionMode;
   await updateBlockedCount();
   await renderMode();
-  await updateMediaJobs();
   const tab = await getActiveHttpTab();
   await renderMediaCatalog(tab);
+  await updateMediaJobs();
   if (!tab) return;
   const hostname = new URL(tab.url).hostname;
   const { userCustomRules = {} } =
@@ -498,6 +501,7 @@ async function setupMediaHelper(button, helper) {
     button.textContent = "Checking…";
     mediaHelperStatus = await readMediaHelperStatus(true);
     await renderMediaCatalog(await getActiveHttpTab());
+    await updateMediaJobs();
   } catch (error) {
     button.disabled = false;
     button.textContent = "Retry";
@@ -533,7 +537,7 @@ async function updateMediaJobs() {
 }
 
 function renderMediaJobs(items) {
-  const visible = items.slice(0, 4);
+  const visible = selectCompactMediaJobs(items, 3);
   hasMediaDownloadJobs = visible.length > 0;
   const existing = new Map(
     [...mediaJobList.children].map((row) => [row.dataset.jobId, row]),
@@ -573,66 +577,120 @@ function createMediaJobItem() {
   label.className = "media-name media-job-label";
   const detail = document.createElement("span");
   detail.className = "media-details media-job-detail";
+  const actions = document.createElement("div");
+  actions.className = "media-job-actions";
   copy.append(label, detail);
-  row.append(copy);
+  row.append(copy, actions);
   return row;
 }
 
 function updateMediaJobItem(row, job) {
   row.dataset.jobId = job.id;
+  const active = isMediaJobActive(job);
+  row.classList.toggle("media-job-terminal", !active);
   setText(
     row.querySelector(".media-job-label"),
     job.title || String(job.kind || "media").toUpperCase(),
   );
-  setText(row.querySelector(".media-job-detail"), formatMediaJobDetails(job));
+  const detail = row.querySelector(".media-job-detail");
+  setText(
+    detail,
+    active ? formatMediaJobDetails(job) : formatCompactMediaJobDetails(job),
+  );
+  detail.className = `media-details media-job-detail media-job-status-${
+    job.status || "unknown"
+  }`;
+  detail.title = active ? "" : job.error || job.outputPath || "";
   const action = getMediaJobPrimaryAction(job);
   const pauseAvailability = getMediaJobPauseAvailability(job);
-  let button = row.querySelector(".media-job-action");
-  if (!action) {
-    button?.remove();
-    return;
+  const actions = row.querySelector(".media-job-actions");
+  actions.replaceChildren();
+  if (action) {
+    actions.append(
+      createMediaJobAction(job, {
+        label: action.label,
+        messageType: action.messageType,
+        actionType: action.type,
+        title:
+          action.type === "cancel" && pauseAvailability?.supported === false
+            ? `${pauseAvailability.reason} Cancel is still available.`
+            : "",
+        danger: action.type === "cancel",
+      }),
+    );
   }
-  if (!button) {
-    button = document.createElement("button");
-    button.className = "media-download media-job-action";
-    button.addEventListener("click", () => runMediaJobAction(button));
-    row.append(button);
+  if (job.status === "completed" && job.outputPath) {
+    const outputActionsReady =
+      mediaHelperStatus?.capabilities?.["output.open"] === true &&
+      mediaHelperStatus?.capabilities?.["output.reveal"] === true;
+    const open = createMediaJobAction(job, {
+      label: "Open",
+      messageType: "OPEN_MEDIA_DOWNLOAD_OUTPUT",
+      actionType: "output",
+      title: "Open downloaded video",
+    });
+    const folder = createMediaJobAction(job, {
+      label: "Folder",
+      messageType: "REVEAL_MEDIA_DOWNLOAD_OUTPUT",
+      actionType: "output",
+      title: "Open file location",
+    });
+    open.disabled = !outputActionsReady;
+    folder.disabled = !outputActionsReady;
+    if (!outputActionsReady) {
+      open.title = folder.title =
+        "Media Helper output actions are unavailable.";
+    }
+    actions.append(open, folder);
   }
-  button.disabled = false;
-  button.classList.toggle("media-cancel", action.type === "cancel");
-  button.textContent = action.label;
-  button.title =
-    action.type === "cancel" && pauseAvailability?.supported === false
-      ? `${pauseAvailability.reason} Cancel is still available.`
-      : "";
+}
+
+function createMediaJobAction(
+  job,
+  { label, messageType, actionType, title = "", danger = false },
+) {
+  const button = document.createElement("button");
+  button.className = "media-download media-job-action";
+  button.classList.toggle("media-cancel", danger);
+  button.textContent = label;
+  button.title = title;
   button.dataset.jobId = job.id;
-  button.dataset.messageType = action.messageType;
-  button.dataset.actionType = action.type;
+  button.dataset.messageType = messageType;
+  button.dataset.actionType = actionType;
+  button.addEventListener("click", () => runMediaJobAction(button));
+  return button;
 }
 
 async function runMediaJobAction(button) {
+  const originalLabel = button.textContent;
   button.disabled = true;
   button.textContent =
     button.dataset.actionType === "pause"
       ? "Pausing…"
       : button.dataset.actionType === "cancel"
         ? "Stopping…"
-        : "Starting…";
+        : button.dataset.actionType === "output"
+          ? "…"
+          : "Starting…";
   try {
     const response = await chrome.runtime.sendMessage({
       type: button.dataset.messageType,
       jobId: button.dataset.jobId,
       connections: settings?.mediaDownloadConnections ?? 8,
     });
-    if (!["started", "pausing", "cancelling"].includes(response?.status)) {
+    if (
+      !["started", "pausing", "cancelling", "opened"].includes(response?.status)
+    ) {
       throw new Error(
         response?.reason || response?.error || "Job action failed.",
       );
     }
+    if (response.status === "opened") button.textContent = originalLabel;
     await updateMediaJobs();
   } catch (error) {
     button.disabled = false;
-    button.textContent = "Retry action";
+    button.textContent =
+      button.dataset.actionType === "output" ? originalLabel : "Retry action";
     button.title = error?.message || String(error);
   }
 }
