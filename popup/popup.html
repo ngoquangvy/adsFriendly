@@ -201,6 +201,10 @@
         line-height: 1.35;
       }
 
+      .media-helper-action {
+        margin-top: 8px;
+      }
+
       .media-list {
         display: flex;
         flex-direction: column;
@@ -442,6 +446,14 @@
       <div class="media-status" id="media-status">
         Open a video page in Assist mode to test detection.
       </div>
+      <button
+        class="media-download media-helper-action"
+        id="media-helper-action"
+        type="button"
+        hidden
+      >
+        Allow helper connection
+      </button>
       <div class="media-list" id="media-list" hidden></div>
       <div class="media-job-list" id="media-job-list" hidden></div>
     </section>

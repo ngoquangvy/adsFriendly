@@ -47,6 +47,26 @@ export function selectVisibleMediaItems(items = [], maximum = 8) {
   return visible.slice(0, maximum);
 }
 
+export function helperSetupPresentation(helper) {
+  if (!helper || helper.status === "ready") return null;
+  if (helper.status === "permission_required") {
+    return {
+      label: "Allow helper connection",
+      title: "Allow AdsFriendly to communicate with the installed Media Helper.",
+    };
+  }
+  if (helper.status === "not_installed") {
+    return {
+      label: "Install helper",
+      title: "Media Helper is not installed or registered for this browser.",
+    };
+  }
+  return {
+    label: "Retry helper",
+    title: helper.error || "Check the Media Helper connection again.",
+  };
+}
+
 export function formatMediaDetails(item) {
   if (item.kind === "blob")
     return item.relatedCount > 1

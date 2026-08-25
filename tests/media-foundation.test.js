@@ -30,10 +30,31 @@ import {
 import {
   createMediaCatalogViewSignature,
   formatMediaDetails,
+  helperSetupPresentation,
   selectVisibleMediaItems,
 } from "../src/media/catalog-view.js";
 import { EVENTS, createRegisteredEvent } from "../src/runtime/event-catalog.js";
 import { normalizeMediaRequestContext } from "../src/media/contracts.js";
+
+test("offers a helper setup action independently from downloadable media", () => {
+  assert.deepEqual(
+    helperSetupPresentation({ status: "permission_required" }),
+    {
+      label: "Allow helper connection",
+      title: "Allow AdsFriendly to communicate with the installed Media Helper.",
+    },
+  );
+  assert.equal(helperSetupPresentation({ status: "ready" }), null);
+  assert.equal(
+    helperSetupPresentation({ status: "not_installed" }).label,
+    "Install helper",
+  );
+  assert.equal(
+    helperSetupPresentation({ status: "error", error: "Host unavailable" })
+      .label,
+    "Retry helper",
+  );
+});
 
 test("classifies direct, HLS, DASH, and blob media without treating segments as videos", () => {
   assert.equal(

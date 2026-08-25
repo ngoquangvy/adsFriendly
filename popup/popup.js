@@ -536,6 +536,25 @@ ${item.title || "blob"}`;
     }
     return visible.slice(0, maximum);
   }
+  function helperSetupPresentation(helper) {
+    if (!helper || helper.status === "ready") return null;
+    if (helper.status === "permission_required") {
+      return {
+        label: "Allow helper connection",
+        title: "Allow AdsFriendly to communicate with the installed Media Helper."
+      };
+    }
+    if (helper.status === "not_installed") {
+      return {
+        label: "Install helper",
+        title: "Media Helper is not installed or registered for this browser."
+      };
+    }
+    return {
+      label: "Retry helper",
+      title: helper.error || "Check the Media Helper connection again."
+    };
+  }
   function formatMediaDetails(item) {
     if (item.kind === "blob")
       return item.relatedCount > 1 ? `${item.relatedCount} Blob signals \xB7 tracing one source` : "Blob signal \xB7 tracing network source";
@@ -678,6 +697,7 @@ ${item.title || "blob"}`;
   var modeDescription = document.getElementById("mode-description");
   var mediaCount = document.getElementById("media-count");
   var mediaStatus = document.getElementById("media-status");
+  var mediaHelperAction = document.getElementById("media-helper-action");
   var mediaList = document.getElementById("media-list");
   var mediaJobList = document.getElementById("media-job-list");
   var MODE_DESCRIPTIONS = Object.freeze({
@@ -713,6 +733,10 @@ ${item.title || "blob"}`;
     });
     await renderMode();
     await updateMediaCatalog();
+  });
+  mediaHelperAction.addEventListener("click", async () => {
+    mediaHelperAction.disabled = true;
+    await setupMediaHelper(mediaHelperAction, mediaHelperStatus);
   });
   document.getElementById("settings-btn").addEventListener("click", () => {
     chrome.runtime.openOptionsPage();
@@ -894,6 +918,7 @@ ${item.title || "blob"}`;
     });
     setText(mediaCount, String(items.length));
     setText(mediaStatus, status);
+    renderMediaHelperAction(helper);
     if (signature === mediaRenderSignature) return;
     const fragment = document.createDocumentFragment();
     const itemsById = new Map(items.map((item) => [item.id, item]));
@@ -903,6 +928,14 @@ ${item.title || "blob"}`;
     mediaList.replaceChildren(fragment);
     mediaList.hidden = visibleItems.length === 0;
     mediaRenderSignature = signature;
+  }
+  function renderMediaHelperAction(helper) {
+    const presentation = helperSetupPresentation(helper);
+    mediaHelperAction.hidden = !presentation;
+    if (!presentation) return;
+    mediaHelperAction.disabled = false;
+    mediaHelperAction.textContent = presentation.label;
+    mediaHelperAction.title = presentation.title;
   }
   function setText(element, value) {
     if (element.textContent !== value) element.textContent = value;
@@ -1034,7 +1067,7 @@ ${item.title || "blob"}`;
         });
         if (!granted) {
           button.disabled = false;
-          button.textContent = "Set up";
+          button.textContent = "Allow helper connection";
           button.title = "Media Helper permission was not granted.";
           return;
         }
@@ -1069,7 +1102,7 @@ ${item.title || "blob"}`;
   }
   function helperSummary(helper) {
     if (helper.status === "permission_required")
-      return "Media found \xB7 set up Media Helper to download.";
+      return "Media found \xB7 allow Media Helper connection to download.";
     if (helper.status === "not_installed")
       return "Media found \xB7 Media Helper is not installed.";
     if (helper.status === "ready" && (helper.canDownloadDirect || helper.canDownloadHls))

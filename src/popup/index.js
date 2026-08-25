@@ -10,6 +10,7 @@ import {
 import {
   createMediaCatalogViewSignature,
   formatMediaDetails,
+  helperSetupPresentation,
   selectVisibleMediaItems,
 } from "../media/catalog-view.js";
 import { mediaCatalogSessionKey } from "../media/storage-keys.js";
@@ -20,6 +21,7 @@ const modeSelect = document.getElementById("protection-mode-select");
 const modeDescription = document.getElementById("mode-description");
 const mediaCount = document.getElementById("media-count");
 const mediaStatus = document.getElementById("media-status");
+const mediaHelperAction = document.getElementById("media-helper-action");
 const mediaList = document.getElementById("media-list");
 const mediaJobList = document.getElementById("media-job-list");
 
@@ -59,6 +61,11 @@ modeSelect.addEventListener("change", async () => {
   });
   await renderMode();
   await updateMediaCatalog();
+});
+
+mediaHelperAction.addEventListener("click", async () => {
+  mediaHelperAction.disabled = true;
+  await setupMediaHelper(mediaHelperAction, mediaHelperStatus);
 });
 
 document.getElementById("settings-btn").addEventListener("click", () => {
@@ -273,6 +280,7 @@ function commitMediaCatalog({ status, items = [], tab = null, helper = null }) {
 
   setText(mediaCount, String(items.length));
   setText(mediaStatus, status);
+  renderMediaHelperAction(helper);
   if (signature === mediaRenderSignature) return;
 
   const fragment = document.createDocumentFragment();
@@ -283,6 +291,15 @@ function commitMediaCatalog({ status, items = [], tab = null, helper = null }) {
   mediaList.replaceChildren(fragment);
   mediaList.hidden = visibleItems.length === 0;
   mediaRenderSignature = signature;
+}
+
+function renderMediaHelperAction(helper) {
+  const presentation = helperSetupPresentation(helper);
+  mediaHelperAction.hidden = !presentation;
+  if (!presentation) return;
+  mediaHelperAction.disabled = false;
+  mediaHelperAction.textContent = presentation.label;
+  mediaHelperAction.title = presentation.title;
 }
 
 function setText(element, value) {
@@ -425,7 +442,7 @@ async function setupMediaHelper(button, helper) {
       });
       if (!granted) {
         button.disabled = false;
-        button.textContent = "Set up";
+        button.textContent = "Allow helper connection";
         button.title = "Media Helper permission was not granted.";
         return;
       }
@@ -464,7 +481,7 @@ async function readMediaHelperStatus(force = false) {
 
 function helperSummary(helper) {
   if (helper.status === "permission_required")
-    return "Media found · set up Media Helper to download.";
+    return "Media found · allow Media Helper connection to download.";
   if (helper.status === "not_installed")
     return "Media found · Media Helper is not installed.";
   if (
