@@ -64,6 +64,26 @@ Runtime rules and AI training samples must stay separate:
 - Settings Packages are editable configuration snapshots. They contain protection settings, site lists, manual element rules, and trusted workflows, but never telemetry, history, counters, identifiers, or training samples.
 - The separation is physical as well as logical: large training arrays cannot consume the settings bucket and prevent Hide, Magic Wand, whitelist, or blacklist writes.
 
+## Navigation Protection Pipeline
+
+New-tab ads and reverse pop-unders are two detectors, not two independent rule
+systems. They both feed the same navigation policy, which owns URL
+classification, whitelist/blacklist checks, trusted source-to-target workflows,
+and the weak/medium/strong response level. New rules and user exceptions belong
+in that shared policy and must not be duplicated in either detector.
+
+Execution remains sequence-aware because the surviving tab differs:
+
+- when the newly opened tab is blocked, keep and notify the original source tab;
+- when the old tab is redirected and a same-page clone was opened, keep and
+  notify the clone; if the clone cannot be kept, restore and notify the old tab.
+
+Blocked-navigation actions and their aggregated toast are shared by both
+sequences. A toast must never be sent to the tab selected for removal.
+`navigation-sequences.js` is the required sequence registry and enforces this
+invariant. A new sequence must be registered there and covered by its plan test
+before the guard can execute it.
+
 ## Settings Packages
 
 `packages/default-settings-package.json` is installed once for a new user. An

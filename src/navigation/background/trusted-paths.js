@@ -1,4 +1,5 @@
 import { getSettingsMutationStore } from "../../background/settings-mutations.js";
+import { resolveNavigationDecisionTarget } from "../shared/search-navigation.js";
 
 export async function syncTrustedPath(source, target, isManual = false) {
   if (!source || !target || source === target) return;
@@ -25,8 +26,19 @@ export async function getTrustedPath(source, target) {
   return (await chrome.storage.local.get([key]))[key] || null;
 }
 
+export async function removeTrustedPath(source, target) {
+  if (!source || !target || source === target) return false;
+  const key = `p:${source}>${target}`;
+  await chrome.storage.local.remove(key);
+  return true;
+}
+
 export async function handleUserDecision(message) {
-  const { action, domain } = message;
+  const { action } = message;
   if (!["WHITELIST", "BLACKLIST"].includes(action)) return;
-  return getSettingsMutationStore().saveDomainDecision(action, domain);
+  const decision = resolveNavigationDecisionTarget(message);
+  if (decision.scope === "navigation_only") {
+    return { status: "navigation_only", action };
+  }
+  return getSettingsMutationStore().saveDomainDecision(action, decision.domain);
 }

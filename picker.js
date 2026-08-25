@@ -637,6 +637,16 @@ var AdsFriendlyPicker = (() => {
     return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
   }
 
+  // src/dom/layout-context.js
+  var RESPONSIVE_LAYOUTS = Object.freeze({
+    ANY: "any",
+    COMPACT: "compact",
+    WIDE: "wide"
+  });
+  function getResponsiveLayout(width = globalThis.innerWidth) {
+    return (Number(width) || 1024) <= 767 ? RESPONSIVE_LAYOUTS.COMPACT : RESPONSIVE_LAYOUTS.WIDE;
+  }
+
   // src/picker/index.js
   function startPickerController(policy) {
     (function() {
@@ -1007,7 +1017,8 @@ Reason: ${reasons.join(", ")}`,
             timestamp: Date.now(),
             timesZapped: 1,
             confidence: isCorrectionLoop ? 1 : 0.8,
-            isCorrection: isCorrectionLoop
+            isCorrection: isCorrectionLoop,
+            layout: getResponsiveLayout()
           };
           if (isCorrectionLoop) {
             console.log(

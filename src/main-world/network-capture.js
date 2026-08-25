@@ -14,6 +14,7 @@ import { CAPABILITIES } from "../runtime/feature-catalog.js";
 export function installNetworkCapture(policy) {
   const originalFetch = window.fetch;
   const probeGate = createMediaProbeGate();
+  const resolutionTasks = new Map();
   const inspect = (
     manifestUrl,
     body,
@@ -32,23 +33,41 @@ export function installNetworkCapture(policy) {
     else probeGate.release(manifestUrl);
     return probe;
   };
-  const stopFetchCapture = installFetchCapture(policy, inspect);
-  const stopXhrCapture = installXhrCapture(policy, inspect);
+  const resolveAttempts = (options) => {
+    const existing = resolutionTasks.get(options.manifestUrl);
+    if (existing) return existing;
+    const task = tryHlsProbeAttempts({
+      ...options,
+      originalFetch,
+      probeGate,
+      inspect,
+    }).finally(() => resolutionTasks.delete(options.manifestUrl));
+    resolutionTasks.set(options.manifestUrl, task);
+    return task;
+  };
+  const stopFetchCapture = installFetchCapture(
+    policy,
+    inspect,
+    resolveAttempts,
+  );
+  const stopXhrCapture = installXhrCapture(policy, inspect, resolveAttempts);
   const stopFallbackProbe = installFallbackProbe({
     policy,
     originalFetch,
     probeGate,
     inspect,
+    resolveAttempts,
   });
   return () => {
     stopFetchCapture();
     stopXhrCapture();
     stopFallbackProbe();
+    resolutionTasks.clear();
     probeGate.clear();
   };
 }
 
-function installFetchCapture(policy, inspect) {
+function installFetchCapture(policy, inspect, resolveAttempts) {
   const originalFetch = window.fetch;
   const fetchWrapper = async function (...args) {
     const url = requestUrl(args[0]);
@@ -65,7 +84,21 @@ function installFetchCapture(policy, inspect) {
       response
         .clone()
         .text()
-        .then((body) => inspect(finalUrl, body, candidate, requestContext))
+        .then((body) => {
+          const primaryProbe = inspect(
+            finalUrl,
+            body,
+            candidate,
+            requestContext,
+          );
+          if (!isUsableMediaProbe(primaryProbe)) {
+            resolveAttempts({
+              manifestUrl: finalUrl,
+              body,
+              candidate,
+            }).catch(() => {});
+          }
+        })
         .catch(() => {});
     }
     return response;
@@ -76,7 +109,7 @@ function installFetchCapture(policy, inspect) {
   };
 }
 
-function installXhrCapture(policy, inspect) {
+function installXhrCapture(policy, inspect, resolveAttempts) {
   const originalOpen = XMLHttpRequest.prototype.open;
   const originalSend = XMLHttpRequest.prototype.send;
   const openWrapper = function (method, url, ...rest) {
@@ -100,8 +133,21 @@ function installXhrCapture(policy, inspect) {
       }
       if (!isManifestLike(url) && candidate?.kind !== MEDIA_KINDS.HLS) return;
       try {
-        if (typeof this.responseText === "string")
-          inspect(url, this.responseText, candidate, requestContext);
+        if (typeof this.responseText === "string") {
+          const primaryProbe = inspect(
+            url,
+            this.responseText,
+            candidate,
+            requestContext,
+          );
+          if (!isUsableMediaProbe(primaryProbe)) {
+            resolveAttempts({
+              manifestUrl: url,
+              body: this.responseText,
+              candidate,
+            }).catch(() => {});
+          }
+        }
       } catch {}
     });
     return originalSend.apply(this, args);
@@ -116,7 +162,13 @@ function installXhrCapture(policy, inspect) {
   };
 }
 
-function installFallbackProbe({ policy, originalFetch, probeGate, inspect }) {
+function installFallbackProbe({
+  policy,
+  originalFetch,
+  probeGate,
+  inspect,
+  resolveAttempts,
+}) {
   let stopped = false;
   const onProbeRequest = (messageEvent) => {
     if (
@@ -161,37 +213,13 @@ function installFallbackProbe({ policy, originalFetch, probeGate, inspect }) {
         );
         if (isUsableMediaProbe(primaryProbe)) return primaryProbe;
 
-        for (const attempt of createHlsProbeAttempts(finalUrl, body)) {
-          const alternativeResponse = await originalFetch.call(
-            window,
-            attempt.url,
-            {
-              credentials: "same-origin",
-              cache: "default",
-            },
-          );
-          if (!alternativeResponse.ok) continue;
-          const alternativeFinalUrl = alternativeResponse.url || attempt.url;
-          const alternativeCandidate =
-            reportMediaSource(
-              alternativeFinalUrl,
-              alternativeResponse.headers.get("content-type"),
-            ) || candidate;
-          const alternativeProbe = inspect(
-            alternativeFinalUrl,
-            await alternativeResponse.text(),
-            alternativeCandidate,
-            createFallbackRequestContext(manifestUrl, alternativeFinalUrl),
-            attempt,
-          );
-          // TRAINING_BACKLOG: MEDIA_RESOLUTION_STRATEGY
-          // Keep this session evidence structured; it is not a label by itself.
-          if (isUsableMediaProbe(alternativeProbe)) {
-            probeGate.remember(manifestUrl, "ready");
-            return alternativeProbe;
-          }
-        }
-        return primaryProbe;
+        return (
+          (await resolveAttempts({
+            manifestUrl: finalUrl,
+            body,
+            candidate: finalCandidate,
+          })) || primaryProbe
+        );
       })
       .catch((error) => {
         if (probeGate.state(manifestUrl) !== "pending") return;
@@ -204,6 +232,52 @@ function installFallbackProbe({ policy, originalFetch, probeGate, inspect }) {
     stopped = true;
     window.removeEventListener("message", onProbeRequest);
   };
+}
+
+export async function tryHlsProbeAttempts({
+  manifestUrl,
+  body,
+  candidate,
+  originalFetch,
+  probeGate,
+  inspect,
+}) {
+  for (const attempt of createHlsProbeAttempts(manifestUrl, body)) {
+    try {
+      const response = await originalFetch.call(window, attempt.url, {
+        credentials: "same-origin",
+        cache: "default",
+      });
+      if (!response.ok) continue;
+      const finalUrl = response.url || attempt.url;
+      const alternativeBody = await response.text();
+      if (!isUsableMediaProbe(parseHlsManifest(finalUrl, alternativeBody))) {
+        continue;
+      }
+      const alternativeCandidate =
+        createMediaCandidateFromSource({
+          pageUrl: location.href,
+          sourceUrl: finalUrl,
+          mimeType: response.headers.get("content-type"),
+          title: document.title || null,
+          detectedBy: MEDIA_DETECTION_SOURCES.NETWORK,
+        }) || candidate;
+      const alternativeProbe = inspect(
+        finalUrl,
+        alternativeBody,
+        alternativeCandidate,
+        createFallbackRequestContext(manifestUrl, finalUrl),
+        attempt,
+      );
+      // TRAINING_BACKLOG: MEDIA_RESOLUTION_STRATEGY
+      // Keep this session evidence structured; it is not a label by itself.
+      if (isUsableMediaProbe(alternativeProbe)) {
+        probeGate.remember(manifestUrl, "ready");
+        return alternativeProbe;
+      }
+    } catch {}
+  }
+  return null;
 }
 
 function reportMediaSource(sourceUrl, mimeType) {

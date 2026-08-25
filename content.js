@@ -14,6 +14,26 @@ var AdsFriendlyContent = (() => {
     return h === p || h.endsWith(`.${p}`);
   }
 
+  // src/navigation/shared/search-navigation.js
+  var GOOGLE_HOST_RE = /^(.+\.)?google\.(com|[a-z]{2}|com\.[a-z]{2}|co\.[a-z]{2})$/i;
+  var EMBEDDED_HOST_RE = /(?:^|\s)(?:https?:\/\/)?(?:www\.)?([a-z0-9-]{1,63}(?:\.[a-z0-9-]{1,63})+)(?:\b|\/)/i;
+  function getPrefilledSearchNavigation(value) {
+    let url;
+    try {
+      url = value instanceof URL ? value : new URL(value);
+    } catch {
+      return null;
+    }
+    const query = url.searchParams.get("q")?.trim() || "";
+    if (!GOOGLE_HOST_RE.test(url.hostname) || url.pathname !== "/search" || !query)
+      return null;
+    const embeddedHost = EMBEDDED_HOST_RE.exec(query)?.[1]?.toLowerCase() || null;
+    return {
+      searchHost: url.hostname.toLowerCase(),
+      embeddedHost
+    };
+  }
+
   // src/navigation/shared/intent-classifier.js
   var STRONG_TRACKING_KEYS = /* @__PURE__ */ new Set([
     "adid",
@@ -27,6 +47,7 @@ var AdsFriendlyContent = (() => {
     "zoneid"
   ]);
   var PROMOTIONAL_TOKEN_RE = /(^|[^a-z0-9])(?:ad|ads|advert|banner|casino|hitclub|promo|sponsor|bet)([^a-z0-9]|$)/i;
+  var PROMOTIONAL_SEARCH_DESTINATION_RE = /(?:^|\s)(?:https?:\/\/)?(?:www\.)?[a-z0-9-]{4,}\.(?:bet|casino|click|live|top|vip|win|xyz)(?:\b|\/)/i;
   function classifyNavigationIntent({
     intentUrl,
     sourceUrl,
@@ -48,10 +69,18 @@ var AdsFriendlyContent = (() => {
     const marketingCount = keys.filter((key) => key.startsWith("utm_")).length;
     const tokenEvidence = `${intent.hostname} ${intent.pathname} ${evidence}`;
     const promotionalToken = PROMOTIONAL_TOKEN_RE.test(tokenEvidence);
+    const searchNavigation = getPrefilledSearchNavigation(intent);
+    const prefilledSearchNavigation = Boolean(searchNavigation);
+    const promotionalSearchDestination = Boolean(
+      searchNavigation?.embeddedHost && PROMOTIONAL_SEARCH_DESTINATION_RE.test(searchNavigation.embeddedHost)
+    );
     const reasons = [];
     if (strongTracking) reasons.push("strong_tracking_parameter");
     if (marketingCount >= 2) reasons.push("multiple_campaign_parameters");
     if (promotionalToken) reasons.push("promotional_element_or_destination");
+    if (prefilledSearchNavigation) reasons.push("prefilled_search_navigation");
+    if (promotionalSearchDestination)
+      reasons.push("promotional_search_destination");
     return {
       likelyAd: reasons.length > 0,
       reasons
@@ -1296,6 +1325,20 @@ var AdsFriendlyContent = (() => {
     }
   }
 
+  // src/dom/layout-context.js
+  var RESPONSIVE_LAYOUTS = Object.freeze({
+    ANY: "any",
+    COMPACT: "compact",
+    WIDE: "wide"
+  });
+  function getResponsiveLayout(width = globalThis.innerWidth) {
+    return (Number(width) || 1024) <= 767 ? RESPONSIVE_LAYOUTS.COMPACT : RESPONSIVE_LAYOUTS.WIDE;
+  }
+  function ruleMatchesResponsiveLayout(rule, layout = getResponsiveLayout()) {
+    if (!rule || typeof rule === "string") return true;
+    return !rule.layout || rule.layout === RESPONSIVE_LAYOUTS.ANY || rule.layout === layout;
+  }
+
   // src/dom/collector.js
   var observed = /* @__PURE__ */ new WeakSet();
   var allowedSelectors = /* @__PURE__ */ new Set();
@@ -1443,7 +1486,8 @@ var AdsFriendlyContent = (() => {
       timestamp: Date.now(),
       timesZapped: 1,
       confidence: candidate.decision.confidence,
-      source: outcome
+      source: outcome,
+      layout: getResponsiveLayout()
     };
     const response = await chrome.runtime.sendMessage({
       type: "UPSERT_CUSTOM_RULES",
@@ -1561,6 +1605,9 @@ var AdsFriendlyContent = (() => {
         "siteResetHistory"
       ]);
       customSelectors = result.userCustomRules?.[hostname] || [];
+      customSelectors = customSelectors.filter(
+        (rule) => ruleMatchesResponsiveLayout(rule, getResponsiveLayout())
+      );
       resetHistory = result.siteResetHistory?.[hostname] || resetHistory;
     } catch (error) {
       if (isExtensionContextInvalidated(error)) throw error;
@@ -1850,12 +1897,19 @@ var AdsFriendlyContent = (() => {
   var pendingNavigation = null;
   function startNavigationToast() {
     const onMessage = (message) => {
-      if (message?.type !== "SHOW_GRAY_NAVIGATION") return;
+      if (![
+        "SHOW_GRAY_NAVIGATION",
+        "SHOW_BLOCKED_NAVIGATION",
+        "SHOW_ALLOWED_SEARCH_NAVIGATION"
+      ].includes(message?.type))
+        return;
       pendingNavigation = {
+        kind: message.type === "SHOW_BLOCKED_NAVIGATION" ? "blocked" : message.type === "SHOW_ALLOWED_SEARCH_NAVIGATION" ? "allowed_search" : "review",
         url: message.url,
         source: message.source,
         target: message.target,
-        tabId: message.tabId
+        tabId: message.tabId,
+        count: message.count || 1
       };
       showNavigationToast();
     };
@@ -1867,8 +1921,32 @@ var AdsFriendlyContent = (() => {
   function showNavigationToast() {
     if (!pendingNavigation?.url) return;
     const toast = ensureToast2();
-    const host = safeHost2(pendingNavigation.url);
-    toast.querySelector(".adsfriendly-toast-message").textContent = `${truncate(host, 28)} may be an ad`;
+    const scope = toast.querySelector(".adsfriendly-toast-scope");
+    const primaryButton = toast.querySelector(".adsfriendly-toast-primary");
+    const blockButton = toast.querySelector(".adsfriendly-toast-block");
+    toast.querySelectorAll("button").forEach((button) => button.disabled = false);
+    toast.querySelector(".adsfriendly-toast-message").title = "";
+    if (pendingNavigation.kind === "blocked") {
+      const count = pendingNavigation.count || 1;
+      scope.textContent = "BLOCKED";
+      toast.querySelector(".adsfriendly-toast-message").textContent = count === 1 ? "Blocked 1 ad tab" : `Blocked ${count} ad tabs`;
+      primaryButton.textContent = count === 1 ? "Open" : "Open latest";
+      blockButton.textContent = "Always allow site";
+      blockButton.hidden = false;
+    } else if (pendingNavigation.kind === "allowed_search") {
+      scope.textContent = "ALLOWED";
+      toast.querySelector(".adsfriendly-toast-message").textContent = `Google Search allowed from ${truncate(pendingNavigation.source, 24)}`;
+      primaryButton.textContent = "Keep allowed";
+      blockButton.textContent = "Block again";
+      blockButton.hidden = false;
+    } else {
+      scope.textContent = "NEW TAB";
+      primaryButton.textContent = "Keep tab";
+      blockButton.textContent = "Block tab";
+      blockButton.hidden = false;
+      const host = safeHost2(pendingNavigation.url);
+      toast.querySelector(".adsfriendly-toast-message").textContent = `${truncate(host, 28)} may be an ad`;
+    }
     toast.classList.remove("adsfriendly-toast-hidden");
     scheduleHide2();
   }
@@ -1941,8 +2019,18 @@ var AdsFriendlyContent = (() => {
       color: #94a3b8;
     }
   `;
-    toast.querySelector(".adsfriendly-toast-primary").onclick = () => submitNavigationDecision("KEEP_REVIEWED_TAB");
-    toast.querySelector(".adsfriendly-toast-block").onclick = () => submitNavigationDecision("BLOCK_REVIEWED_TAB");
+    toast.querySelector(".adsfriendly-toast-primary").onclick = () => {
+      if (pendingNavigation?.kind === "blocked") return openBlockedNavigation();
+      if (pendingNavigation?.kind === "allowed_search")
+        return hideNavigationToast();
+      return submitNavigationDecision("KEEP_REVIEWED_TAB");
+    };
+    toast.querySelector(".adsfriendly-toast-block").onclick = () => {
+      if (pendingNavigation?.kind === "blocked") return allowBlockedSource();
+      if (pendingNavigation?.kind === "allowed_search")
+        return blockAllowedSource();
+      return submitNavigationDecision("BLOCK_REVIEWED_TAB");
+    };
     toast.querySelector(".adsfriendly-toast-close").onclick = hideNavigationToast;
     toast.addEventListener("mouseenter", pauseHide2);
     toast.addEventListener("mouseleave", scheduleHide2);
@@ -1951,6 +2039,63 @@ var AdsFriendlyContent = (() => {
     (document.head || document.documentElement).appendChild(style);
     (document.body || document.documentElement).appendChild(toast);
     return toast;
+  }
+  function allowBlockedSource() {
+    return submitScopedNavigationAction("ALLOW_BLOCKED_SOURCE", "Allowing\u2026");
+  }
+  function blockAllowedSource() {
+    return submitScopedNavigationAction(
+      "BLOCK_ALLOWED_SEARCH_SOURCE",
+      "Updating\u2026"
+    );
+  }
+  async function submitScopedNavigationAction(type, pendingText) {
+    if (!pendingNavigation?.url) return;
+    const toast = ensureToast2();
+    const message = toast.querySelector(".adsfriendly-toast-message");
+    const buttons = toast.querySelectorAll("button");
+    buttons.forEach((button) => button.disabled = true);
+    message.textContent = pendingText;
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type,
+        url: pendingNavigation.url,
+        source: pendingNavigation.source,
+        target: pendingNavigation.target
+      });
+      if (!["ok", "allowed", "saved"].includes(response?.status))
+        throw new Error(response?.error || "Could not update this site.");
+      hideNavigationToast();
+    } catch (error) {
+      message.textContent = "Could not update site";
+      message.title = error.message;
+      buttons.forEach((button) => button.disabled = false);
+      scheduleHide2();
+    }
+  }
+  async function openBlockedNavigation() {
+    if (!pendingNavigation?.url) return;
+    const toast = ensureToast2();
+    const message = toast.querySelector(".adsfriendly-toast-message");
+    const buttons = toast.querySelectorAll("button");
+    buttons.forEach((button) => button.disabled = true);
+    message.textContent = "Opening\u2026";
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: "OPEN_BLOCKED_NAVIGATION",
+        url: pendingNavigation.url,
+        source: pendingNavigation.source,
+        target: pendingNavigation.target
+      });
+      if (!["ok", "opened"].includes(response?.status))
+        throw new Error(response?.error || "Could not open this tab.");
+      hideNavigationToast();
+    } catch (error) {
+      message.textContent = "Could not open tab";
+      message.title = error.message;
+      buttons.forEach((button) => button.disabled = false);
+      scheduleHide2();
+    }
   }
   async function submitNavigationDecision(type) {
     if (!pendingNavigation?.url) return;

@@ -1341,6 +1341,7 @@ var AdsFriendlyMainWorld = (() => {
   function installNetworkCapture(policy) {
     const originalFetch = window.fetch;
     const probeGate = createMediaProbeGate();
+    const resolutionTasks = /* @__PURE__ */ new Map();
     const inspect = (manifestUrl, body, candidate, requestContext2 = null, resolutionAttempt = null) => {
       const probe = inspectManifest(
         manifestUrl,
@@ -1353,22 +1354,40 @@ var AdsFriendlyMainWorld = (() => {
       else probeGate.release(manifestUrl);
       return probe;
     };
-    const stopFetchCapture = installFetchCapture(policy, inspect);
-    const stopXhrCapture = installXhrCapture(policy, inspect);
+    const resolveAttempts = (options) => {
+      const existing = resolutionTasks.get(options.manifestUrl);
+      if (existing) return existing;
+      const task = tryHlsProbeAttempts({
+        ...options,
+        originalFetch,
+        probeGate,
+        inspect
+      }).finally(() => resolutionTasks.delete(options.manifestUrl));
+      resolutionTasks.set(options.manifestUrl, task);
+      return task;
+    };
+    const stopFetchCapture = installFetchCapture(
+      policy,
+      inspect,
+      resolveAttempts
+    );
+    const stopXhrCapture = installXhrCapture(policy, inspect, resolveAttempts);
     const stopFallbackProbe = installFallbackProbe({
       policy,
       originalFetch,
       probeGate,
-      inspect
+      inspect,
+      resolveAttempts
     });
     return () => {
       stopFetchCapture();
       stopXhrCapture();
       stopFallbackProbe();
+      resolutionTasks.clear();
       probeGate.clear();
     };
   }
-  function installFetchCapture(policy, inspect) {
+  function installFetchCapture(policy, inspect, resolveAttempts) {
     const originalFetch = window.fetch;
     const fetchWrapper = async function(...args) {
       const url = requestUrl(args[0]);
@@ -1382,7 +1401,22 @@ var AdsFriendlyMainWorld = (() => {
         reportMediaSource(url, mimeType);
       }
       if (isManifestLike(finalUrl) || candidate?.kind === MEDIA_KINDS.HLS) {
-        response.clone().text().then((body) => inspect(finalUrl, body, candidate, requestContext2)).catch(() => {
+        response.clone().text().then((body) => {
+          const primaryProbe = inspect(
+            finalUrl,
+            body,
+            candidate,
+            requestContext2
+          );
+          if (!isUsableMediaProbe(primaryProbe)) {
+            resolveAttempts({
+              manifestUrl: finalUrl,
+              body,
+              candidate
+            }).catch(() => {
+            });
+          }
+        }).catch(() => {
         });
       }
       return response;
@@ -1392,7 +1426,7 @@ var AdsFriendlyMainWorld = (() => {
       if (window.fetch === fetchWrapper) window.fetch = originalFetch;
     };
   }
-  function installXhrCapture(policy, inspect) {
+  function installXhrCapture(policy, inspect, resolveAttempts) {
     const originalOpen = XMLHttpRequest.prototype.open;
     const originalSend = XMLHttpRequest.prototype.send;
     const openWrapper = function(method, url, ...rest) {
@@ -1412,8 +1446,22 @@ var AdsFriendlyMainWorld = (() => {
         }
         if (!isManifestLike(url) && candidate?.kind !== MEDIA_KINDS.HLS) return;
         try {
-          if (typeof this.responseText === "string")
-            inspect(url, this.responseText, candidate, requestContext2);
+          if (typeof this.responseText === "string") {
+            const primaryProbe = inspect(
+              url,
+              this.responseText,
+              candidate,
+              requestContext2
+            );
+            if (!isUsableMediaProbe(primaryProbe)) {
+              resolveAttempts({
+                manifestUrl: url,
+                body: this.responseText,
+                candidate
+              }).catch(() => {
+              });
+            }
+          }
         } catch {
         }
       });
@@ -1428,7 +1476,13 @@ var AdsFriendlyMainWorld = (() => {
         XMLHttpRequest.prototype.send = originalSend;
     };
   }
-  function installFallbackProbe({ policy, originalFetch, probeGate, inspect }) {
+  function installFallbackProbe({
+    policy,
+    originalFetch,
+    probeGate,
+    inspect,
+    resolveAttempts
+  }) {
     let stopped = false;
     const onProbeRequest = (messageEvent) => {
       if (stopped || messageEvent.source !== window || messageEvent.data?.source !== "adsfriendly-content" || messageEvent.data?.type !== "PROBE_HLS_MANIFEST" || !policy.can(CAPABILITIES.MEDIA_OBSERVE))
@@ -1461,34 +1515,11 @@ var AdsFriendlyMainWorld = (() => {
           createFallbackRequestContext(manifestUrl, finalUrl)
         );
         if (isUsableMediaProbe(primaryProbe)) return primaryProbe;
-        for (const attempt of createHlsProbeAttempts(finalUrl, body)) {
-          const alternativeResponse = await originalFetch.call(
-            window,
-            attempt.url,
-            {
-              credentials: "same-origin",
-              cache: "default"
-            }
-          );
-          if (!alternativeResponse.ok) continue;
-          const alternativeFinalUrl = alternativeResponse.url || attempt.url;
-          const alternativeCandidate = reportMediaSource(
-            alternativeFinalUrl,
-            alternativeResponse.headers.get("content-type")
-          ) || candidate;
-          const alternativeProbe = inspect(
-            alternativeFinalUrl,
-            await alternativeResponse.text(),
-            alternativeCandidate,
-            createFallbackRequestContext(manifestUrl, alternativeFinalUrl),
-            attempt
-          );
-          if (isUsableMediaProbe(alternativeProbe)) {
-            probeGate.remember(manifestUrl, "ready");
-            return alternativeProbe;
-          }
-        }
-        return primaryProbe;
+        return await resolveAttempts({
+          manifestUrl: finalUrl,
+          body,
+          candidate: finalCandidate
+        }) || primaryProbe;
       }).catch((error) => {
         if (probeGate.state(manifestUrl) !== "pending") return;
         probeGate.release(manifestUrl);
@@ -1500,6 +1531,49 @@ var AdsFriendlyMainWorld = (() => {
       stopped = true;
       window.removeEventListener("message", onProbeRequest);
     };
+  }
+  async function tryHlsProbeAttempts({
+    manifestUrl,
+    body,
+    candidate,
+    originalFetch,
+    probeGate,
+    inspect
+  }) {
+    for (const attempt of createHlsProbeAttempts(manifestUrl, body)) {
+      try {
+        const response = await originalFetch.call(window, attempt.url, {
+          credentials: "same-origin",
+          cache: "default"
+        });
+        if (!response.ok) continue;
+        const finalUrl = response.url || attempt.url;
+        const alternativeBody = await response.text();
+        if (!isUsableMediaProbe(parseHlsManifest(finalUrl, alternativeBody))) {
+          continue;
+        }
+        const alternativeCandidate = createMediaCandidateFromSource({
+          pageUrl: location.href,
+          sourceUrl: finalUrl,
+          mimeType: response.headers.get("content-type"),
+          title: document.title || null,
+          detectedBy: MEDIA_DETECTION_SOURCES.NETWORK
+        }) || candidate;
+        const alternativeProbe = inspect(
+          finalUrl,
+          alternativeBody,
+          alternativeCandidate,
+          createFallbackRequestContext(manifestUrl, finalUrl),
+          attempt
+        );
+        if (isUsableMediaProbe(alternativeProbe)) {
+          probeGate.remember(manifestUrl, "ready");
+          return alternativeProbe;
+        }
+      } catch {
+      }
+    }
+    return null;
   }
   function reportMediaSource(sourceUrl, mimeType) {
     const candidate = createMediaCandidateFromSource({

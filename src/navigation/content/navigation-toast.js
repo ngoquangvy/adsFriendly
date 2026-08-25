@@ -5,12 +5,26 @@ let pendingNavigation = null;
 
 export function startNavigationToast() {
   const onMessage = (message) => {
-    if (message?.type !== "SHOW_GRAY_NAVIGATION") return;
+    if (
+      ![
+        "SHOW_GRAY_NAVIGATION",
+        "SHOW_BLOCKED_NAVIGATION",
+        "SHOW_ALLOWED_SEARCH_NAVIGATION",
+      ].includes(message?.type)
+    )
+      return;
     pendingNavigation = {
+      kind:
+        message.type === "SHOW_BLOCKED_NAVIGATION"
+          ? "blocked"
+          : message.type === "SHOW_ALLOWED_SEARCH_NAVIGATION"
+            ? "allowed_search"
+            : "review",
       url: message.url,
       source: message.source,
       target: message.target,
       tabId: message.tabId,
+      count: message.count || 1,
     };
     showNavigationToast();
   };
@@ -25,9 +39,37 @@ function showNavigationToast() {
   if (!pendingNavigation?.url) return;
 
   const toast = ensureToast();
-  const host = safeHost(pendingNavigation.url);
-  toast.querySelector(".adsfriendly-toast-message").textContent =
-    `${truncate(host, 28)} may be an ad`;
+  const scope = toast.querySelector(".adsfriendly-toast-scope");
+  const primaryButton = toast.querySelector(".adsfriendly-toast-primary");
+  const blockButton = toast.querySelector(".adsfriendly-toast-block");
+  toast
+    .querySelectorAll("button")
+    .forEach((button) => (button.disabled = false));
+  toast.querySelector(".adsfriendly-toast-message").title = "";
+  if (pendingNavigation.kind === "blocked") {
+    const count = pendingNavigation.count || 1;
+    scope.textContent = "BLOCKED";
+    toast.querySelector(".adsfriendly-toast-message").textContent =
+      count === 1 ? "Blocked 1 ad tab" : `Blocked ${count} ad tabs`;
+    primaryButton.textContent = count === 1 ? "Open" : "Open latest";
+    blockButton.textContent = "Always allow site";
+    blockButton.hidden = false;
+  } else if (pendingNavigation.kind === "allowed_search") {
+    scope.textContent = "ALLOWED";
+    toast.querySelector(".adsfriendly-toast-message").textContent =
+      `Google Search allowed from ${truncate(pendingNavigation.source, 24)}`;
+    primaryButton.textContent = "Keep allowed";
+    blockButton.textContent = "Block again";
+    blockButton.hidden = false;
+  } else {
+    scope.textContent = "NEW TAB";
+    primaryButton.textContent = "Keep tab";
+    blockButton.textContent = "Block tab";
+    blockButton.hidden = false;
+    const host = safeHost(pendingNavigation.url);
+    toast.querySelector(".adsfriendly-toast-message").textContent =
+      `${truncate(host, 28)} may be an ad`;
+  }
   toast.classList.remove("adsfriendly-toast-hidden");
 
   scheduleHide();
@@ -105,11 +147,19 @@ function ensureToast() {
     }
   `;
 
-  toast.querySelector(".adsfriendly-toast-primary").onclick = () =>
-    submitNavigationDecision("KEEP_REVIEWED_TAB");
+  toast.querySelector(".adsfriendly-toast-primary").onclick = () => {
+    if (pendingNavigation?.kind === "blocked") return openBlockedNavigation();
+    if (pendingNavigation?.kind === "allowed_search")
+      return hideNavigationToast();
+    return submitNavigationDecision("KEEP_REVIEWED_TAB");
+  };
 
-  toast.querySelector(".adsfriendly-toast-block").onclick = () =>
-    submitNavigationDecision("BLOCK_REVIEWED_TAB");
+  toast.querySelector(".adsfriendly-toast-block").onclick = () => {
+    if (pendingNavigation?.kind === "blocked") return allowBlockedSource();
+    if (pendingNavigation?.kind === "allowed_search")
+      return blockAllowedSource();
+    return submitNavigationDecision("BLOCK_REVIEWED_TAB");
+  };
 
   toast.querySelector(".adsfriendly-toast-close").onclick = hideNavigationToast;
   toast.addEventListener("mouseenter", pauseHide);
@@ -120,6 +170,67 @@ function ensureToast() {
   (document.head || document.documentElement).appendChild(style);
   (document.body || document.documentElement).appendChild(toast);
   return toast;
+}
+
+function allowBlockedSource() {
+  return submitScopedNavigationAction("ALLOW_BLOCKED_SOURCE", "Allowing…");
+}
+
+function blockAllowedSource() {
+  return submitScopedNavigationAction(
+    "BLOCK_ALLOWED_SEARCH_SOURCE",
+    "Updating…",
+  );
+}
+
+async function submitScopedNavigationAction(type, pendingText) {
+  if (!pendingNavigation?.url) return;
+  const toast = ensureToast();
+  const message = toast.querySelector(".adsfriendly-toast-message");
+  const buttons = toast.querySelectorAll("button");
+  buttons.forEach((button) => (button.disabled = true));
+  message.textContent = pendingText;
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type,
+      url: pendingNavigation.url,
+      source: pendingNavigation.source,
+      target: pendingNavigation.target,
+    });
+    if (!["ok", "allowed", "saved"].includes(response?.status))
+      throw new Error(response?.error || "Could not update this site.");
+    hideNavigationToast();
+  } catch (error) {
+    message.textContent = "Could not update site";
+    message.title = error.message;
+    buttons.forEach((button) => (button.disabled = false));
+    scheduleHide();
+  }
+}
+
+async function openBlockedNavigation() {
+  if (!pendingNavigation?.url) return;
+  const toast = ensureToast();
+  const message = toast.querySelector(".adsfriendly-toast-message");
+  const buttons = toast.querySelectorAll("button");
+  buttons.forEach((button) => (button.disabled = true));
+  message.textContent = "Opening…";
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "OPEN_BLOCKED_NAVIGATION",
+      url: pendingNavigation.url,
+      source: pendingNavigation.source,
+      target: pendingNavigation.target,
+    });
+    if (!["ok", "opened"].includes(response?.status))
+      throw new Error(response?.error || "Could not open this tab.");
+    hideNavigationToast();
+  } catch (error) {
+    message.textContent = "Could not open tab";
+    message.title = error.message;
+    buttons.forEach((button) => (button.disabled = false));
+    scheduleHide();
+  }
 }
 
 async function submitNavigationDecision(type) {

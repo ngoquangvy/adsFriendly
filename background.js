@@ -374,6 +374,35 @@ var AdsFriendlyBackground = (() => {
     }
   }
 
+  // src/navigation/shared/search-navigation.js
+  var GOOGLE_HOST_RE = /^(.+\.)?google\.(com|[a-z]{2}|com\.[a-z]{2}|co\.[a-z]{2})$/i;
+  var EMBEDDED_HOST_RE = /(?:^|\s)(?:https?:\/\/)?(?:www\.)?([a-z0-9-]{1,63}(?:\.[a-z0-9-]{1,63})+)(?:\b|\/)/i;
+  var PREFILLED_SEARCH_TRUST_TARGET = "google.com";
+  function getPrefilledSearchNavigation(value) {
+    let url;
+    try {
+      url = value instanceof URL ? value : new URL(value);
+    } catch {
+      return null;
+    }
+    const query = url.searchParams.get("q")?.trim() || "";
+    if (!GOOGLE_HOST_RE.test(url.hostname) || url.pathname !== "/search" || !query)
+      return null;
+    const embeddedHost = EMBEDDED_HOST_RE.exec(query)?.[1]?.toLowerCase() || null;
+    return {
+      searchHost: url.hostname.toLowerCase(),
+      embeddedHost
+    };
+  }
+  function resolveNavigationDecisionTarget({ action: action2, domain, url } = {}) {
+    const search = getPrefilledSearchNavigation(url);
+    if (!search) return { scope: "domain", domain };
+    if (action2 === "BLACKLIST" && search.embeddedHost) {
+      return { scope: "embedded_domain", domain: search.embeddedHost };
+    }
+    return { scope: "navigation_only", domain: null };
+  }
+
   // src/navigation/background/trusted-paths.js
   async function syncTrustedPath(source, target, isManual = false) {
     if (!source || !target || source === target) return;
@@ -398,10 +427,20 @@ var AdsFriendlyBackground = (() => {
     const key = `p:${source}>${target}`;
     return (await chrome.storage.local.get([key]))[key] || null;
   }
+  async function removeTrustedPath(source, target) {
+    if (!source || !target || source === target) return false;
+    const key = `p:${source}>${target}`;
+    await chrome.storage.local.remove(key);
+    return true;
+  }
   async function handleUserDecision(message) {
-    const { action: action2, domain } = message;
+    const { action: action2 } = message;
     if (!["WHITELIST", "BLACKLIST"].includes(action2)) return;
-    return getSettingsMutationStore().saveDomainDecision(action2, domain);
+    const decision = resolveNavigationDecisionTarget(message);
+    if (decision.scope === "navigation_only") {
+      return { status: "navigation_only", action: action2 };
+    }
+    return getSettingsMutationStore().saveDomainDecision(action2, decision.domain);
   }
 
   // src/background/reputation.js
@@ -1174,10 +1213,11 @@ var AdsFriendlyBackground = (() => {
     whitelisted = false,
     blacklisted = false,
     trustedPath = false,
-    promotionalIntent = false
+    promotionalIntent = false,
+    targetLikelyAd = false
   } = {}) {
     if (blacklisted) return NEW_TAB_DECISIONS.CLOSE;
-    if (sameSite || trustedInitiator || trustedTarget || whitelisted || !promotionalIntent && trustedPath)
+    if (sameSite || trustedInitiator || trustedTarget && !promotionalIntent && !targetLikelyAd || whitelisted || !promotionalIntent && !targetLikelyAd && trustedPath)
       return NEW_TAB_DECISIONS.ALLOW;
     return NEW_TAB_DECISIONS.VERIFY;
   }
@@ -1192,8 +1232,9 @@ var AdsFriendlyBackground = (() => {
   } = {}) {
     const reasons = /* @__PURE__ */ new Set([...intentReasons, ...targetReasons]);
     const strongTracking = reasons.has("strong_tracking_parameter");
+    const strongPrefilledSearch = reasons.has("prefilled_search_navigation");
     const corroboratingSignal = reasons.has("multiple_campaign_parameters") || reasons.has("promotional_element_or_destination");
-    if (strongTracking && corroboratingSignal) {
+    if (strongPrefilledSearch || strongTracking && corroboratingSignal) {
       return NEW_TAB_REVIEW_SURFACES.CLOSE;
     }
     return promotionalIntent || targetLikelyAd ? NEW_TAB_REVIEW_SURFACES.FULL_PAGE : NEW_TAB_REVIEW_SURFACES.TOAST;
@@ -1241,6 +1282,7 @@ var AdsFriendlyBackground = (() => {
     "zoneid"
   ]);
   var PROMOTIONAL_TOKEN_RE = /(^|[^a-z0-9])(?:ad|ads|advert|banner|casino|hitclub|promo|sponsor|bet)([^a-z0-9]|$)/i;
+  var PROMOTIONAL_SEARCH_DESTINATION_RE = /(?:^|\s)(?:https?:\/\/)?(?:www\.)?[a-z0-9-]{4,}\.(?:bet|casino|click|live|top|vip|win|xyz)(?:\b|\/)/i;
   function classifyNavigationIntent({
     intentUrl,
     sourceUrl,
@@ -1262,14 +1304,80 @@ var AdsFriendlyBackground = (() => {
     const marketingCount = keys.filter((key) => key.startsWith("utm_")).length;
     const tokenEvidence = `${intent.hostname} ${intent.pathname} ${evidence}`;
     const promotionalToken = PROMOTIONAL_TOKEN_RE.test(tokenEvidence);
+    const searchNavigation = getPrefilledSearchNavigation(intent);
+    const prefilledSearchNavigation = Boolean(searchNavigation);
+    const promotionalSearchDestination = Boolean(
+      searchNavigation?.embeddedHost && PROMOTIONAL_SEARCH_DESTINATION_RE.test(searchNavigation.embeddedHost)
+    );
     const reasons = [];
     if (strongTracking) reasons.push("strong_tracking_parameter");
     if (marketingCount >= 2) reasons.push("multiple_campaign_parameters");
     if (promotionalToken) reasons.push("promotional_element_or_destination");
+    if (prefilledSearchNavigation) reasons.push("prefilled_search_navigation");
+    if (promotionalSearchDestination)
+      reasons.push("promotional_search_destination");
     return {
       likelyAd: reasons.length > 0,
       reasons
     };
+  }
+
+  // src/navigation/background/navigation-sequences.js
+  var NAVIGATION_SEQUENCES = Object.freeze({
+    OPENED_TAB_IS_TARGET: "opened_tab_is_target",
+    ORIGINAL_TAB_WAS_REDIRECTED: "original_tab_was_redirected"
+  });
+  var SEQUENCE_PLANS = Object.freeze({
+    [NAVIGATION_SEQUENCES.OPENED_TAB_IS_TARGET]: ({
+      originalTabId,
+      openedTabId
+    }) => ({
+      closeTabId: openedTabId,
+      restoreTabId: null,
+      survivingTabId: originalTabId,
+      notifyTabId: originalTabId
+    }),
+    [NAVIGATION_SEQUENCES.ORIGINAL_TAB_WAS_REDIRECTED]: ({
+      originalTabId,
+      openedTabId,
+      restoreOriginal = false
+    }) => restoreOriginal ? {
+      closeTabId: null,
+      restoreTabId: originalTabId,
+      survivingTabId: originalTabId,
+      notifyTabId: originalTabId
+    } : {
+      closeTabId: originalTabId,
+      restoreTabId: null,
+      survivingTabId: openedTabId,
+      notifyTabId: openedTabId
+    }
+  });
+  function createNavigationEnforcementPlan({
+    sequence,
+    originalTabId,
+    openedTabId,
+    restoreOriginal = false
+  }) {
+    const buildPlan = SEQUENCE_PLANS[sequence];
+    if (!buildPlan) {
+      throw new Error(
+        `Unknown navigation sequence: ${sequence}. Register it before use.`
+      );
+    }
+    if (!Number.isInteger(originalTabId) || !Number.isInteger(openedTabId)) {
+      throw new TypeError("Navigation enforcement requires two valid tab IDs.");
+    }
+    const plan = Object.freeze(
+      buildPlan({ originalTabId, openedTabId, restoreOriginal })
+    );
+    if (plan.notifyTabId !== plan.survivingTabId) {
+      throw new Error("Navigation toast must target the surviving tab.");
+    }
+    if (plan.closeTabId === plan.notifyTabId) {
+      throw new Error("Navigation toast cannot target the tab being closed.");
+    }
+    return plan;
   }
 
   // src/navigation/background/guard.js
@@ -1304,9 +1412,12 @@ var AdsFriendlyBackground = (() => {
   ];
   var pendingTabs = /* @__PURE__ */ new Map();
   var handledTabs = /* @__PURE__ */ new Map();
+  var evaluatingTabs = /* @__PURE__ */ new Set();
   var reverseCandidatesBySource = /* @__PURE__ */ new Map();
   var reverseCandidatesByClone = /* @__PURE__ */ new Map();
   var pendingReviewToasts = /* @__PURE__ */ new Map();
+  var blockedNoticesBySource = /* @__PURE__ */ new Map();
+  var userOpenedNavigations = /* @__PURE__ */ new Map();
   var navigationPolicy = null;
   function registerNavigationGuard(policy) {
     navigationPolicy = policy;
@@ -1388,9 +1499,12 @@ var AdsFriendlyBackground = (() => {
       chrome.tabs.onUpdated.removeListener(onUpdated);
       chrome.webNavigation.onCommitted.removeListener(onCommitted);
       pendingTabs.clear();
+      evaluatingTabs.clear();
       reverseCandidatesBySource.clear();
       reverseCandidatesByClone.clear();
       pendingReviewToasts.clear();
+      blockedNoticesBySource.clear();
+      userOpenedNavigations.clear();
       navigationPolicy = null;
     };
   }
@@ -1470,15 +1584,26 @@ var AdsFriendlyBackground = (() => {
     }
     const sourceHost = new URL(candidate.originalUrl).hostname;
     await logBlockedNavigationIfAllowed(candidate.redirectedUrl, sourceHost);
+    let enforcementPlan = createNavigationEnforcementPlan({
+      sequence: NAVIGATION_SEQUENCES.ORIGINAL_TAB_WAS_REDIRECTED,
+      originalTabId: candidate.sourceTabId,
+      openedTabId: candidate.cloneTabId
+    });
     try {
       const cloneTab = await chrome.tabs.get(candidate.cloneTabId);
       if (!cloneTab?.url || !isSelfCloneNavigation(candidate.originalUrl, cloneTab.url))
         throw new Error("clone gone");
-      await chrome.tabs.update(candidate.cloneTabId, { active: true });
-      await chrome.tabs.remove(candidate.sourceTabId);
+      await chrome.tabs.update(enforcementPlan.survivingTabId, { active: true });
+      await chrome.tabs.remove(enforcementPlan.closeTabId);
     } catch {
+      enforcementPlan = createNavigationEnforcementPlan({
+        sequence: NAVIGATION_SEQUENCES.ORIGINAL_TAB_WAS_REDIRECTED,
+        originalTabId: candidate.sourceTabId,
+        openedTabId: candidate.cloneTabId,
+        restoreOriginal: true
+      });
       try {
-        await chrome.tabs.update(candidate.sourceTabId, {
+        await chrome.tabs.update(enforcementPlan.restoreTabId, {
           url: candidate.originalUrl
         });
       } catch {
@@ -1486,20 +1611,32 @@ var AdsFriendlyBackground = (() => {
     } finally {
       pendingTabs.delete(candidate.cloneTabId);
       handledTabs.set(candidate.sourceTabId, Date.now());
+      await showBlockedNavigationToast({
+        sourceTabId: enforcementPlan.notifyTabId,
+        url: candidate.redirectedUrl,
+        source: sourceHost,
+        target: new URL(candidate.redirectedUrl).hostname
+      });
       cleanupReverseCandidate(candidate);
     }
   }
   async function isAllowedReverseRedirect(candidate) {
-    const original = new URL(candidate.originalUrl);
-    const redirected = new URL(candidate.redirectedUrl);
-    if (isTrustedTarget(redirected.hostname)) return true;
-    const { whitelist = [] } = await chrome.storage.local.get("whitelist");
-    if (whitelist.includes(redirected.hostname)) return true;
-    const trustWindow = await getDynamicTrustWindow(original.hostname);
-    if (hasMatchingIntent(candidate.sourceTabId, redirected.hostname, trustWindow))
-      return true;
-    const path = await getTrustedPath(original.hostname, redirected.hostname);
-    return !isPromotionalIntent(candidate.sourceTabId) && !!path && (path.isManual || path.visits >= 3);
+    const evaluation = await evaluateNavigationPolicy({
+      sourceUrl: candidate.originalUrl,
+      targetUrl: candidate.redirectedUrl,
+      sourceTabId: candidate.sourceTabId,
+      allowMatchingIntent: true,
+      allowTrustedInitiator: false
+    });
+    if (evaluation.allowedSearch) {
+      await showAllowedSearchToast({
+        tabId: candidate.sourceTabId,
+        url: evaluation.targetUrl.href,
+        source: evaluation.sourceUrl.hostname,
+        target: evaluation.trustTarget
+      });
+    }
+    return evaluation.decision === NEW_TAB_DECISIONS.ALLOW;
   }
   function getRecentSourceUrl(sourceTabId) {
     const click = runtimeState.lastTrustedClick;
@@ -1518,64 +1655,134 @@ var AdsFriendlyBackground = (() => {
   function logReversePopunderError(error) {
     console.error("Reverse pop-under guard failed:", error);
   }
+  async function evaluateNavigationPolicy({
+    sourceUrl: sourceValue,
+    targetUrl: targetValue,
+    sourceTabId,
+    allowMatchingIntent = false,
+    allowTrustedInitiator = true,
+    waitForIntent = false
+  }) {
+    const sourceUrl = new URL(sourceValue);
+    const targetUrl = new URL(targetValue);
+    const targetDomain = targetUrl.hostname;
+    const sameSite = sameHostnameOrSubdomain(sourceUrl.hostname, targetDomain) || sameHostnameOrSubdomain(targetDomain, sourceUrl.hostname);
+    const targetClassification = classifyNavigationIntent({
+      intentUrl: targetUrl.href,
+      sourceUrl: sourceUrl.href
+    });
+    const prefilledSearch = targetClassification.reasons.includes(
+      "prefilled_search_navigation"
+    );
+    const trustTarget = prefilledSearch ? PREFILLED_SEARCH_TRUST_TARGET : targetDomain;
+    const [{ whitelist = [], blacklist = [] }, path, trustWindow] = await Promise.all([
+      chrome.storage.local.get(["whitelist", "blacklist"]),
+      getTrustedPath(sourceUrl.hostname, trustTarget),
+      getDynamicTrustWindow(sourceUrl.hostname)
+    ]);
+    if (waitForIntent) await delay(180);
+    const intentClassification = getRecentIntentClassification(
+      sourceTabId,
+      trustWindow
+    );
+    const promotionalIntent = intentClassification.likelyAd;
+    const allowedSearch = prefilledSearch && path?.isManual === true;
+    const matchingIntent = allowMatchingIntent && hasMatchingIntent(sourceTabId, targetDomain, trustWindow);
+    const decision = allowedSearch ? NEW_TAB_DECISIONS.ALLOW : decideNewTabNavigation({
+      sameSite,
+      trustedInitiator: allowTrustedInitiator && isTrustedInitiator(sourceUrl.hostname),
+      trustedTarget: isTrustedTarget(targetDomain),
+      whitelisted: whitelist.includes(targetDomain),
+      blacklisted: isBlacklistedTarget(targetDomain, blacklist),
+      trustedPath: matchingIntent || !!path?.isManual || (path?.visits || 0) >= 3,
+      promotionalIntent,
+      targetLikelyAd: targetClassification.likelyAd
+    });
+    const reviewSurface = decision === NEW_TAB_DECISIONS.VERIFY ? chooseNewTabReviewSurface({
+      promotionalIntent,
+      targetLikelyAd: targetClassification.likelyAd,
+      intentReasons: intentClassification.reasons,
+      targetReasons: targetClassification.reasons
+    }) : null;
+    return {
+      sourceUrl,
+      targetUrl,
+      targetDomain,
+      sameSite,
+      trustTarget,
+      allowedSearch,
+      decision,
+      reviewSurface
+    };
+  }
   async function evaluateNewTab({ sourceTabId, tabId, url }) {
     if (!navigationPolicy?.can(CAPABILITIES.NAVIGATION_GUARD)) return;
     if (!sourceTabId || !tabId || !url || isBlankUrl(url)) return;
-    if (handledTabs.has(tabId)) return;
+    if (handledTabs.has(tabId) || evaluatingTabs.has(tabId)) return;
+    if (consumeUserOpenedNavigation(url)) {
+      pendingTabs.delete(tabId);
+      handledTabs.set(tabId, Date.now());
+      setTimeout(() => handledTabs.delete(tabId), 15e3);
+      return;
+    }
+    evaluatingTabs.add(tabId);
     let shouldFinalize = false;
     try {
-      const { whitelist = [], blacklist = [] } = await chrome.storage.local.get([
-        "whitelist",
-        "blacklist"
-      ]);
       const sourceTab = await chrome.tabs.get(sourceTabId);
       const capturedSourceUrl = reverseCandidatesBySource.get(sourceTabId)?.originalUrl || sourceTab?.url;
       if (!capturedSourceUrl?.startsWith("http")) return;
-      const sourceUrl = new URL(capturedSourceUrl);
-      const targetUrl = new URL(url);
-      const targetDomain = targetUrl.hostname;
-      const sameSite = sameHostnameOrSubdomain(sourceUrl.hostname, targetDomain) || sameHostnameOrSubdomain(targetDomain, sourceUrl.hostname);
-      if (shouldKeepTrackingNewTab({ sameSite })) return;
-      const trustWindow = await getDynamicTrustWindow(sourceUrl.hostname);
-      const path = await getTrustedPath(sourceUrl.hostname, targetDomain);
-      await delay(180);
-      const intentClassification = getRecentIntentClassification(
+      const evaluation = await evaluateNavigationPolicy({
+        sourceUrl: capturedSourceUrl,
+        targetUrl: url,
         sourceTabId,
-        trustWindow
-      );
-      const promotionalIntent = intentClassification.likelyAd;
-      const decision = decideNewTabNavigation({
-        sameSite,
-        trustedInitiator: isTrustedInitiator(sourceUrl.hostname),
-        trustedTarget: isTrustedTarget(targetDomain),
-        whitelisted: whitelist.includes(targetDomain),
-        blacklisted: isBlacklistedTarget(targetDomain, blacklist),
-        trustedPath: !!path && (path.isManual || path.visits >= 3),
-        promotionalIntent
+        waitForIntent: true
       });
+      const { sourceUrl, targetDomain, decision, reviewSurface } = evaluation;
+      if (shouldKeepTrackingNewTab({ sameSite: evaluation.sameSite })) return;
+      if (evaluation.allowedSearch) {
+        shouldFinalize = true;
+        return showAllowedSearchToast({
+          tabId,
+          url,
+          source: sourceUrl.hostname,
+          target: evaluation.trustTarget
+        });
+      }
       if (decision === NEW_TAB_DECISIONS.ALLOW) {
         shouldFinalize = true;
         return;
       }
       if (decision === NEW_TAB_DECISIONS.CLOSE) {
         shouldFinalize = true;
+        const enforcementPlan = createNavigationEnforcementPlan({
+          sequence: NAVIGATION_SEQUENCES.OPENED_TAB_IS_TARGET,
+          originalTabId: sourceTabId,
+          openedTabId: tabId
+        });
         await logBlockedNavigationIfAllowed(url, sourceUrl.hostname);
-        return closeTabQuietly(tabId);
+        await closeTabQuietly(enforcementPlan.closeTabId);
+        return showBlockedNavigationToast({
+          sourceTabId: enforcementPlan.notifyTabId,
+          url,
+          source: sourceUrl.hostname,
+          target: targetDomain
+        });
       }
-      const targetClassification = classifyNavigationIntent({
-        intentUrl: url,
-        sourceUrl: capturedSourceUrl
-      });
-      const reviewSurface = chooseNewTabReviewSurface({
-        promotionalIntent,
-        targetLikelyAd: targetClassification.likelyAd,
-        intentReasons: intentClassification.reasons,
-        targetReasons: targetClassification.reasons
-      });
       shouldFinalize = true;
       if (reviewSurface === NEW_TAB_REVIEW_SURFACES.CLOSE) {
+        const enforcementPlan = createNavigationEnforcementPlan({
+          sequence: NAVIGATION_SEQUENCES.OPENED_TAB_IS_TARGET,
+          originalTabId: sourceTabId,
+          openedTabId: tabId
+        });
         await logBlockedNavigationIfAllowed(url, sourceUrl.hostname);
-        return closeTabQuietly(tabId);
+        await closeTabQuietly(enforcementPlan.closeTabId);
+        return showBlockedNavigationToast({
+          sourceTabId: enforcementPlan.notifyTabId,
+          url,
+          source: sourceUrl.hostname,
+          target: targetDomain
+        });
       }
       if (reviewSurface === NEW_TAB_REVIEW_SURFACES.FULL_PAGE) {
         return redirectToBlockedPage(tabId, url, sourceUrl.hostname);
@@ -1591,12 +1798,75 @@ var AdsFriendlyBackground = (() => {
     } catch (err) {
       console.error("Error evaluating navigation:", err);
     } finally {
+      evaluatingTabs.delete(tabId);
       if (shouldFinalize) {
         pendingTabs.delete(tabId);
         handledTabs.set(tabId, Date.now());
         setTimeout(() => handledTabs.delete(tabId), 15e3);
       }
     }
+  }
+  async function showAllowedSearchToast({ tabId, url, source, target }) {
+    if (!navigationPolicy?.can(CAPABILITIES.NAVIGATION_FEEDBACK)) return false;
+    const message = {
+      type: "SHOW_ALLOWED_SEARCH_NAVIGATION",
+      url,
+      source,
+      target
+    };
+    return queueNavigationToast(tabId, message);
+  }
+  function showAllowedSearchNavigation(details) {
+    return showAllowedSearchToast(details);
+  }
+  function allowUserOpenedNavigation(url) {
+    let normalized;
+    try {
+      normalized = new URL(url).href;
+    } catch {
+      return false;
+    }
+    userOpenedNavigations.set(normalized, Date.now() + 5e3);
+    return true;
+  }
+  function consumeUserOpenedNavigation(url) {
+    let normalized;
+    try {
+      normalized = new URL(url).href;
+    } catch {
+      return false;
+    }
+    const expiresAt = userOpenedNavigations.get(normalized) || 0;
+    userOpenedNavigations.delete(normalized);
+    return expiresAt > Date.now();
+  }
+  async function showBlockedNavigationToast({
+    sourceTabId,
+    url,
+    source,
+    target
+  }) {
+    if (!navigationPolicy?.can(CAPABILITIES.NAVIGATION_FEEDBACK)) return false;
+    const now = Date.now();
+    const previous = blockedNoticesBySource.get(sourceTabId);
+    const count = previous?.expiresAt > now ? previous.count + 1 : 1;
+    const notice = {
+      count,
+      expiresAt: now + 1e4,
+      message: {
+        type: "SHOW_BLOCKED_NAVIGATION",
+        count,
+        url,
+        source,
+        target
+      }
+    };
+    blockedNoticesBySource.set(sourceTabId, notice);
+    setTimeout(() => {
+      if (blockedNoticesBySource.get(sourceTabId) === notice)
+        blockedNoticesBySource.delete(sourceTabId);
+    }, 10500);
+    return queueNavigationToast(sourceTabId, notice.message);
   }
   function hasMatchingIntent(sourceTabId, targetDomain, trustWindow) {
     const click = runtimeState.lastTrustedClick;
@@ -1615,6 +1885,9 @@ var AdsFriendlyBackground = (() => {
       source,
       target
     };
+    return queueNavigationToast(tabId, message);
+  }
+  async function queueNavigationToast(tabId, message) {
     pendingReviewToasts.set(tabId, {
       message,
       expiresAt: Date.now() + 1e4,
@@ -3364,6 +3637,9 @@ var AdsFriendlyBackground = (() => {
     BLOCK_GRAY_NAVIGATION: CAPABILITIES.NAVIGATION_FEEDBACK,
     KEEP_REVIEWED_TAB: CAPABILITIES.NAVIGATION_FEEDBACK,
     BLOCK_REVIEWED_TAB: CAPABILITIES.NAVIGATION_FEEDBACK,
+    OPEN_BLOCKED_NAVIGATION: CAPABILITIES.NAVIGATION_FEEDBACK,
+    ALLOW_BLOCKED_SOURCE: CAPABILITIES.NAVIGATION_FEEDBACK,
+    BLOCK_ALLOWED_SEARCH_SOURCE: CAPABILITIES.NAVIGATION_FEEDBACK,
     NAVIGATION_TOAST_READY: CAPABILITIES.NAVIGATION_FEEDBACK,
     LEARN_VIDEO_AD: CAPABILITIES.LEARNING_FEEDBACK,
     SYNC_VIDEO_LEARNING: CAPABILITIES.LEARNING_FEEDBACK,
@@ -3534,7 +3810,12 @@ var AdsFriendlyBackground = (() => {
       return;
     }
     if (message.type === "BLOCK_GRAY_NAVIGATION") {
-      await handleUserDecision({ action: "BLACKLIST", domain: message.target });
+      await handleUserDecision({
+        action: "BLACKLIST",
+        domain: message.target,
+        url: message.url,
+        source: message.source
+      });
       await recordTelemetryBestEffort({
         unit: "navigation",
         label: "ad",
@@ -3583,7 +3864,12 @@ var AdsFriendlyBackground = (() => {
       return;
     }
     if (message.type === "BLOCK_REVIEWED_TAB") {
-      await handleUserDecision({ action: "BLACKLIST", domain: message.target });
+      await handleUserDecision({
+        action: "BLACKLIST",
+        domain: message.target,
+        url: message.url,
+        source: message.source
+      });
       await recordTelemetryBestEffort({
         unit: "navigation",
         label: "ad",
@@ -3612,6 +3898,42 @@ var AdsFriendlyBackground = (() => {
       }
       return;
     }
+    if (message.type === "OPEN_BLOCKED_NAVIGATION") {
+      let targetUrl;
+      try {
+        targetUrl = new URL(message.url);
+      } catch {
+        return { status: "invalid_url" };
+      }
+      if (!/^https?:$/.test(targetUrl.protocol)) return { status: "invalid_url" };
+      allowUserOpenedNavigation(targetUrl.href);
+      await chrome.tabs.create(tabCreateProperties(targetUrl.href, sender));
+      return { status: "opened" };
+    }
+    if (message.type === "ALLOW_BLOCKED_SOURCE") {
+      const source = senderSourceHostname(sender);
+      const search = getPrefilledSearchNavigation(message.url);
+      if (!source || !search) return { status: "invalid_navigation" };
+      await syncTrustedPath(source, PREFILLED_SEARCH_TRUST_TARGET, true);
+      allowUserOpenedNavigation(message.url);
+      const tab = await chrome.tabs.create(
+        tabCreateProperties(message.url, sender)
+      );
+      await showAllowedSearchNavigation({
+        tabId: tab.id,
+        url: message.url,
+        source,
+        target: PREFILLED_SEARCH_TRUST_TARGET
+      });
+      return { status: "allowed" };
+    }
+    if (message.type === "BLOCK_ALLOWED_SEARCH_SOURCE") {
+      const source = String(message.source || "").toLowerCase();
+      const search = getPrefilledSearchNavigation(sender?.tab?.url);
+      if (!source || !search) return { status: "invalid_navigation" };
+      await removeTrustedPath(source, PREFILLED_SEARCH_TRUST_TARGET);
+      return { status: "saved" };
+    }
     if (message.type === "LEARN_VIDEO_AD") return handleLearnVideoAd(message);
     if (message.type === "SYNC_VIDEO_LEARNING")
       return handleVideoLearning(message);
@@ -3623,6 +3945,20 @@ var AdsFriendlyBackground = (() => {
     if (message.type === "TOGGLE_STATUS")
       console.log("Protection status:", message.isEnabled);
     return { status: "ignored" };
+  }
+  function senderSourceHostname(sender) {
+    try {
+      return new URL(sender?.tab?.url).hostname.toLowerCase();
+    } catch {
+      return null;
+    }
+  }
+  function tabCreateProperties(url, sender) {
+    const properties = { url, active: true };
+    if (Number.isInteger(sender?.tab?.id)) {
+      properties.openerTabId = sender.tab.id;
+    }
+    return properties;
   }
   async function recordTelemetryBestEffort(event2) {
     try {
@@ -3700,6 +4036,7 @@ var AdsFriendlyBackground = (() => {
     "iframe",
     "video"
   ]);
+  var VALID_RULE_LAYOUTS = /* @__PURE__ */ new Set(["any", "compact", "wide"]);
   function normalizeSettingsPackage(input) {
     if (!input || typeof input !== "object" || Array.isArray(input)) {
       throw new Error("Settings package must be a JSON object.");
@@ -3816,7 +4153,8 @@ var AdsFriendlyBackground = (() => {
       selector,
       fingerprint: normalizeFingerprint(rule.fingerprint),
       confidence: clampNumber(rule.confidence, 0, 1, 0.8),
-      source: cleanText(rule.source || "package", 80)
+      source: cleanText(rule.source || "package", 80),
+      layout: VALID_RULE_LAYOUTS.has(rule.layout) ? rule.layout : "any"
     };
     if (rule.isCorrection === true) normalized.isCorrection = true;
     return normalized;

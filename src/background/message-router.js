@@ -6,12 +6,21 @@ import {
 import { handleLearnVideoAd, handleVideoLearning } from "./video-learning.js";
 import {
   handleUserDecision,
+  removeTrustedPath,
   syncTrustedPath,
 } from "../navigation/background/trusted-paths.js";
+import {
+  getPrefilledSearchNavigation,
+  PREFILLED_SEARCH_TRUST_TARGET,
+} from "../navigation/shared/search-navigation.js";
 import { updateSiteReputation } from "./reputation.js";
 import { flushTelemetry, recordTelemetry } from "./telemetry.js";
 import { CAPABILITIES } from "../runtime/feature-catalog.js";
-import { deliverPendingNavigationReview } from "../navigation/background/guard.js";
+import {
+  allowUserOpenedNavigation,
+  deliverPendingNavigationReview,
+  showAllowedSearchNavigation,
+} from "../navigation/background/guard.js";
 import {
   getSettingsMutationStore,
   getStorageHealth,
@@ -39,6 +48,9 @@ const MESSAGE_CAPABILITIES = Object.freeze({
   BLOCK_GRAY_NAVIGATION: CAPABILITIES.NAVIGATION_FEEDBACK,
   KEEP_REVIEWED_TAB: CAPABILITIES.NAVIGATION_FEEDBACK,
   BLOCK_REVIEWED_TAB: CAPABILITIES.NAVIGATION_FEEDBACK,
+  OPEN_BLOCKED_NAVIGATION: CAPABILITIES.NAVIGATION_FEEDBACK,
+  ALLOW_BLOCKED_SOURCE: CAPABILITIES.NAVIGATION_FEEDBACK,
+  BLOCK_ALLOWED_SEARCH_SOURCE: CAPABILITIES.NAVIGATION_FEEDBACK,
   NAVIGATION_TOAST_READY: CAPABILITIES.NAVIGATION_FEEDBACK,
   LEARN_VIDEO_AD: CAPABILITIES.LEARNING_FEEDBACK,
   SYNC_VIDEO_LEARNING: CAPABILITIES.LEARNING_FEEDBACK,
@@ -214,7 +226,12 @@ async function route(message, sender) {
     return;
   }
   if (message.type === "BLOCK_GRAY_NAVIGATION") {
-    await handleUserDecision({ action: "BLACKLIST", domain: message.target });
+    await handleUserDecision({
+      action: "BLACKLIST",
+      domain: message.target,
+      url: message.url,
+      source: message.source,
+    });
     await recordTelemetryBestEffort({
       unit: "navigation",
       label: "ad",
@@ -263,7 +280,12 @@ async function route(message, sender) {
     return;
   }
   if (message.type === "BLOCK_REVIEWED_TAB") {
-    await handleUserDecision({ action: "BLACKLIST", domain: message.target });
+    await handleUserDecision({
+      action: "BLACKLIST",
+      domain: message.target,
+      url: message.url,
+      source: message.source,
+    });
     await recordTelemetryBestEffort({
       unit: "navigation",
       label: "ad",
@@ -291,6 +313,42 @@ async function route(message, sender) {
     }
     return;
   }
+  if (message.type === "OPEN_BLOCKED_NAVIGATION") {
+    let targetUrl;
+    try {
+      targetUrl = new URL(message.url);
+    } catch {
+      return { status: "invalid_url" };
+    }
+    if (!/^https?:$/.test(targetUrl.protocol)) return { status: "invalid_url" };
+    allowUserOpenedNavigation(targetUrl.href);
+    await chrome.tabs.create(tabCreateProperties(targetUrl.href, sender));
+    return { status: "opened" };
+  }
+  if (message.type === "ALLOW_BLOCKED_SOURCE") {
+    const source = senderSourceHostname(sender);
+    const search = getPrefilledSearchNavigation(message.url);
+    if (!source || !search) return { status: "invalid_navigation" };
+    await syncTrustedPath(source, PREFILLED_SEARCH_TRUST_TARGET, true);
+    allowUserOpenedNavigation(message.url);
+    const tab = await chrome.tabs.create(
+      tabCreateProperties(message.url, sender),
+    );
+    await showAllowedSearchNavigation({
+      tabId: tab.id,
+      url: message.url,
+      source,
+      target: PREFILLED_SEARCH_TRUST_TARGET,
+    });
+    return { status: "allowed" };
+  }
+  if (message.type === "BLOCK_ALLOWED_SEARCH_SOURCE") {
+    const source = String(message.source || "").toLowerCase();
+    const search = getPrefilledSearchNavigation(sender?.tab?.url);
+    if (!source || !search) return { status: "invalid_navigation" };
+    await removeTrustedPath(source, PREFILLED_SEARCH_TRUST_TARGET);
+    return { status: "saved" };
+  }
   if (message.type === "LEARN_VIDEO_AD") return handleLearnVideoAd(message);
   if (message.type === "SYNC_VIDEO_LEARNING")
     return handleVideoLearning(message);
@@ -302,6 +360,22 @@ async function route(message, sender) {
   if (message.type === "TOGGLE_STATUS")
     console.log("Protection status:", message.isEnabled);
   return { status: "ignored" };
+}
+
+function senderSourceHostname(sender) {
+  try {
+    return new URL(sender?.tab?.url).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+function tabCreateProperties(url, sender) {
+  const properties = { url, active: true };
+  if (Number.isInteger(sender?.tab?.id)) {
+    properties.openerTabId = sender.tab.id;
+  }
+  return properties;
 }
 
 async function recordTelemetryBestEffort(event) {

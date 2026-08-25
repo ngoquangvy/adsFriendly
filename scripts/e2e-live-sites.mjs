@@ -69,6 +69,7 @@ async function main() {
       `--remote-debugging-port=${DEBUG_PORT}`,
       "--no-first-run",
       "--no-default-browser-check",
+      "--disable-sync",
       "--disable-popup-blocking",
       "--enable-unsafe-extension-debugging",
       "--ignore-certificate-errors",

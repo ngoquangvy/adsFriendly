@@ -17,6 +17,7 @@ import {
   normalizeHttpMediaUrl,
 } from "../src/media/probe-gate.js";
 import { createMediaObserverReportKey } from "../src/content/media-observer.js";
+import { tryHlsProbeAttempts } from "../src/main-world/network-capture.js";
 import { createHlsDownloadPlan } from "../src/media/hls-download-plan.js";
 import { downloadResourcesInParallel } from "../src/media/parallel-downloader.js";
 import {
@@ -281,6 +282,49 @@ encrypted-payload`;
     ).length,
     3,
   );
+});
+
+test("a directly captured encrypted HLS response resolves through its adapter", async () => {
+  const previousWindow = globalThis.window;
+  const previousLocation = globalThis.location;
+  const previousDocument = globalThis.document;
+  globalThis.window = {};
+  globalThis.location = { href: "https://embed.example/player" };
+  globalThis.document = { title: "Player" };
+  const attempts = [];
+  try {
+    const result = await tryHlsProbeAttempts({
+      manifestUrl: "https://embed.example/token?d=1",
+      body: "#EXTM3U\n#ENC-AESGCM;iv=1234\n#EXT-X-B65:0-138\npayload",
+      candidate: createMediaCandidateFromSource({
+        pageUrl: "https://embed.example/player",
+        sourceUrl: "https://embed.example/token?d=1",
+        detectedBy: "network",
+      }),
+      originalFetch: async (_url) => ({
+        ok: true,
+        url: "https://embed.example/token",
+        headers: { get: () => "application/vnd.apple.mpegurl" },
+        text: async () =>
+          "#EXTM3U\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXTINF:4,\nsegment.ts\n#EXT-X-ENDLIST",
+      }),
+      probeGate: createMediaProbeGate(),
+      inspect: (url, body, _candidate, _requestContext, attempt) => {
+        attempts.push(attempt);
+        return parseHlsManifest(url, body);
+      },
+    });
+    assert.equal(result.streamType, "vod");
+    assert.equal(result.segmentCount, 1);
+    assert.equal(attempts[0].removedQueryKey, "d");
+  } finally {
+    if (previousWindow === undefined) delete globalThis.window;
+    else globalThis.window = previousWindow;
+    if (previousLocation === undefined) delete globalThis.location;
+    else globalThis.location = previousLocation;
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+  }
 });
 
 test("parses low-latency HLS parts without inventing full segments", () => {

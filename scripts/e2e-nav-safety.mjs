@@ -52,6 +52,10 @@ class CdpSession {
 async function main() {
   const profileDir = path.join(tmpdir(), `adsfriendly-nav-e2e-${Date.now()}`);
   await mkdir(profileDir, { recursive: true });
+  const disguisedGoogleAdUrl =
+    "https://www.google.com/search?q=777hoky256jp.live+-%E2%9A%BD%EF%B8%8F&hl=id&gl=ID";
+  const reverseGoogleAdUrl =
+    "https://www.google.com/search?q=reverse-ad.example+-%E2%9A%A0%EF%B8%8F&hl=en";
 
   const server = createServer((req, res) => {
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
@@ -88,7 +92,14 @@ async function main() {
       <h2>Application services</h2>
       <p>Normal content should remain visible too.</p>
     </section>
+    <button id="reverse-pop" type="button">Test reverse pop-under</button>
   </main>
+  <script>
+    document.getElementById("reverse-pop").onclick = () => {
+      window.open(location.origin + location.pathname + "?kept=1", "_blank");
+      setTimeout(() => location.href = ${JSON.stringify(reverseGoogleAdUrl)}, 350);
+    };
+  </script>
 </body>
 </html>`);
   });
@@ -96,6 +107,7 @@ async function main() {
   await new Promise((resolve) => server.listen(0, resolve));
   const testUrl = `http://127.0.0.1:${server.address().port}/`;
   const manualTabUrl = `http://localhost:${server.address().port}/manual-tab`;
+  const reverseSourceUrl = `http://localhost:${server.address().port}/reverse`;
 
   const chrome = spawn(
     CHROME,
@@ -106,6 +118,7 @@ async function main() {
       `--remote-debugging-port=${DEBUG_PORT}`,
       "--no-first-run",
       "--no-default-browser-check",
+      "--disable-sync",
       "--disable-popup-blocking",
       "--enable-unsafe-extension-debugging",
       "about:blank",
@@ -163,6 +176,140 @@ async function main() {
     const manualTabPreserved = (await listTargets()).some((target) =>
       target.url.startsWith(manualTabUrl),
     );
+    await page.send("Runtime.evaluate", {
+      expression: `window.open(${JSON.stringify(disguisedGoogleAdUrl)}, "_blank")`,
+    });
+    await delay(1800);
+    const navigationStorage = await evaluateJson(
+      worker,
+      `new Promise(resolve => chrome.storage.local.get(["blockedLogs"], resolve))`,
+    );
+    const googleAdBlocked = (navigationStorage.blockedLogs || []).some(
+      (entry) => entry.url === disguisedGoogleAdUrl,
+    );
+    const googleAdTabClosed = !(await listTargets()).some((target) =>
+      decodeURIComponent(target.url).includes("777hoky256jp.live"),
+    );
+    const blockedToast = await evaluateJson(
+      page,
+      `(() => {
+        const toast = document.getElementById("adsfriendly-nav-toast");
+        return {
+          visible: Boolean(toast && !toast.classList.contains("adsfriendly-toast-hidden")),
+          message: toast?.querySelector(".adsfriendly-toast-message")?.textContent || "",
+          action: toast?.querySelector(".adsfriendly-toast-primary")?.textContent || "",
+          secondary: toast?.querySelector(".adsfriendly-toast-block")?.textContent || ""
+        };
+      })()`,
+    );
+    await page.send("Runtime.evaluate", {
+      expression: `window.open(${JSON.stringify(disguisedGoogleAdUrl)}, "_blank")`,
+    });
+    await delay(1200);
+    const aggregatedBlockedToast = await evaluateJson(
+      page,
+      `(() => {
+        const toast = document.getElementById("adsfriendly-nav-toast");
+        return {
+          visible: Boolean(toast && !toast.classList.contains("adsfriendly-toast-hidden")),
+          message: toast?.querySelector(".adsfriendly-toast-message")?.textContent || "",
+          action: toast?.querySelector(".adsfriendly-toast-primary")?.textContent || "",
+          secondary: toast?.querySelector(".adsfriendly-toast-block")?.textContent || ""
+        };
+      })()`,
+    );
+    const allowSourceClicked = await evaluateJson(
+      page,
+      `(() => {
+        const button = document.querySelector("#adsfriendly-nav-toast .adsfriendly-toast-block");
+        if (!button) return false;
+        button.click();
+        return true;
+      })()`,
+    );
+    await delay(1800);
+    const userReopenedGoogleAd = (await listTargets()).some((target) =>
+      decodeURIComponent(target.url).includes("777hoky256jp.live"),
+    );
+    const trustKey = `p:${new URL(testUrl).hostname}>google.com`;
+    const trustedSearchPath = await evaluateJson(
+      worker,
+      `new Promise(resolve => chrome.storage.local.get(${JSON.stringify(trustKey)}, resolve))`,
+    );
+    const allowedTarget = (await listTargets()).find((target) =>
+      decodeURIComponent(target.url).includes("777hoky256jp.live"),
+    );
+    const allowedChromeTab = await evaluateJson(
+      worker,
+      `new Promise(resolve => chrome.tabs.query({}, tabs => resolve(tabs.find(tab => decodeURIComponent(tab.url || "").includes("777hoky256jp.live")) || null)))`,
+    );
+    let allowedSearchToast = null;
+    if (allowedTarget) {
+      const allowedPage = new CdpSession(allowedTarget.webSocketDebuggerUrl);
+      await allowedPage.send("Runtime.enable");
+      await delay(1200);
+      allowedSearchToast = await evaluateJson(
+        allowedPage,
+        `(() => {
+          const toast = document.getElementById("adsfriendly-nav-toast");
+          return {
+            visible: Boolean(toast && !toast.classList.contains("adsfriendly-toast-hidden")),
+            message: toast?.querySelector(".adsfriendly-toast-message")?.textContent || "",
+            action: toast?.querySelector(".adsfriendly-toast-block")?.textContent || ""
+          };
+        })()`,
+      );
+      allowedPage.close();
+    }
+    const reverseSourceTarget = await newPage(reverseSourceUrl);
+    const reversePage = new CdpSession(
+      reverseSourceTarget.webSocketDebuggerUrl,
+    );
+    await reversePage.send("Runtime.enable");
+    await delay(1800);
+    const reverseSourceTab = await evaluateJson(
+      worker,
+      `new Promise(resolve => chrome.tabs.query({}, tabs => resolve(tabs.find(tab => tab.url === ${JSON.stringify(reverseSourceUrl)}) || null)))`,
+    );
+    await reversePage.send("Runtime.evaluate", {
+      expression: `document.getElementById("reverse-pop").click()`,
+    });
+    await delay(2600);
+    const tabsAfterReverse = await evaluateJson(
+      worker,
+      `new Promise(resolve => chrome.tabs.query({}, resolve))`,
+    );
+    const reverseSourceClosed = !tabsAfterReverse.some(
+      (tab) => tab.id === reverseSourceTab?.id,
+    );
+    const reverseAdTabClosed = !tabsAfterReverse.some(
+      (tab) => tab.url === reverseGoogleAdUrl,
+    );
+    const survivingCloneTab = tabsAfterReverse.find(
+      (tab) => tab.url?.startsWith(`${reverseSourceUrl}?kept=1`),
+    );
+    let reverseToast = null;
+    const survivingCloneTarget = (await listTargets()).find((target) =>
+      target.url.startsWith(`${reverseSourceUrl}?kept=1`),
+    );
+    if (survivingCloneTarget) {
+      const clonePage = new CdpSession(
+        survivingCloneTarget.webSocketDebuggerUrl,
+      );
+      await clonePage.send("Runtime.enable");
+      reverseToast = await evaluateJson(
+        clonePage,
+        `(() => {
+          const toast = document.getElementById("adsfriendly-nav-toast");
+          return {
+            visible: Boolean(toast && !toast.classList.contains("adsfriendly-toast-hidden")),
+            message: toast?.querySelector(".adsfriendly-toast-message")?.textContent || "",
+            action: toast?.querySelector(".adsfriendly-toast-primary")?.textContent || ""
+          };
+        })()`,
+      );
+      clonePage.close();
+    }
 
     const passed =
       pageResult.navVisible &&
@@ -170,6 +317,27 @@ async function main() {
       pageResult.visibleLinks === 7 &&
       pageResult.toastCount === 0 &&
       manualTabPreserved &&
+      googleAdBlocked &&
+      googleAdTabClosed &&
+      blockedToast.visible &&
+      blockedToast.message === "Blocked 1 ad tab" &&
+      blockedToast.action === "Open" &&
+      blockedToast.secondary === "Always allow site" &&
+      aggregatedBlockedToast.visible &&
+      aggregatedBlockedToast.message === "Blocked 2 ad tabs" &&
+      aggregatedBlockedToast.action === "Open latest" &&
+      aggregatedBlockedToast.secondary === "Always allow site" &&
+      userReopenedGoogleAd &&
+      allowSourceClicked &&
+      trustedSearchPath[trustKey]?.isManual === true &&
+      allowedSearchToast?.visible === true &&
+      allowedSearchToast.action === "Block again" &&
+      reverseSourceClosed &&
+      reverseAdTabClosed &&
+      Boolean(survivingCloneTab) &&
+      reverseToast?.visible === true &&
+      reverseToast.message === "Blocked 1 ad tab" &&
+      reverseToast.action === "Open" &&
       (storageResult.domTrainingSamples || []).length === 0 &&
       (storageResult.blockedLogs || []).length === 0;
 
@@ -180,6 +348,21 @@ async function main() {
           testUrl,
           manualTabUrl,
           manualTabPreserved,
+          disguisedGoogleAdUrl,
+          googleAdBlocked,
+          googleAdTabClosed,
+          blockedToast,
+          aggregatedBlockedToast,
+          userReopenedGoogleAd,
+          allowSourceClicked,
+          trustedSearchPath: trustedSearchPath[trustKey] || null,
+          allowedChromeTab,
+          allowedSearchToast,
+          reverseSourceUrl,
+          reverseSourceClosed,
+          reverseAdTabClosed,
+          survivingCloneTab,
+          reverseToast,
           pageResult,
           sampleCount: (storageResult.domTrainingSamples || []).length,
           blockedLogCount: (storageResult.blockedLogs || []).length,

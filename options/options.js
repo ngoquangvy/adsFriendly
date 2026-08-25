@@ -452,6 +452,7 @@ var AdsFriendlyOptions = (() => {
     "iframe",
     "video"
   ]);
+  var VALID_RULE_LAYOUTS = /* @__PURE__ */ new Set(["any", "compact", "wide"]);
   function createSettingsPackage(storageSnapshot = {}, metadata = {}) {
     const trustedPaths = Object.entries(storageSnapshot).filter(([key, value]) => key.startsWith("p:") && value).map(([, value]) => value);
     return normalizeSettingsPackage({
@@ -600,7 +601,8 @@ var AdsFriendlyOptions = (() => {
       selector,
       fingerprint: normalizeFingerprint(rule.fingerprint),
       confidence: clampNumber(rule.confidence, 0, 1, 0.8),
-      source: cleanText(rule.source || "package", 80)
+      source: cleanText(rule.source || "package", 80),
+      layout: VALID_RULE_LAYOUTS.has(rule.layout) ? rule.layout : "any"
     };
     if (rule.isCorrection === true) normalized.isCorrection = true;
     return normalized;
@@ -1006,10 +1008,12 @@ This replaces the current shareable settings. Diagnostics and training samples a
       const details = rules.map((rule, index) => {
         const selector = typeof rule === "string" ? rule : rule.selector;
         const fingerprint = typeof rule === "object" && rule.fingerprint ? JSON.stringify(rule.fingerprint) : "Simple selector";
+        const layout = typeof rule === "object" ? rule.layout || "any" : "any";
         return `
             <div style="display:flex; justify-content:space-between; gap:0.75rem; padding:8px 0; border-top:1px solid rgba(255,255,255,0.05); font-size:0.75rem;">
               <div style="min-width:0">
                 <code style="word-break:break-all; color:#93c5fd">${safeText(selector)}</code>
+                <span class="sample-chip" style="margin-left:6px">${safeText(layout.toUpperCase())}</span>
                 <div style="color:#64748b; margin-top:3px; word-break:break-all">${safeText(fingerprint)}</div>
               </div>
               <button class="btn-delete-rule-item btn-delete" data-host="${safeText(hostname)}" data-index="${index}" title="Delete rule">Delete</button>
