@@ -229,6 +229,135 @@ test("built helper remuxes a discontinuous HLS VOD with FFmpeg", async (t) => {
   );
 });
 
+test("built helper downloads HLS encrypted with an AES-128 identity key", async (t) => {
+  if (
+    !(await executableAvailable("ffmpeg")) ||
+    !(await executableAvailable("ffprobe"))
+  ) {
+    t.skip("FFmpeg integration tools are not installed.");
+    return;
+  }
+  const fixtureDirectory = await mkdtemp(
+    join(tmpdir(), "adsfriendly-aes128-fixture-"),
+  );
+  const outputDirectory = await mkdtemp(
+    join(tmpdir(), "adsfriendly-aes128-output-"),
+  );
+  t.after(() => rm(fixtureDirectory, { recursive: true, force: true }));
+  t.after(() => rm(outputDirectory, { recursive: true, force: true }));
+  const manifestPath = join(fixtureDirectory, "encrypted.m3u8");
+  const keyPath = join(fixtureDirectory, "key.bin");
+  const keyInfoPath = join(fixtureDirectory, "key-info.txt");
+  await writeFile(keyPath, Buffer.from("0123456789abcdef"));
+  await writeFile(keyInfoPath, `key.bin\n${keyPath}\n`);
+  await execFileAsync(
+    "ffmpeg",
+    [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-f",
+      "lavfi",
+      "-i",
+      "testsrc=size=160x90:rate=10",
+      "-f",
+      "lavfi",
+      "-i",
+      "sine=frequency=440:sample_rate=44100",
+      "-t",
+      "2",
+      "-c:v",
+      "libx264",
+      "-preset",
+      "ultrafast",
+      "-pix_fmt",
+      "yuv420p",
+      "-c:a",
+      "aac",
+      "-hls_time",
+      "0.5",
+      "-hls_list_size",
+      "0",
+      "-hls_playlist_type",
+      "vod",
+      "-hls_key_info_file",
+      keyInfoPath,
+      "-hls_segment_filename",
+      join(fixtureDirectory, "encrypted%03d.ts"),
+      manifestPath,
+    ],
+    { windowsHide: true, cwd: fixtureDirectory },
+  );
+
+  const server = createServer(async (request, response) => {
+    try {
+      const filename = basename(
+        new URL(request.url, "http://fixture").pathname,
+      );
+      const bytes = await readFile(join(fixtureDirectory, filename));
+      response.setHeader(
+        "content-type",
+        filename.endsWith(".m3u8")
+          ? "application/vnd.apple.mpegurl"
+          : filename.endsWith(".bin")
+            ? "application/octet-stream"
+            : "video/mp2t",
+      );
+      response.end(bytes);
+    } catch {
+      response.writeHead(404).end();
+    }
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const address = server.address();
+  const manifestUrl = `http://127.0.0.1:${address.port}/encrypted.m3u8`;
+  const child = spawnHelper();
+  t.after(() => child.kill());
+  const frames = createFrameReader(child.stdout);
+  child.stdin.write(
+    frame(hlsDownloadRequest("hls-aes128-1", manifestUrl, outputDirectory)),
+  );
+  await frames.next(
+    (event) => event.type === MEDIA_HELPER_EVENTS.DOWNLOAD_STARTED,
+  );
+  const completed = await frames.next(
+    (event) =>
+      event.requestId === "hls-aes128-1" &&
+      [
+        MEDIA_HELPER_EVENTS.DOWNLOAD_COMPLETED,
+        MEDIA_HELPER_EVENTS.ERROR,
+      ].includes(event.type),
+  );
+  assert.equal(
+    completed.type,
+    MEDIA_HELPER_EVENTS.DOWNLOAD_COMPLETED,
+    completed.payload.message,
+  );
+  const probe = JSON.parse(
+    (
+      await execFileAsync(
+        "ffprobe",
+        [
+          "-v",
+          "error",
+          "-show_entries",
+          "format=duration:stream=codec_type",
+          "-of",
+          "json",
+          completed.payload.outputPath,
+        ],
+        { windowsHide: true },
+      )
+    ).stdout,
+  );
+  assert.ok(Number(probe.format.duration) >= 1.5);
+  assert.deepEqual(
+    [...new Set(probe.streams.map((stream) => stream.codec_type))].sort(),
+    ["audio", "video"],
+  );
+});
+
 test("built helper downloads and muxes a static DASH VOD with FFmpeg", async (t) => {
   if (
     !(await executableAvailable("ffmpeg")) ||

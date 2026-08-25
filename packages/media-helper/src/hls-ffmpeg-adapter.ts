@@ -115,11 +115,19 @@ async function preflightManifestTree(
     if (summary.status !== "ready" || summary.playlistType === "unknown") {
       throw new Error("HLS endpoint did not return a usable playlist.");
     }
-    if (summary.drm !== "none" || summary.encryptionMethods.length) {
-      throw new Error("Encrypted or DRM-protected HLS is not supported.");
+    if (summary.drm !== "none") {
+      throw new Error("DRM-protected HLS is playback only.");
+    }
+    if (!supportsEncryption(summary)) {
+      throw new Error(
+        "Only unencrypted HLS or HLS encrypted with AES-128 identity keys is supported.",
+      );
     }
 
     const baseUrl = response.url || requestedUrl;
+    for (const keyResource of extractKeyResources(body, baseUrl)) {
+      await validateResource(keyResource, checkedResources, checkedHosts);
+    }
     if (summary.playlistType === "master") {
       const references = extractMasterReferences(body, baseUrl);
       if (!references.length)
@@ -214,6 +222,32 @@ function extractMediaResources(body: string, baseUrl: string) {
     }
   }
   return [...new Set(resources)];
+}
+
+function extractKeyResources(body: string, baseUrl: string) {
+  const resources: string[] = [];
+  for (const rawLine of body.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (
+      !line.startsWith("#EXT-X-KEY:") &&
+      !line.startsWith("#EXT-X-SESSION-KEY:")
+    )
+      continue;
+    const method = line.match(/(?:^|[:,])METHOD=([^,]+)/i)?.[1]?.trim();
+    if (!method || method.toUpperCase() === "NONE") continue;
+    const uri = attributeUri(line);
+    if (!uri) throw new Error("Encrypted HLS key URI is missing.");
+    resources.push(resolveHttpUrl(uri, baseUrl));
+  }
+  return [...new Set(resources)];
+}
+
+function supportsEncryption(summary: ReturnType<typeof parseHlsManifest>) {
+  if (!summary.encryptionMethods.length) return true;
+  return (
+    summary.encryptionMethods.every((method) => method === "AES-128") &&
+    summary.encryptionKeyFormats.every((format) => format === "identity")
+  );
 }
 
 function attributeUri(line: string) {

@@ -1014,6 +1014,7 @@ var AdsFriendlyBackground = (() => {
     ]),
     feature("main-world.network-capture", "main-world", C2.MEDIA_OBSERVE),
     feature("main-world.blob-source-tracer", "main-world", C2.MEDIA_OBSERVE),
+    feature("main-world.eme-observer", "main-world", C2.MEDIA_OBSERVE),
     feature("main-world.timer-control", "main-world", C2.VIDEO_AUTO_ACTION)
   ]);
   var CAPABILITY_SET = new Set(Object.values(CAPABILITIES));
@@ -2106,6 +2107,21 @@ var AdsFriendlyBackground = (() => {
     SUSPECTED: "suspected",
     CONFIRMED: "confirmed"
   });
+  var ENCRYPTION_SCHEMES = Object.freeze({
+    NONE: "none",
+    AES_128: "aes-128",
+    SAMPLE_AES: "sample-aes",
+    CENC: "cenc",
+    CBCS: "cbcs",
+    UNKNOWN: "unknown"
+  });
+  var DRM_SYSTEMS = Object.freeze({
+    WIDEVINE: "widevine",
+    PLAYREADY: "playready",
+    FAIRPLAY: "fairplay",
+    CLEARKEY: "clearkey",
+    UNKNOWN: "unknown"
+  });
   var MEDIA_PROBE_STATES = Object.freeze({
     DISCOVERED: "discovered",
     READY: "ready",
@@ -2164,7 +2180,15 @@ var AdsFriendlyBackground = (() => {
       revisionId: optionalString(value.revisionId),
       requestContexts: normalizeRequestContexts(value.requestContexts),
       resolutionAttempt: normalizeMediaResolutionAttempt(value.resolutionAttempt),
-      encryptionMethods: normalizeStrings(value.encryptionMethods)
+      encryptionMethods: normalizeStrings(value.encryptionMethods),
+      encryptionScheme: normalizeEncryptionScheme(value.encryptionScheme),
+      encryptionKeyFormats: normalizeStrings(value.encryptionKeyFormats).slice(
+        0,
+        20
+      ),
+      drmSystem: normalizeDrmSystem(value.drmSystem),
+      drmEvidence: normalizeStrings(value.drmEvidence).slice(0, 20),
+      eme: normalizeEmeMetadata(value.eme)
     };
     if (!candidate.sourceUrl && !candidate.manifestUrl) {
       throw new Error(
@@ -2223,11 +2247,55 @@ var AdsFriendlyBackground = (() => {
       requestContext: normalizeMediaRequestContext(value.requestContext),
       resolutionAttempt: normalizeMediaResolutionAttempt(value.resolutionAttempt),
       encryptionMethods: normalizeStrings(value.encryptionMethods),
+      encryptionScheme: normalizeEncryptionScheme(value.encryptionScheme),
+      encryptionKeyFormats: normalizeStrings(value.encryptionKeyFormats).slice(
+        0,
+        20
+      ),
+      drmSystem: normalizeDrmSystem(value.drmSystem),
+      drmEvidence: normalizeStrings(value.drmEvidence).slice(0, 20),
+      eme: normalizeEmeMetadata(value.eme),
       drm: enumValue(
         value.drm || DRM_STATES.NONE,
         Object.values(DRM_STATES),
         "drm"
       )
+    };
+  }
+  function normalizeEmeObservation(value = {}) {
+    return {
+      pageUrl: requiredString(value.pageUrl, "pageUrl"),
+      keySystem: normalizeKeySystem(value.keySystem),
+      initDataType: safeMetadataString(value.initDataType),
+      encryptionSchemes: normalizeStrings(value.encryptionSchemes).map(normalizeObservedEncryptionScheme).filter(Boolean).slice(0, 8),
+      keyStatuses: normalizeStrings(value.keyStatuses).map((status) => status.toLowerCase()).filter(
+        (status) => [
+          "usable",
+          "expired",
+          "released",
+          "output-restricted",
+          "output-downscaled",
+          "status-pending",
+          "internal-error"
+        ].includes(status)
+      ).slice(0, 8),
+      licenseStatus: optionalEnumValue(
+        value.licenseStatus,
+        ["requested", "updated", "usable", "restricted", "expired", "error"],
+        "licenseStatus"
+      ),
+      observedAt: optionalFiniteNumber(value.observedAt) || Date.now()
+    };
+  }
+  function normalizeEmeMetadata(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    return {
+      keySystems: normalizeStrings(value.keySystems).map(normalizeKeySystem).filter(Boolean).slice(0, 8),
+      initDataTypes: normalizeStrings(value.initDataTypes).map(safeMetadataString).filter(Boolean).slice(0, 8),
+      encryptionSchemes: normalizeStrings(value.encryptionSchemes).map(normalizeObservedEncryptionScheme).filter(Boolean).slice(0, 8),
+      keyStatuses: normalizeStrings(value.keyStatuses).map((status) => status.toLowerCase()).filter(Boolean).slice(0, 8),
+      licenseStatus: optionalString(value.licenseStatus),
+      observedAt: optionalFiniteNumber(value.observedAt) || null
     };
   }
   function normalizeBlobSourceTrace(value = {}) {
@@ -2340,6 +2408,35 @@ var AdsFriendlyBackground = (() => {
       )
     ] : [];
   }
+  function normalizeEncryptionScheme(value) {
+    return enumValue(
+      value || ENCRYPTION_SCHEMES.NONE,
+      Object.values(ENCRYPTION_SCHEMES),
+      "encryptionScheme"
+    );
+  }
+  function normalizeObservedEncryptionScheme(value) {
+    const normalized = String(value || "").toLowerCase();
+    if (["cenc", "cbcs", "cens", "cbc1"].includes(normalized)) return normalized;
+    return null;
+  }
+  function normalizeKeySystem(value) {
+    const normalized = safeMetadataString(value)?.toLowerCase();
+    if (!normalized) return null;
+    if (normalized === "com.widevine.alpha") return normalized;
+    if (normalized.includes("playready")) return "com.microsoft.playready";
+    if (normalized.includes("fairplay")) return "com.apple.fps";
+    if (normalized.includes("clearkey")) return "org.w3.clearkey";
+    return "unknown";
+  }
+  function normalizeDrmSystem(value) {
+    if (value === null || value === void 0 || value === "") return null;
+    return enumValue(value, Object.values(DRM_SYSTEMS), "drmSystem");
+  }
+  function safeMetadataString(value) {
+    if (typeof value !== "string" || !value) return null;
+    return value.slice(0, 100);
+  }
   function normalizeHttpUrls(value, maximum) {
     if (!Array.isArray(value)) return [];
     const urls = [];
@@ -2379,6 +2476,7 @@ var AdsFriendlyBackground = (() => {
     MEDIA_DISCOVERED: "media.discovered",
     MEDIA_PROBED: "media.probed",
     MEDIA_BLOB_TRACED: "media.blob_traced",
+    MEDIA_EME_OBSERVED: "media.eme_observed",
     MEDIA_CATALOG_UPDATED: "media.catalog.updated",
     VIDEO_AD_EVIDENCE_FOUND: "video_ad.evidence_found",
     VIDEO_AD_LABELLED: "video_ad.labelled"
@@ -2402,6 +2500,12 @@ var AdsFriendlyBackground = (() => {
       "media.blob-source-tracer",
       ["media.catalog"],
       normalizeBlobSourceTrace
+    ),
+    [E.MEDIA_EME_OBSERVED]: event(
+      E.MEDIA_EME_OBSERVED,
+      "media.eme-observer",
+      ["media.catalog"],
+      normalizeEmeObservation
     ),
     [E.MEDIA_CATALOG_UPDATED]: event(
       E.MEDIA_CATALOG_UPDATED,
@@ -2712,6 +2816,7 @@ var AdsFriendlyBackground = (() => {
           firstSeenAt: existing?.firstSeenAt || now,
           lastSeenAt: now
         };
+        applyEmeToItem(item, tabCatalog.eme);
         tabCatalog.items.set(candidate.id, item);
         trimOldest(tabCatalog.items, maximumPerTab);
         return cloneItem(item);
@@ -2762,6 +2867,7 @@ var AdsFriendlyBackground = (() => {
           firstSeenAt: existing?.firstSeenAt || event2.timestamp,
           lastSeenAt: event2.timestamp
         };
+        applyEmeToItem(item, tabCatalog.eme);
         tabCatalog.items.set(probe.mediaId, item);
         trimOldest(tabCatalog.items, maximumPerTab);
         return cloneItem(item);
@@ -2806,9 +2912,37 @@ var AdsFriendlyBackground = (() => {
           firstSeenAt: existing?.firstSeenAt || event2.timestamp,
           lastSeenAt: event2.timestamp
         };
+        applyEmeToItem(item, tabCatalog.eme);
         tabCatalog.items.set(trace.mediaId, item);
         trimOldest(tabCatalog.items, maximumPerTab);
         return cloneItem(item);
+      },
+      applyEme(tabId, rawEvent) {
+        assertTabId(tabId);
+        const event2 = normalizeRegisteredEvent(rawEvent);
+        if (event2.type !== EVENTS.MEDIA_EME_OBSERVED) {
+          throw new Error(
+            `[MediaCatalog] Cannot apply EME event "${event2.type}".`
+          );
+        }
+        const observation = event2.payload;
+        let tabCatalog = tabs.get(tabId);
+        if (tabCatalog && !samePageUrl(tabCatalog.pageUrl, observation.pageUrl)) {
+          tabs.delete(tabId);
+          tabCatalog = null;
+        }
+        if (!tabCatalog) {
+          tabCatalog = {
+            pageUrl: observation.pageUrl,
+            items: /* @__PURE__ */ new Map(),
+            eme: null
+          };
+          tabs.set(tabId, tabCatalog);
+        }
+        tabCatalog.eme = mergeEmeMetadata(tabCatalog.eme, observation);
+        for (const item of tabCatalog.items.values())
+          applyEmeToItem(item, tabCatalog.eme);
+        return [...tabCatalog.items.values()].map((item) => cloneItem(item));
       },
       list(tabId, pageUrl = null) {
         assertTabId(tabId);
@@ -2857,7 +2991,12 @@ var AdsFriendlyBackground = (() => {
       discontinuitySequence: item.discontinuitySequence,
       revisionId: item.revisionId,
       resolutionAttempt: item.resolutionAttempt,
-      encryptionMethods: item.encryptionMethods
+      encryptionMethods: item.encryptionMethods,
+      encryptionKeyFormats: item.encryptionKeyFormats,
+      encryptionScheme: item.encryptionScheme,
+      drmSystem: item.drmSystem,
+      drmEvidence: item.drmEvidence,
+      eme: item.eme
     };
   }
   function probeFieldsFromProbe(probe) {
@@ -2881,7 +3020,11 @@ var AdsFriendlyBackground = (() => {
       discontinuitySequence: probe.discontinuitySequence,
       revisionId: probe.revisionId,
       resolutionAttempt: probe.resolutionAttempt,
-      encryptionMethods: probe.encryptionMethods
+      encryptionMethods: probe.encryptionMethods,
+      encryptionKeyFormats: probe.encryptionKeyFormats,
+      encryptionScheme: probe.encryptionScheme,
+      drmSystem: probe.drmSystem,
+      drmEvidence: probe.drmEvidence
     };
   }
   function probeQuality(value) {
@@ -2936,6 +3079,68 @@ var AdsFriendlyBackground = (() => {
       ),
       observedAt: Math.max(existing?.observedAt || 0, incoming.observedAt || 0)
     };
+  }
+  function mergeEmeMetadata(existing, observation) {
+    return {
+      keySystems: uniqueStrings([
+        ...existing?.keySystems || [],
+        observation.keySystem
+      ]).slice(0, 8),
+      initDataTypes: uniqueStrings([
+        ...existing?.initDataTypes || [],
+        observation.initDataType
+      ]).slice(0, 8),
+      encryptionSchemes: uniqueStrings([
+        ...existing?.encryptionSchemes || [],
+        ...observation.encryptionSchemes || []
+      ]).slice(0, 8),
+      keyStatuses: uniqueStrings([
+        ...existing?.keyStatuses || [],
+        ...observation.keyStatuses || []
+      ]).slice(0, 8),
+      licenseStatus: observation.licenseStatus || existing?.licenseStatus || null,
+      observedAt: Math.max(
+        existing?.observedAt || 0,
+        observation.observedAt || 0
+      )
+    };
+  }
+  function applyEmeToItem(item, eme) {
+    if (!eme) return item;
+    item.eme = mergeEmeMetadata(item.eme, {
+      keySystem: null,
+      initDataType: null,
+      encryptionSchemes: eme.encryptionSchemes,
+      keyStatuses: eme.keyStatuses,
+      licenseStatus: eme.licenseStatus,
+      observedAt: eme.observedAt
+    });
+    item.eme.keySystems = uniqueStrings([
+      ...item.eme.keySystems || [],
+      ...eme.keySystems || []
+    ]).slice(0, 8);
+    item.eme.initDataTypes = uniqueStrings([
+      ...item.eme.initDataTypes || [],
+      ...eme.initDataTypes || []
+    ]).slice(0, 8);
+    const hasCdmEvidence = eme.keySystems?.length > 0 || eme.keyStatuses?.length > 0 || Boolean(eme.licenseStatus);
+    if (item.drm === "suspected" && hasCdmEvidence) {
+      item.drm = "confirmed";
+      item.drmSystem = item.drmSystem || drmSystemFromKeySystems(eme.keySystems);
+      item.drmEvidence = uniqueStrings([
+        ...item.drmEvidence || [],
+        "eme-key-system-access"
+      ]);
+    }
+    return item;
+  }
+  function drmSystemFromKeySystems(keySystems = []) {
+    const value = keySystems.join(" ").toLowerCase();
+    if (value.includes("widevine")) return "widevine";
+    if (value.includes("playready")) return "playready";
+    if (value.includes("apple") || value.includes("fairplay")) return "fairplay";
+    if (value.includes("clearkey")) return "clearkey";
+    return "unknown";
   }
   function resolveBlobSources(items, adaptiveResolutions) {
     const itemsById = new Map(items.map((item) => [item.id, item]));
@@ -3011,6 +3216,15 @@ var AdsFriendlyBackground = (() => {
       subtitles: item.subtitles.map((track) => ({ ...track })),
       detectionSources: [...item.detectionSources],
       encryptionMethods: [...item.encryptionMethods || []],
+      encryptionKeyFormats: [...item.encryptionKeyFormats || []],
+      drmEvidence: [...item.drmEvidence || []],
+      eme: item.eme ? {
+        ...item.eme,
+        keySystems: [...item.eme.keySystems || []],
+        initDataTypes: [...item.eme.initDataTypes || []],
+        encryptionSchemes: [...item.eme.encryptionSchemes || []],
+        keyStatuses: [...item.eme.keyStatuses || []]
+      } : null,
       requestContexts: (item.requestContexts || []).map((context) => ({
         ...context
       })),
@@ -3035,7 +3249,11 @@ var AdsFriendlyBackground = (() => {
         resolution: resolution.resolvedStream.resolution ? { ...resolution.resolvedStream.resolution } : null,
         encryptionMethods: [
           ...resolution.resolvedStream.encryptionMethods || []
-        ]
+        ],
+        encryptionKeyFormats: [
+          ...resolution.resolvedStream.encryptionKeyFormats || []
+        ],
+        drmEvidence: [...resolution.resolvedStream.drmEvidence || []]
       } : null,
       resolvedRequestContext: resolution?.resolvedRequestContext ? { ...resolution.resolvedRequestContext } : null
     };
@@ -3114,6 +3332,13 @@ var AdsFriendlyBackground = (() => {
     await persistTab(tabId).catch(() => {
     });
     return { status: "recorded", item };
+  }
+  async function recordMediaEmeObservation(tabId, event2) {
+    if (!active) return { status: "catalog_disabled" };
+    const items = catalog.applyEme(tabId, event2);
+    await persistTab(tabId).catch(() => {
+    });
+    return { status: "recorded", items };
   }
   async function listDiscoveredMedia(tabId, pageUrl = null) {
     if (!active) return { status: "catalog_disabled", items: [] };
@@ -3447,7 +3672,10 @@ var AdsFriendlyBackground = (() => {
       kind: candidate.kind,
       title: optionalString2(candidate.title),
       mimeType: optionalString2(candidate.mimeType),
-      drm: candidate.drm || "none"
+      drm: candidate.drm || "none",
+      drmSystem: candidate.drmSystem || null,
+      drmEvidence: stringArray(candidate.drmEvidence),
+      encryptionScheme: candidate.encryptionScheme || "none"
     };
     return {
       id: requiredString2(value.id, "id"),
@@ -3470,6 +3698,7 @@ var AdsFriendlyBackground = (() => {
         streamType: candidate.streamType,
         drm: candidate.drm || "none",
         encryptionMethods: stringArray(candidate.encryptionMethods),
+        encryptionKeyFormats: stringArray(candidate.encryptionKeyFormats),
         variants: objectArray(candidate.variants),
         iframeVariants: objectArray(candidate.iframeVariants),
         audioTracks: objectArray(candidate.audioTracks),
@@ -3500,14 +3729,14 @@ var AdsFriendlyBackground = (() => {
         return { supported: false, reason: "Direct media URL is not ready." };
       }
       if (candidate.drm === "suspected" || candidate.drm === "confirmed")
-        return { supported: false, reason: "DRM-protected stream." };
+        return { supported: false, reason: drmPlaybackOnlyReason(candidate) };
       return { supported: true, reason: null };
     }
     if (candidate.kind === "dash") {
       if (candidate.probeStatus !== "ready")
         return { supported: false, reason: "DASH manifest is not ready." };
       if (candidate.drm === "suspected" || candidate.drm === "confirmed")
-        return { supported: false, reason: "DRM-protected stream." };
+        return { supported: false, reason: drmPlaybackOnlyReason(candidate) };
       if (candidate.streamType === "live")
         return { supported: false, reason: "Live DASH is not supported yet." };
       if (candidate.streamType !== "vod")
@@ -3524,8 +3753,8 @@ var AdsFriendlyBackground = (() => {
     if (candidate.probeStatus !== "ready")
       return { supported: false, reason: "Manifest is not ready." };
     if (candidate.drm === "suspected" || candidate.drm === "confirmed")
-      return { supported: false, reason: "DRM-protected stream." };
-    if (candidate.encryptionMethods?.length)
+      return { supported: false, reason: drmPlaybackOnlyReason(candidate) };
+    if (candidate.encryptionMethods?.length && !isDownloadableAes128(candidate))
       return { supported: false, reason: "Encrypted HLS is not supported yet." };
     if (candidate.playlistType === "unknown")
       return {
@@ -3546,6 +3775,19 @@ var AdsFriendlyBackground = (() => {
     if (!["master", "media"].includes(candidate.playlistType))
       return { supported: false, reason: "Unknown HLS playlist type." };
     return { supported: true, reason: null };
+  }
+  function isDownloadableAes128(candidate) {
+    const methods = candidate.encryptionMethods || [];
+    const formats = candidate.encryptionKeyFormats || [];
+    return methods.length > 0 && methods.every((method) => String(method).toUpperCase() === "AES-128") && formats.every((format) => String(format).toLowerCase() === "identity");
+  }
+  function drmPlaybackOnlyReason(candidate) {
+    const state = candidate.drm === "confirmed" ? "confirmed" : "suspected";
+    const system = candidate.drmSystem ? ` \xB7 ${formatDrmSystem(candidate.drmSystem)}` : "";
+    return `DRM ${state}${system} \xB7 Playback only.`;
+  }
+  function formatDrmSystem(value) {
+    return value === "widevine" ? "Widevine" : value === "playready" ? "PlayReady" : value === "fairplay" ? "FairPlay" : value === "clearkey" ? "Clear Key" : "Unknown system";
   }
   function requiredString2(value, field) {
     if (typeof value !== "string" || !value.trim())
@@ -4315,6 +4557,7 @@ var AdsFriendlyBackground = (() => {
     MEDIA_DISCOVERED: CAPABILITIES.MEDIA_CATALOG,
     MEDIA_PROBED: CAPABILITIES.MEDIA_CATALOG,
     MEDIA_BLOB_TRACED: CAPABILITIES.MEDIA_CATALOG,
+    MEDIA_EME_OBSERVED: CAPABILITIES.MEDIA_CATALOG,
     GET_MEDIA_CATALOG: CAPABILITIES.MEDIA_CATALOG,
     GET_MEDIA_HELPER_STATUS: CAPABILITIES.MEDIA_DOWNLOAD,
     CREATE_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
@@ -4432,6 +4675,22 @@ var AdsFriendlyBackground = (() => {
       const tabId = sender?.tab?.id;
       if (!Number.isInteger(tabId)) return { status: "ignored" };
       return recordBlobSourceTrace(tabId, {
+        ...message.event,
+        payload: {
+          ...message.event?.payload,
+          pageUrl: sender.tab.url || message.event?.payload?.pageUrl
+        },
+        metadata: {
+          ...message.event?.metadata,
+          frameId: sender.frameId ?? null,
+          frameUrl: message.event?.payload?.pageUrl || null
+        }
+      });
+    }
+    if (message.type === "MEDIA_EME_OBSERVED") {
+      const tabId = sender?.tab?.id;
+      if (!Number.isInteger(tabId)) return { status: "ignored" };
+      return recordMediaEmeObservation(tabId, {
         ...message.event,
         payload: {
           ...message.event?.payload,

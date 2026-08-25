@@ -6,12 +6,14 @@ own navigation protection, DOM protection, and shared media discovery. All
 user-initiated video downloads require this helper; there is no second browser
 download backend to keep in sync.
 
-The helper is the only video download backend. Version 0.5 implements Direct
+The helper is the only video download backend. Version 0.6 implements Direct
 HTTP MP4/WebM downloads with bounded parallel Range requests, progress,
-cancellation, and resumable `.part` metadata, plus completed unencrypted HLS VOD
+cancellation, and resumable `.part` metadata, plus completed unencrypted or
+AES-128 identity-key HLS VOD
 and static unencrypted DASH VOD downloads through FFmpeg. The adaptive adapters
-preflight bounded manifests, reject live/encrypted streams and unsafe
+preflight bounded manifests, reject live/DRM streams and unsafe
 private-network resources, and mux the selected video and audio tracks into MP4.
+AES-128 key URIs are validated as HTTP(S) resources but are not persisted.
 It can also open a completed output or reveal it in the operating system file
 manager. Output actions are restricted to regular files inside the user's
 managed Downloads directory.

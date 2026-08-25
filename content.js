@@ -1193,6 +1193,7 @@ var AdsFriendlyContent = (() => {
     ]),
     feature("main-world.network-capture", "main-world", C2.MEDIA_OBSERVE),
     feature("main-world.blob-source-tracer", "main-world", C2.MEDIA_OBSERVE),
+    feature("main-world.eme-observer", "main-world", C2.MEDIA_OBSERVE),
     feature("main-world.timer-control", "main-world", C2.VIDEO_AUTO_ACTION)
   ]);
   var CAPABILITY_SET = new Set(Object.values(CAPABILITIES));
@@ -2424,6 +2425,21 @@ var AdsFriendlyContent = (() => {
     SUSPECTED: "suspected",
     CONFIRMED: "confirmed"
   });
+  var ENCRYPTION_SCHEMES = Object.freeze({
+    NONE: "none",
+    AES_128: "aes-128",
+    SAMPLE_AES: "sample-aes",
+    CENC: "cenc",
+    CBCS: "cbcs",
+    UNKNOWN: "unknown"
+  });
+  var DRM_SYSTEMS = Object.freeze({
+    WIDEVINE: "widevine",
+    PLAYREADY: "playready",
+    FAIRPLAY: "fairplay",
+    CLEARKEY: "clearkey",
+    UNKNOWN: "unknown"
+  });
   var MEDIA_PROBE_STATES = Object.freeze({
     DISCOVERED: "discovered",
     READY: "ready",
@@ -2482,7 +2498,15 @@ var AdsFriendlyContent = (() => {
       revisionId: optionalString(value.revisionId),
       requestContexts: normalizeRequestContexts(value.requestContexts),
       resolutionAttempt: normalizeMediaResolutionAttempt(value.resolutionAttempt),
-      encryptionMethods: normalizeStrings(value.encryptionMethods)
+      encryptionMethods: normalizeStrings(value.encryptionMethods),
+      encryptionScheme: normalizeEncryptionScheme(value.encryptionScheme),
+      encryptionKeyFormats: normalizeStrings(value.encryptionKeyFormats).slice(
+        0,
+        20
+      ),
+      drmSystem: normalizeDrmSystem(value.drmSystem),
+      drmEvidence: normalizeStrings(value.drmEvidence).slice(0, 20),
+      eme: normalizeEmeMetadata(value.eme)
     };
     if (!candidate.sourceUrl && !candidate.manifestUrl) {
       throw new Error(
@@ -2541,11 +2565,55 @@ var AdsFriendlyContent = (() => {
       requestContext: normalizeMediaRequestContext(value.requestContext),
       resolutionAttempt: normalizeMediaResolutionAttempt(value.resolutionAttempt),
       encryptionMethods: normalizeStrings(value.encryptionMethods),
+      encryptionScheme: normalizeEncryptionScheme(value.encryptionScheme),
+      encryptionKeyFormats: normalizeStrings(value.encryptionKeyFormats).slice(
+        0,
+        20
+      ),
+      drmSystem: normalizeDrmSystem(value.drmSystem),
+      drmEvidence: normalizeStrings(value.drmEvidence).slice(0, 20),
+      eme: normalizeEmeMetadata(value.eme),
       drm: enumValue(
         value.drm || DRM_STATES.NONE,
         Object.values(DRM_STATES),
         "drm"
       )
+    };
+  }
+  function normalizeEmeObservation(value = {}) {
+    return {
+      pageUrl: requiredString(value.pageUrl, "pageUrl"),
+      keySystem: normalizeKeySystem(value.keySystem),
+      initDataType: safeMetadataString(value.initDataType),
+      encryptionSchemes: normalizeStrings(value.encryptionSchemes).map(normalizeObservedEncryptionScheme).filter(Boolean).slice(0, 8),
+      keyStatuses: normalizeStrings(value.keyStatuses).map((status) => status.toLowerCase()).filter(
+        (status) => [
+          "usable",
+          "expired",
+          "released",
+          "output-restricted",
+          "output-downscaled",
+          "status-pending",
+          "internal-error"
+        ].includes(status)
+      ).slice(0, 8),
+      licenseStatus: optionalEnumValue(
+        value.licenseStatus,
+        ["requested", "updated", "usable", "restricted", "expired", "error"],
+        "licenseStatus"
+      ),
+      observedAt: optionalFiniteNumber(value.observedAt) || Date.now()
+    };
+  }
+  function normalizeEmeMetadata(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    return {
+      keySystems: normalizeStrings(value.keySystems).map(normalizeKeySystem).filter(Boolean).slice(0, 8),
+      initDataTypes: normalizeStrings(value.initDataTypes).map(safeMetadataString).filter(Boolean).slice(0, 8),
+      encryptionSchemes: normalizeStrings(value.encryptionSchemes).map(normalizeObservedEncryptionScheme).filter(Boolean).slice(0, 8),
+      keyStatuses: normalizeStrings(value.keyStatuses).map((status) => status.toLowerCase()).filter(Boolean).slice(0, 8),
+      licenseStatus: optionalString(value.licenseStatus),
+      observedAt: optionalFiniteNumber(value.observedAt) || null
     };
   }
   function normalizeBlobSourceTrace(value = {}) {
@@ -2657,6 +2725,35 @@ var AdsFriendlyContent = (() => {
         value.slice(0, 100).filter((item) => typeof item === "string" && item).map((item) => item.slice(0, 100))
       )
     ] : [];
+  }
+  function normalizeEncryptionScheme(value) {
+    return enumValue(
+      value || ENCRYPTION_SCHEMES.NONE,
+      Object.values(ENCRYPTION_SCHEMES),
+      "encryptionScheme"
+    );
+  }
+  function normalizeObservedEncryptionScheme(value) {
+    const normalized = String(value || "").toLowerCase();
+    if (["cenc", "cbcs", "cens", "cbc1"].includes(normalized)) return normalized;
+    return null;
+  }
+  function normalizeKeySystem(value) {
+    const normalized = safeMetadataString(value)?.toLowerCase();
+    if (!normalized) return null;
+    if (normalized === "com.widevine.alpha") return normalized;
+    if (normalized.includes("playready")) return "com.microsoft.playready";
+    if (normalized.includes("fairplay")) return "com.apple.fps";
+    if (normalized.includes("clearkey")) return "org.w3.clearkey";
+    return "unknown";
+  }
+  function normalizeDrmSystem(value) {
+    if (value === null || value === void 0 || value === "") return null;
+    return enumValue(value, Object.values(DRM_SYSTEMS), "drmSystem");
+  }
+  function safeMetadataString(value) {
+    if (typeof value !== "string" || !value) return null;
+    return value.slice(0, 100);
   }
   function normalizeHttpUrls(value, maximum) {
     if (!Array.isArray(value)) return [];
@@ -2773,6 +2870,7 @@ var AdsFriendlyContent = (() => {
     MEDIA_DISCOVERED: "media.discovered",
     MEDIA_PROBED: "media.probed",
     MEDIA_BLOB_TRACED: "media.blob_traced",
+    MEDIA_EME_OBSERVED: "media.eme_observed",
     MEDIA_CATALOG_UPDATED: "media.catalog.updated",
     VIDEO_AD_EVIDENCE_FOUND: "video_ad.evidence_found",
     VIDEO_AD_LABELLED: "video_ad.labelled"
@@ -2796,6 +2894,12 @@ var AdsFriendlyContent = (() => {
       "media.blob-source-tracer",
       ["media.catalog"],
       normalizeBlobSourceTrace
+    ),
+    [E.MEDIA_EME_OBSERVED]: event(
+      E.MEDIA_EME_OBSERVED,
+      "media.eme-observer",
+      ["media.catalog"],
+      normalizeEmeObservation
     ),
     [E.MEDIA_CATALOG_UPDATED]: event(
       E.MEDIA_CATALOG_UPDATED,
@@ -2919,7 +3023,8 @@ var AdsFriendlyContent = (() => {
       if (messageEvent.source !== window || messageEvent.data?.source !== "adsfriendly-spy" || messageEvent.data?.type !== "REGISTERED_EVENT" || ![
         EVENTS.MEDIA_DISCOVERED,
         EVENTS.MEDIA_PROBED,
-        EVENTS.MEDIA_BLOB_TRACED
+        EVENTS.MEDIA_BLOB_TRACED,
+        EVENTS.MEDIA_EME_OBSERVED
       ].includes(messageEvent.data.event?.type))
         return;
       try {
@@ -2994,7 +3099,7 @@ var AdsFriendlyContent = (() => {
       if (reported.has(reportKey) || pending.has(reportKey)) return;
       pending.add(reportKey);
       chrome.runtime.sendMessage({
-        type: event2.type === EVENTS.MEDIA_PROBED ? "MEDIA_PROBED" : event2.type === EVENTS.MEDIA_BLOB_TRACED ? "MEDIA_BLOB_TRACED" : "MEDIA_DISCOVERED",
+        type: event2.type === EVENTS.MEDIA_PROBED ? "MEDIA_PROBED" : event2.type === EVENTS.MEDIA_BLOB_TRACED ? "MEDIA_BLOB_TRACED" : event2.type === EVENTS.MEDIA_EME_OBSERVED ? "MEDIA_EME_OBSERVED" : "MEDIA_DISCOVERED",
         event: event2
       }).then((response) => {
         pending.delete(reportKey);
@@ -3059,6 +3164,15 @@ var AdsFriendlyContent = (() => {
         Math.floor((payload.appendCount || 0) / 10)
       ].join(":");
     }
+    if (event2?.type === EVENTS.MEDIA_EME_OBSERVED) {
+      return [
+        event2.type,
+        payload.keySystem || "unknown",
+        payload.initDataType || "none",
+        payload.licenseStatus || "none",
+        ...payload.keyStatuses || []
+      ].join(":");
+    }
     if (event2?.type !== EVENTS.MEDIA_PROBED) {
       return `${event2?.type || "unknown"}:${mediaId}`;
     }
@@ -3073,6 +3187,8 @@ var AdsFriendlyContent = (() => {
       payload.variants?.length || 0,
       segmentSignal,
       payload.drm || "none",
+      payload.drmSystem || "none",
+      payload.encryptionScheme || "none",
       (payload.encryptionMethods || []).join(",")
     ].join(":");
   }

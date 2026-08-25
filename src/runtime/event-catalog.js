@@ -2,6 +2,7 @@ import {
   normalizeMediaCandidate,
   normalizeBlobSourceTrace,
   normalizeMediaProbe,
+  normalizeEmeObservation,
   normalizeVideoAdEvidence,
 } from "../media/contracts.js";
 
@@ -9,6 +10,7 @@ export const EVENTS = Object.freeze({
   MEDIA_DISCOVERED: "media.discovered",
   MEDIA_PROBED: "media.probed",
   MEDIA_BLOB_TRACED: "media.blob_traced",
+  MEDIA_EME_OBSERVED: "media.eme_observed",
   MEDIA_CATALOG_UPDATED: "media.catalog.updated",
   VIDEO_AD_EVIDENCE_FOUND: "video_ad.evidence_found",
   VIDEO_AD_LABELLED: "video_ad.labelled",
@@ -34,6 +36,12 @@ export const EVENT_CATALOG = Object.freeze({
     "media.blob-source-tracer",
     ["media.catalog"],
     normalizeBlobSourceTrace,
+  ),
+  [E.MEDIA_EME_OBSERVED]: event(
+    E.MEDIA_EME_OBSERVED,
+    "media.eme-observer",
+    ["media.catalog"],
+    normalizeEmeObservation,
   ),
   [E.MEDIA_CATALOG_UPDATED]: event(
     E.MEDIA_CATALOG_UPDATED,

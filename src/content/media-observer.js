@@ -40,6 +40,7 @@ export function startMediaObserver() {
         EVENTS.MEDIA_DISCOVERED,
         EVENTS.MEDIA_PROBED,
         EVENTS.MEDIA_BLOB_TRACED,
+        EVENTS.MEDIA_EME_OBSERVED,
       ].includes(messageEvent.data.event?.type)
     )
       return;
@@ -134,7 +135,9 @@ export function startMediaObserver() {
             ? "MEDIA_PROBED"
             : event.type === EVENTS.MEDIA_BLOB_TRACED
               ? "MEDIA_BLOB_TRACED"
-              : "MEDIA_DISCOVERED",
+              : event.type === EVENTS.MEDIA_EME_OBSERVED
+                ? "MEDIA_EME_OBSERVED"
+                : "MEDIA_DISCOVERED",
         event,
       })
       .then((response) => {
@@ -209,6 +212,15 @@ export function createMediaObserverReportKey(event) {
       Math.floor((payload.appendCount || 0) / 10),
     ].join(":");
   }
+  if (event?.type === EVENTS.MEDIA_EME_OBSERVED) {
+    return [
+      event.type,
+      payload.keySystem || "unknown",
+      payload.initDataType || "none",
+      payload.licenseStatus || "none",
+      ...(payload.keyStatuses || []),
+    ].join(":");
+  }
   if (event?.type !== EVENTS.MEDIA_PROBED) {
     return `${event?.type || "unknown"}:${mediaId}`;
   }
@@ -226,6 +238,8 @@ export function createMediaObserverReportKey(event) {
     payload.variants?.length || 0,
     segmentSignal,
     payload.drm || "none",
+    payload.drmSystem || "none",
+    payload.encryptionScheme || "none",
     (payload.encryptionMethods || []).join(","),
   ].join(":");
 }

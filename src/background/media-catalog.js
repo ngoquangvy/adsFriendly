@@ -55,6 +55,13 @@ export async function recordBlobSourceTrace(tabId, event) {
   return { status: "recorded", item };
 }
 
+export async function recordMediaEmeObservation(tabId, event) {
+  if (!active) return { status: "catalog_disabled" };
+  const items = catalog.applyEme(tabId, event);
+  await persistTab(tabId).catch(() => {});
+  return { status: "recorded", items };
+}
+
 export async function listDiscoveredMedia(tabId, pageUrl = null) {
   if (!active) return { status: "catalog_disabled", items: [] };
   return { status: "ok", items: catalog.list(tabId, pageUrl) };

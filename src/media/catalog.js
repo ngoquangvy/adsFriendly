@@ -57,6 +57,7 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
         firstSeenAt: existing?.firstSeenAt || now,
         lastSeenAt: now,
       };
+      applyEmeToItem(item, tabCatalog.eme);
       tabCatalog.items.set(candidate.id, item);
       trimOldest(tabCatalog.items, maximumPerTab);
       return cloneItem(item);
@@ -115,6 +116,7 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
         firstSeenAt: existing?.firstSeenAt || event.timestamp,
         lastSeenAt: event.timestamp,
       };
+      applyEmeToItem(item, tabCatalog.eme);
       tabCatalog.items.set(probe.mediaId, item);
       trimOldest(tabCatalog.items, maximumPerTab);
       return cloneItem(item);
@@ -161,9 +163,37 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
         firstSeenAt: existing?.firstSeenAt || event.timestamp,
         lastSeenAt: event.timestamp,
       };
+      applyEmeToItem(item, tabCatalog.eme);
       tabCatalog.items.set(trace.mediaId, item);
       trimOldest(tabCatalog.items, maximumPerTab);
       return cloneItem(item);
+    },
+    applyEme(tabId, rawEvent) {
+      assertTabId(tabId);
+      const event = normalizeRegisteredEvent(rawEvent);
+      if (event.type !== EVENTS.MEDIA_EME_OBSERVED) {
+        throw new Error(
+          `[MediaCatalog] Cannot apply EME event "${event.type}".`,
+        );
+      }
+      const observation = event.payload;
+      let tabCatalog = tabs.get(tabId);
+      if (tabCatalog && !samePageUrl(tabCatalog.pageUrl, observation.pageUrl)) {
+        tabs.delete(tabId);
+        tabCatalog = null;
+      }
+      if (!tabCatalog) {
+        tabCatalog = {
+          pageUrl: observation.pageUrl,
+          items: new Map(),
+          eme: null,
+        };
+        tabs.set(tabId, tabCatalog);
+      }
+      tabCatalog.eme = mergeEmeMetadata(tabCatalog.eme, observation);
+      for (const item of tabCatalog.items.values())
+        applyEmeToItem(item, tabCatalog.eme);
+      return [...tabCatalog.items.values()].map((item) => cloneItem(item));
     },
     list(tabId, pageUrl = null) {
       assertTabId(tabId);
@@ -214,6 +244,11 @@ function probeFields(item) {
     revisionId: item.revisionId,
     resolutionAttempt: item.resolutionAttempt,
     encryptionMethods: item.encryptionMethods,
+    encryptionKeyFormats: item.encryptionKeyFormats,
+    encryptionScheme: item.encryptionScheme,
+    drmSystem: item.drmSystem,
+    drmEvidence: item.drmEvidence,
+    eme: item.eme,
   };
 }
 
@@ -239,6 +274,10 @@ function probeFieldsFromProbe(probe) {
     revisionId: probe.revisionId,
     resolutionAttempt: probe.resolutionAttempt,
     encryptionMethods: probe.encryptionMethods,
+    encryptionKeyFormats: probe.encryptionKeyFormats,
+    encryptionScheme: probe.encryptionScheme,
+    drmSystem: probe.drmSystem,
+    drmEvidence: probe.drmEvidence,
   };
 }
 
@@ -301,6 +340,74 @@ function mergeBlobTrace(existing, incoming) {
     ),
     observedAt: Math.max(existing?.observedAt || 0, incoming.observedAt || 0),
   };
+}
+
+function mergeEmeMetadata(existing, observation) {
+  return {
+    keySystems: uniqueStrings([
+      ...(existing?.keySystems || []),
+      observation.keySystem,
+    ]).slice(0, 8),
+    initDataTypes: uniqueStrings([
+      ...(existing?.initDataTypes || []),
+      observation.initDataType,
+    ]).slice(0, 8),
+    encryptionSchemes: uniqueStrings([
+      ...(existing?.encryptionSchemes || []),
+      ...(observation.encryptionSchemes || []),
+    ]).slice(0, 8),
+    keyStatuses: uniqueStrings([
+      ...(existing?.keyStatuses || []),
+      ...(observation.keyStatuses || []),
+    ]).slice(0, 8),
+    licenseStatus: observation.licenseStatus || existing?.licenseStatus || null,
+    observedAt: Math.max(
+      existing?.observedAt || 0,
+      observation.observedAt || 0,
+    ),
+  };
+}
+
+function applyEmeToItem(item, eme) {
+  if (!eme) return item;
+  item.eme = mergeEmeMetadata(item.eme, {
+    keySystem: null,
+    initDataType: null,
+    encryptionSchemes: eme.encryptionSchemes,
+    keyStatuses: eme.keyStatuses,
+    licenseStatus: eme.licenseStatus,
+    observedAt: eme.observedAt,
+  });
+  item.eme.keySystems = uniqueStrings([
+    ...(item.eme.keySystems || []),
+    ...(eme.keySystems || []),
+  ]).slice(0, 8);
+  item.eme.initDataTypes = uniqueStrings([
+    ...(item.eme.initDataTypes || []),
+    ...(eme.initDataTypes || []),
+  ]).slice(0, 8);
+  const hasCdmEvidence =
+    eme.keySystems?.length > 0 ||
+    eme.keyStatuses?.length > 0 ||
+    Boolean(eme.licenseStatus);
+  if (item.drm === "suspected" && hasCdmEvidence) {
+    item.drm = "confirmed";
+    item.drmSystem = item.drmSystem || drmSystemFromKeySystems(eme.keySystems);
+    item.drmEvidence = uniqueStrings([
+      ...(item.drmEvidence || []),
+      "eme-key-system-access",
+    ]);
+  }
+  return item;
+}
+
+function drmSystemFromKeySystems(keySystems = []) {
+  const value = keySystems.join(" ").toLowerCase();
+  if (value.includes("widevine")) return "widevine";
+  if (value.includes("playready")) return "playready";
+  if (value.includes("apple") || value.includes("fairplay")) return "fairplay";
+  if (value.includes("clearkey")) return "clearkey";
+  return "unknown";
 }
 
 function resolveBlobSources(items, adaptiveResolutions) {
@@ -384,6 +491,17 @@ function cloneItem(item, resolution = null) {
     subtitles: item.subtitles.map((track) => ({ ...track })),
     detectionSources: [...item.detectionSources],
     encryptionMethods: [...(item.encryptionMethods || [])],
+    encryptionKeyFormats: [...(item.encryptionKeyFormats || [])],
+    drmEvidence: [...(item.drmEvidence || [])],
+    eme: item.eme
+      ? {
+          ...item.eme,
+          keySystems: [...(item.eme.keySystems || [])],
+          initDataTypes: [...(item.eme.initDataTypes || [])],
+          encryptionSchemes: [...(item.eme.encryptionSchemes || [])],
+          keyStatuses: [...(item.eme.keyStatuses || [])],
+        }
+      : null,
     requestContexts: (item.requestContexts || []).map((context) => ({
       ...context,
     })),
@@ -416,6 +534,10 @@ function cloneItem(item, resolution = null) {
           encryptionMethods: [
             ...(resolution.resolvedStream.encryptionMethods || []),
           ],
+          encryptionKeyFormats: [
+            ...(resolution.resolvedStream.encryptionKeyFormats || []),
+          ],
+          drmEvidence: [...(resolution.resolvedStream.drmEvidence || [])],
         }
       : null,
     resolvedRequestContext: resolution?.resolvedRequestContext

@@ -206,6 +206,7 @@ export const FEATURE_CATALOG = Object.freeze([
 
   feature("main-world.network-capture", "main-world", C.MEDIA_OBSERVE),
   feature("main-world.blob-source-tracer", "main-world", C.MEDIA_OBSERVE),
+  feature("main-world.eme-observer", "main-world", C.MEDIA_OBSERVE),
   feature("main-world.timer-control", "main-world", C.VIDEO_AUTO_ACTION),
 ]);
 

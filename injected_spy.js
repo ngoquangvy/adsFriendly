@@ -42,6 +42,21 @@ var AdsFriendlyMainWorld = (() => {
     SUSPECTED: "suspected",
     CONFIRMED: "confirmed"
   });
+  var ENCRYPTION_SCHEMES = Object.freeze({
+    NONE: "none",
+    AES_128: "aes-128",
+    SAMPLE_AES: "sample-aes",
+    CENC: "cenc",
+    CBCS: "cbcs",
+    UNKNOWN: "unknown"
+  });
+  var DRM_SYSTEMS = Object.freeze({
+    WIDEVINE: "widevine",
+    PLAYREADY: "playready",
+    FAIRPLAY: "fairplay",
+    CLEARKEY: "clearkey",
+    UNKNOWN: "unknown"
+  });
   var MEDIA_PROBE_STATES = Object.freeze({
     DISCOVERED: "discovered",
     READY: "ready",
@@ -100,7 +115,15 @@ var AdsFriendlyMainWorld = (() => {
       revisionId: optionalString(value.revisionId),
       requestContexts: normalizeRequestContexts(value.requestContexts),
       resolutionAttempt: normalizeMediaResolutionAttempt(value.resolutionAttempt),
-      encryptionMethods: normalizeStrings(value.encryptionMethods)
+      encryptionMethods: normalizeStrings(value.encryptionMethods),
+      encryptionScheme: normalizeEncryptionScheme(value.encryptionScheme),
+      encryptionKeyFormats: normalizeStrings(value.encryptionKeyFormats).slice(
+        0,
+        20
+      ),
+      drmSystem: normalizeDrmSystem(value.drmSystem),
+      drmEvidence: normalizeStrings(value.drmEvidence).slice(0, 20),
+      eme: normalizeEmeMetadata(value.eme)
     };
     if (!candidate.sourceUrl && !candidate.manifestUrl) {
       throw new Error(
@@ -159,11 +182,55 @@ var AdsFriendlyMainWorld = (() => {
       requestContext: normalizeMediaRequestContext(value.requestContext),
       resolutionAttempt: normalizeMediaResolutionAttempt(value.resolutionAttempt),
       encryptionMethods: normalizeStrings(value.encryptionMethods),
+      encryptionScheme: normalizeEncryptionScheme(value.encryptionScheme),
+      encryptionKeyFormats: normalizeStrings(value.encryptionKeyFormats).slice(
+        0,
+        20
+      ),
+      drmSystem: normalizeDrmSystem(value.drmSystem),
+      drmEvidence: normalizeStrings(value.drmEvidence).slice(0, 20),
+      eme: normalizeEmeMetadata(value.eme),
       drm: enumValue(
         value.drm || DRM_STATES.NONE,
         Object.values(DRM_STATES),
         "drm"
       )
+    };
+  }
+  function normalizeEmeObservation(value = {}) {
+    return {
+      pageUrl: requiredString(value.pageUrl, "pageUrl"),
+      keySystem: normalizeKeySystem(value.keySystem),
+      initDataType: safeMetadataString(value.initDataType),
+      encryptionSchemes: normalizeStrings(value.encryptionSchemes).map(normalizeObservedEncryptionScheme).filter(Boolean).slice(0, 8),
+      keyStatuses: normalizeStrings(value.keyStatuses).map((status) => status.toLowerCase()).filter(
+        (status) => [
+          "usable",
+          "expired",
+          "released",
+          "output-restricted",
+          "output-downscaled",
+          "status-pending",
+          "internal-error"
+        ].includes(status)
+      ).slice(0, 8),
+      licenseStatus: optionalEnumValue(
+        value.licenseStatus,
+        ["requested", "updated", "usable", "restricted", "expired", "error"],
+        "licenseStatus"
+      ),
+      observedAt: optionalFiniteNumber(value.observedAt) || Date.now()
+    };
+  }
+  function normalizeEmeMetadata(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    return {
+      keySystems: normalizeStrings(value.keySystems).map(normalizeKeySystem).filter(Boolean).slice(0, 8),
+      initDataTypes: normalizeStrings(value.initDataTypes).map(safeMetadataString).filter(Boolean).slice(0, 8),
+      encryptionSchemes: normalizeStrings(value.encryptionSchemes).map(normalizeObservedEncryptionScheme).filter(Boolean).slice(0, 8),
+      keyStatuses: normalizeStrings(value.keyStatuses).map((status) => status.toLowerCase()).filter(Boolean).slice(0, 8),
+      licenseStatus: optionalString(value.licenseStatus),
+      observedAt: optionalFiniteNumber(value.observedAt) || null
     };
   }
   function normalizeBlobSourceTrace(value = {}) {
@@ -275,6 +342,35 @@ var AdsFriendlyMainWorld = (() => {
         value.slice(0, 100).filter((item) => typeof item === "string" && item).map((item) => item.slice(0, 100))
       )
     ] : [];
+  }
+  function normalizeEncryptionScheme(value) {
+    return enumValue(
+      value || ENCRYPTION_SCHEMES.NONE,
+      Object.values(ENCRYPTION_SCHEMES),
+      "encryptionScheme"
+    );
+  }
+  function normalizeObservedEncryptionScheme(value) {
+    const normalized = String(value || "").toLowerCase();
+    if (["cenc", "cbcs", "cens", "cbc1"].includes(normalized)) return normalized;
+    return null;
+  }
+  function normalizeKeySystem(value) {
+    const normalized = safeMetadataString(value)?.toLowerCase();
+    if (!normalized) return null;
+    if (normalized === "com.widevine.alpha") return normalized;
+    if (normalized.includes("playready")) return "com.microsoft.playready";
+    if (normalized.includes("fairplay")) return "com.apple.fps";
+    if (normalized.includes("clearkey")) return "org.w3.clearkey";
+    return "unknown";
+  }
+  function normalizeDrmSystem(value) {
+    if (value === null || value === void 0 || value === "") return null;
+    return enumValue(value, Object.values(DRM_SYSTEMS), "drmSystem");
+  }
+  function safeMetadataString(value) {
+    if (typeof value !== "string" || !value) return null;
+    return value.slice(0, 100);
   }
   function normalizeHttpUrls(value, maximum) {
     if (!Array.isArray(value)) return [];
@@ -407,6 +503,7 @@ var AdsFriendlyMainWorld = (() => {
       const audioTracks = [];
       const subtitles = [];
       const encryptionMethods = /* @__PURE__ */ new Set();
+      const encryptionKeyFormats = /* @__PURE__ */ new Set();
       let pendingVariant = null;
       let pendingSegmentDuration = null;
       let segmentCount = 0;
@@ -461,9 +558,14 @@ var AdsFriendlyMainWorld = (() => {
           continue;
         }
         if (line.startsWith("#EXT-X-KEY:") || line.startsWith("#EXT-X-SESSION-KEY:")) {
-          const method = parseAttributeList(valueAfterColon(line)).METHOD;
+          const attributes = parseAttributeList(valueAfterColon(line));
+          const method = attributes.METHOD;
           if (method && method.toUpperCase() !== "NONE")
             encryptionMethods.add(method.toUpperCase());
+          if (attributes.KEYFORMAT)
+            encryptionKeyFormats.add(
+              String(attributes.KEYFORMAT).toLowerCase().slice(0, 100)
+            );
           continue;
         }
         if (line.startsWith("#EXTINF:")) {
@@ -535,6 +637,8 @@ var AdsFriendlyMainWorld = (() => {
       const playlistType = hasMasterEvidence ? "master" : hasMediaEvidence ? "media" : "unknown";
       const streamType = playlistType === "master" ? null : playlistType === "unknown" ? "unknown" : hasEndList || declaredPlaylistType === "VOD" ? "vod" : segmentCount > 0 || partialSegmentCount > 0 || targetDuration !== null || declaredPlaylistType === "EVENT" ? "live" : "unknown";
       const methods = [...encryptionMethods];
+      const keyFormats = [...encryptionKeyFormats];
+      const classification = classifyHlsEncryption(methods, keyFormats);
       return {
         status: "ready",
         error: null,
@@ -554,7 +658,8 @@ var AdsFriendlyMainWorld = (() => {
         discontinuitySequence: playlistType === "media" ? discontinuitySequence : null,
         revisionId: stableTextId(source),
         encryptionMethods: methods,
-        drm: methods.some(isDrmLikeMethod) ? "suspected" : "none"
+        encryptionKeyFormats: keyFormats,
+        ...classification
       };
     } catch (error) {
       return {
@@ -654,11 +759,54 @@ var AdsFriendlyMainWorld = (() => {
       discontinuitySequence: null,
       revisionId: null,
       encryptionMethods: [],
+      encryptionKeyFormats: [],
+      encryptionScheme: "none",
+      drmSystem: null,
+      drmEvidence: [],
       drm: "none"
     };
   }
-  function isDrmLikeMethod(method) {
-    return method.startsWith("SAMPLE-AES");
+  function classifyHlsEncryption(methods, keyFormats) {
+    if (!methods.length) {
+      return {
+        encryptionScheme: "none",
+        drm: "none",
+        drmSystem: null,
+        drmEvidence: []
+      };
+    }
+    const drmSystem = detectDrmSystem(keyFormats);
+    const sampleAes = methods.some((method) => method.startsWith("SAMPLE-AES"));
+    const aes128 = methods.every((method) => method === "AES-128");
+    const encryptionScheme = sampleAes ? "sample-aes" : aes128 ? "aes-128" : "unknown";
+    if (drmSystem) {
+      return {
+        encryptionScheme,
+        drm: "confirmed",
+        drmSystem,
+        drmEvidence: ["hls-keyformat"]
+      };
+    }
+    return {
+      encryptionScheme,
+      drm: sampleAes ? "suspected" : "none",
+      drmSystem: null,
+      drmEvidence: sampleAes ? ["hls-sample-aes"] : []
+    };
+  }
+  function detectDrmSystem(keyFormats) {
+    for (const format of keyFormats) {
+      if (format === "identity") continue;
+      if (format.includes("edef8ba9") || format.includes("widevine"))
+        return "widevine";
+      if (format.includes("9a04f079") || format.includes("playready"))
+        return "playready";
+      if (format.includes("94ce86fb") || format.includes("streamingkeydelivery"))
+        return "fairplay";
+      if (format.includes("e2719d58") || format.includes("clearkey"))
+        return "clearkey";
+    }
+    return null;
   }
   function valueAfterColon(line) {
     return line.slice(line.indexOf(":") + 1);
@@ -707,17 +855,6 @@ var AdsFriendlyMainWorld = (() => {
   }
 
   // src/media/dash-parser.js
-  var DRM_SCHEMES = [
-    "widevine",
-    "playready",
-    "fairplay",
-    "marlin",
-    "clearkey",
-    "edef8ba9",
-    "9a04f079",
-    "e2719d58",
-    "94ce86fb"
-  ];
   function parseDashManifest(manifestUrl, body) {
     try {
       const xml = String(body || "").replace(/^\uFEFF/, "").trim();
@@ -727,9 +864,8 @@ var AdsFriendlyMainWorld = (() => {
       const streamType = String(rootAttributes.type || "static").toLowerCase() === "dynamic" ? "live" : "vod";
       const duration = parseIsoDuration(rootAttributes.mediaPresentationDuration);
       const protectionSchemes = extractProtectionSchemes(xml);
-      const drm = protectionSchemes.some(
-        (scheme) => DRM_SCHEMES.some((name) => scheme.includes(name))
-      ) ? "confirmed" : protectionSchemes.length ? "suspected" : "none";
+      const drmSystem = detectDrmSystem2(protectionSchemes);
+      const drm = drmSystem ? "confirmed" : protectionSchemes.length ? "suspected" : "none";
       const tracks = extractTracks(xml);
       const variants = tracks.filter((track) => track.type === "video");
       const audioTracks = tracks.filter((track) => track.type === "audio");
@@ -753,6 +889,10 @@ var AdsFriendlyMainWorld = (() => {
         discontinuitySequence: null,
         revisionId: revisionId(manifestUrl, xml),
         encryptionMethods: protectionSchemes,
+        encryptionKeyFormats: [],
+        encryptionScheme: protectionSchemes.length ? /cbcs|cbc1/i.test(xml) ? "cbcs" : "cenc" : "none",
+        drmSystem,
+        drmEvidence: drmSystem ? ["dash-content-protection"] : [],
         drm
       };
     } catch (error) {
@@ -761,6 +901,19 @@ var AdsFriendlyMainWorld = (() => {
         error: error?.message || "dash_parse_failed"
       };
     }
+  }
+  function detectDrmSystem2(schemes) {
+    for (const scheme of schemes) {
+      if (scheme.includes("widevine") || scheme.includes("edef8ba9"))
+        return "widevine";
+      if (scheme.includes("playready") || scheme.includes("9a04f079"))
+        return "playready";
+      if (scheme.includes("fairplay") || scheme.includes("94ce86fb"))
+        return "fairplay";
+      if (scheme.includes("clearkey") || scheme.includes("e2719d58"))
+        return "clearkey";
+    }
+    return null;
   }
   function extractTracks(xml) {
     const tracks = [];
@@ -894,6 +1047,10 @@ ${body}`;
       discontinuitySequence: null,
       revisionId: null,
       encryptionMethods: [],
+      encryptionKeyFormats: [],
+      encryptionScheme: "none",
+      drmSystem: null,
+      drmEvidence: [],
       drm: "none"
     };
   }
@@ -1060,6 +1217,7 @@ ${body}`;
     MEDIA_DISCOVERED: "media.discovered",
     MEDIA_PROBED: "media.probed",
     MEDIA_BLOB_TRACED: "media.blob_traced",
+    MEDIA_EME_OBSERVED: "media.eme_observed",
     MEDIA_CATALOG_UPDATED: "media.catalog.updated",
     VIDEO_AD_EVIDENCE_FOUND: "video_ad.evidence_found",
     VIDEO_AD_LABELLED: "video_ad.labelled"
@@ -1083,6 +1241,12 @@ ${body}`;
       "media.blob-source-tracer",
       ["media.catalog"],
       normalizeBlobSourceTrace
+    ),
+    [E.MEDIA_EME_OBSERVED]: event(
+      E.MEDIA_EME_OBSERVED,
+      "media.eme-observer",
+      ["media.catalog"],
+      normalizeEmeObservation
     ),
     [E.MEDIA_CATALOG_UPDATED]: event(
       E.MEDIA_CATALOG_UPDATED,
@@ -1439,6 +1603,7 @@ ${body}`;
     ]),
     feature("main-world.network-capture", "main-world", C2.MEDIA_OBSERVE),
     feature("main-world.blob-source-tracer", "main-world", C2.MEDIA_OBSERVE),
+    feature("main-world.eme-observer", "main-world", C2.MEDIA_OBSERVE),
     feature("main-world.timer-control", "main-world", C2.VIDEO_AUTO_ACTION)
   ]);
   var CAPABILITY_SET = new Set(Object.values(CAPABILITIES));
@@ -2292,6 +2457,165 @@ ${body}`;
     if (items.length > maximum) items.shift();
   }
 
+  // src/main-world/eme-observer.js
+  function installEmeObserver() {
+    const cleanups = [];
+    const observedSessions = /* @__PURE__ */ new WeakSet();
+    const mediaKeysSystems = /* @__PURE__ */ new WeakMap();
+    const sessionSystems = /* @__PURE__ */ new WeakMap();
+    const onEncrypted = (event2) => {
+      emit({ initDataType: event2.initDataType || null });
+    };
+    document.addEventListener("encrypted", onEncrypted, true);
+    cleanups.push(
+      () => document.removeEventListener("encrypted", onEncrypted, true)
+    );
+    patchMethod(
+      navigator,
+      "requestMediaKeySystemAccess",
+      (original) => function requestMediaKeySystemAccess(keySystem, configurations) {
+        const requestedKeySystem = typeof keySystem === "string" ? keySystem : null;
+        emit({
+          keySystem: requestedKeySystem,
+          encryptionSchemes: collectEncryptionSchemes(configurations),
+          licenseStatus: "requested"
+        });
+        return original.apply(this, arguments);
+      },
+      cleanups
+    );
+    patchMethod(
+      globalThis.MediaKeySystemAccess?.prototype,
+      "createMediaKeys",
+      (original) => function createMediaKeys() {
+        const keySystem = this.keySystem || null;
+        return Promise.resolve(original.apply(this, arguments)).then(
+          (mediaKeys) => {
+            if (mediaKeys) mediaKeysSystems.set(mediaKeys, keySystem);
+            return mediaKeys;
+          }
+        );
+      },
+      cleanups
+    );
+    patchMethod(
+      globalThis.MediaKeys?.prototype,
+      "createSession",
+      (original) => function createSession() {
+        const session = original.apply(this, arguments);
+        const keySystem = mediaKeysSystems.get(this) || null;
+        if (session) sessionSystems.set(session, keySystem);
+        observeSession(session, keySystem);
+        return session;
+      },
+      cleanups
+    );
+    patchMethod(
+      globalThis.MediaKeySession?.prototype,
+      "generateRequest",
+      (original) => function generateRequest(initDataType) {
+        emit({
+          keySystem: sessionSystems.get(this) || null,
+          initDataType: typeof initDataType === "string" ? initDataType : null,
+          licenseStatus: "requested"
+        });
+        return original.apply(this, arguments);
+      },
+      cleanups
+    );
+    patchMethod(
+      globalThis.MediaKeySession?.prototype,
+      "update",
+      (original) => function update() {
+        const result = original.apply(this, arguments);
+        return Promise.resolve(result).then(
+          (value) => {
+            emit({
+              keySystem: sessionSystems.get(this) || null,
+              licenseStatus: "updated"
+            });
+            return value;
+          },
+          (error) => {
+            emit({
+              keySystem: sessionSystems.get(this) || null,
+              licenseStatus: "error"
+            });
+            throw error;
+          }
+        );
+      },
+      cleanups
+    );
+    return () => cleanups.reverse().forEach((cleanup) => cleanup());
+    function observeSession(session, keySystem) {
+      if (!session || observedSessions.has(session)) return;
+      observedSessions.add(session);
+      const onStatusesChanged = () => {
+        const keyStatuses = [];
+        try {
+          session.keyStatuses?.forEach((status) => keyStatuses.push(status));
+        } catch {
+        }
+        emit({
+          keySystem,
+          keyStatuses,
+          licenseStatus: licenseStatusFromKeyStatuses(keyStatuses)
+        });
+      };
+      session.addEventListener?.("keystatuseschange", onStatusesChanged);
+      cleanups.push(
+        () => session.removeEventListener?.("keystatuseschange", onStatusesChanged)
+      );
+    }
+    function emit(payload) {
+      notifyContentScript({
+        type: "REGISTERED_EVENT",
+        event: createRegisteredEvent(EVENTS.MEDIA_EME_OBSERVED, {
+          pageUrl: location.href,
+          ...payload,
+          observedAt: Date.now()
+        })
+      });
+    }
+  }
+  function patchMethod(target, property, createReplacement, cleanups) {
+    if (!target || typeof target[property] !== "function") return;
+    const original = target[property];
+    const replacement = createReplacement(original);
+    try {
+      target[property] = replacement;
+      cleanups.push(() => {
+        try {
+          if (target[property] === replacement) target[property] = original;
+        } catch {
+        }
+      });
+    } catch {
+    }
+  }
+  function collectEncryptionSchemes(configurations) {
+    const schemes = [];
+    for (const configuration of Array.isArray(configurations) ? configurations : []) {
+      for (const capability2 of [
+        ...configuration?.audioCapabilities || [],
+        ...configuration?.videoCapabilities || []
+      ]) {
+        if (typeof capability2?.encryptionScheme === "string")
+          schemes.push(capability2.encryptionScheme);
+      }
+    }
+    return [...new Set(schemes)].slice(0, 8);
+  }
+  function licenseStatusFromKeyStatuses(statuses) {
+    if (statuses.includes("usable")) return "usable";
+    if (statuses.includes("expired")) return "expired";
+    if (statuses.includes("output-restricted") || statuses.includes("output-downscaled"))
+      return "restricted";
+    if (statuses.includes("internal-error")) return "error";
+    return null;
+  }
+
   // src/main-world/timer-control.js
   var isAdMode = false;
   var timerPolicy = null;
@@ -2566,6 +2890,7 @@ ${body}`;
     implementations: {
       "main-world.network-capture": ({ policy }) => installNetworkCapture(policy),
       "main-world.blob-source-tracer": ({ policy }) => installBlobSourceTracer(policy),
+      "main-world.eme-observer": () => installEmeObserver(),
       "main-world.timer-control": ({ policy }) => installTimerControl(policy)
     }
   });

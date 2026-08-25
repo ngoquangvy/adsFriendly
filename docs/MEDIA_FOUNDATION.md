@@ -71,6 +71,15 @@ Request routing facts (document/referrer URL, transport, credentials mode, and
 whether the browser session is required) stay in `chrome.storage.session`.
 Cookie, authorization, and arbitrary request-header values are never captured.
 
+HLS protection is classified explicitly. Plain `AES-128` with the identity key
+format is encrypted HLS, not DRM. `SAMPLE-AES` without stronger evidence remains
+`DRM suspected`; a recognized HLS key format, DASH ContentProtection scheme, or
+an EME/CDM call confirms the DRM system where possible. The main-world EME
+observer records only normalized key-system names, init-data type, declared
+encryption scheme, key-status names, and license lifecycle status. It never
+reads or stores raw init data, key IDs, license payloads, decryption keys, or
+session credentials.
+
 Network capture is installed at `document_start` in Chrome's MAIN world for both
 the top page and video iframes, so page CSP does not block it. When a
 manifest URL is discovered through DOM or Resource Timing after its response was
@@ -116,10 +125,12 @@ are transient diagnostics—not training labels or video-ad classifications.
 ## Optional helper boundary
 
 `src/media/helper-contract.js` is the versioned, language-neutral protocol
-contract shared by the extension and `packages/media-helper/`. Helper 0.4 has
+contract shared by the extension and `packages/media-helper/`. Helper 0.6 has
 an adapter registry, a Direct HTTP MP4/WebM adapter with parallel byte-range
 requests, progress, cancellation, and resume metadata, plus FFmpeg-backed HLS
-and DASH VOD adapters. Adaptive preflight rejects live/encrypted streams, bounds
+and DASH VOD adapters. HLS AES-128 identity keys are supported when their HTTP(S)
+key URI is reachable; SAMPLE-AES and DRM key formats remain playback-only.
+Adaptive preflight rejects live/DRM streams, bounds
 manifest input, validates referenced network resources, and supports HLS
 discontinuities that FFmpeg can remux into MP4. The background bridge keeps transient job status in
 `chrome.storage.session`; these records remain separate from Settings packages

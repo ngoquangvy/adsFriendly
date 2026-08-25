@@ -1,15 +1,3 @@
-const DRM_SCHEMES = [
-  "widevine",
-  "playready",
-  "fairplay",
-  "marlin",
-  "clearkey",
-  "edef8ba9",
-  "9a04f079",
-  "e2719d58",
-  "94ce86fb",
-];
-
 export function parseDashManifest(manifestUrl, body) {
   try {
     const xml = String(body || "")
@@ -25,9 +13,8 @@ export function parseDashManifest(manifestUrl, body) {
         : "vod";
     const duration = parseIsoDuration(rootAttributes.mediaPresentationDuration);
     const protectionSchemes = extractProtectionSchemes(xml);
-    const drm = protectionSchemes.some((scheme) =>
-      DRM_SCHEMES.some((name) => scheme.includes(name)),
-    )
+    const drmSystem = detectDrmSystem(protectionSchemes);
+    const drm = drmSystem
       ? "confirmed"
       : protectionSchemes.length
         ? "suspected"
@@ -57,6 +44,14 @@ export function parseDashManifest(manifestUrl, body) {
       discontinuitySequence: null,
       revisionId: revisionId(manifestUrl, xml),
       encryptionMethods: protectionSchemes,
+      encryptionKeyFormats: [],
+      encryptionScheme: protectionSchemes.length
+        ? /cbcs|cbc1/i.test(xml)
+          ? "cbcs"
+          : "cenc"
+        : "none",
+      drmSystem,
+      drmEvidence: drmSystem ? ["dash-content-protection"] : [],
       drm,
     };
   } catch (error) {
@@ -65,6 +60,20 @@ export function parseDashManifest(manifestUrl, body) {
       error: error?.message || "dash_parse_failed",
     };
   }
+}
+
+function detectDrmSystem(schemes) {
+  for (const scheme of schemes) {
+    if (scheme.includes("widevine") || scheme.includes("edef8ba9"))
+      return "widevine";
+    if (scheme.includes("playready") || scheme.includes("9a04f079"))
+      return "playready";
+    if (scheme.includes("fairplay") || scheme.includes("94ce86fb"))
+      return "fairplay";
+    if (scheme.includes("clearkey") || scheme.includes("e2719d58"))
+      return "clearkey";
+  }
+  return null;
 }
 
 function extractTracks(xml) {
@@ -228,6 +237,10 @@ function unsupported(error) {
     discontinuitySequence: null,
     revisionId: null,
     encryptionMethods: [],
+    encryptionKeyFormats: [],
+    encryptionScheme: "none",
+    drmSystem: null,
+    drmEvidence: [],
     drm: "none",
   };
 }

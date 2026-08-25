@@ -17,6 +17,23 @@ export const DRM_STATES = Object.freeze({
   CONFIRMED: "confirmed",
 });
 
+export const ENCRYPTION_SCHEMES = Object.freeze({
+  NONE: "none",
+  AES_128: "aes-128",
+  SAMPLE_AES: "sample-aes",
+  CENC: "cenc",
+  CBCS: "cbcs",
+  UNKNOWN: "unknown",
+});
+
+export const DRM_SYSTEMS = Object.freeze({
+  WIDEVINE: "widevine",
+  PLAYREADY: "playready",
+  FAIRPLAY: "fairplay",
+  CLEARKEY: "clearkey",
+  UNKNOWN: "unknown",
+});
+
 export const MEDIA_PROBE_STATES = Object.freeze({
   DISCOVERED: "discovered",
   READY: "ready",
@@ -77,6 +94,14 @@ export function normalizeMediaCandidate(value = {}) {
     requestContexts: normalizeRequestContexts(value.requestContexts),
     resolutionAttempt: normalizeMediaResolutionAttempt(value.resolutionAttempt),
     encryptionMethods: normalizeStrings(value.encryptionMethods),
+    encryptionScheme: normalizeEncryptionScheme(value.encryptionScheme),
+    encryptionKeyFormats: normalizeStrings(value.encryptionKeyFormats).slice(
+      0,
+      20,
+    ),
+    drmSystem: normalizeDrmSystem(value.drmSystem),
+    drmEvidence: normalizeStrings(value.drmEvidence).slice(0, 20),
+    eme: normalizeEmeMetadata(value.eme),
   };
   if (!candidate.sourceUrl && !candidate.manifestUrl) {
     throw new Error(
@@ -136,11 +161,75 @@ export function normalizeMediaProbe(value = {}) {
     requestContext: normalizeMediaRequestContext(value.requestContext),
     resolutionAttempt: normalizeMediaResolutionAttempt(value.resolutionAttempt),
     encryptionMethods: normalizeStrings(value.encryptionMethods),
+    encryptionScheme: normalizeEncryptionScheme(value.encryptionScheme),
+    encryptionKeyFormats: normalizeStrings(value.encryptionKeyFormats).slice(
+      0,
+      20,
+    ),
+    drmSystem: normalizeDrmSystem(value.drmSystem),
+    drmEvidence: normalizeStrings(value.drmEvidence).slice(0, 20),
+    eme: normalizeEmeMetadata(value.eme),
     drm: enumValue(
       value.drm || DRM_STATES.NONE,
       Object.values(DRM_STATES),
       "drm",
     ),
+  };
+}
+
+export function normalizeEmeObservation(value = {}) {
+  return {
+    pageUrl: requiredString(value.pageUrl, "pageUrl"),
+    keySystem: normalizeKeySystem(value.keySystem),
+    initDataType: safeMetadataString(value.initDataType),
+    encryptionSchemes: normalizeStrings(value.encryptionSchemes)
+      .map(normalizeObservedEncryptionScheme)
+      .filter(Boolean)
+      .slice(0, 8),
+    keyStatuses: normalizeStrings(value.keyStatuses)
+      .map((status) => status.toLowerCase())
+      .filter((status) =>
+        [
+          "usable",
+          "expired",
+          "released",
+          "output-restricted",
+          "output-downscaled",
+          "status-pending",
+          "internal-error",
+        ].includes(status),
+      )
+      .slice(0, 8),
+    licenseStatus: optionalEnumValue(
+      value.licenseStatus,
+      ["requested", "updated", "usable", "restricted", "expired", "error"],
+      "licenseStatus",
+    ),
+    observedAt: optionalFiniteNumber(value.observedAt) || Date.now(),
+  };
+}
+
+export function normalizeEmeMetadata(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return {
+    keySystems: normalizeStrings(value.keySystems)
+      .map(normalizeKeySystem)
+      .filter(Boolean)
+      .slice(0, 8),
+    initDataTypes: normalizeStrings(value.initDataTypes)
+      .map(safeMetadataString)
+      .filter(Boolean)
+      .slice(0, 8),
+    encryptionSchemes: normalizeStrings(value.encryptionSchemes)
+      .map(normalizeObservedEncryptionScheme)
+      .filter(Boolean)
+      .slice(0, 8),
+    keyStatuses: normalizeStrings(value.keyStatuses)
+      .map((status) => status.toLowerCase())
+      .filter(Boolean)
+      .slice(0, 8),
+    licenseStatus: optionalString(value.licenseStatus),
+    observedAt: optionalFiniteNumber(value.observedAt) || null,
   };
 }
 
@@ -276,6 +365,40 @@ function normalizeStrings(value) {
         ),
       ]
     : [];
+}
+
+function normalizeEncryptionScheme(value) {
+  return enumValue(
+    value || ENCRYPTION_SCHEMES.NONE,
+    Object.values(ENCRYPTION_SCHEMES),
+    "encryptionScheme",
+  );
+}
+
+function normalizeObservedEncryptionScheme(value) {
+  const normalized = String(value || "").toLowerCase();
+  if (["cenc", "cbcs", "cens", "cbc1"].includes(normalized)) return normalized;
+  return null;
+}
+
+function normalizeKeySystem(value) {
+  const normalized = safeMetadataString(value)?.toLowerCase();
+  if (!normalized) return null;
+  if (normalized === "com.widevine.alpha") return normalized;
+  if (normalized.includes("playready")) return "com.microsoft.playready";
+  if (normalized.includes("fairplay")) return "com.apple.fps";
+  if (normalized.includes("clearkey")) return "org.w3.clearkey";
+  return "unknown";
+}
+
+function normalizeDrmSystem(value) {
+  if (value === null || value === undefined || value === "") return null;
+  return enumValue(value, Object.values(DRM_SYSTEMS), "drmSystem");
+}
+
+function safeMetadataString(value) {
+  if (typeof value !== "string" || !value) return null;
+  return value.slice(0, 100);
 }
 
 function normalizeHttpUrls(value, maximum) {

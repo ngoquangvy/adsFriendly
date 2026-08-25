@@ -21,6 +21,7 @@ export function parseHlsManifest(manifestUrl, body) {
     const audioTracks = [];
     const subtitles = [];
     const encryptionMethods = new Set();
+    const encryptionKeyFormats = new Set();
     let pendingVariant = null;
     let pendingSegmentDuration = null;
     let segmentCount = 0;
@@ -79,9 +80,14 @@ export function parseHlsManifest(manifestUrl, body) {
         line.startsWith("#EXT-X-KEY:") ||
         line.startsWith("#EXT-X-SESSION-KEY:")
       ) {
-        const method = parseAttributeList(valueAfterColon(line)).METHOD;
+        const attributes = parseAttributeList(valueAfterColon(line));
+        const method = attributes.METHOD;
         if (method && method.toUpperCase() !== "NONE")
           encryptionMethods.add(method.toUpperCase());
+        if (attributes.KEYFORMAT)
+          encryptionKeyFormats.add(
+            String(attributes.KEYFORMAT).toLowerCase().slice(0, 100),
+          );
         continue;
       }
       if (line.startsWith("#EXTINF:")) {
@@ -177,6 +183,8 @@ export function parseHlsManifest(manifestUrl, body) {
               ? "live"
               : "unknown";
     const methods = [...encryptionMethods];
+    const keyFormats = [...encryptionKeyFormats];
+    const classification = classifyHlsEncryption(methods, keyFormats);
     return {
       status: "ready",
       error: null,
@@ -199,7 +207,8 @@ export function parseHlsManifest(manifestUrl, body) {
         playlistType === "media" ? discontinuitySequence : null,
       revisionId: stableTextId(source),
       encryptionMethods: methods,
-      drm: methods.some(isDrmLikeMethod) ? "suspected" : "none",
+      encryptionKeyFormats: keyFormats,
+      ...classification,
     };
   } catch (error) {
     return {
@@ -308,12 +317,60 @@ function unsupported(error) {
     discontinuitySequence: null,
     revisionId: null,
     encryptionMethods: [],
+    encryptionKeyFormats: [],
+    encryptionScheme: "none",
+    drmSystem: null,
+    drmEvidence: [],
     drm: "none",
   };
 }
 
-function isDrmLikeMethod(method) {
-  return method.startsWith("SAMPLE-AES");
+function classifyHlsEncryption(methods, keyFormats) {
+  if (!methods.length) {
+    return {
+      encryptionScheme: "none",
+      drm: "none",
+      drmSystem: null,
+      drmEvidence: [],
+    };
+  }
+  const drmSystem = detectDrmSystem(keyFormats);
+  const sampleAes = methods.some((method) => method.startsWith("SAMPLE-AES"));
+  const aes128 = methods.every((method) => method === "AES-128");
+  const encryptionScheme = sampleAes
+    ? "sample-aes"
+    : aes128
+      ? "aes-128"
+      : "unknown";
+  if (drmSystem) {
+    return {
+      encryptionScheme,
+      drm: "confirmed",
+      drmSystem,
+      drmEvidence: ["hls-keyformat"],
+    };
+  }
+  return {
+    encryptionScheme,
+    drm: sampleAes ? "suspected" : "none",
+    drmSystem: null,
+    drmEvidence: sampleAes ? ["hls-sample-aes"] : [],
+  };
+}
+
+function detectDrmSystem(keyFormats) {
+  for (const format of keyFormats) {
+    if (format === "identity") continue;
+    if (format.includes("edef8ba9") || format.includes("widevine"))
+      return "widevine";
+    if (format.includes("9a04f079") || format.includes("playready"))
+      return "playready";
+    if (format.includes("94ce86fb") || format.includes("streamingkeydelivery"))
+      return "fairplay";
+    if (format.includes("e2719d58") || format.includes("clearkey"))
+      return "clearkey";
+  }
+  return null;
 }
 
 function valueAfterColon(line) {

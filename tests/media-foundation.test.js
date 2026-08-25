@@ -465,7 +465,7 @@ test("DRM-only resolved Blob does not request helper setup", () => {
   assert.equal(formatMediaName(blob), "cdn.example · HLS source");
   assert.equal(
     formatMediaHelperSummary({ status: "permission_required" }, state),
-    "Media found · DRM-protected stream cannot be downloaded.",
+    "Media found · DRM stream is playback only.",
   );
   assert.equal(selectVisibleMediaItems([blob, hls]).length, 1);
 });
@@ -602,14 +602,86 @@ segment-2.ts
   assert.equal(result.targetDuration, 10);
   assert.equal(result.segmentCount, 2);
   assert.deepEqual(result.encryptionMethods, ["AES-128"]);
+  assert.equal(result.encryptionScheme, "aes-128");
+  assert.deepEqual(result.encryptionKeyFormats, []);
   assert.equal(result.drm, "none");
+  assert.match(
+    formatMediaDetails({ kind: "hls", probeStatus: "ready", ...result }),
+    /Encrypted HLS · AES-128/,
+  );
 
   const sampleAes = parseHlsManifest(
     "https://cdn.example/live/index.m3u8",
     '#EXTM3U\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI="key"\n#EXTINF:6,\na.ts',
   );
   assert.equal(sampleAes.streamType, "live");
+  assert.equal(sampleAes.encryptionScheme, "sample-aes");
   assert.equal(sampleAes.drm, "suspected");
+  assert.match(
+    formatMediaDetails({ kind: "hls", probeStatus: "ready", ...sampleAes }),
+    /DRM suspected · SAMPLE-AES · Playback only/,
+  );
+
+  const widevine = parseHlsManifest(
+    "https://cdn.example/live/index.m3u8",
+    '#EXTM3U\n#EXT-X-KEY:METHOD=SAMPLE-AES,KEYFORMAT="urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed",URI="license"\n#EXTINF:6,\na.ts',
+  );
+  assert.equal(widevine.drm, "confirmed");
+  assert.equal(widevine.drmSystem, "widevine");
+  assert.deepEqual(widevine.drmEvidence, ["hls-keyformat"]);
+  assert.match(
+    formatMediaDetails({ kind: "hls", probeStatus: "ready", ...widevine }),
+    /DRM confirmed · Widevine · Playback only/,
+  );
+});
+
+test("EME metadata confirms a suspected stream without retaining payloads", () => {
+  const catalog = createMediaCatalog();
+  catalog.applyProbe(
+    31,
+    createRegisteredEvent(EVENTS.MEDIA_PROBED, {
+      mediaId: "eme-hls",
+      pageUrl: "https://video.example/watch",
+      manifestUrl: "https://cdn.example/index.m3u8",
+      kind: "hls",
+      status: "ready",
+      playlistType: "media",
+      streamType: "vod",
+      segmentCount: 4,
+      encryptionMethods: ["SAMPLE-AES"],
+      encryptionScheme: "sample-aes",
+      drm: "suspected",
+    }),
+  );
+  catalog.applyEme(
+    31,
+    createRegisteredEvent(EVENTS.MEDIA_EME_OBSERVED, {
+      pageUrl: "https://video.example/watch",
+      initDataType: "cenc",
+    }),
+  );
+  assert.equal(catalog.list(31)[0].drm, "suspected");
+  catalog.applyEme(
+    31,
+    createRegisteredEvent(EVENTS.MEDIA_EME_OBSERVED, {
+      pageUrl: "https://video.example/watch",
+      keySystem: "com.widevine.alpha",
+      initDataType: "cenc",
+      encryptionSchemes: ["cbcs"],
+      keyStatuses: ["usable"],
+      licenseStatus: "usable",
+      initData: "must-not-survive",
+      licensePayload: "must-not-survive",
+    }),
+  );
+  const [item] = catalog.list(31);
+  assert.equal(item.drm, "confirmed");
+  assert.equal(item.drmSystem, "widevine");
+  assert.deepEqual(item.eme.keySystems, ["com.widevine.alpha"]);
+  assert.deepEqual(item.eme.initDataTypes, ["cenc"]);
+  assert.equal(item.eme.licenseStatus, "usable");
+  assert.equal("initData" in item.eme, false);
+  assert.equal("licensePayload" in item.eme, false);
 });
 
 test("HLS attribute parsing preserves quoted commas", () => {
@@ -1213,9 +1285,26 @@ test("download availability blocks DRM and live HLS before job creation", () => 
     segmentCount: 1,
   };
   assert.equal(getMediaDownloadAvailability(base).supported, true);
+  assert.equal(
+    getMediaDownloadAvailability({
+      ...base,
+      encryptionMethods: ["AES-128"],
+      encryptionScheme: "aes-128",
+      encryptionKeyFormats: ["identity"],
+    }).supported,
+    true,
+  );
   assert.match(
     getMediaDownloadAvailability({ ...base, drm: "suspected" }).reason,
     /DRM/,
+  );
+  assert.match(
+    getMediaDownloadAvailability({
+      ...base,
+      drm: "confirmed",
+      drmSystem: "widevine",
+    }).reason,
+    /Widevine · Playback only/,
   );
   assert.match(
     getMediaDownloadAvailability({ ...base, streamType: "live" }).reason,

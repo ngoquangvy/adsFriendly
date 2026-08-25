@@ -120,7 +120,7 @@ export function helperSetupPresentation(
 export function formatMediaHelperSummary(helper, downloadState) {
   if (!downloadState.downloadableCount) {
     if (downloadState.drmBlockedCount)
-      return "Media found · DRM-protected stream cannot be downloaded.";
+      return "Media found · DRM stream is playback only.";
     return "Media found · no downloadable source is ready yet.";
   }
   if (helper.status === "permission_required")
@@ -229,8 +229,7 @@ export function formatMediaDetails(item) {
   }
   if (item.audioTracks?.length) facts.push(`${item.audioTracks.length} audio`);
   if (item.subtitles?.length) facts.push(`${item.subtitles.length} subtitles`);
-  if (item.drm === "suspected") facts.push("DRM suspected");
-  else if (item.encryptionMethods?.length) facts.push("Encrypted");
+  appendProtectionFacts(facts, item);
   return facts.filter(Boolean).join(" · ") || "HLS manifest ready";
 }
 
@@ -268,7 +267,7 @@ function resolvedBlobDetails(item) {
   if (stream.resolution?.height) facts.push(`${stream.resolution.height}p`);
   if (Number.isFinite(stream.duration) && stream.duration > 0)
     facts.push(formatDuration(stream.duration));
-  if (["suspected", "confirmed"].includes(stream.drm)) facts.push("DRM");
+  appendProtectionFacts(facts, stream);
   return facts.join(" · ");
 }
 
@@ -288,7 +287,7 @@ function dashDetails(item) {
   if (qualities.length) facts.push(qualities.join(" · "));
   if (item.audioTracks?.length) facts.push(`${item.audioTracks.length} audio`);
   if (item.subtitles?.length) facts.push(`${item.subtitles.length} subtitles`);
-  if (["suspected", "confirmed"].includes(item.drm)) facts.push("DRM");
+  appendProtectionFacts(facts, item);
   return facts.join(" · ");
 }
 
@@ -308,11 +307,46 @@ function resolvedHlsDetails(item) {
   if (stream.segmentCount > 0) facts.push(`${stream.segmentCount} segments`);
   if (stream.partialSegmentCount > 0)
     facts.push(`${stream.partialSegmentCount} parts`);
-  if (["suspected", "confirmed"].includes(stream.drm)) facts.push("DRM");
-  else if (stream.encryptionMethods?.length) facts.push("Encrypted");
+  appendProtectionFacts(facts, stream);
   if (item.resolvedRequestContext?.requiresBrowserSession)
     facts.push("browser session");
   return facts.join(" · ");
+}
+
+function appendProtectionFacts(facts, item) {
+  if (item.drm === "confirmed") {
+    facts.push(
+      `DRM confirmed${item.drmSystem ? ` · ${formatDrmSystem(item.drmSystem)}` : ""}`,
+      "Playback only",
+    );
+    return;
+  }
+  if (item.drm === "suspected") {
+    facts.push(
+      item.encryptionScheme === "sample-aes"
+        ? "DRM suspected · SAMPLE-AES"
+        : "DRM suspected",
+      "Playback only",
+    );
+    return;
+  }
+  if (item.encryptionScheme === "aes-128") {
+    facts.push("Encrypted HLS · AES-128");
+    return;
+  }
+  if (item.encryptionMethods?.length) facts.push("Encrypted");
+}
+
+function formatDrmSystem(value) {
+  return value === "widevine"
+    ? "Widevine"
+    : value === "playready"
+      ? "PlayReady"
+      : value === "fairplay"
+        ? "FairPlay"
+        : value === "clearkey"
+          ? "Clear Key"
+          : "Unknown system";
 }
 
 function compareVariantQuality(left, right) {
@@ -421,6 +455,11 @@ function mediaRenderFacts(item) {
     requiresBrowserSession:
       item.resolvedRequestContext?.requiresBrowserSession === true,
     drm: item.drm,
+    drmSystem: item.drmSystem,
+    drmEvidence: item.drmEvidence,
+    eme: item.eme,
+    encryptionScheme: item.encryptionScheme,
+    encryptionKeyFormats: item.encryptionKeyFormats,
     encryptionMethods: item.encryptionMethods,
     variants: item.variants,
     iframeVariants: item.iframeVariants,

@@ -14,6 +14,9 @@ export function normalizeMediaDownloadJob(value = {}) {
     title: optionalString(candidate.title),
     mimeType: optionalString(candidate.mimeType),
     drm: candidate.drm || "none",
+    drmSystem: candidate.drmSystem || null,
+    drmEvidence: stringArray(candidate.drmEvidence),
+    encryptionScheme: candidate.encryptionScheme || "none",
   };
   return {
     id: requiredString(value.id, "id"),
@@ -39,6 +42,7 @@ export function normalizeMediaDownloadJob(value = {}) {
             streamType: candidate.streamType,
             drm: candidate.drm || "none",
             encryptionMethods: stringArray(candidate.encryptionMethods),
+            encryptionKeyFormats: stringArray(candidate.encryptionKeyFormats),
             variants: objectArray(candidate.variants),
             iframeVariants: objectArray(candidate.iframeVariants),
             audioTracks: objectArray(candidate.audioTracks),
@@ -71,14 +75,14 @@ export function getMediaDownloadAvailability(candidate = {}) {
       return { supported: false, reason: "Direct media URL is not ready." };
     }
     if (candidate.drm === "suspected" || candidate.drm === "confirmed")
-      return { supported: false, reason: "DRM-protected stream." };
+      return { supported: false, reason: drmPlaybackOnlyReason(candidate) };
     return { supported: true, reason: null };
   }
   if (candidate.kind === "dash") {
     if (candidate.probeStatus !== "ready")
       return { supported: false, reason: "DASH manifest is not ready." };
     if (candidate.drm === "suspected" || candidate.drm === "confirmed")
-      return { supported: false, reason: "DRM-protected stream." };
+      return { supported: false, reason: drmPlaybackOnlyReason(candidate) };
     if (candidate.streamType === "live")
       return { supported: false, reason: "Live DASH is not supported yet." };
     if (candidate.streamType !== "vod")
@@ -95,8 +99,8 @@ export function getMediaDownloadAvailability(candidate = {}) {
   if (candidate.probeStatus !== "ready")
     return { supported: false, reason: "Manifest is not ready." };
   if (candidate.drm === "suspected" || candidate.drm === "confirmed")
-    return { supported: false, reason: "DRM-protected stream." };
-  if (candidate.encryptionMethods?.length)
+    return { supported: false, reason: drmPlaybackOnlyReason(candidate) };
+  if (candidate.encryptionMethods?.length && !isDownloadableAes128(candidate))
     return { supported: false, reason: "Encrypted HLS is not supported yet." };
   if (candidate.playlistType === "unknown")
     return {
@@ -121,6 +125,36 @@ export function getMediaDownloadAvailability(candidate = {}) {
   if (!["master", "media"].includes(candidate.playlistType))
     return { supported: false, reason: "Unknown HLS playlist type." };
   return { supported: true, reason: null };
+}
+
+function isDownloadableAes128(candidate) {
+  const methods = candidate.encryptionMethods || [];
+  const formats = candidate.encryptionKeyFormats || [];
+  return (
+    methods.length > 0 &&
+    methods.every((method) => String(method).toUpperCase() === "AES-128") &&
+    formats.every((format) => String(format).toLowerCase() === "identity")
+  );
+}
+
+function drmPlaybackOnlyReason(candidate) {
+  const state = candidate.drm === "confirmed" ? "confirmed" : "suspected";
+  const system = candidate.drmSystem
+    ? ` · ${formatDrmSystem(candidate.drmSystem)}`
+    : "";
+  return `DRM ${state}${system} · Playback only.`;
+}
+
+function formatDrmSystem(value) {
+  return value === "widevine"
+    ? "Widevine"
+    : value === "playready"
+      ? "PlayReady"
+      : value === "fairplay"
+        ? "FairPlay"
+        : value === "clearkey"
+          ? "Clear Key"
+          : "Unknown system";
 }
 
 function requiredString(value, field) {
