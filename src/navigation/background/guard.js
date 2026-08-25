@@ -14,6 +14,7 @@ import {
 } from "./new-tab-policy.js";
 import {
   REVERSE_POPUNDER_WINDOW_MS,
+  isReversePopunderReviewSequence,
   isReversePopunderSequence,
   isSelfCloneNavigation,
 } from "./reverse-popunder.js";
@@ -59,6 +60,7 @@ const handledTabs = new Map();
 const evaluatingTabs = new Set();
 const reverseCandidatesBySource = new Map();
 const reverseCandidatesByClone = new Map();
+const committedUrlsByTab = new Map();
 const pendingReviewToasts = new Map();
 const blockedNoticesBySource = new Map();
 const userOpenedNavigations = new Map();
@@ -66,6 +68,12 @@ let navigationPolicy = null;
 
 export function registerNavigationGuard(policy) {
   navigationPolicy = policy;
+  chrome.tabs
+    .query({})
+    .then((tabs) => {
+      for (const tab of tabs) rememberCommittedUrl(tab.id, tab.url);
+    })
+    .catch(() => {});
   const onCreatedNavigationTarget = (details) => {
     trackReverseCandidate({
       sourceTabId: details.sourceTabId,
@@ -80,6 +88,7 @@ export function registerNavigationGuard(policy) {
   };
 
   const onCreated = (tab) => {
+    rememberCommittedUrl(tab.id, tab.pendingUrl || tab.url);
     const sourceTabId =
       tab.openerTabId || getRecentUserGestureSourceTabId(2500);
     if (!sourceTabId || !tab.id) return;
@@ -122,6 +131,7 @@ export function registerNavigationGuard(policy) {
   const onCommitted = (details) => {
     if (details.frameId !== 0 || isBlankUrl(details.url)) return;
     observeReverseNavigation(details.tabId, details.url);
+    rememberCommittedUrl(details.tabId, details.url);
     const pending = pendingTabs.get(details.tabId);
     if (!pending) return;
     if (isExpiredFallbackPending(pending)) {
@@ -135,12 +145,18 @@ export function registerNavigationGuard(policy) {
     });
   };
 
+  const onRemoved = (tabId) => {
+    committedUrlsByTab.delete(tabId);
+    pendingReviewToasts.delete(tabId);
+  };
+
   chrome.webNavigation.onCreatedNavigationTarget.addListener(
     onCreatedNavigationTarget,
   );
   chrome.tabs.onCreated.addListener(onCreated);
   chrome.tabs.onUpdated.addListener(onUpdated);
   chrome.webNavigation.onCommitted.addListener(onCommitted);
+  chrome.tabs.onRemoved.addListener(onRemoved);
 
   return () => {
     chrome.webNavigation.onCreatedNavigationTarget.removeListener(
@@ -149,10 +165,12 @@ export function registerNavigationGuard(policy) {
     chrome.tabs.onCreated.removeListener(onCreated);
     chrome.tabs.onUpdated.removeListener(onUpdated);
     chrome.webNavigation.onCommitted.removeListener(onCommitted);
+    chrome.tabs.onRemoved.removeListener(onRemoved);
     pendingTabs.clear();
     evaluatingTabs.clear();
     reverseCandidatesBySource.clear();
     reverseCandidatesByClone.clear();
+    committedUrlsByTab.clear();
     pendingReviewToasts.clear();
     blockedNoticesBySource.clear();
     userOpenedNavigations.clear();
@@ -195,11 +213,13 @@ async function trackReverseCandidate({ sourceTabId, cloneTabId, cloneUrl }) {
     candidate = {
       sourceTabId,
       cloneTabId,
-      originalUrl: getRecentSourceUrl(sourceTabId),
+      originalUrl:
+        getRecentSourceUrl(sourceTabId) || committedUrlsByTab.get(sourceTabId),
       cloneUrl: null,
       redirectedUrl: null,
       createdAt: Date.now(),
       handling: false,
+      reviewTimer: null,
     };
     reverseCandidatesBySource.set(sourceTabId, candidate);
     reverseCandidatesByClone.set(cloneTabId, candidate);
@@ -252,8 +272,10 @@ async function maybeHandleReversePopunder(candidate) {
       redirectedUrl: candidate.redirectedUrl,
       elapsedMs,
     })
-  )
+  ) {
+    scheduleReverseRedirectReview(candidate);
     return;
+  }
 
   candidate.handling = true;
   if (await isAllowedReverseRedirect(candidate)) {
@@ -303,6 +325,71 @@ async function maybeHandleReversePopunder(candidate) {
   }
 }
 
+function scheduleReverseRedirectReview(candidate) {
+  if (candidate.reviewTimer) return;
+  const elapsedMs = Date.now() - candidate.createdAt;
+  if (
+    !isReversePopunderReviewSequence({
+      originalUrl: candidate.originalUrl,
+      cloneUrl: candidate.cloneUrl,
+      redirectedUrl: candidate.redirectedUrl,
+      elapsedMs,
+    })
+  )
+    return;
+  candidate.reviewTimer = setTimeout(() => {
+    candidate.reviewTimer = null;
+    reviewReverseRedirect(candidate).catch(logReversePopunderError);
+  }, 400);
+}
+
+async function reviewReverseRedirect(candidate) {
+  if (
+    candidate.handling ||
+    reverseCandidatesBySource.get(candidate.sourceTabId) !== candidate
+  )
+    return;
+  const elapsedMs = Date.now() - candidate.createdAt;
+  if (
+    isReversePopunderSequence({
+      originalUrl: candidate.originalUrl,
+      cloneUrl: candidate.cloneUrl,
+      redirectedUrl: candidate.redirectedUrl,
+      elapsedMs,
+    })
+  ) {
+    await maybeHandleReversePopunder(candidate);
+    return;
+  }
+  if (
+    !isReversePopunderReviewSequence({
+      originalUrl: candidate.originalUrl,
+      cloneUrl: candidate.cloneUrl,
+      redirectedUrl: candidate.redirectedUrl,
+      elapsedMs,
+    })
+  )
+    return;
+
+  candidate.handling = true;
+  const evaluation = await evaluateNavigationPolicy({
+    sourceUrl: candidate.originalUrl,
+    targetUrl: candidate.redirectedUrl,
+    sourceTabId: candidate.sourceTabId,
+    allowMatchingIntent: true,
+    allowTrustedInitiator: false,
+  });
+  if (evaluation.decision !== NEW_TAB_DECISIONS.ALLOW) {
+    await showNavigationReviewToast({
+      tabId: candidate.sourceTabId,
+      url: candidate.redirectedUrl,
+      source: evaluation.sourceUrl.hostname,
+      target: evaluation.targetDomain,
+    });
+  }
+  cleanupReverseCandidate(candidate);
+}
+
 async function isAllowedReverseRedirect(candidate) {
   const evaluation = await evaluateNavigationPolicy({
     sourceUrl: candidate.originalUrl,
@@ -334,11 +421,19 @@ function getRecentSourceUrl(sourceTabId) {
 }
 
 function cleanupReverseCandidate(candidate) {
+  if (candidate.reviewTimer) clearTimeout(candidate.reviewTimer);
+  candidate.reviewTimer = null;
   if (reverseCandidatesBySource.get(candidate.sourceTabId) === candidate) {
     reverseCandidatesBySource.delete(candidate.sourceTabId);
   }
   if (reverseCandidatesByClone.get(candidate.cloneTabId) === candidate) {
     reverseCandidatesByClone.delete(candidate.cloneTabId);
+  }
+}
+
+function rememberCommittedUrl(tabId, url) {
+  if (Number.isInteger(tabId) && url?.startsWith("http")) {
+    committedUrlsByTab.set(tabId, url);
   }
 }
 

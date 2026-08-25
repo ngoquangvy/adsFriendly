@@ -277,7 +277,7 @@ async function route(message, sender) {
         surface: "navigation_toast",
       },
     });
-    return;
+    return { status: "saved" };
   }
   if (message.type === "BLOCK_REVIEWED_TAB") {
     await handleUserDecision({
@@ -311,7 +311,7 @@ async function route(message, sender) {
         await chrome.tabs.remove(message.tabId);
       } catch {}
     }
-    return;
+    return { status: "saved" };
   }
   if (message.type === "OPEN_BLOCKED_NAVIGATION") {
     let targetUrl;

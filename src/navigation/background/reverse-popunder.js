@@ -30,6 +30,27 @@ export function isReversePopunderSequence({
   );
 }
 
+export function isReversePopunderReviewSequence({
+  originalUrl,
+  cloneUrl,
+  redirectedUrl,
+  elapsedMs,
+}) {
+  if (elapsedMs < 0 || elapsedMs > REVERSE_POPUNDER_WINDOW_MS) return false;
+  const original = parseUrl(originalUrl);
+  const clone = parseUrl(cloneUrl);
+  const redirected = parseUrl(redirectedUrl);
+  if (![original, clone, redirected].every(isHttpUrl)) return false;
+  const cloneStayedOnSource =
+    sameHostnameOrSubdomain(original.hostname, clone.hostname) ||
+    sameHostnameOrSubdomain(clone.hostname, original.hostname);
+  const sourceWasReplaced = !(
+    sameHostnameOrSubdomain(original.hostname, redirected.hostname) ||
+    sameHostnameOrSubdomain(redirected.hostname, original.hostname)
+  );
+  return cloneStayedOnSource && sourceWasReplaced;
+}
+
 function isHttpUrl(url) {
   return url?.protocol === "http:" || url?.protocol === "https:";
 }

@@ -1261,6 +1261,21 @@ var AdsFriendlyBackground = (() => {
     if (!isHttpUrl(redirected)) return false;
     return !(sameHostnameOrSubdomain(original.hostname, redirected.hostname) || sameHostnameOrSubdomain(redirected.hostname, original.hostname));
   }
+  function isReversePopunderReviewSequence({
+    originalUrl,
+    cloneUrl,
+    redirectedUrl,
+    elapsedMs
+  }) {
+    if (elapsedMs < 0 || elapsedMs > REVERSE_POPUNDER_WINDOW_MS) return false;
+    const original = parseUrl(originalUrl);
+    const clone = parseUrl(cloneUrl);
+    const redirected = parseUrl(redirectedUrl);
+    if (![original, clone, redirected].every(isHttpUrl)) return false;
+    const cloneStayedOnSource = sameHostnameOrSubdomain(original.hostname, clone.hostname) || sameHostnameOrSubdomain(clone.hostname, original.hostname);
+    const sourceWasReplaced = !(sameHostnameOrSubdomain(original.hostname, redirected.hostname) || sameHostnameOrSubdomain(redirected.hostname, original.hostname));
+    return cloneStayedOnSource && sourceWasReplaced;
+  }
   function isHttpUrl(url) {
     return url?.protocol === "http:" || url?.protocol === "https:";
   }
@@ -1415,12 +1430,17 @@ var AdsFriendlyBackground = (() => {
   var evaluatingTabs = /* @__PURE__ */ new Set();
   var reverseCandidatesBySource = /* @__PURE__ */ new Map();
   var reverseCandidatesByClone = /* @__PURE__ */ new Map();
+  var committedUrlsByTab = /* @__PURE__ */ new Map();
   var pendingReviewToasts = /* @__PURE__ */ new Map();
   var blockedNoticesBySource = /* @__PURE__ */ new Map();
   var userOpenedNavigations = /* @__PURE__ */ new Map();
   var navigationPolicy = null;
   function registerNavigationGuard(policy) {
     navigationPolicy = policy;
+    chrome.tabs.query({}).then((tabs) => {
+      for (const tab of tabs) rememberCommittedUrl(tab.id, tab.url);
+    }).catch(() => {
+    });
     const onCreatedNavigationTarget = (details) => {
       trackReverseCandidate({
         sourceTabId: details.sourceTabId,
@@ -1434,6 +1454,7 @@ var AdsFriendlyBackground = (() => {
       });
     };
     const onCreated = (tab) => {
+      rememberCommittedUrl(tab.id, tab.pendingUrl || tab.url);
       const sourceTabId = tab.openerTabId || getRecentUserGestureSourceTabId(2500);
       if (!sourceTabId || !tab.id) return;
       pendingTabs.set(tab.id, {
@@ -1473,6 +1494,7 @@ var AdsFriendlyBackground = (() => {
     const onCommitted = (details) => {
       if (details.frameId !== 0 || isBlankUrl(details.url)) return;
       observeReverseNavigation(details.tabId, details.url);
+      rememberCommittedUrl(details.tabId, details.url);
       const pending = pendingTabs.get(details.tabId);
       if (!pending) return;
       if (isExpiredFallbackPending(pending)) {
@@ -1485,12 +1507,17 @@ var AdsFriendlyBackground = (() => {
         url: details.url
       });
     };
+    const onRemoved = (tabId) => {
+      committedUrlsByTab.delete(tabId);
+      pendingReviewToasts.delete(tabId);
+    };
     chrome.webNavigation.onCreatedNavigationTarget.addListener(
       onCreatedNavigationTarget
     );
     chrome.tabs.onCreated.addListener(onCreated);
     chrome.tabs.onUpdated.addListener(onUpdated);
     chrome.webNavigation.onCommitted.addListener(onCommitted);
+    chrome.tabs.onRemoved.addListener(onRemoved);
     return () => {
       chrome.webNavigation.onCreatedNavigationTarget.removeListener(
         onCreatedNavigationTarget
@@ -1498,10 +1525,12 @@ var AdsFriendlyBackground = (() => {
       chrome.tabs.onCreated.removeListener(onCreated);
       chrome.tabs.onUpdated.removeListener(onUpdated);
       chrome.webNavigation.onCommitted.removeListener(onCommitted);
+      chrome.tabs.onRemoved.removeListener(onRemoved);
       pendingTabs.clear();
       evaluatingTabs.clear();
       reverseCandidatesBySource.clear();
       reverseCandidatesByClone.clear();
+      committedUrlsByTab.clear();
       pendingReviewToasts.clear();
       blockedNoticesBySource.clear();
       userOpenedNavigations.clear();
@@ -1529,11 +1558,12 @@ var AdsFriendlyBackground = (() => {
       candidate = {
         sourceTabId,
         cloneTabId,
-        originalUrl: getRecentSourceUrl(sourceTabId),
+        originalUrl: getRecentSourceUrl(sourceTabId) || committedUrlsByTab.get(sourceTabId),
         cloneUrl: null,
         redirectedUrl: null,
         createdAt: Date.now(),
-        handling: false
+        handling: false,
+        reviewTimer: null
       };
       reverseCandidatesBySource.set(sourceTabId, candidate);
       reverseCandidatesByClone.set(cloneTabId, candidate);
@@ -1575,8 +1605,10 @@ var AdsFriendlyBackground = (() => {
       cloneUrl: candidate.cloneUrl,
       redirectedUrl: candidate.redirectedUrl,
       elapsedMs
-    }))
+    })) {
+      scheduleReverseRedirectReview(candidate);
       return;
+    }
     candidate.handling = true;
     if (await isAllowedReverseRedirect(candidate)) {
       cleanupReverseCandidate(candidate);
@@ -1620,6 +1652,59 @@ var AdsFriendlyBackground = (() => {
       cleanupReverseCandidate(candidate);
     }
   }
+  function scheduleReverseRedirectReview(candidate) {
+    if (candidate.reviewTimer) return;
+    const elapsedMs = Date.now() - candidate.createdAt;
+    if (!isReversePopunderReviewSequence({
+      originalUrl: candidate.originalUrl,
+      cloneUrl: candidate.cloneUrl,
+      redirectedUrl: candidate.redirectedUrl,
+      elapsedMs
+    }))
+      return;
+    candidate.reviewTimer = setTimeout(() => {
+      candidate.reviewTimer = null;
+      reviewReverseRedirect(candidate).catch(logReversePopunderError);
+    }, 400);
+  }
+  async function reviewReverseRedirect(candidate) {
+    if (candidate.handling || reverseCandidatesBySource.get(candidate.sourceTabId) !== candidate)
+      return;
+    const elapsedMs = Date.now() - candidate.createdAt;
+    if (isReversePopunderSequence({
+      originalUrl: candidate.originalUrl,
+      cloneUrl: candidate.cloneUrl,
+      redirectedUrl: candidate.redirectedUrl,
+      elapsedMs
+    })) {
+      await maybeHandleReversePopunder(candidate);
+      return;
+    }
+    if (!isReversePopunderReviewSequence({
+      originalUrl: candidate.originalUrl,
+      cloneUrl: candidate.cloneUrl,
+      redirectedUrl: candidate.redirectedUrl,
+      elapsedMs
+    }))
+      return;
+    candidate.handling = true;
+    const evaluation = await evaluateNavigationPolicy({
+      sourceUrl: candidate.originalUrl,
+      targetUrl: candidate.redirectedUrl,
+      sourceTabId: candidate.sourceTabId,
+      allowMatchingIntent: true,
+      allowTrustedInitiator: false
+    });
+    if (evaluation.decision !== NEW_TAB_DECISIONS.ALLOW) {
+      await showNavigationReviewToast({
+        tabId: candidate.sourceTabId,
+        url: candidate.redirectedUrl,
+        source: evaluation.sourceUrl.hostname,
+        target: evaluation.targetDomain
+      });
+    }
+    cleanupReverseCandidate(candidate);
+  }
   async function isAllowedReverseRedirect(candidate) {
     const evaluation = await evaluateNavigationPolicy({
       sourceUrl: candidate.originalUrl,
@@ -1645,11 +1730,18 @@ var AdsFriendlyBackground = (() => {
     return null;
   }
   function cleanupReverseCandidate(candidate) {
+    if (candidate.reviewTimer) clearTimeout(candidate.reviewTimer);
+    candidate.reviewTimer = null;
     if (reverseCandidatesBySource.get(candidate.sourceTabId) === candidate) {
       reverseCandidatesBySource.delete(candidate.sourceTabId);
     }
     if (reverseCandidatesByClone.get(candidate.cloneTabId) === candidate) {
       reverseCandidatesByClone.delete(candidate.cloneTabId);
+    }
+  }
+  function rememberCommittedUrl(tabId, url) {
+    if (Number.isInteger(tabId) && url?.startsWith("http")) {
+      committedUrlsByTab.set(tabId, url);
     }
   }
   function logReversePopunderError(error) {
@@ -3861,7 +3953,7 @@ var AdsFriendlyBackground = (() => {
           surface: "navigation_toast"
         }
       });
-      return;
+      return { status: "saved" };
     }
     if (message.type === "BLOCK_REVIEWED_TAB") {
       await handleUserDecision({
@@ -3896,7 +3988,7 @@ var AdsFriendlyBackground = (() => {
         } catch {
         }
       }
-      return;
+      return { status: "saved" };
     }
     if (message.type === "OPEN_BLOCKED_NAVIGATION") {
       let targetUrl;

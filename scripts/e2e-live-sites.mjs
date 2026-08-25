@@ -171,6 +171,7 @@ async function testSite(harness, url) {
 
   let pageTarget;
   let page;
+  let survivingPage;
   try {
     pageTarget = await newPage(url);
     page = new CdpSession(pageTarget.webSocketDebuggerUrl);
@@ -193,8 +194,29 @@ async function testSite(harness, url) {
       await delay(Number(process.env.CLICK_WAIT_MS || 4500));
     }
 
-    const afterClick = await inspectPage(page);
     const afterTargets = await listTargets();
+    const originalStillOpen = afterTargets.some(
+      (target) => target.id === pageTarget.id,
+    );
+    let afterClick;
+    if (originalStillOpen) {
+      afterClick = await inspectPage(page);
+    } else {
+      const sourceHost = new URL(url).hostname;
+      const survivingTarget = afterTargets
+        .filter(isPage)
+        .find((target) => {
+          try {
+            return new URL(target.url).hostname === sourceHost;
+          } catch {
+            return false;
+          }
+        });
+      if (!survivingTarget) throw new Error("No surviving source tab found.");
+      survivingPage = new CdpSession(survivingTarget.webSocketDebuggerUrl);
+      await survivingPage.send("Runtime.enable");
+      afterClick = await inspectPage(survivingPage);
+    }
     const newPages = afterTargets
       .filter(isPage)
       .filter((target) => !beforePageIds.has(target.id))
@@ -216,6 +238,7 @@ async function testSite(harness, url) {
       title: afterClick.title,
       beforeClick,
       afterClick,
+      originalTabClosed: !originalStillOpen,
       newPages,
       domSampleCount: storage.domTrainingSamples?.length || 0,
       domSamples: summarizeSamples(storage.domTrainingSamples || []),
@@ -228,6 +251,7 @@ async function testSite(harness, url) {
     return { url, error: error.message };
   } finally {
     if (page) page.close();
+    if (survivingPage) survivingPage.close();
   }
 }
 
@@ -328,6 +352,7 @@ async function inspectPage(page) {
         };
       });
       const adLikeRows = rows.filter((row) => row.adLike);
+      const navigationToast = document.getElementById('adsfriendly-nav-toast');
       return {
         url: location.href,
         title: document.title,
@@ -337,6 +362,12 @@ async function inspectPage(page) {
         hiddenAdLikeCount: adLikeRows.filter((row) => row.hidden).length,
         visibleAdLikeCount: adLikeRows.filter((row) => !row.hidden).length,
         toastCount: document.querySelectorAll('[id^="adsfriendly-dom-toast"]').length,
+        navigationToast: navigationToast
+          ? {
+              hidden: navigationToast.classList.contains('adsfriendly-toast-hidden'),
+              text: navigationToast.textContent.replace(/\s+/g, ' ').trim()
+            }
+          : null,
         topHiddenAdLike: adLikeRows.filter((row) => row.hidden).slice(0, 8),
         topVisibleAdLike: adLikeRows.filter((row) => !row.hidden).slice(0, 8),
       };

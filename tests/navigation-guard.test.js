@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   REVERSE_POPUNDER_WINDOW_MS,
+  isReversePopunderReviewSequence,
   isReversePopunderSequence,
   isSelfCloneNavigation,
 } from "../src/navigation/background/reverse-popunder.js";
@@ -287,6 +288,27 @@ test("detects a reverse pop-under inside the protection window", () => {
       elapsedMs: 850,
     }),
     true,
+  );
+});
+
+test("reviews a source tab redirected while a same-site page stays open", () => {
+  assert.equal(
+    isReversePopunderReviewSequence({
+      originalUrl: "https://watch.example/video/12",
+      cloneUrl: "https://watch.example/video/13",
+      redirectedUrl: "https://ads.example-cdn.test/landing?zoneid=42",
+      elapsedMs: 850,
+    }),
+    true,
+  );
+  assert.equal(
+    isReversePopunderReviewSequence({
+      originalUrl: "https://watch.example/video/12",
+      cloneUrl: "https://docs.example.test/article",
+      redirectedUrl: "https://ads.example-cdn.test/landing",
+      elapsedMs: 850,
+    }),
+    false,
   );
 });
 
