@@ -1,3 +1,5 @@
+import { getMediaDownloadAvailability } from "./download-job-contract.js";
+
 export function createMediaCatalogViewSignature({
   tabId = null,
   status = "",
@@ -65,8 +67,36 @@ export function selectVisibleMediaItems(items = [], maximum = 8) {
   return visible.slice(0, maximum);
 }
 
-export function helperSetupPresentation(helper) {
-  if (!helper || helper.status === "ready") return null;
+export function getMediaCatalogDownloadState(items = []) {
+  const itemsById = new Map(items.map((item) => [item.id, item]));
+  const candidates = new Map();
+  for (const item of selectVisibleMediaItems(items, Number.MAX_SAFE_INTEGER)) {
+    const candidate = item.selectedMediaId
+      ? itemsById.get(item.selectedMediaId) || item.resolvedStream || item
+      : item;
+    if (!["direct", "hls", "dash"].includes(candidate.kind)) continue;
+    candidates.set(candidate.id, candidate);
+  }
+  const availability = [...candidates.values()].map((candidate) => ({
+    candidate,
+    ...getMediaDownloadAvailability(candidate),
+  }));
+  return {
+    candidateCount: availability.length,
+    downloadableCount: availability.filter((item) => item.supported).length,
+    drmBlockedCount: availability.filter((item) =>
+      String(item.reason || "").includes("DRM"),
+    ).length,
+    unavailableCount: availability.filter((item) => !item.supported).length,
+  };
+}
+
+export function helperSetupPresentation(
+  helper,
+  { hasDownloadableMedia = true } = {},
+) {
+  if (!hasDownloadableMedia || !helper || helper.status === "ready")
+    return null;
   if (helper.status === "permission_required") {
     return {
       label: "Allow helper connection",
@@ -84,6 +114,30 @@ export function helperSetupPresentation(helper) {
     label: "Retry helper",
     title: helper.error || "Check the Media Helper connection again.",
   };
+}
+
+export function formatMediaHelperSummary(helper, downloadState) {
+  if (!downloadState.downloadableCount) {
+    if (downloadState.drmBlockedCount)
+      return "Media found · DRM-protected stream cannot be downloaded.";
+    return "Media found · no downloadable source is ready yet.";
+  }
+  if (helper.status === "permission_required")
+    return "Media found · allow Media Helper connection to download.";
+  if (helper.status === "not_installed")
+    return "Media found · Media Helper is not installed.";
+  if (
+    helper.status === "ready" &&
+    (helper.canDownloadDirect ||
+      helper.canDownloadHls ||
+      helper.canDownloadDash)
+  )
+    return `Media Helper ${helper.helperVersion || ""} ready.`.trim();
+  if (helper.status === "ready")
+    return "Media Helper connected · downloader update required.";
+  if (helper.status === "incompatible")
+    return "Media Helper version is incompatible.";
+  return "Media found · Media Helper is unavailable.";
 }
 
 export function formatMediaDetails(item) {
@@ -175,6 +229,31 @@ export function formatMediaDetails(item) {
   return facts.filter(Boolean).join(" · ") || "HLS manifest ready";
 }
 
+export function formatMediaName(item) {
+  const sourceUrl =
+    item.resolvedStream?.manifestUrl ||
+    item.resolvedStream?.sourceUrl ||
+    item.manifestUrl ||
+    item.sourceUrl ||
+    "";
+  try {
+    const url = new URL(sourceUrl);
+    if (item.kind === "blob") {
+      const title = readableMediaTitle(item.title);
+      if (title) return title;
+      if (["http:", "https:"].includes(url.protocol))
+        return `${url.hostname} · ${String(item.resolvedKind || "media").toUpperCase()} source`;
+      return "Blob media stream";
+    }
+    const file = url.pathname.split("/").filter(Boolean).at(-1);
+    if (item.kind === "hls" && file?.length > 48 && /^[a-z0-9_-]+$/i.test(file))
+      return `${url.hostname} · tokenized playlist`;
+    return file ? `${url.hostname} · ${file}` : url.hostname;
+  } catch {
+    return readableMediaTitle(item.title) || sourceUrl || "Unknown media";
+  }
+}
+
 function resolvedBlobDetails(item) {
   const stream = item.resolvedStream || {};
   const kind = String(
@@ -258,6 +337,13 @@ function formatDuration(seconds) {
       remainingSeconds,
     ).padStart(2, "0")}`;
   return `${minutes}:${String(remainingSeconds).padStart(2, "0")}`;
+}
+
+function readableMediaTitle(value) {
+  const title = typeof value === "string" ? value.trim() : "";
+  if (!title || title.length > 160) return null;
+  if (/^[a-f0-9]{24,}$/i.test(title)) return null;
+  return title;
 }
 
 function mediaRenderFacts(item) {

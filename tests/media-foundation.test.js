@@ -31,6 +31,9 @@ import {
 import {
   createMediaCatalogViewSignature,
   formatMediaDetails,
+  formatMediaHelperSummary,
+  formatMediaName,
+  getMediaCatalogDownloadState,
   helperSetupPresentation,
   selectVisibleMediaItems,
 } from "../src/media/catalog-view.js";
@@ -57,6 +60,13 @@ test("offers a helper setup action independently from downloadable media", () =>
     helperSetupPresentation({ status: "error", error: "Host unavailable" })
       .label,
     "Retry helper",
+  );
+  assert.equal(
+    helperSetupPresentation(
+      { status: "permission_required" },
+      { hasDownloadableMedia: false },
+    ),
+    null,
   );
 });
 
@@ -305,6 +315,51 @@ test("catalog resolves a traced Blob row to its downloadable HLS source", () => 
     getMediaDownloadAvailability(resolvedBlob.resolvedStream).supported,
     true,
   );
+});
+
+test("DRM-only resolved Blob does not request helper setup", () => {
+  const hls = {
+    id: "drm-hls",
+    kind: "hls",
+    probeStatus: "ready",
+    playlistType: "media",
+    streamType: "vod",
+    segmentCount: 10,
+    drm: "suspected",
+    encryptionMethods: ["SAMPLE-AES"],
+    manifestUrl: "https://cdn.example/movie.m3u8",
+  };
+  const blob = {
+    id: "blob-drm",
+    kind: "blob",
+    sourceUrl: "blob:https://video.example/player",
+    title: "7940ad3c296dddbb98de10bf9f4e3ebc2f1f95a890bdfd28a937cae5157c26f7",
+    selectedMediaId: hls.id,
+    resolvedMediaIds: [hls.id],
+    resolvedKind: "hls",
+    resolvedStream: hls,
+    blobTrace: { candidateIds: [hls.id] },
+  };
+  const state = getMediaCatalogDownloadState([blob, hls]);
+  assert.deepEqual(state, {
+    candidateCount: 1,
+    downloadableCount: 0,
+    drmBlockedCount: 1,
+    unavailableCount: 1,
+  });
+  assert.equal(
+    helperSetupPresentation(
+      { status: "permission_required" },
+      { hasDownloadableMedia: state.downloadableCount > 0 },
+    ),
+    null,
+  );
+  assert.equal(formatMediaName(blob), "cdn.example · HLS source");
+  assert.equal(
+    formatMediaHelperSummary({ status: "permission_required" }, state),
+    "Media found · DRM-protected stream cannot be downloaded.",
+  );
+  assert.equal(selectVisibleMediaItems([blob, hls]).length, 1);
 });
 
 test("catalog ignores a forged DIRECT candidate that is actually an HLS segment", () => {

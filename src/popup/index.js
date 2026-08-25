@@ -10,6 +10,9 @@ import {
 import {
   createMediaCatalogViewSignature,
   formatMediaDetails,
+  formatMediaHelperSummary,
+  formatMediaName,
+  getMediaCatalogDownloadState,
   helperSetupPresentation,
   selectVisibleMediaItems,
 } from "../media/catalog-view.js";
@@ -258,9 +261,10 @@ async function renderMediaCatalog(tab) {
       return;
     }
     mediaHelperStatus = await readMediaHelperStatus();
+    const downloadState = getMediaCatalogDownloadState(items);
     commitMediaCatalog({
       tab,
-      status: helperSummary(mediaHelperStatus),
+      status: formatMediaHelperSummary(mediaHelperStatus, downloadState),
       items,
       helper: mediaHelperStatus,
     });
@@ -272,6 +276,7 @@ async function renderMediaCatalog(tab) {
 
 function commitMediaCatalog({ status, items = [], tab = null, helper = null }) {
   const visibleItems = selectVisibleMediaItems(items);
+  const downloadState = getMediaCatalogDownloadState(items);
   const signature = createMediaCatalogViewSignature({
     tabId: tab?.id ?? null,
     status,
@@ -279,9 +284,9 @@ function commitMediaCatalog({ status, items = [], tab = null, helper = null }) {
     items: visibleItems,
   });
 
-  setText(mediaCount, String(items.length));
+  setText(mediaCount, String(visibleItems.length));
   setText(mediaStatus, status);
-  renderMediaHelperAction(helper);
+  renderMediaHelperAction(helper, downloadState);
   if (signature === mediaRenderSignature) return;
 
   const fragment = document.createDocumentFragment();
@@ -294,8 +299,10 @@ function commitMediaCatalog({ status, items = [], tab = null, helper = null }) {
   mediaRenderSignature = signature;
 }
 
-function renderMediaHelperAction(helper) {
-  const presentation = helperSetupPresentation(helper);
+function renderMediaHelperAction(helper, downloadState) {
+  const presentation = helperSetupPresentation(helper, {
+    hasDownloadableMedia: downloadState.downloadableCount > 0,
+  });
   mediaHelperAction.hidden = !presentation;
   if (!presentation) return;
   mediaHelperAction.disabled = false;
@@ -332,8 +339,13 @@ function createMediaItem(item, tab, helper, itemsById) {
   copy.className = "media-copy";
   const name = document.createElement("span");
   name.className = "media-name";
-  const sourceUrl = item.manifestUrl || item.sourceUrl || "";
-  name.textContent = mediaDisplayName(item, sourceUrl);
+  const sourceUrl =
+    item.resolvedStream?.manifestUrl ||
+    item.resolvedStream?.sourceUrl ||
+    item.manifestUrl ||
+    item.sourceUrl ||
+    "";
+  name.textContent = formatMediaName(item);
   name.title = sourceUrl;
   const details = document.createElement("span");
   details.className = "media-details";
@@ -488,25 +500,6 @@ async function readMediaHelperStatus(force = false) {
       };
 }
 
-function helperSummary(helper) {
-  if (helper.status === "permission_required")
-    return "Media found · allow Media Helper connection to download.";
-  if (helper.status === "not_installed")
-    return "Media found · Media Helper is not installed.";
-  if (
-    helper.status === "ready" &&
-    (helper.canDownloadDirect ||
-      helper.canDownloadHls ||
-      helper.canDownloadDash)
-  )
-    return `Media Helper ${helper.helperVersion || ""} ready.`.trim();
-  if (helper.status === "ready")
-    return "Media Helper connected · downloader update required.";
-  if (helper.status === "incompatible")
-    return "Media Helper version is incompatible.";
-  return "Media found · Media Helper is unavailable.";
-}
-
 async function updateMediaJobs() {
   try {
     const response = await chrome.runtime.sendMessage({
@@ -642,19 +635,6 @@ function downloadUnavailableLabel(reason = "") {
     return "Waiting";
   if (reason.includes("no media")) return "No media";
   return "Unavailable";
-}
-
-function mediaDisplayName(item, sourceUrl) {
-  try {
-    const url = new URL(sourceUrl);
-    if (url.protocol === "blob:") return item.title || "Blob media stream";
-    const file = url.pathname.split("/").filter(Boolean).at(-1);
-    if (item.kind === "hls" && file?.length > 48 && /^[a-z0-9_-]+$/i.test(file))
-      return `${url.hostname} · tokenized playlist`;
-    return file ? `${url.hostname} · ${file}` : url.hostname;
-  } catch {
-    return item.title || sourceUrl || "Unknown media";
-  }
 }
 
 async function getActiveHttpTab() {
