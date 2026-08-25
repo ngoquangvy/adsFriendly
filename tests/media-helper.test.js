@@ -1,16 +1,19 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { endianness, tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import {
   MEDIA_HELPER_EVENTS,
   MEDIA_HELPER_PROTOCOL_VERSION,
   MEDIA_HELPER_REQUESTS,
 } from "../src/media/helper-contract.js";
+
+const execFileAsync = promisify(execFile);
 
 test("built helper completes a framed Native Messaging handshake", async () => {
   const hostPath = fileURLToPath(
@@ -97,6 +100,123 @@ test("built helper downloads direct media with ranges, cancellation, and resume"
   assert.deepEqual(await readFile(completed.payload.outputPath), bytes);
 });
 
+test("built helper remuxes a discontinuous HLS VOD with FFmpeg", async (t) => {
+  if (!(await executableAvailable("ffmpeg")) || !(await executableAvailable("ffprobe"))) {
+    t.skip("FFmpeg integration tools are not installed.");
+    return;
+  }
+  const fixtureDirectory = await mkdtemp(join(tmpdir(), "adsfriendly-hls-fixture-"));
+  const outputDirectory = await mkdtemp(join(tmpdir(), "adsfriendly-hls-output-"));
+  t.after(() => rm(fixtureDirectory, { recursive: true, force: true }));
+  t.after(() => rm(outputDirectory, { recursive: true, force: true }));
+  const manifestPath = join(fixtureDirectory, "index.m3u8");
+  await execFileAsync(
+    "ffmpeg",
+    [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-f",
+      "lavfi",
+      "-i",
+      "testsrc=size=160x90:rate=10",
+      "-f",
+      "lavfi",
+      "-i",
+      "sine=frequency=880:sample_rate=44100",
+      "-t",
+      "2",
+      "-c:v",
+      "libx264",
+      "-preset",
+      "ultrafast",
+      "-pix_fmt",
+      "yuv420p",
+      "-c:a",
+      "aac",
+      "-hls_time",
+      "0.5",
+      "-hls_list_size",
+      "0",
+      "-hls_playlist_type",
+      "vod",
+      "-hls_segment_filename",
+      join(fixtureDirectory, "segment%03d.ts"),
+      manifestPath,
+    ],
+    { windowsHide: true },
+  );
+  const playlist = await readFile(manifestPath, "utf8");
+  await writeFile(
+    manifestPath,
+    playlist.replace(/(segment000\.ts\r?\n)/, "$1#EXT-X-DISCONTINUITY\n"),
+  );
+
+  const server = createServer(async (request, response) => {
+    try {
+      const filename = basename(new URL(request.url, "http://fixture").pathname);
+      const bytes = await readFile(join(fixtureDirectory, filename));
+      response.setHeader(
+        "content-type",
+        filename.endsWith(".m3u8")
+          ? "application/vnd.apple.mpegurl"
+          : "video/mp2t",
+      );
+      response.end(bytes);
+    } catch {
+      response.writeHead(404).end();
+    }
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const address = server.address();
+  const manifestUrl = `http://127.0.0.1:${address.port}/index.m3u8`;
+  const child = spawnHelper();
+  t.after(() => child.kill());
+  const frames = createFrameReader(child.stdout);
+  child.stdin.write(
+    frame(hlsDownloadRequest("hls-download-1", manifestUrl, outputDirectory)),
+  );
+  const started = await frames.next(
+    (event) => event.type === MEDIA_HELPER_EVENTS.DOWNLOAD_STARTED,
+  );
+  assert.equal(started.payload.adapterId, "hls-ffmpeg");
+  const completed = await frames.next(
+    (event) =>
+      event.requestId === "hls-download-1" &&
+      [MEDIA_HELPER_EVENTS.DOWNLOAD_COMPLETED, MEDIA_HELPER_EVENTS.ERROR].includes(
+        event.type,
+      ),
+  );
+  assert.equal(
+    completed.type,
+    MEDIA_HELPER_EVENTS.DOWNLOAD_COMPLETED,
+    completed.payload.message,
+  );
+  const probe = JSON.parse(
+    (
+      await execFileAsync(
+        "ffprobe",
+        [
+          "-v",
+          "error",
+          "-show_entries",
+          "format=duration:stream=codec_type",
+          "-of",
+          "json",
+          completed.payload.outputPath,
+        ],
+        { windowsHide: true },
+      )
+    ).stdout,
+  );
+  assert.ok(Number(probe.format.duration) >= 1.5);
+  assert.deepEqual(
+    [...new Set(probe.streams.map((stream) => stream.codec_type))].sort(),
+    ["audio", "video"],
+  );
+});
+
 function spawnHelper() {
   const hostPath = fileURLToPath(
     new URL("../packages/media-helper/dist/host.cjs", import.meta.url),
@@ -127,6 +247,45 @@ function downloadRequest(jobId, sourceUrl, outputDirectory) {
       },
     },
   };
+}
+
+function hlsDownloadRequest(jobId, manifestUrl, outputDirectory) {
+  return {
+    type: MEDIA_HELPER_REQUESTS.DOWNLOAD_START,
+    requestId: jobId,
+    protocolVersion: MEDIA_HELPER_PROTOCOL_VERSION,
+    payload: {
+      jobId,
+      connections: 4,
+      outputDirectory,
+      candidate: {
+        id: "hls-test",
+        kind: "hls",
+        pageUrl: manifestUrl,
+        manifestUrl,
+        title: "fixture-hls",
+        mimeType: "application/vnd.apple.mpegurl",
+        duration: 2,
+        segmentCount: 4,
+        requestContext: {
+          referrer: manifestUrl,
+          documentUrl: manifestUrl,
+          method: "GET",
+          credentials: "omit",
+          requiresBrowserSession: false,
+        },
+      },
+    },
+  };
+}
+
+async function executableAvailable(command) {
+  try {
+    await execFileAsync(command, ["-version"], { windowsHide: true });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function createRangeServer(bytes, delayMs) {

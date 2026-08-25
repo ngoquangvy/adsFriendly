@@ -564,6 +564,17 @@ function mediaJobDetails(job) {
   if (job.status === "cancelling") return "Stopping…";
   const downloaded = job.progress?.downloadedBytes;
   const total = job.progress?.totalBytes;
+  const processedSeconds = job.progress?.processedSeconds;
+  const duration = job.progress?.duration;
+  if (
+    Number.isFinite(processedSeconds) &&
+    Number.isFinite(duration) &&
+    duration > 0
+  ) {
+    const percent = Math.min(100, Math.round((processedSeconds / duration) * 100));
+    const size = Number.isFinite(downloaded) ? ` · ${formatBytes(downloaded)}` : "";
+    return `${percent}% · ${formatDuration(processedSeconds)} / ${formatDuration(duration)}${size}`;
+  }
   if (Number.isFinite(downloaded) && Number.isFinite(total) && total > 0) {
     const percent = Math.min(100, Math.round((downloaded / total) * 100));
     const speed = Number.isFinite(job.progress?.bytesPerSecond)
@@ -572,6 +583,16 @@ function mediaJobDetails(job) {
     return `${percent}% · ${formatBytes(downloaded)} / ${formatBytes(total)}${speed}`;
   }
   return `${job.status || "starting"}…`;
+}
+
+function formatDuration(seconds) {
+  const total = Math.max(0, Math.round(seconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const remaining = total % 60;
+  return hours
+    ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remaining).padStart(2, "0")}`
+    : `${minutes}:${String(remaining).padStart(2, "0")}`;
 }
 
 function formatBytes(bytes) {

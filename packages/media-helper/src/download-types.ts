@@ -6,6 +6,8 @@ export interface DownloadCandidate {
   manifestUrl: string | null;
   title: string | null;
   mimeType: string | null;
+  duration: number | null;
+  segmentCount: number | null;
   requestContext: {
     requestUrl: string | null;
     finalUrl: string | null;
@@ -31,6 +33,8 @@ export interface DownloadProgress {
   bytesPerSecond: number;
   resumable: boolean;
   resumedBytes: number;
+  processedSeconds?: number | null;
+  duration?: number | null;
 }
 
 export interface DownloadResult {

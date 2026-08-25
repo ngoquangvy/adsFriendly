@@ -1159,12 +1159,26 @@ ${item.title || "blob"}`;
     if (job.status === "cancelling") return "Stopping\u2026";
     const downloaded = job.progress?.downloadedBytes;
     const total = job.progress?.totalBytes;
+    const processedSeconds = job.progress?.processedSeconds;
+    const duration = job.progress?.duration;
+    if (Number.isFinite(processedSeconds) && Number.isFinite(duration) && duration > 0) {
+      const percent = Math.min(100, Math.round(processedSeconds / duration * 100));
+      const size = Number.isFinite(downloaded) ? ` \xB7 ${formatBytes(downloaded)}` : "";
+      return `${percent}% \xB7 ${formatDuration2(processedSeconds)} / ${formatDuration2(duration)}${size}`;
+    }
     if (Number.isFinite(downloaded) && Number.isFinite(total) && total > 0) {
       const percent = Math.min(100, Math.round(downloaded / total * 100));
       const speed = Number.isFinite(job.progress?.bytesPerSecond) ? ` \xB7 ${formatBytes(job.progress.bytesPerSecond)}/s` : "";
       return `${percent}% \xB7 ${formatBytes(downloaded)} / ${formatBytes(total)}${speed}`;
     }
     return `${job.status || "starting"}\u2026`;
+  }
+  function formatDuration2(seconds) {
+    const total = Math.max(0, Math.round(seconds));
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor(total % 3600 / 60);
+    const remaining = total % 60;
+    return hours ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remaining).padStart(2, "0")}` : `${minutes}:${String(remaining).padStart(2, "0")}`;
   }
   function formatBytes(bytes) {
     if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;

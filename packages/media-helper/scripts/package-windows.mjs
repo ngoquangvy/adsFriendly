@@ -125,4 +125,17 @@ async function verifyExecutable(path) {
   ) {
     throw new Error("Packaged helper failed its Native Messaging handshake.");
   }
+  if (response.payload?.capabilities?.["download.direct_http"] !== true) {
+    throw new Error("Packaged helper omitted its Direct HTTP capability.");
+  }
+  if (
+    typeof response.payload?.capabilities?.["download.hls_vod"] !== "boolean"
+  ) {
+    throw new Error("Packaged helper returned an invalid HLS capability.");
+  }
+  process.stdout.write(
+    `Verified packaged helper ${response.payload.helperVersion}; HLS ${
+      response.payload.capabilities["download.hls_vod"] ? "enabled" : "unavailable"
+    }.\n`,
+  );
 }

@@ -6,11 +6,13 @@ own navigation protection, DOM protection, and shared media discovery. All
 user-initiated video downloads require this helper; there is no second browser
 download backend to keep in sync.
 
-The helper is the only video download backend. Version 0.2 implements Direct
+The helper is the only video download backend. Version 0.3 implements Direct
 HTTP MP4/WebM downloads with bounded parallel Range requests, progress,
-cancellation, and resumable `.part` metadata. HLS, DASH, Blob resolution, and
-FFmpeg-backed muxing remain separate adapters so adding them does not change the
-extension's ad-protection runtime.
+cancellation, and resumable `.part` metadata, plus completed unencrypted HLS VOD
+downloads through FFmpeg. The HLS adapter preflights the bounded manifest tree,
+rejects live/encrypted streams and unsafe private-network resources, and lets
+FFmpeg join discontinuities into MP4. DASH and Blob resolution remain separate
+adapters so adding them does not change the extension's ad-protection runtime.
 
 Build it from the repository root with `pnpm helper:build`. On Windows,
 `pnpm helper:package:windows` creates a Node Single Executable Application at

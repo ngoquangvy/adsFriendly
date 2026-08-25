@@ -142,6 +142,8 @@ test("helper HLS context carries routing facts without arbitrary headers", () =>
       kind: "hls",
       pageUrl: "https://video.example/watch",
       manifestUrl: "https://cdn.example/master.m3u8",
+      duration: 5163.209,
+      segmentCount: 1726,
       requestContext: {
         documentUrl: "https://embed.example/player",
         referrer: "https://video.example/watch",
@@ -153,6 +155,8 @@ test("helper HLS context carries routing facts without arbitrary headers", () =>
   });
   assert.equal(payload.candidate.requestContext.credentials, "include");
   assert.equal(payload.candidate.requestContext.requiresBrowserSession, true);
+  assert.equal(payload.candidate.duration, 5163.209);
+  assert.equal(payload.candidate.segmentCount, 1726);
   assert.equal("headers" in payload.candidate.requestContext, false);
 });
 

@@ -476,11 +476,11 @@ async function writeAll(
 function requestHeaders(job: DownloadJob) {
   return {
     Referer: job.candidate.pageUrl,
-    "User-Agent": "AdsFriendlyMediaHelper/0.2",
+    "User-Agent": "AdsFriendlyMediaHelper/0.3",
   };
 }
 
-function resolveOutputDirectory(value: string | null) {
+export function resolveOutputDirectory(value: string | null) {
   if (!value) return join(homedir(), "Downloads", "AdsFriendly");
   if (!isAbsolute(value)) throw new Error("Output directory must be absolute.");
   return value;
@@ -527,7 +527,7 @@ function mediaExtension(filename: string, mimeType: string | null) {
   );
 }
 
-function sanitizeFilename(value: string, fallbackExtension: string) {
+export function sanitizeFilename(value: string, fallbackExtension: string) {
   let name = value
     .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
     .replace(/[. ]+$/g, "")
@@ -540,7 +540,7 @@ function sanitizeFilename(value: string, fallbackExtension: string) {
   return name;
 }
 
-async function availableOutputPath(directory: string, filename: string) {
+export async function availableOutputPath(directory: string, filename: string) {
   const extension = extname(filename);
   const stem = filename.slice(0, filename.length - extension.length);
   for (let index = 0; index < 1000; index++) {
@@ -553,7 +553,7 @@ async function availableOutputPath(directory: string, filename: string) {
   throw new Error("Could not choose an available output filename.");
 }
 
-async function assertSafeRemoteUrl(value: string) {
+export async function assertSafeRemoteUrl(value: string) {
   const url = new URL(value);
   if (
     !["http:", "https:"].includes(url.protocol) ||
@@ -572,7 +572,7 @@ async function assertSafeRemoteUrl(value: string) {
   }
 }
 
-async function fetchRemote(value: string, init: RequestInit) {
+export async function fetchRemote(value: string, init: RequestInit) {
   let url = new URL(value);
   for (let redirectCount = 0; redirectCount <= 5; redirectCount++) {
     await assertSafeRemoteUrl(url.href);

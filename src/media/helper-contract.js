@@ -125,6 +125,10 @@ export function normalizeHelperDownloadPayload(value = {}) {
       manifestUrl: kind === "hls" ? sourceUrl : null,
       title: optionalString(candidate.title),
       mimeType: optionalString(candidate.mimeType),
+      duration:
+        kind === "hls" ? optionalNonNegativeNumber(candidate.duration) : null,
+      segmentCount:
+        kind === "hls" ? optionalNonNegativeInteger(candidate.segmentCount) : null,
       requestContext:
         kind === "hls"
           ? normalizeHelperRequestContext(candidate.requestContext)
@@ -161,6 +165,24 @@ function requiredHttpUrl(value, field) {
 
 function optionalString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function optionalNonNegativeNumber(value) {
+  if (value === null || value === undefined) return null;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) {
+    throw new Error("[MediaHelperProtocol] Expected a non-negative number.");
+  }
+  return number;
+}
+
+function optionalNonNegativeInteger(value) {
+  const number = optionalNonNegativeNumber(value);
+  if (number === null) return null;
+  if (!Number.isInteger(number)) {
+    throw new Error("[MediaHelperProtocol] Expected a non-negative integer.");
+  }
+  return number;
 }
 
 function normalizeHelperRequestContext(value) {

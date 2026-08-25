@@ -110,12 +110,14 @@ training labels or video-ad classifications.
 ## Optional helper boundary
 
 `src/media/helper-contract.js` is the versioned, language-neutral protocol
-contract shared by the extension and `packages/media-helper/`. Helper 0.2 adds
-an adapter registry and a Direct HTTP MP4/WebM adapter with parallel byte-range
-requests, progress, cancellation, and resume metadata. The background bridge
-keeps transient job status in `chrome.storage.session`; these records remain
-separate from Settings packages and training data. The helper deliberately
-reports HLS execution as unavailable until its native adapter is implemented.
+contract shared by the extension and `packages/media-helper/`. Helper 0.3 has
+an adapter registry, a Direct HTTP MP4/WebM adapter with parallel byte-range
+requests, progress, cancellation, and resume metadata, and an FFmpeg-backed HLS
+VOD adapter. HLS preflight rejects live/encrypted streams, bounds the manifest
+tree, validates referenced network resources, and supports discontinuities that
+FFmpeg can remux into MP4. The background bridge keeps transient job status in
+`chrome.storage.session`; these records remain separate from Settings packages
+and training data.
 
 The extension declares `nativeMessaging` as an optional permission and asks for
 it only after a user initiates Media Helper setup. The extension sends only
