@@ -48,6 +48,13 @@ export async function recordMediaProbe(tabId, event) {
   return { status: "recorded", item };
 }
 
+export async function recordBlobSourceTrace(tabId, event) {
+  if (!active) return { status: "catalog_disabled" };
+  const item = catalog.applyBlobTrace(tabId, event);
+  await persistTab(tabId).catch(() => {});
+  return { status: "recorded", item };
+}
+
 export async function listDiscoveredMedia(tabId, pageUrl = null) {
   if (!active) return { status: "catalog_disabled", items: [] };
   return { status: "ok", items: catalog.list(tabId, pageUrl) };
@@ -80,6 +87,19 @@ async function hydrateCatalog() {
             }),
             timestamp: item.lastSeenAt || Date.now(),
           });
+        } catch {}
+      }
+      if (item.kind === "blob" && item.blobTrace) {
+        try {
+          catalog.applyBlobTrace(
+            tabId,
+            createRegisteredEvent(EVENTS.MEDIA_BLOB_TRACED, {
+              mediaId: item.id,
+              pageUrl: item.pageUrl,
+              blobUrl: item.sourceUrl,
+              ...item.blobTrace,
+            }),
+          );
         } catch {}
       }
     }

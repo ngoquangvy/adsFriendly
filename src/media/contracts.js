@@ -144,6 +144,25 @@ export function normalizeMediaProbe(value = {}) {
   };
 }
 
+export function normalizeBlobSourceTrace(value = {}) {
+  const blobUrl = requiredString(value.blobUrl, "blobUrl");
+  if (!blobUrl.startsWith("blob:")) {
+    throw new Error("[MediaContract] blobUrl must use the blob: protocol.");
+  }
+  return {
+    mediaId: requiredString(value.mediaId, "mediaId"),
+    pageUrl: requiredString(value.pageUrl, "pageUrl"),
+    blobUrl,
+    sourceUrls: normalizeHttpUrls(value.sourceUrls, 32),
+    candidateIds: normalizeStrings(value.candidateIds).slice(0, 8),
+    mimeTypes: normalizeStrings(value.mimeTypes).slice(0, 8),
+    appendCount: optionalNonNegativeInteger(value.appendCount) || 0,
+    totalAppendedBytes:
+      optionalNonNegativeInteger(value.totalAppendedBytes) || 0,
+    observedAt: optionalFiniteNumber(value.observedAt) || Date.now(),
+  };
+}
+
 export function normalizeMediaResolutionAttempt(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const strategy = optionalEnumValue(
@@ -257,6 +276,19 @@ function normalizeStrings(value) {
         ),
       ]
     : [];
+}
+
+function normalizeHttpUrls(value, maximum) {
+  if (!Array.isArray(value)) return [];
+  const urls = [];
+  for (const item of value.slice(0, maximum)) {
+    if (typeof item !== "string") continue;
+    try {
+      const url = new URL(item);
+      if (["http:", "https:"].includes(url.protocol)) urls.push(url.href);
+    } catch {}
+  }
+  return [...new Set(urls)];
 }
 
 function normalizeRequestContexts(value) {

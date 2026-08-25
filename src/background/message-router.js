@@ -28,6 +28,7 @@ import {
 import { addDomTrainingSample } from "../storage/training-store.js";
 import {
   listDiscoveredMedia,
+  recordBlobSourceTrace,
   recordDiscoveredMedia,
   recordMediaProbe,
 } from "./media-catalog.js";
@@ -67,6 +68,7 @@ const MESSAGE_CAPABILITIES = Object.freeze({
   RECORD_DOM_SAMPLE: CAPABILITIES.LEARNING_FEEDBACK,
   MEDIA_DISCOVERED: CAPABILITIES.MEDIA_CATALOG,
   MEDIA_PROBED: CAPABILITIES.MEDIA_CATALOG,
+  MEDIA_BLOB_TRACED: CAPABILITIES.MEDIA_CATALOG,
   GET_MEDIA_CATALOG: CAPABILITIES.MEDIA_CATALOG,
   GET_MEDIA_HELPER_STATUS: CAPABILITIES.MEDIA_DOWNLOAD,
   CREATE_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
@@ -166,6 +168,22 @@ async function route(message, sender) {
     const tabId = sender?.tab?.id;
     if (!Number.isInteger(tabId)) return { status: "ignored" };
     return recordMediaProbe(tabId, {
+      ...message.event,
+      payload: {
+        ...message.event?.payload,
+        pageUrl: sender.tab.url || message.event?.payload?.pageUrl,
+      },
+      metadata: {
+        ...message.event?.metadata,
+        frameId: sender.frameId ?? null,
+        frameUrl: message.event?.payload?.pageUrl || null,
+      },
+    });
+  }
+  if (message.type === "MEDIA_BLOB_TRACED") {
+    const tabId = sender?.tab?.id;
+    if (!Number.isInteger(tabId)) return { status: "ignored" };
+    return recordBlobSourceTrace(tabId, {
       ...message.event,
       payload: {
         ...message.event?.payload,

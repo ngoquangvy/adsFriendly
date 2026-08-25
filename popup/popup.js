@@ -270,6 +270,7 @@ var AdsFriendlyPopup = (() => {
       C2.LEARNING_FEEDBACK
     ]),
     feature("main-world.network-capture", "main-world", C2.MEDIA_OBSERVE),
+    feature("main-world.blob-source-tracer", "main-world", C2.MEDIA_OBSERVE),
     feature("main-world.timer-control", "main-world", C2.VIDEO_AUTO_ACTION)
   ]);
   var CAPABILITY_SET = new Set(Object.values(CAPABILITIES));
@@ -526,12 +527,20 @@ var AdsFriendlyPopup = (() => {
     });
   }
   function selectVisibleMediaItems(items = [], maximum = 8) {
+    const blobResolvedSourceIds = new Set(
+      items.filter((item) => item.kind === "blob" && item.selectedMediaId).flatMap((item) => [
+        item.selectedMediaId,
+        ...item.resolvedMediaIds || [],
+        ...item.blobTrace?.candidateIds || []
+      ]).filter(Boolean)
+    );
     const sorted = [...items].sort(
       (left, right) => (right.firstSeenAt || 0) - (left.firstSeenAt || 0) || String(left.id || "").localeCompare(String(right.id || ""))
     );
     const visible = [];
     const blobGroups = /* @__PURE__ */ new Map();
     for (const item of sorted) {
+      if (item.kind !== "blob" && blobResolvedSourceIds.has(item.id)) continue;
       if (item.kind === "hls" && item.parentManifestIds?.length) continue;
       if (item.kind !== "blob") {
         visible.push(item);
@@ -542,6 +551,12 @@ ${item.title || "blob"}`;
       const existing = blobGroups.get(key);
       if (existing) {
         existing.relatedCount += 1;
+        if (item.selectedMediaId && !existing.selectedMediaId) {
+          const resolved = { ...item, relatedCount: existing.relatedCount };
+          blobGroups.set(key, resolved);
+          const visibleIndex = visible.indexOf(existing);
+          if (visibleIndex >= 0) visible[visibleIndex] = resolved;
+        }
         continue;
       }
       const grouped = { ...item, relatedCount: 1 };
@@ -570,8 +585,10 @@ ${item.title || "blob"}`;
     };
   }
   function formatMediaDetails(item) {
+    if (item.kind === "blob" && item.selectedMediaId)
+      return resolvedBlobDetails(item);
     if (item.kind === "blob")
-      return item.relatedCount > 1 ? `${item.relatedCount} Blob signals \xB7 tracing one source` : "Blob signal \xB7 tracing network source";
+      return item.relatedCount > 1 ? `${item.relatedCount} Blob signals \xB7 tracing source buffers` : item.blobTrace?.appendCount ? `${item.blobTrace.appendCount} buffers observed \xB7 matching source` : "Blob signal \xB7 tracing source buffers";
     if (item.kind === "direct") return "Direct video file";
     if (item.kind === "dash") return dashDetails(item);
     if (item.kind !== "hls") return "Media source found";
@@ -618,6 +635,18 @@ ${item.title || "blob"}`;
     if (item.drm === "suspected") facts.push("DRM suspected");
     else if (item.encryptionMethods?.length) facts.push("Encrypted");
     return facts.filter(Boolean).join(" \xB7 ") || "HLS manifest ready";
+  }
+  function resolvedBlobDetails(item) {
+    const stream = item.resolvedStream || {};
+    const kind = String(
+      item.resolvedKind || stream.kind || "media"
+    ).toUpperCase();
+    const facts = [`Blob resolved to ${kind}`];
+    if (stream.resolution?.height) facts.push(`${stream.resolution.height}p`);
+    if (Number.isFinite(stream.duration) && stream.duration > 0)
+      facts.push(formatDuration(stream.duration));
+    if (["suspected", "confirmed"].includes(stream.drm)) facts.push("DRM");
+    return facts.join(" \xB7 ");
   }
   function dashDetails(item) {
     if (item.probeStatus === "failed") return "DASH manifest request failed";
@@ -700,6 +729,8 @@ ${item.title || "blob"}`;
       resolvedMediaIds: item.resolvedMediaIds,
       selectedMediaId: item.selectedMediaId,
       resolvedStream: item.resolvedStream,
+      resolvedKind: item.resolvedKind,
+      blobTrace: item.blobTrace,
       requiresBrowserSession: item.resolvedRequestContext?.requiresBrowserSession === true,
       drm: item.drm,
       encryptionMethods: item.encryptionMethods,
@@ -1002,7 +1033,7 @@ ${item.title || "blob"}`;
     details.textContent = formatMediaDetails(item);
     copy.append(name, details);
     row.append(kind, copy);
-    if (["direct", "hls", "dash"].includes(item.kind)) {
+    if (["direct", "hls", "dash"].includes(item.kind) || item.kind === "blob" && item.selectedMediaId) {
       const downloadItem = itemsById.get(item.selectedMediaId) || item;
       row.append(createMediaDownloadButton(item, downloadItem, tab, helper));
     }
@@ -1012,13 +1043,17 @@ ${item.title || "blob"}`;
     const availability = getMediaDownloadAvailability(downloadItem);
     const button = document.createElement("button");
     button.className = "media-download";
-    const presentation = downloadButtonPresentation(availability, helper, item);
+    const presentation = downloadButtonPresentation(
+      availability,
+      helper,
+      downloadItem
+    );
     button.disabled = presentation.disabled;
     button.textContent = presentation.label;
     button.title = presentation.title;
     button.addEventListener("click", async () => {
       button.disabled = true;
-      if (helper.status !== "ready" || !helperCanDownload(item, helper)) {
+      if (helper.status !== "ready" || !helperCanDownload(downloadItem, helper)) {
         await setupMediaHelper(button, helper);
         return;
       }

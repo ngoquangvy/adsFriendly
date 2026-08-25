@@ -340,7 +340,10 @@ function createMediaItem(item, tab, helper, itemsById) {
   details.textContent = formatMediaDetails(item);
   copy.append(name, details);
   row.append(kind, copy);
-  if (["direct", "hls", "dash"].includes(item.kind)) {
+  if (
+    ["direct", "hls", "dash"].includes(item.kind) ||
+    (item.kind === "blob" && item.selectedMediaId)
+  ) {
     const downloadItem = itemsById.get(item.selectedMediaId) || item;
     row.append(createMediaDownloadButton(item, downloadItem, tab, helper));
   }
@@ -351,13 +354,17 @@ function createMediaDownloadButton(item, downloadItem, tab, helper) {
   const availability = getMediaDownloadAvailability(downloadItem);
   const button = document.createElement("button");
   button.className = "media-download";
-  const presentation = downloadButtonPresentation(availability, helper, item);
+  const presentation = downloadButtonPresentation(
+    availability,
+    helper,
+    downloadItem,
+  );
   button.disabled = presentation.disabled;
   button.textContent = presentation.label;
   button.title = presentation.title;
   button.addEventListener("click", async () => {
     button.disabled = true;
-    if (helper.status !== "ready" || !helperCanDownload(item, helper)) {
+    if (helper.status !== "ready" || !helperCanDownload(downloadItem, helper)) {
       await setupMediaHelper(button, helper);
       return;
     }

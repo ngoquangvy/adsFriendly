@@ -166,6 +166,23 @@ var AdsFriendlyMainWorld = (() => {
       )
     };
   }
+  function normalizeBlobSourceTrace(value = {}) {
+    const blobUrl = requiredString(value.blobUrl, "blobUrl");
+    if (!blobUrl.startsWith("blob:")) {
+      throw new Error("[MediaContract] blobUrl must use the blob: protocol.");
+    }
+    return {
+      mediaId: requiredString(value.mediaId, "mediaId"),
+      pageUrl: requiredString(value.pageUrl, "pageUrl"),
+      blobUrl,
+      sourceUrls: normalizeHttpUrls(value.sourceUrls, 32),
+      candidateIds: normalizeStrings(value.candidateIds).slice(0, 8),
+      mimeTypes: normalizeStrings(value.mimeTypes).slice(0, 8),
+      appendCount: optionalNonNegativeInteger(value.appendCount) || 0,
+      totalAppendedBytes: optionalNonNegativeInteger(value.totalAppendedBytes) || 0,
+      observedAt: optionalFiniteNumber(value.observedAt) || Date.now()
+    };
+  }
   function normalizeMediaResolutionAttempt(value) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
     const strategy = optionalEnumValue(
@@ -258,6 +275,19 @@ var AdsFriendlyMainWorld = (() => {
         value.slice(0, 100).filter((item) => typeof item === "string" && item).map((item) => item.slice(0, 100))
       )
     ] : [];
+  }
+  function normalizeHttpUrls(value, maximum) {
+    if (!Array.isArray(value)) return [];
+    const urls = [];
+    for (const item of value.slice(0, maximum)) {
+      if (typeof item !== "string") continue;
+      try {
+        const url = new URL(item);
+        if (["http:", "https:"].includes(url.protocol)) urls.push(url.href);
+      } catch {
+      }
+    }
+    return [...new Set(urls)];
   }
   function normalizeRequestContexts(value) {
     if (!Array.isArray(value)) return [];
@@ -1029,6 +1059,7 @@ ${body}`;
   var EVENTS = Object.freeze({
     MEDIA_DISCOVERED: "media.discovered",
     MEDIA_PROBED: "media.probed",
+    MEDIA_BLOB_TRACED: "media.blob_traced",
     MEDIA_CATALOG_UPDATED: "media.catalog.updated",
     VIDEO_AD_EVIDENCE_FOUND: "video_ad.evidence_found",
     VIDEO_AD_LABELLED: "video_ad.labelled"
@@ -1046,6 +1077,12 @@ ${body}`;
       "media.probe",
       ["media.catalog"],
       normalizeMediaProbe
+    ),
+    [E.MEDIA_BLOB_TRACED]: event(
+      E.MEDIA_BLOB_TRACED,
+      "media.blob-source-tracer",
+      ["media.catalog"],
+      normalizeBlobSourceTrace
     ),
     [E.MEDIA_CATALOG_UPDATED]: event(
       E.MEDIA_CATALOG_UPDATED,
@@ -1401,6 +1438,7 @@ ${body}`;
       C2.LEARNING_FEEDBACK
     ]),
     feature("main-world.network-capture", "main-world", C2.MEDIA_OBSERVE),
+    feature("main-world.blob-source-tracer", "main-world", C2.MEDIA_OBSERVE),
     feature("main-world.timer-control", "main-world", C2.VIDEO_AUTO_ACTION)
   ]);
   var CAPABILITY_SET = new Set(Object.values(CAPABILITIES));
@@ -1534,6 +1572,60 @@ ${body}`;
     }
   }
 
+  // src/main-world/media-observation-ledger.js
+  var MAXIMUM_OBSERVATIONS = 64;
+  var MAXIMUM_AGE_MS = 6e4;
+  var observations = [];
+  function rememberMediaObservation(candidate, observedAt = Date.now()) {
+    if (!candidate?.id || !candidate?.kind) return;
+    observations.push({ candidate: { ...candidate }, observedAt });
+    trim(observedAt);
+  }
+  function findRelatedMediaObservations(sourceUrls = [], { observedAt = Date.now(), maximum = 8, allowedKinds = null } = {}) {
+    trim(observedAt);
+    const sourceHosts = new Set(sourceUrls.map(hostOf).filter(Boolean));
+    return observations.map((observation) => ({
+      ...observation,
+      score: observationScore(observation, sourceHosts, observedAt)
+    })).filter(
+      (observation) => !allowedKinds || allowedKinds.includes(observation.candidate.kind)
+    ).filter((observation) => observation.score > 0).sort(
+      (left, right) => right.score - left.score || right.observedAt - left.observedAt
+    ).slice(0, maximum).map((observation) => ({
+      id: observation.candidate.id,
+      kind: observation.candidate.kind,
+      sourceUrl: observation.candidate.manifestUrl || observation.candidate.sourceUrl,
+      observedAt: observation.observedAt
+    }));
+  }
+  function clearMediaObservations() {
+    observations.length = 0;
+  }
+  function observationScore(observation, sourceHosts, now) {
+    const age = Math.max(0, now - observation.observedAt);
+    if (age > MAXIMUM_AGE_MS) return 0;
+    const candidate = observation.candidate;
+    const candidateHost = hostOf(candidate.manifestUrl || candidate.sourceUrl);
+    const adaptive = ["hls", "dash"].includes(candidate.kind);
+    const sameHost = candidateHost && sourceHosts.has(candidateHost);
+    if (sourceHosts.size && !sameHost) return 0;
+    if (!sourceHosts.size && !adaptive) return 0;
+    return (sameHost ? 100 : 20) + (adaptive ? 10 : 0) - age / 1e4;
+  }
+  function trim(now) {
+    const cutoff = now - MAXIMUM_AGE_MS;
+    while (observations.length && (observations.length > MAXIMUM_OBSERVATIONS || observations[0].observedAt < cutoff)) {
+      observations.shift();
+    }
+  }
+  function hostOf(value) {
+    try {
+      return new URL(value).hostname;
+    } catch {
+      return null;
+    }
+  }
+
   // src/main-world/network-capture.js
   function installNetworkCapture(policy) {
     const originalFetch = window.fetch;
@@ -1582,6 +1674,7 @@ ${body}`;
       stopFallbackProbe();
       resolutionTasks.clear();
       probeGate.clear();
+      clearMediaObservations();
     };
   }
   function installFetchCapture(policy, inspect, resolveAttempts) {
@@ -1793,6 +1886,7 @@ ${body}`;
       detectedBy: MEDIA_DETECTION_SOURCES.NETWORK
     });
     if (!candidate) return null;
+    rememberMediaObservation(candidate);
     notifyContentScript({
       type: "REGISTERED_EVENT",
       event: createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, candidate)
@@ -1924,6 +2018,278 @@ ${body}`;
     } catch {
       return false;
     }
+  }
+
+  // src/main-world/blob-source-tracer.js
+  var MAX_SOURCE_URLS = 32;
+  var MAX_MIME_TYPES = 8;
+  var REPORT_DELAY_MS = 200;
+  function installBlobSourceTracer(policy) {
+    const bufferSources = /* @__PURE__ */ new WeakMap();
+    const blobSources = /* @__PURE__ */ new WeakMap();
+    const mediaSourceStates = /* @__PURE__ */ new WeakMap();
+    const sourceBufferStates = /* @__PURE__ */ new WeakMap();
+    const objectUrlStates = /* @__PURE__ */ new Map();
+    const cleanups = [];
+    patchResponseArrayBuffer();
+    patchResponseBlob();
+    patchBlobArrayBuffer();
+    patchXhrResponse();
+    patchMediaSource();
+    patchObjectUrls();
+    return () => {
+      for (const cleanup of cleanups.reverse()) cleanup();
+      for (const state of objectUrlStates.values()) clearTimeout(state.timerId);
+      objectUrlStates.clear();
+    };
+    function patchResponseArrayBuffer() {
+      const original = globalThis.Response?.prototype?.arrayBuffer;
+      if (typeof original !== "function") return;
+      const wrapper = async function(...args) {
+        const value = await original.apply(this, args);
+        rememberBuffer(value, responseSource(this));
+        return value;
+      };
+      Response.prototype.arrayBuffer = wrapper;
+      cleanups.push(() => {
+        if (Response.prototype.arrayBuffer === wrapper)
+          Response.prototype.arrayBuffer = original;
+      });
+    }
+    function patchResponseBlob() {
+      const original = globalThis.Response?.prototype?.blob;
+      if (typeof original !== "function") return;
+      const wrapper = async function(...args) {
+        const value = await original.apply(this, args);
+        if (value instanceof Blob) blobSources.set(value, responseSource(this));
+        return value;
+      };
+      Response.prototype.blob = wrapper;
+      cleanups.push(() => {
+        if (Response.prototype.blob === wrapper)
+          Response.prototype.blob = original;
+      });
+    }
+    function patchBlobArrayBuffer() {
+      const original = globalThis.Blob?.prototype?.arrayBuffer;
+      if (typeof original !== "function") return;
+      const wrapper = async function(...args) {
+        const value = await original.apply(this, args);
+        rememberBuffer(value, blobSources.get(this));
+        return value;
+      };
+      Blob.prototype.arrayBuffer = wrapper;
+      cleanups.push(() => {
+        if (Blob.prototype.arrayBuffer === wrapper)
+          Blob.prototype.arrayBuffer = original;
+      });
+    }
+    function patchXhrResponse() {
+      const prototype = globalThis.XMLHttpRequest?.prototype;
+      const descriptor = prototype ? Object.getOwnPropertyDescriptor(prototype, "response") : null;
+      if (!prototype || typeof descriptor?.get !== "function" || !descriptor.configurable)
+        return;
+      const getter = function() {
+        const value = descriptor.get.call(this);
+        const source = {
+          url: this.responseURL || this.__adsfriendly_url || "",
+          mimeType: safeXhrContentType(this),
+          observedAt: Date.now()
+        };
+        if (value instanceof ArrayBuffer) rememberBuffer(value, source);
+        else if (value instanceof Blob) blobSources.set(value, source);
+        return value;
+      };
+      Object.defineProperty(prototype, "response", {
+        ...descriptor,
+        get: getter
+      });
+      cleanups.push(() => {
+        const current = Object.getOwnPropertyDescriptor(prototype, "response");
+        if (current?.get === getter)
+          Object.defineProperty(prototype, "response", descriptor);
+      });
+    }
+    function patchMediaSource() {
+      const mediaSourcePrototype = globalThis.MediaSource?.prototype;
+      const sourceBufferPrototype = globalThis.SourceBuffer?.prototype;
+      const originalAdd = mediaSourcePrototype?.addSourceBuffer;
+      const originalAppend = sourceBufferPrototype?.appendBuffer;
+      if (typeof originalAdd === "function") {
+        const addWrapper = function(mimeType) {
+          const sourceBuffer = originalAdd.call(this, mimeType);
+          const state = mediaSourceState(this);
+          rememberBounded(
+            state.mimeTypes,
+            String(mimeType || ""),
+            MAX_MIME_TYPES
+          );
+          sourceBufferStates.set(sourceBuffer, { state, mimeType });
+          scheduleReport(state);
+          return sourceBuffer;
+        };
+        mediaSourcePrototype.addSourceBuffer = addWrapper;
+        cleanups.push(() => {
+          if (mediaSourcePrototype.addSourceBuffer === addWrapper)
+            mediaSourcePrototype.addSourceBuffer = originalAdd;
+        });
+      }
+      if (typeof originalAppend === "function") {
+        const appendWrapper = function(value) {
+          const sourceBufferState = sourceBufferStates.get(this);
+          if (sourceBufferState) {
+            const state = sourceBufferState.state;
+            const buffer = value instanceof ArrayBuffer ? value : value?.buffer;
+            const source = bufferSources.get(buffer);
+            state.appendCount += 1;
+            state.totalAppendedBytes += Number(value?.byteLength || 0);
+            state.lastAppendAt = Date.now();
+            if (source?.url) {
+              rememberBounded(state.sourceUrls, source.url, MAX_SOURCE_URLS);
+              if (source.mimeType)
+                rememberBounded(state.mimeTypes, source.mimeType, MAX_MIME_TYPES);
+            }
+            scheduleReport(state);
+          }
+          return originalAppend.call(this, value);
+        };
+        sourceBufferPrototype.appendBuffer = appendWrapper;
+        cleanups.push(() => {
+          if (sourceBufferPrototype.appendBuffer === appendWrapper)
+            sourceBufferPrototype.appendBuffer = originalAppend;
+        });
+      }
+    }
+    function patchObjectUrls() {
+      const originalCreate = URL.createObjectURL;
+      const originalRevoke = URL.revokeObjectURL;
+      if (typeof originalCreate === "function") {
+        const createWrapper = function(object) {
+          const objectUrl = originalCreate.call(this, object);
+          if (object instanceof MediaSource) {
+            const state = mediaSourceState(object);
+            state.blobUrl = objectUrl;
+            objectUrlStates.set(objectUrl, state);
+            scheduleReport(state);
+          } else if (object instanceof Blob) {
+            const source = blobSources.get(object);
+            if (source?.url) {
+              const state = createTraceState(objectUrl, "blob_object");
+              rememberBounded(state.sourceUrls, source.url, MAX_SOURCE_URLS);
+              if (source.mimeType || object.type)
+                rememberBounded(
+                  state.mimeTypes,
+                  source.mimeType || object.type,
+                  MAX_MIME_TYPES
+                );
+              state.totalAppendedBytes = object.size || 0;
+              objectUrlStates.set(objectUrl, state);
+              scheduleReport(state);
+            }
+          }
+          return objectUrl;
+        };
+        URL.createObjectURL = createWrapper;
+        cleanups.push(() => {
+          if (URL.createObjectURL === createWrapper)
+            URL.createObjectURL = originalCreate;
+        });
+      }
+      if (typeof originalRevoke === "function") {
+        const revokeWrapper = function(objectUrl) {
+          const state = objectUrlStates.get(String(objectUrl));
+          if (state) {
+            clearTimeout(state.timerId);
+            objectUrlStates.delete(String(objectUrl));
+          }
+          return originalRevoke.call(this, objectUrl);
+        };
+        URL.revokeObjectURL = revokeWrapper;
+        cleanups.push(() => {
+          if (URL.revokeObjectURL === revokeWrapper)
+            URL.revokeObjectURL = originalRevoke;
+        });
+      }
+    }
+    function mediaSourceState(mediaSource) {
+      let state = mediaSourceStates.get(mediaSource);
+      if (!state) {
+        state = createTraceState(null, "media_source");
+        mediaSourceStates.set(mediaSource, state);
+      }
+      return state;
+    }
+    function scheduleReport(state) {
+      if (!state.blobUrl || !policy.can(CAPABILITIES.MEDIA_OBSERVE)) return;
+      clearTimeout(state.timerId);
+      state.timerId = setTimeout(() => reportState(state), REPORT_DELAY_MS);
+    }
+    function reportState(state) {
+      state.timerId = null;
+      if (!state.blobUrl || !policy.can(CAPABILITIES.MEDIA_OBSERVE)) return;
+      const related = findRelatedMediaObservations(state.sourceUrls, {
+        observedAt: state.lastAppendAt || Date.now(),
+        allowedKinds: state.traceKind === "media_source" ? ["hls", "dash"] : ["direct"]
+      });
+      const signature = JSON.stringify({
+        sourceUrls: state.sourceUrls,
+        candidateIds: related.map((item) => item.id),
+        appendCount: state.appendCount,
+        totalAppendedBytes: state.totalAppendedBytes
+      });
+      if (signature === state.lastReportSignature) return;
+      state.lastReportSignature = signature;
+      notifyContentScript({
+        type: "REGISTERED_EVENT",
+        event: createRegisteredEvent(EVENTS.MEDIA_BLOB_TRACED, {
+          mediaId: stableMediaId("blob", state.blobUrl),
+          pageUrl: location.href,
+          blobUrl: state.blobUrl,
+          sourceUrls: state.sourceUrls,
+          candidateIds: related.map((item) => item.id),
+          mimeTypes: state.mimeTypes,
+          appendCount: state.appendCount,
+          totalAppendedBytes: state.totalAppendedBytes,
+          observedAt: Date.now()
+        })
+      });
+    }
+    function rememberBuffer(buffer, source) {
+      if (buffer instanceof ArrayBuffer && source?.url)
+        bufferSources.set(buffer, source);
+    }
+  }
+  function createTraceState(blobUrl, traceKind) {
+    return {
+      blobUrl,
+      traceKind,
+      sourceUrls: [],
+      mimeTypes: [],
+      appendCount: 0,
+      totalAppendedBytes: 0,
+      lastAppendAt: null,
+      lastReportSignature: null,
+      timerId: null
+    };
+  }
+  function responseSource(response) {
+    return {
+      url: response?.url || "",
+      mimeType: response?.headers?.get?.("content-type") || "",
+      observedAt: Date.now()
+    };
+  }
+  function safeXhrContentType(xhr) {
+    try {
+      return xhr.getResponseHeader("content-type") || "";
+    } catch {
+      return "";
+    }
+  }
+  function rememberBounded(items, value, maximum) {
+    if (!value || items.includes(value)) return;
+    items.push(value);
+    if (items.length > maximum) items.shift();
   }
 
   // src/main-world/timer-control.js
@@ -2189,6 +2555,7 @@ ${body}`;
     watchSettings: false,
     implementations: {
       "main-world.network-capture": ({ policy }) => installNetworkCapture(policy),
+      "main-world.blob-source-tracer": ({ policy }) => installBlobSourceTracer(policy),
       "main-world.timer-control": ({ policy }) => installTimerControl(policy)
     }
   });

@@ -140,6 +140,23 @@ var AdsFriendlyMediaFrame = (() => {
       )
     };
   }
+  function normalizeBlobSourceTrace(value = {}) {
+    const blobUrl = requiredString(value.blobUrl, "blobUrl");
+    if (!blobUrl.startsWith("blob:")) {
+      throw new Error("[MediaContract] blobUrl must use the blob: protocol.");
+    }
+    return {
+      mediaId: requiredString(value.mediaId, "mediaId"),
+      pageUrl: requiredString(value.pageUrl, "pageUrl"),
+      blobUrl,
+      sourceUrls: normalizeHttpUrls(value.sourceUrls, 32),
+      candidateIds: normalizeStrings(value.candidateIds).slice(0, 8),
+      mimeTypes: normalizeStrings(value.mimeTypes).slice(0, 8),
+      appendCount: optionalNonNegativeInteger(value.appendCount) || 0,
+      totalAppendedBytes: optionalNonNegativeInteger(value.totalAppendedBytes) || 0,
+      observedAt: optionalFiniteNumber(value.observedAt) || Date.now()
+    };
+  }
   function normalizeMediaResolutionAttempt(value) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
     const strategy = optionalEnumValue(
@@ -232,6 +249,19 @@ var AdsFriendlyMediaFrame = (() => {
         value.slice(0, 100).filter((item) => typeof item === "string" && item).map((item) => item.slice(0, 100))
       )
     ] : [];
+  }
+  function normalizeHttpUrls(value, maximum) {
+    if (!Array.isArray(value)) return [];
+    const urls = [];
+    for (const item of value.slice(0, maximum)) {
+      if (typeof item !== "string") continue;
+      try {
+        const url = new URL(item);
+        if (["http:", "https:"].includes(url.protocol)) urls.push(url.href);
+      } catch {
+      }
+    }
+    return [...new Set(urls)];
   }
   function normalizeRequestContexts(value) {
     if (!Array.isArray(value)) return [];
@@ -334,6 +364,7 @@ var AdsFriendlyMediaFrame = (() => {
   var EVENTS = Object.freeze({
     MEDIA_DISCOVERED: "media.discovered",
     MEDIA_PROBED: "media.probed",
+    MEDIA_BLOB_TRACED: "media.blob_traced",
     MEDIA_CATALOG_UPDATED: "media.catalog.updated",
     VIDEO_AD_EVIDENCE_FOUND: "video_ad.evidence_found",
     VIDEO_AD_LABELLED: "video_ad.labelled"
@@ -351,6 +382,12 @@ var AdsFriendlyMediaFrame = (() => {
       "media.probe",
       ["media.catalog"],
       normalizeMediaProbe
+    ),
+    [E.MEDIA_BLOB_TRACED]: event(
+      E.MEDIA_BLOB_TRACED,
+      "media.blob-source-tracer",
+      ["media.catalog"],
+      normalizeBlobSourceTrace
     ),
     [E.MEDIA_CATALOG_UPDATED]: event(
       E.MEDIA_CATALOG_UPDATED,
@@ -476,9 +513,11 @@ var AdsFriendlyMediaFrame = (() => {
       subtree: true
     });
     const onMainWorldMessage = (messageEvent) => {
-      if (messageEvent.source !== window || messageEvent.data?.source !== "adsfriendly-spy" || messageEvent.data?.type !== "REGISTERED_EVENT" || ![EVENTS.MEDIA_DISCOVERED, EVENTS.MEDIA_PROBED].includes(
-        messageEvent.data.event?.type
-      ))
+      if (messageEvent.source !== window || messageEvent.data?.source !== "adsfriendly-spy" || messageEvent.data?.type !== "REGISTERED_EVENT" || ![
+        EVENTS.MEDIA_DISCOVERED,
+        EVENTS.MEDIA_PROBED,
+        EVENTS.MEDIA_BLOB_TRACED
+      ].includes(messageEvent.data.event?.type))
         return;
       try {
         reportEvent(normalizeRegisteredEvent(messageEvent.data.event));
@@ -552,7 +591,7 @@ var AdsFriendlyMediaFrame = (() => {
       if (reported.has(reportKey) || pending.has(reportKey)) return;
       pending.add(reportKey);
       chrome.runtime.sendMessage({
-        type: event2.type === EVENTS.MEDIA_PROBED ? "MEDIA_PROBED" : "MEDIA_DISCOVERED",
+        type: event2.type === EVENTS.MEDIA_PROBED ? "MEDIA_PROBED" : event2.type === EVENTS.MEDIA_BLOB_TRACED ? "MEDIA_BLOB_TRACED" : "MEDIA_DISCOVERED",
         event: event2
       }).then((response) => {
         pending.delete(reportKey);
@@ -607,6 +646,15 @@ var AdsFriendlyMediaFrame = (() => {
     const mediaId = payload.id || payload.mediaId || "unknown";
     if (event2?.type === EVENTS.MEDIA_DISCOVERED) {
       return `${event2.type}:${mediaId}:${payload.detectedBy || "unknown"}`;
+    }
+    if (event2?.type === EVENTS.MEDIA_BLOB_TRACED) {
+      return [
+        event2.type,
+        mediaId,
+        payload.sourceUrls?.length || 0,
+        payload.candidateIds?.join(",") || "none",
+        Math.floor((payload.appendCount || 0) / 10)
+      ].join(":");
     }
     if (event2?.type !== EVENTS.MEDIA_PROBED) {
       return `${event2?.type || "unknown"}:${mediaId}`;
@@ -909,6 +957,7 @@ var AdsFriendlyMediaFrame = (() => {
       C2.LEARNING_FEEDBACK
     ]),
     feature("main-world.network-capture", "main-world", C2.MEDIA_OBSERVE),
+    feature("main-world.blob-source-tracer", "main-world", C2.MEDIA_OBSERVE),
     feature("main-world.timer-control", "main-world", C2.VIDEO_AUTO_ACTION)
   ]);
   var CAPABILITY_SET = new Set(Object.values(CAPABILITIES));

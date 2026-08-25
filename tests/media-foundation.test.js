@@ -36,6 +36,12 @@ import {
 } from "../src/media/catalog-view.js";
 import { EVENTS, createRegisteredEvent } from "../src/runtime/event-catalog.js";
 import { normalizeMediaRequestContext } from "../src/media/contracts.js";
+import { installBlobSourceTracer } from "../src/main-world/blob-source-tracer.js";
+import {
+  clearMediaObservations,
+  findRelatedMediaObservations,
+  rememberMediaObservation,
+} from "../src/main-world/media-observation-ledger.js";
 
 test("offers a helper setup action independently from downloadable media", () => {
   assert.deepEqual(helperSetupPresentation({ status: "permission_required" }), {
@@ -133,6 +139,171 @@ test("DASH parsing identifies dynamic streams and DRM protection", () => {
       variants: parsed.variants,
     }).supported,
     false,
+  );
+});
+
+test("blob source tracing links an appended network buffer to an adaptive manifest", async () => {
+  const previous = {
+    Response: globalThis.Response,
+    XMLHttpRequest: globalThis.XMLHttpRequest,
+    MediaSource: globalThis.MediaSource,
+    SourceBuffer: globalThis.SourceBuffer,
+    window: globalThis.window,
+    location: globalThis.location,
+    createObjectURL: URL.createObjectURL,
+    revokeObjectURL: URL.revokeObjectURL,
+  };
+  const messages = [];
+  class FakeResponse {
+    constructor(url, bytes) {
+      this.url = url;
+      this.bytes = bytes;
+      this.headers = { get: () => "video/iso.segment" };
+    }
+    async arrayBuffer() {
+      return this.bytes;
+    }
+    async blob() {
+      return new Blob([this.bytes]);
+    }
+  }
+  class FakeXhr {
+    getResponseHeader() {
+      return "video/iso.segment";
+    }
+  }
+  Object.defineProperty(FakeXhr.prototype, "response", {
+    configurable: true,
+    get() {
+      return this.value;
+    },
+  });
+  class FakeSourceBuffer {
+    appendBuffer(value) {
+      this.lastValue = value;
+    }
+  }
+  class FakeMediaSource {
+    addSourceBuffer() {
+      return new FakeSourceBuffer();
+    }
+  }
+  globalThis.Response = FakeResponse;
+  globalThis.XMLHttpRequest = FakeXhr;
+  globalThis.MediaSource = FakeMediaSource;
+  globalThis.SourceBuffer = FakeSourceBuffer;
+  globalThis.window = {
+    postMessage(message) {
+      messages.push(message);
+    },
+  };
+  globalThis.location = { href: "https://video.example/watch" };
+  URL.createObjectURL = () => "blob:https://video.example/player";
+  URL.revokeObjectURL = () => {};
+  rememberMediaObservation({
+    id: "manifest-hls",
+    kind: "hls",
+    manifestUrl: "https://cdn.example/master.m3u8",
+  });
+  const stop = installBlobSourceTracer({ can: () => true });
+  try {
+    const mediaSource = new FakeMediaSource();
+    URL.createObjectURL(mediaSource);
+    const sourceBuffer = mediaSource.addSourceBuffer(
+      'video/mp4; codecs="avc1"',
+    );
+    const bytes = new ArrayBuffer(128);
+    const response = new FakeResponse("https://cdn.example/chunk-1.m4s", bytes);
+    sourceBuffer.appendBuffer(await response.arrayBuffer());
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const trace = messages.find(
+      (message) => message.event?.type === EVENTS.MEDIA_BLOB_TRACED,
+    )?.event?.payload;
+    assert.equal(trace.blobUrl, "blob:https://video.example/player");
+    assert.deepEqual(trace.candidateIds, ["manifest-hls"]);
+    assert.deepEqual(trace.sourceUrls, ["https://cdn.example/chunk-1.m4s"]);
+    assert.equal(trace.appendCount, 1);
+    assert.equal(trace.totalAppendedBytes, 128);
+  } finally {
+    stop();
+    clearMediaObservations();
+    globalThis.Response = previous.Response;
+    globalThis.XMLHttpRequest = previous.XMLHttpRequest;
+    globalThis.MediaSource = previous.MediaSource;
+    globalThis.SourceBuffer = previous.SourceBuffer;
+    globalThis.window = previous.window;
+    globalThis.location = previous.location;
+    URL.createObjectURL = previous.createObjectURL;
+    URL.revokeObjectURL = previous.revokeObjectURL;
+  }
+});
+
+test("blob tracing does not associate a different-host ad manifest", () => {
+  clearMediaObservations();
+  rememberMediaObservation({
+    id: "ad-hls",
+    kind: "hls",
+    manifestUrl: "https://ads.example/ad.m3u8",
+  });
+  assert.deepEqual(
+    findRelatedMediaObservations(["https://video-cdn.example/chunk.m4s"], {
+      allowedKinds: ["hls", "dash"],
+    }),
+    [],
+  );
+  clearMediaObservations();
+});
+
+test("catalog resolves a traced Blob row to its downloadable HLS source", () => {
+  const catalog = createMediaCatalog();
+  const pageUrl = "https://video.example/watch";
+  const hls = createMediaCandidateFromSource({
+    pageUrl,
+    sourceUrl: "https://cdn.example/movie.m3u8",
+    detectedBy: "network",
+  });
+  const blob = createMediaCandidateFromSource({
+    pageUrl,
+    sourceUrl: "blob:https://video.example/player",
+    detectedBy: "dom",
+  });
+  catalog.add(24, createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, hls));
+  catalog.applyProbe(
+    24,
+    createRegisteredEvent(EVENTS.MEDIA_PROBED, {
+      mediaId: hls.id,
+      pageUrl,
+      manifestUrl: hls.manifestUrl,
+      kind: "hls",
+      status: "ready",
+      playlistType: "media",
+      streamType: "vod",
+      duration: 120,
+      segmentCount: 20,
+    }),
+  );
+  catalog.add(24, createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, blob));
+  catalog.applyBlobTrace(
+    24,
+    createRegisteredEvent(EVENTS.MEDIA_BLOB_TRACED, {
+      mediaId: blob.id,
+      pageUrl,
+      blobUrl: blob.sourceUrl,
+      sourceUrls: ["https://cdn.example/chunk-1.ts"],
+      candidateIds: [hls.id],
+      mimeTypes: ["video/mp2t"],
+      appendCount: 3,
+      totalAppendedBytes: 4096,
+    }),
+  );
+  const resolvedBlob = catalog.list(24).find((item) => item.id === blob.id);
+  assert.equal(resolvedBlob.resolutionStatus, "resolved");
+  assert.equal(resolvedBlob.selectedMediaId, hls.id);
+  assert.equal(resolvedBlob.resolvedKind, "hls");
+  assert.match(formatMediaDetails(resolvedBlob), /Blob resolved to HLS/);
+  assert.equal(
+    getMediaDownloadAvailability(resolvedBlob.resolvedStream).supported,
+    true,
   );
 });
 
@@ -982,6 +1153,38 @@ test("media popup groups duplicate unresolved blobs from one player", () => {
   ]);
   assert.equal(items.length, 1);
   assert.equal(items[0].id, "blob-2");
+  assert.equal(items[0].relatedCount, 2);
+});
+
+test("media popup keeps the resolved Blob when grouping player handles", () => {
+  const items = selectVisibleMediaItems([
+    {
+      id: "blob-resolved",
+      kind: "blob",
+      pageUrl: "https://video.example/watch",
+      title: "Player",
+      firstSeenAt: 10,
+      selectedMediaId: "hls-source",
+      resolvedKind: "hls",
+      resolvedMediaIds: ["hls-source"],
+      blobTrace: { candidateIds: ["hls-source"] },
+    },
+    {
+      id: "blob-newer",
+      kind: "blob",
+      pageUrl: "https://video.example/watch",
+      title: "Player",
+      firstSeenAt: 20,
+    },
+    {
+      id: "hls-source",
+      kind: "hls",
+      firstSeenAt: 15,
+    },
+  ]);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].id, "blob-resolved");
+  assert.equal(items[0].selectedMediaId, "hls-source");
   assert.equal(items[0].relatedCount, 2);
 });
 

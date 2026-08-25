@@ -11,6 +11,10 @@ import {
 } from "../media/probe-gate.js";
 import { EVENTS, createRegisteredEvent } from "../runtime/event-catalog.js";
 import { CAPABILITIES } from "../runtime/feature-catalog.js";
+import {
+  clearMediaObservations,
+  rememberMediaObservation,
+} from "./media-observation-ledger.js";
 
 export function installNetworkCapture(policy) {
   const originalFetch = window.fetch;
@@ -65,6 +69,7 @@ export function installNetworkCapture(policy) {
     stopFallbackProbe();
     resolutionTasks.clear();
     probeGate.clear();
+    clearMediaObservations();
   };
 }
 
@@ -330,6 +335,7 @@ function reportMediaSource(sourceUrl, mimeType) {
     detectedBy: MEDIA_DETECTION_SOURCES.NETWORK,
   });
   if (!candidate) return null;
+  rememberMediaObservation(candidate);
   notifyContentScript({
     type: "REGISTERED_EVENT",
     event: createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, candidate),

@@ -1,5 +1,6 @@
 import { onContentMessage } from "./bridge.js";
 import { installNetworkCapture } from "./network-capture.js";
+import { installBlobSourceTracer } from "./blob-source-tracer.js";
 import { installTimerControl, setAdMode } from "./timer-control.js";
 import { createMainController } from "../runtime/main-controller.js";
 
@@ -14,8 +15,9 @@ const controller = createMainController({
   initialSettings,
   watchSettings: false,
   implementations: {
-    "main-world.network-capture": ({ policy }) =>
-      installNetworkCapture(policy),
+    "main-world.network-capture": ({ policy }) => installNetworkCapture(policy),
+    "main-world.blob-source-tracer": ({ policy }) =>
+      installBlobSourceTracer(policy),
     "main-world.timer-control": ({ policy }) => installTimerControl(policy),
   },
 });
@@ -27,6 +29,8 @@ onContentMessage((message) => {
 });
 
 console.log("[AdsFriendly Spy] Injected and controlled by MainController.");
-controller.start().catch((error) =>
-  console.error("[AdsFriendly Spy] MainController failed", error),
-);
+controller
+  .start()
+  .catch((error) =>
+    console.error("[AdsFriendly Spy] MainController failed", error),
+  );

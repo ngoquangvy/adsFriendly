@@ -270,6 +270,7 @@ var AdsFriendlyOptions = (() => {
       C2.LEARNING_FEEDBACK
     ]),
     feature("main-world.network-capture", "main-world", C2.MEDIA_OBSERVE),
+    feature("main-world.blob-source-tracer", "main-world", C2.MEDIA_OBSERVE),
     feature("main-world.timer-control", "main-world", C2.VIDEO_AUTO_ACTION)
   ]);
   var CAPABILITY_SET = new Set(Object.values(CAPABILITIES));

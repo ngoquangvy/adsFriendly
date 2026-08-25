@@ -2,6 +2,7 @@ import { normalizeRegisteredEvent } from "../runtime/event-catalog.js";
 import { EVENTS } from "../runtime/event-catalog.js";
 import {
   MEDIA_DETECTION_SOURCES,
+  MEDIA_KINDS,
   MEDIA_PROBE_STATES,
   normalizeMediaCandidate,
 } from "./contracts.js";
@@ -118,6 +119,52 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
       trimOldest(tabCatalog.items, maximumPerTab);
       return cloneItem(item);
     },
+    applyBlobTrace(tabId, rawEvent) {
+      assertTabId(tabId);
+      const event = normalizeRegisteredEvent(rawEvent);
+      if (event.type !== EVENTS.MEDIA_BLOB_TRACED) {
+        throw new Error(
+          `[MediaCatalog] Cannot apply blob trace event "${event.type}".`,
+        );
+      }
+      const trace = event.payload;
+      let tabCatalog = tabs.get(tabId);
+      if (tabCatalog && !samePageUrl(tabCatalog.pageUrl, trace.pageUrl)) {
+        tabs.delete(tabId);
+        tabCatalog = null;
+      }
+      if (!tabCatalog) {
+        tabCatalog = { pageUrl: trace.pageUrl, items: new Map() };
+        tabs.set(tabId, tabCatalog);
+      }
+      const existing = tabCatalog.items.get(trace.mediaId);
+      const base =
+        existing ||
+        normalizeMediaCandidate({
+          id: trace.mediaId,
+          pageUrl: trace.pageUrl,
+          sourceUrl: trace.blobUrl,
+          kind: MEDIA_KINDS.BLOB,
+          detectedBy: MEDIA_DETECTION_SOURCES.PLAYER,
+        });
+      const blobTrace = mergeBlobTrace(existing?.blobTrace, trace);
+      const item = {
+        ...base,
+        blobTrace,
+        detectionSources: uniqueStrings([
+          ...(existing?.detectionSources || []),
+          MEDIA_DETECTION_SOURCES.PLAYER,
+        ]),
+        probeCount: existing?.probeCount || 0,
+        lastProbeAt: existing?.lastProbeAt || null,
+        lastUsableProbeAt: existing?.lastUsableProbeAt || null,
+        firstSeenAt: existing?.firstSeenAt || event.timestamp,
+        lastSeenAt: event.timestamp,
+      };
+      tabCatalog.items.set(trace.mediaId, item);
+      trimOldest(tabCatalog.items, maximumPerTab);
+      return cloneItem(item);
+    },
     list(tabId, pageUrl = null) {
       assertTabId(tabId);
       const tabCatalog = tabs.get(tabId);
@@ -127,7 +174,13 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
         (left, right) => right.lastSeenAt - left.lastSeenAt,
       );
       const resolutions = resolveHlsSources(items);
-      return items.map((item) => cloneItem(item, resolutions.get(item.id)));
+      const blobResolutions = resolveBlobSources(items, resolutions);
+      return items.map((item) =>
+        cloneItem(
+          item,
+          blobResolutions.get(item.id) || resolutions.get(item.id),
+        ),
+      );
     },
     clear(tabId) {
       assertTabId(tabId);
@@ -223,6 +276,80 @@ function mergeRequestContexts(existing = [], incoming, observedAt) {
     .slice(0, 8);
 }
 
+function mergeBlobTrace(existing, incoming) {
+  return {
+    blobUrl: incoming.blobUrl,
+    sourceUrls: uniqueStrings([
+      ...(existing?.sourceUrls || []),
+      ...(incoming.sourceUrls || []),
+    ]).slice(-32),
+    candidateIds: uniqueStrings([
+      ...(existing?.candidateIds || []),
+      ...(incoming.candidateIds || []),
+    ]).slice(-8),
+    mimeTypes: uniqueStrings([
+      ...(existing?.mimeTypes || []),
+      ...(incoming.mimeTypes || []),
+    ]).slice(-8),
+    appendCount: Math.max(
+      existing?.appendCount || 0,
+      incoming.appendCount || 0,
+    ),
+    totalAppendedBytes: Math.max(
+      existing?.totalAppendedBytes || 0,
+      incoming.totalAppendedBytes || 0,
+    ),
+    observedAt: Math.max(existing?.observedAt || 0, incoming.observedAt || 0),
+  };
+}
+
+function resolveBlobSources(items, adaptiveResolutions) {
+  const itemsById = new Map(items.map((item) => [item.id, item]));
+  const resolved = new Map();
+  for (const blob of items.filter((item) => item.kind === MEDIA_KINDS.BLOB)) {
+    const candidates = [];
+    for (const candidateId of blob.blobTrace?.candidateIds || []) {
+      let item = itemsById.get(candidateId);
+      const adaptive = adaptiveResolutions.get(candidateId);
+      if (adaptive?.selectedMediaId) {
+        item = itemsById.get(adaptive.selectedMediaId) || item;
+      }
+      if (!item || item.kind === MEDIA_KINDS.BLOB) continue;
+      candidates.push(item);
+    }
+    const uniqueCandidates = [
+      ...new Map(candidates.map((item) => [item.id, item])).values(),
+    ].sort(
+      (left, right) => blobCandidateScore(right) - blobCandidateScore(left),
+    );
+    const selected = uniqueCandidates[0];
+    if (!selected) continue;
+    resolved.set(blob.id, {
+      parents: [],
+      children: [],
+      resolutionStatus: "resolved",
+      resolvedMediaIds: uniqueCandidates.map((item) => item.id),
+      selectedMediaId: selected.id,
+      resolvedKind: selected.kind,
+      resolvedStream: selected,
+      resolvedRequestContext:
+        selected.resolvedRequestContext ||
+        selected.requestContexts?.[0] ||
+        null,
+    });
+  }
+  return resolved;
+}
+
+function blobCandidateScore(item) {
+  if (["suspected", "confirmed"].includes(item.drm)) return -100;
+  if (item.kind === MEDIA_KINDS.DIRECT) return 80;
+  if (item.probeStatus !== MEDIA_PROBE_STATES.READY) return 10;
+  if (item.streamType === "vod") return 70;
+  if (item.streamType === "live") return 20;
+  return 40;
+}
+
 function trimOldest(items, maximum) {
   while (items.size > maximum) {
     let oldestId = null;
@@ -266,11 +393,20 @@ function cloneItem(item, resolution = null) {
           evidence: [...(item.resolutionAttempt.evidence || [])],
         }
       : null,
+    blobTrace: item.blobTrace
+      ? {
+          ...item.blobTrace,
+          sourceUrls: [...(item.blobTrace.sourceUrls || [])],
+          candidateIds: [...(item.blobTrace.candidateIds || [])],
+          mimeTypes: [...(item.blobTrace.mimeTypes || [])],
+        }
+      : null,
     parentManifestIds: [...(resolution?.parents || [])],
     childManifestIds: [...(resolution?.children || [])],
     resolutionStatus: resolution?.resolutionStatus || null,
     resolvedMediaIds: [...(resolution?.resolvedMediaIds || [])],
     selectedMediaId: resolution?.selectedMediaId || null,
+    resolvedKind: resolution?.resolvedKind || null,
     resolvedStream: resolution?.resolvedStream
       ? {
           ...resolution.resolvedStream,

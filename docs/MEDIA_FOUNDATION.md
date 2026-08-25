@@ -101,13 +101,17 @@ retained in `src/download/` as a reference and regression fixture, but its
 extension runtime page and generated bundle are no longer shipped. It can be
 removed after the native helper reaches feature parity.
 
-Blob sources (including the common YouTube player case) remain discovery-only:
-the blob URL does not reveal the underlying adaptive streams. The observer now
-probes both HLS and DASH manifests seen below a Blob-backed player. Static,
-unencrypted DASH VOD is parsed in the extension and downloaded through the
-helper; unresolved MediaSource buffers remain a later slice. Duplicate unresolved
-Blob handles from the same page player are grouped in the popup. Probe results
-and download jobs are not training labels or video-ad classifications.
+Blob URLs (including the common YouTube player case) are never downloaded
+directly because the object URL itself does not reveal the underlying adaptive streams. The
+main-world Blob tracer now correlates response ArrayBuffers from Fetch/XHR with
+`SourceBuffer.appendBuffer`, the owning `MediaSource`, and its object URL. A
+same-host HLS or DASH manifest observed in the same bounded time window can then
+replace the Blob row as the downloadable source. Static, unencrypted DASH VOD is
+parsed in the extension and downloaded through the helper. Players that copy,
+transform, or stream bytes without preserving the observed buffer identity can
+still remain unresolved. Duplicate unresolved Blob handles from the same page
+player are grouped in the popup. Trace metadata, probe results, and download jobs
+are transient diagnostics—not training labels or video-ad classifications.
 
 ## Optional helper boundary
 

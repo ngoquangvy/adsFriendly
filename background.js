@@ -1013,6 +1013,7 @@ var AdsFriendlyBackground = (() => {
       C2.LEARNING_FEEDBACK
     ]),
     feature("main-world.network-capture", "main-world", C2.MEDIA_OBSERVE),
+    feature("main-world.blob-source-tracer", "main-world", C2.MEDIA_OBSERVE),
     feature("main-world.timer-control", "main-world", C2.VIDEO_AUTO_ACTION)
   ]);
   var CAPABILITY_SET = new Set(Object.values(CAPABILITIES));
@@ -2229,6 +2230,23 @@ var AdsFriendlyBackground = (() => {
       )
     };
   }
+  function normalizeBlobSourceTrace(value = {}) {
+    const blobUrl = requiredString(value.blobUrl, "blobUrl");
+    if (!blobUrl.startsWith("blob:")) {
+      throw new Error("[MediaContract] blobUrl must use the blob: protocol.");
+    }
+    return {
+      mediaId: requiredString(value.mediaId, "mediaId"),
+      pageUrl: requiredString(value.pageUrl, "pageUrl"),
+      blobUrl,
+      sourceUrls: normalizeHttpUrls(value.sourceUrls, 32),
+      candidateIds: normalizeStrings(value.candidateIds).slice(0, 8),
+      mimeTypes: normalizeStrings(value.mimeTypes).slice(0, 8),
+      appendCount: optionalNonNegativeInteger(value.appendCount) || 0,
+      totalAppendedBytes: optionalNonNegativeInteger(value.totalAppendedBytes) || 0,
+      observedAt: optionalFiniteNumber(value.observedAt) || Date.now()
+    };
+  }
   function normalizeMediaResolutionAttempt(value) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
     const strategy = optionalEnumValue(
@@ -2322,6 +2340,19 @@ var AdsFriendlyBackground = (() => {
       )
     ] : [];
   }
+  function normalizeHttpUrls(value, maximum) {
+    if (!Array.isArray(value)) return [];
+    const urls = [];
+    for (const item of value.slice(0, maximum)) {
+      if (typeof item !== "string") continue;
+      try {
+        const url = new URL(item);
+        if (["http:", "https:"].includes(url.protocol)) urls.push(url.href);
+      } catch {
+      }
+    }
+    return [...new Set(urls)];
+  }
   function normalizeRequestContexts(value) {
     if (!Array.isArray(value)) return [];
     return value.slice(0, 8).map(normalizeMediaRequestContext).filter(Boolean);
@@ -2347,6 +2378,7 @@ var AdsFriendlyBackground = (() => {
   var EVENTS = Object.freeze({
     MEDIA_DISCOVERED: "media.discovered",
     MEDIA_PROBED: "media.probed",
+    MEDIA_BLOB_TRACED: "media.blob_traced",
     MEDIA_CATALOG_UPDATED: "media.catalog.updated",
     VIDEO_AD_EVIDENCE_FOUND: "video_ad.evidence_found",
     VIDEO_AD_LABELLED: "video_ad.labelled"
@@ -2364,6 +2396,12 @@ var AdsFriendlyBackground = (() => {
       "media.probe",
       ["media.catalog"],
       normalizeMediaProbe
+    ),
+    [E.MEDIA_BLOB_TRACED]: event(
+      E.MEDIA_BLOB_TRACED,
+      "media.blob-source-tracer",
+      ["media.catalog"],
+      normalizeBlobSourceTrace
     ),
     [E.MEDIA_CATALOG_UPDATED]: event(
       E.MEDIA_CATALOG_UPDATED,
@@ -2728,6 +2766,50 @@ var AdsFriendlyBackground = (() => {
         trimOldest(tabCatalog.items, maximumPerTab);
         return cloneItem(item);
       },
+      applyBlobTrace(tabId, rawEvent) {
+        assertTabId(tabId);
+        const event2 = normalizeRegisteredEvent(rawEvent);
+        if (event2.type !== EVENTS.MEDIA_BLOB_TRACED) {
+          throw new Error(
+            `[MediaCatalog] Cannot apply blob trace event "${event2.type}".`
+          );
+        }
+        const trace = event2.payload;
+        let tabCatalog = tabs.get(tabId);
+        if (tabCatalog && !samePageUrl(tabCatalog.pageUrl, trace.pageUrl)) {
+          tabs.delete(tabId);
+          tabCatalog = null;
+        }
+        if (!tabCatalog) {
+          tabCatalog = { pageUrl: trace.pageUrl, items: /* @__PURE__ */ new Map() };
+          tabs.set(tabId, tabCatalog);
+        }
+        const existing = tabCatalog.items.get(trace.mediaId);
+        const base = existing || normalizeMediaCandidate({
+          id: trace.mediaId,
+          pageUrl: trace.pageUrl,
+          sourceUrl: trace.blobUrl,
+          kind: MEDIA_KINDS.BLOB,
+          detectedBy: MEDIA_DETECTION_SOURCES.PLAYER
+        });
+        const blobTrace = mergeBlobTrace(existing?.blobTrace, trace);
+        const item = {
+          ...base,
+          blobTrace,
+          detectionSources: uniqueStrings([
+            ...existing?.detectionSources || [],
+            MEDIA_DETECTION_SOURCES.PLAYER
+          ]),
+          probeCount: existing?.probeCount || 0,
+          lastProbeAt: existing?.lastProbeAt || null,
+          lastUsableProbeAt: existing?.lastUsableProbeAt || null,
+          firstSeenAt: existing?.firstSeenAt || event2.timestamp,
+          lastSeenAt: event2.timestamp
+        };
+        tabCatalog.items.set(trace.mediaId, item);
+        trimOldest(tabCatalog.items, maximumPerTab);
+        return cloneItem(item);
+      },
       list(tabId, pageUrl = null) {
         assertTabId(tabId);
         const tabCatalog = tabs.get(tabId);
@@ -2737,7 +2819,13 @@ var AdsFriendlyBackground = (() => {
           (left, right) => right.lastSeenAt - left.lastSeenAt
         );
         const resolutions = resolveHlsSources(items);
-        return items.map((item) => cloneItem(item, resolutions.get(item.id)));
+        const blobResolutions = resolveBlobSources(items, resolutions);
+        return items.map(
+          (item) => cloneItem(
+            item,
+            blobResolutions.get(item.id) || resolutions.get(item.id)
+          )
+        );
       },
       clear(tabId) {
         assertTabId(tabId);
@@ -2823,6 +2911,74 @@ var AdsFriendlyBackground = (() => {
     }
     return [...unique.values()].sort((left, right) => (right.observedAt || 0) - (left.observedAt || 0)).slice(0, 8);
   }
+  function mergeBlobTrace(existing, incoming) {
+    return {
+      blobUrl: incoming.blobUrl,
+      sourceUrls: uniqueStrings([
+        ...existing?.sourceUrls || [],
+        ...incoming.sourceUrls || []
+      ]).slice(-32),
+      candidateIds: uniqueStrings([
+        ...existing?.candidateIds || [],
+        ...incoming.candidateIds || []
+      ]).slice(-8),
+      mimeTypes: uniqueStrings([
+        ...existing?.mimeTypes || [],
+        ...incoming.mimeTypes || []
+      ]).slice(-8),
+      appendCount: Math.max(
+        existing?.appendCount || 0,
+        incoming.appendCount || 0
+      ),
+      totalAppendedBytes: Math.max(
+        existing?.totalAppendedBytes || 0,
+        incoming.totalAppendedBytes || 0
+      ),
+      observedAt: Math.max(existing?.observedAt || 0, incoming.observedAt || 0)
+    };
+  }
+  function resolveBlobSources(items, adaptiveResolutions) {
+    const itemsById = new Map(items.map((item) => [item.id, item]));
+    const resolved = /* @__PURE__ */ new Map();
+    for (const blob of items.filter((item) => item.kind === MEDIA_KINDS.BLOB)) {
+      const candidates = [];
+      for (const candidateId of blob.blobTrace?.candidateIds || []) {
+        let item = itemsById.get(candidateId);
+        const adaptive = adaptiveResolutions.get(candidateId);
+        if (adaptive?.selectedMediaId) {
+          item = itemsById.get(adaptive.selectedMediaId) || item;
+        }
+        if (!item || item.kind === MEDIA_KINDS.BLOB) continue;
+        candidates.push(item);
+      }
+      const uniqueCandidates = [
+        ...new Map(candidates.map((item) => [item.id, item])).values()
+      ].sort(
+        (left, right) => blobCandidateScore(right) - blobCandidateScore(left)
+      );
+      const selected = uniqueCandidates[0];
+      if (!selected) continue;
+      resolved.set(blob.id, {
+        parents: [],
+        children: [],
+        resolutionStatus: "resolved",
+        resolvedMediaIds: uniqueCandidates.map((item) => item.id),
+        selectedMediaId: selected.id,
+        resolvedKind: selected.kind,
+        resolvedStream: selected,
+        resolvedRequestContext: selected.resolvedRequestContext || selected.requestContexts?.[0] || null
+      });
+    }
+    return resolved;
+  }
+  function blobCandidateScore(item) {
+    if (["suspected", "confirmed"].includes(item.drm)) return -100;
+    if (item.kind === MEDIA_KINDS.DIRECT) return 80;
+    if (item.probeStatus !== MEDIA_PROBE_STATES.READY) return 10;
+    if (item.streamType === "vod") return 70;
+    if (item.streamType === "live") return 20;
+    return 40;
+  }
   function trimOldest(items, maximum) {
     while (items.size > maximum) {
       let oldestId = null;
@@ -2862,11 +3018,18 @@ var AdsFriendlyBackground = (() => {
         ...item.resolutionAttempt,
         evidence: [...item.resolutionAttempt.evidence || []]
       } : null,
+      blobTrace: item.blobTrace ? {
+        ...item.blobTrace,
+        sourceUrls: [...item.blobTrace.sourceUrls || []],
+        candidateIds: [...item.blobTrace.candidateIds || []],
+        mimeTypes: [...item.blobTrace.mimeTypes || []]
+      } : null,
       parentManifestIds: [...resolution?.parents || []],
       childManifestIds: [...resolution?.children || []],
       resolutionStatus: resolution?.resolutionStatus || null,
       resolvedMediaIds: [...resolution?.resolvedMediaIds || []],
       selectedMediaId: resolution?.selectedMediaId || null,
+      resolvedKind: resolution?.resolvedKind || null,
       resolvedStream: resolution?.resolvedStream ? {
         ...resolution.resolvedStream,
         resolution: resolution.resolvedStream.resolution ? { ...resolution.resolvedStream.resolution } : null,
@@ -2945,6 +3108,13 @@ var AdsFriendlyBackground = (() => {
     });
     return { status: "recorded", item };
   }
+  async function recordBlobSourceTrace(tabId, event2) {
+    if (!active) return { status: "catalog_disabled" };
+    const item = catalog.applyBlobTrace(tabId, event2);
+    await persistTab(tabId).catch(() => {
+    });
+    return { status: "recorded", item };
+  }
   async function listDiscoveredMedia(tabId, pageUrl = null) {
     if (!active) return { status: "catalog_disabled", items: [] };
     return { status: "ok", items: catalog.list(tabId, pageUrl) };
@@ -2971,6 +3141,20 @@ var AdsFriendlyBackground = (() => {
               }),
               timestamp: item.lastSeenAt || Date.now()
             });
+          } catch {
+          }
+        }
+        if (item.kind === "blob" && item.blobTrace) {
+          try {
+            catalog.applyBlobTrace(
+              tabId,
+              createRegisteredEvent(EVENTS.MEDIA_BLOB_TRACED, {
+                mediaId: item.id,
+                pageUrl: item.pageUrl,
+                blobUrl: item.sourceUrl,
+                ...item.blobTrace
+              })
+            );
           } catch {
           }
         }
@@ -3764,6 +3948,7 @@ var AdsFriendlyBackground = (() => {
     RECORD_DOM_SAMPLE: CAPABILITIES.LEARNING_FEEDBACK,
     MEDIA_DISCOVERED: CAPABILITIES.MEDIA_CATALOG,
     MEDIA_PROBED: CAPABILITIES.MEDIA_CATALOG,
+    MEDIA_BLOB_TRACED: CAPABILITIES.MEDIA_CATALOG,
     GET_MEDIA_CATALOG: CAPABILITIES.MEDIA_CATALOG,
     GET_MEDIA_HELPER_STATUS: CAPABILITIES.MEDIA_DOWNLOAD,
     CREATE_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
@@ -3858,6 +4043,22 @@ var AdsFriendlyBackground = (() => {
       const tabId = sender?.tab?.id;
       if (!Number.isInteger(tabId)) return { status: "ignored" };
       return recordMediaProbe(tabId, {
+        ...message.event,
+        payload: {
+          ...message.event?.payload,
+          pageUrl: sender.tab.url || message.event?.payload?.pageUrl
+        },
+        metadata: {
+          ...message.event?.metadata,
+          frameId: sender.frameId ?? null,
+          frameUrl: message.event?.payload?.pageUrl || null
+        }
+      });
+    }
+    if (message.type === "MEDIA_BLOB_TRACED") {
+      const tabId = sender?.tab?.id;
+      if (!Number.isInteger(tabId)) return { status: "ignored" };
+      return recordBlobSourceTrace(tabId, {
         ...message.event,
         payload: {
           ...message.event?.payload,

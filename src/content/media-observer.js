@@ -36,9 +36,11 @@ export function startMediaObserver() {
       messageEvent.source !== window ||
       messageEvent.data?.source !== "adsfriendly-spy" ||
       messageEvent.data?.type !== "REGISTERED_EVENT" ||
-      ![EVENTS.MEDIA_DISCOVERED, EVENTS.MEDIA_PROBED].includes(
-        messageEvent.data.event?.type,
-      )
+      ![
+        EVENTS.MEDIA_DISCOVERED,
+        EVENTS.MEDIA_PROBED,
+        EVENTS.MEDIA_BLOB_TRACED,
+      ].includes(messageEvent.data.event?.type)
     )
       return;
     try {
@@ -130,7 +132,9 @@ export function startMediaObserver() {
         type:
           event.type === EVENTS.MEDIA_PROBED
             ? "MEDIA_PROBED"
-            : "MEDIA_DISCOVERED",
+            : event.type === EVENTS.MEDIA_BLOB_TRACED
+              ? "MEDIA_BLOB_TRACED"
+              : "MEDIA_DISCOVERED",
         event,
       })
       .then((response) => {
@@ -195,6 +199,15 @@ export function createMediaObserverReportKey(event) {
   const mediaId = payload.id || payload.mediaId || "unknown";
   if (event?.type === EVENTS.MEDIA_DISCOVERED) {
     return `${event.type}:${mediaId}:${payload.detectedBy || "unknown"}`;
+  }
+  if (event?.type === EVENTS.MEDIA_BLOB_TRACED) {
+    return [
+      event.type,
+      mediaId,
+      payload.sourceUrls?.length || 0,
+      payload.candidateIds?.join(",") || "none",
+      Math.floor((payload.appendCount || 0) / 10),
+    ].join(":");
   }
   if (event?.type !== EVENTS.MEDIA_PROBED) {
     return `${event?.type || "unknown"}:${mediaId}`;
