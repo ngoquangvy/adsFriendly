@@ -21,6 +21,7 @@ export const MEDIA_HELPER_EVENTS = Object.freeze({
 export const MEDIA_HELPER_CAPABILITIES = Object.freeze({
   DIRECT_HTTP_DOWNLOAD: "download.direct_http",
   HLS_VOD_DOWNLOAD: "download.hls_vod",
+  DASH_VOD_DOWNLOAD: "download.dash_vod",
   FFMPEG_MUX: "mux.ffmpeg",
 });
 
@@ -100,7 +101,11 @@ export function normalizeHelperDownloadPayload(value = {}) {
     throw new Error("[MediaHelperProtocol] Download candidate is required.");
   }
   const kind = candidate.kind;
-  if (!Object.values({ DIRECT: "direct", HLS: "hls" }).includes(kind)) {
+  if (
+    !Object.values({ DIRECT: "direct", HLS: "hls", DASH: "dash" }).includes(
+      kind,
+    )
+  ) {
     throw new Error(
       `[MediaHelperProtocol] Unsupported media kind "${kind || ""}".`,
     );
@@ -122,17 +127,19 @@ export function normalizeHelperDownloadPayload(value = {}) {
       kind,
       pageUrl: requiredHttpUrl(candidate.pageUrl, "candidate.pageUrl"),
       sourceUrl: kind === "direct" ? sourceUrl : null,
-      manifestUrl: kind === "hls" ? sourceUrl : null,
+      manifestUrl: ["hls", "dash"].includes(kind) ? sourceUrl : null,
       title: optionalString(candidate.title),
       mimeType: optionalString(candidate.mimeType),
-      duration:
-        kind === "hls" ? optionalNonNegativeNumber(candidate.duration) : null,
+      duration: ["hls", "dash"].includes(kind)
+        ? optionalNonNegativeNumber(candidate.duration)
+        : null,
       segmentCount:
-        kind === "hls" ? optionalNonNegativeInteger(candidate.segmentCount) : null,
-      requestContext:
         kind === "hls"
-          ? normalizeHelperRequestContext(candidate.requestContext)
+          ? optionalNonNegativeInteger(candidate.segmentCount)
           : null,
+      requestContext: ["hls", "dash"].includes(kind)
+        ? normalizeHelperRequestContext(candidate.requestContext)
+        : null,
     },
   };
 }

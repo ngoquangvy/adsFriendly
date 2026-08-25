@@ -164,7 +164,7 @@ export function startMediaObserver() {
 
   function scheduleManifestProbe(candidate) {
     if (
-      candidate.kind !== "hls" ||
+      !["hls", "dash"].includes(candidate.kind) ||
       !candidate.manifestUrl ||
       requestedProbes.has(candidate.id)
     )
@@ -177,8 +177,9 @@ export function startMediaObserver() {
         window.postMessage(
           {
             source: "adsfriendly-content",
-            type: "PROBE_HLS_MANIFEST",
+            type: "PROBE_MEDIA_MANIFEST",
             mediaId: candidate.id,
+            kind: candidate.kind,
             manifestUrl: candidate.manifestUrl,
           },
           "*",

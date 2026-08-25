@@ -676,6 +676,198 @@ var AdsFriendlyMainWorld = (() => {
     return `revision-${(hash >>> 0).toString(36)}`;
   }
 
+  // src/media/dash-parser.js
+  var DRM_SCHEMES = [
+    "widevine",
+    "playready",
+    "fairplay",
+    "marlin",
+    "clearkey",
+    "edef8ba9",
+    "9a04f079",
+    "e2719d58",
+    "94ce86fb"
+  ];
+  function parseDashManifest(manifestUrl, body) {
+    try {
+      const xml = String(body || "").replace(/^\uFEFF/, "").trim();
+      const root = xml.match(/<MPD\b([^>]*)>/i);
+      if (!root) return unsupported2("not_dash_manifest");
+      const rootAttributes = parseXmlAttributes(root[1]);
+      const streamType = String(rootAttributes.type || "static").toLowerCase() === "dynamic" ? "live" : "vod";
+      const duration = parseIsoDuration(rootAttributes.mediaPresentationDuration);
+      const protectionSchemes = extractProtectionSchemes(xml);
+      const drm = protectionSchemes.some(
+        (scheme) => DRM_SCHEMES.some((name) => scheme.includes(name))
+      ) ? "confirmed" : protectionSchemes.length ? "suspected" : "none";
+      const tracks = extractTracks(xml);
+      const variants = tracks.filter((track) => track.type === "video");
+      const audioTracks = tracks.filter((track) => track.type === "audio");
+      const subtitles = tracks.filter((track) => track.type === "text");
+      return {
+        kind: "dash",
+        status: "ready",
+        error: null,
+        playlistType: "master",
+        streamType,
+        duration,
+        variants,
+        iframeVariants: [],
+        audioTracks,
+        subtitles,
+        segmentCount: null,
+        partialSegmentCount: null,
+        skippedSegmentCount: null,
+        lowLatency: streamType === "live" && /availabilityTimeOffset\s*=/i.test(xml),
+        mediaSequence: null,
+        discontinuitySequence: null,
+        revisionId: revisionId(manifestUrl, xml),
+        encryptionMethods: protectionSchemes,
+        drm
+      };
+    } catch (error) {
+      return {
+        ...unsupported2("dash_parse_failed"),
+        error: error?.message || "dash_parse_failed"
+      };
+    }
+  }
+  function extractTracks(xml) {
+    const tracks = [];
+    const adaptations = [
+      ...xml.matchAll(/<AdaptationSet\b([^>]*)>([\s\S]*?)<\/AdaptationSet\s*>/gi)
+    ];
+    for (const [, rawAttributes, content] of adaptations) {
+      const adaptation = parseXmlAttributes(rawAttributes);
+      const representations = [
+        ...content.matchAll(/<Representation\b([^>]*?)(?:\/?>)/gi)
+      ];
+      if (!representations.length) {
+        const track = normalizeTrack2(adaptation, adaptation, tracks.length);
+        if (track) tracks.push(track);
+        continue;
+      }
+      for (const [, representationAttributes] of representations) {
+        const representation = parseXmlAttributes(representationAttributes);
+        const track = normalizeTrack2(adaptation, representation, tracks.length);
+        if (track) tracks.push(track);
+      }
+    }
+    if (adaptations.length) return deduplicateTracks(tracks);
+    for (const [, rawAttributes] of xml.matchAll(
+      /<Representation\b([^>]*?)(?:\/?>)/gi
+    )) {
+      const representation = parseXmlAttributes(rawAttributes);
+      const track = normalizeTrack2({}, representation, tracks.length);
+      if (track) tracks.push(track);
+    }
+    return deduplicateTracks(tracks);
+  }
+  function normalizeTrack2(adaptation, representation, index) {
+    const mimeType = representation.mimeType || adaptation.mimeType || null;
+    const contentType = String(
+      adaptation.contentType || representation.contentType || mimeType || ""
+    ).toLowerCase();
+    const type = contentType.includes("video") ? "video" : contentType.includes("audio") ? "audio" : contentType.includes("text") || contentType.includes("subtitle") || contentType.includes("application") ? "text" : null;
+    if (!type) return null;
+    const width = positiveInteger(representation.width || adaptation.width);
+    const height = positiveInteger(representation.height || adaptation.height);
+    const bandwidth = positiveInteger(representation.bandwidth);
+    return {
+      id: representation.id || adaptation.id || `${type}-${index + 1}`,
+      type,
+      bandwidth,
+      averageBandwidth: bandwidth,
+      width,
+      height,
+      resolution: width || height ? { width, height } : null,
+      codecs: representation.codecs || adaptation.codecs || null,
+      mimeType,
+      language: adaptation.lang || representation.lang || null,
+      name: adaptation.label || representation.label || adaptation.lang || null
+    };
+  }
+  function deduplicateTracks(tracks) {
+    const unique = /* @__PURE__ */ new Map();
+    for (const track of tracks) {
+      const key = [
+        track.type,
+        track.id,
+        track.bandwidth,
+        track.width,
+        track.height,
+        track.language
+      ].join(":");
+      unique.set(key, track);
+    }
+    return [...unique.values()].slice(0, 100);
+  }
+  function extractProtectionSchemes(xml) {
+    return [
+      ...new Set(
+        [...xml.matchAll(/<ContentProtection\b([^>]*)>/gi)].map((match) => parseXmlAttributes(match[1]).schemeIdUri).filter(Boolean).map((value) => String(value).toLowerCase().slice(0, 100))
+      )
+    ];
+  }
+  function parseIsoDuration(value) {
+    if (typeof value !== "string" || !value) return null;
+    const match = value.match(
+      /^P(?:(\d+(?:\.\d+)?)D)?(?:T(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?)?$/i
+    );
+    if (!match) return null;
+    const seconds = Number(match[1] || 0) * 86400 + Number(match[2] || 0) * 3600 + Number(match[3] || 0) * 60 + Number(match[4] || 0);
+    return Number.isFinite(seconds) ? seconds : null;
+  }
+  function parseXmlAttributes(value) {
+    const attributes = {};
+    for (const match of String(value || "").matchAll(
+      /([:\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g
+    )) {
+      attributes[match[1]] = decodeXml(match[2] ?? match[3] ?? "");
+    }
+    return attributes;
+  }
+  function decodeXml(value) {
+    return value.replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+  }
+  function positiveInteger(value) {
+    const number = Number(value);
+    return Number.isInteger(number) && number > 0 ? number : null;
+  }
+  function revisionId(url, body) {
+    let hash = 2166136261;
+    const input = `${url || ""}
+${body}`;
+    for (let index = 0; index < input.length; index++) {
+      hash ^= input.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return `dash-${(hash >>> 0).toString(36)}`;
+  }
+  function unsupported2(error) {
+    return {
+      kind: "dash",
+      status: "unsupported",
+      error,
+      playlistType: null,
+      streamType: null,
+      duration: null,
+      variants: [],
+      iframeVariants: [],
+      audioTracks: [],
+      subtitles: [],
+      segmentCount: null,
+      partialSegmentCount: null,
+      skippedSegmentCount: null,
+      lowLatency: false,
+      mediaSequence: null,
+      discontinuitySequence: null,
+      revisionId: null,
+      encryptionMethods: [],
+      drm: "none"
+    };
+  }
+
   // src/media/hls-probe-adapters.js
   var MAX_PROBE_ATTEMPTS = 3;
   var PROTECTED_QUERY_KEYS = Object.freeze([
@@ -809,6 +1001,11 @@ var AdsFriendlyMainWorld = (() => {
   }
   function isUsableMediaProbe(probe = {}) {
     if (probe.status !== "ready") return false;
+    if (probe.kind === "dash") {
+      return Boolean(
+        probe.variants?.length || probe.audioTracks?.length || ["vod", "live"].includes(probe.streamType)
+      );
+    }
     if (probe.playlistType === "master") {
       return Boolean(
         probe.variants?.length || probe.iframeVariants?.length || probe.audioTracks?.length || probe.subtitles?.length
@@ -1397,10 +1594,10 @@ var AdsFriendlyMainWorld = (() => {
       const requestContext2 = createFetchRequestContext(args, url, finalUrl);
       const mimeType = response.headers.get("content-type");
       const candidate = reportMediaSource(finalUrl, mimeType);
-      if (url && finalUrl !== url && candidate?.kind === MEDIA_KINDS.HLS) {
+      if (url && finalUrl !== url && [MEDIA_KINDS.HLS, MEDIA_KINDS.DASH].includes(candidate?.kind)) {
         reportMediaSource(url, mimeType);
       }
-      if (isManifestLike(finalUrl) || candidate?.kind === MEDIA_KINDS.HLS) {
+      if (isManifestLike(finalUrl) || [MEDIA_KINDS.HLS, MEDIA_KINDS.DASH].includes(candidate?.kind)) {
         response.clone().text().then((body) => {
           const primaryProbe = inspect(
             finalUrl,
@@ -1408,7 +1605,7 @@ var AdsFriendlyMainWorld = (() => {
             candidate,
             requestContext2
           );
-          if (!isUsableMediaProbe(primaryProbe)) {
+          if (primaryProbe?.kind === MEDIA_KINDS.HLS && !isUsableMediaProbe(primaryProbe)) {
             resolveAttempts({
               manifestUrl: finalUrl,
               body,
@@ -1441,14 +1638,15 @@ var AdsFriendlyMainWorld = (() => {
         const requestContext2 = createXhrRequestContext(this, url);
         const mimeType = this.getResponseHeader("content-type");
         const candidate = reportMediaSource(url, mimeType);
-        if (this.__adsfriendly_url && url !== this.__adsfriendly_url && candidate?.kind === MEDIA_KINDS.HLS) {
+        if (this.__adsfriendly_url && url !== this.__adsfriendly_url && [MEDIA_KINDS.HLS, MEDIA_KINDS.DASH].includes(candidate?.kind)) {
           reportMediaSource(this.__adsfriendly_url, mimeType);
         }
-        if (!isManifestLike(url) && candidate?.kind !== MEDIA_KINDS.HLS) return;
+        if (!isManifestLike(url) && ![MEDIA_KINDS.HLS, MEDIA_KINDS.DASH].includes(candidate?.kind))
+          return;
         readXhrResponseBody(this).then((body) => {
           if (typeof body !== "string") return;
           const primaryProbe = inspect(url, body, candidate, requestContext2);
-          if (!isUsableMediaProbe(primaryProbe)) {
+          if (primaryProbe?.kind === MEDIA_KINDS.HLS && !isUsableMediaProbe(primaryProbe)) {
             resolveAttempts({
               manifestUrl: url,
               body,
@@ -1492,14 +1690,17 @@ var AdsFriendlyMainWorld = (() => {
   }) {
     let stopped = false;
     const onProbeRequest = (messageEvent) => {
-      if (stopped || messageEvent.source !== window || messageEvent.data?.source !== "adsfriendly-content" || messageEvent.data?.type !== "PROBE_HLS_MANIFEST" || !policy.can(CAPABILITIES.MEDIA_OBSERVE))
+      if (stopped || messageEvent.source !== window || messageEvent.data?.source !== "adsfriendly-content" || !["PROBE_HLS_MANIFEST", "PROBE_MEDIA_MANIFEST"].includes(
+        messageEvent.data?.type
+      ) || !policy.can(CAPABILITIES.MEDIA_OBSERVE))
         return;
       const manifestUrl = probeGate.claim(messageEvent.data.manifestUrl);
       if (!manifestUrl) return;
+      const requestedKind = messageEvent.data.kind === MEDIA_KINDS.DASH ? MEDIA_KINDS.DASH : MEDIA_KINDS.HLS;
       const candidate = createMediaCandidateFromSource({
         pageUrl: location.href,
         sourceUrl: manifestUrl,
-        mimeType: "application/vnd.apple.mpegurl",
+        mimeType: requestedKind === MEDIA_KINDS.DASH ? "application/dash+xml" : "application/vnd.apple.mpegurl",
         title: document.title || null,
         detectedBy: MEDIA_DETECTION_SOURCES.NETWORK
       });
@@ -1521,7 +1722,8 @@ var AdsFriendlyMainWorld = (() => {
           finalCandidate,
           createFallbackRequestContext(manifestUrl, finalUrl)
         );
-        if (isUsableMediaProbe(primaryProbe)) return primaryProbe;
+        if (requestedKind === MEDIA_KINDS.DASH || isUsableMediaProbe(primaryProbe))
+          return primaryProbe;
         return await resolveAttempts({
           manifestUrl: finalUrl,
           body,
@@ -1599,22 +1801,27 @@ var AdsFriendlyMainWorld = (() => {
   }
   function inspectManifest(manifestUrl, body, candidate, requestContext2 = null, resolutionAttempt = null) {
     analyzeManifest(manifestUrl, body);
-    let hlsCandidate = candidate;
-    if (hlsCandidate?.kind !== MEDIA_KINDS.HLS && typeof body === "string" && body.replace(/^\uFEFF/, "").trimStart().startsWith("#EXTM3U")) {
-      hlsCandidate = reportMediaSource(
+    let manifestCandidate = candidate;
+    if (![MEDIA_KINDS.HLS, MEDIA_KINDS.DASH].includes(manifestCandidate?.kind) && typeof body === "string" && body.replace(/^\uFEFF/, "").trimStart().startsWith("#EXTM3U")) {
+      manifestCandidate = reportMediaSource(
         manifestUrl,
         "application/vnd.apple.mpegurl"
       );
     }
-    if (hlsCandidate?.kind !== MEDIA_KINDS.HLS) return null;
-    const probe = parseHlsManifest(manifestUrl, body);
+    if (manifestCandidate?.kind !== MEDIA_KINDS.DASH && typeof body === "string" && /^\s*(?:<\?xml[^>]*>\s*)?<MPD\b/i.test(body.replace(/^\uFEFF/, ""))) {
+      manifestCandidate = reportMediaSource(manifestUrl, "application/dash+xml");
+    }
+    if (![MEDIA_KINDS.HLS, MEDIA_KINDS.DASH].includes(manifestCandidate?.kind))
+      return null;
+    const parsedProbe = manifestCandidate.kind === MEDIA_KINDS.DASH ? parseDashManifest(manifestUrl, body) : parseHlsManifest(manifestUrl, body);
+    const probe = { kind: manifestCandidate.kind, ...parsedProbe };
     notifyContentScript({
       type: "REGISTERED_EVENT",
       event: createRegisteredEvent(EVENTS.MEDIA_PROBED, {
-        mediaId: hlsCandidate.id,
+        mediaId: manifestCandidate.id,
         pageUrl: location.href,
-        manifestUrl: hlsCandidate.manifestUrl,
-        kind: MEDIA_KINDS.HLS,
+        manifestUrl: manifestCandidate.manifestUrl,
+        kind: manifestCandidate.kind,
         ...probe,
         requestContext: requestContext2,
         resolutionAttempt
@@ -1623,14 +1830,14 @@ var AdsFriendlyMainWorld = (() => {
     return probe;
   }
   function reportProbeFailure(manifestUrl, candidate, error) {
-    if (candidate?.kind !== MEDIA_KINDS.HLS) return;
+    if (![MEDIA_KINDS.HLS, MEDIA_KINDS.DASH].includes(candidate?.kind)) return;
     notifyContentScript({
       type: "REGISTERED_EVENT",
       event: createRegisteredEvent(EVENTS.MEDIA_PROBED, {
         mediaId: candidate.id,
         pageUrl: location.href,
         manifestUrl,
-        kind: MEDIA_KINDS.HLS,
+        kind: candidate.kind,
         status: "failed",
         error
       })

@@ -39,6 +39,13 @@ export function createMediaProbeGate({ maximumRemembered = 100 } = {}) {
 
 export function isUsableMediaProbe(probe = {}) {
   if (probe.status !== "ready") return false;
+  if (probe.kind === "dash") {
+    return Boolean(
+      probe.variants?.length ||
+      probe.audioTracks?.length ||
+      ["vod", "live"].includes(probe.streamType),
+    );
+  }
   if (probe.playlistType === "master") {
     return Boolean(
       probe.variants?.length ||

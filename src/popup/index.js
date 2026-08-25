@@ -37,6 +37,7 @@ let mediaHelperStatus = {
   status: "checking",
   canDownloadDirect: false,
   canDownloadHls: false,
+  canDownloadDash: false,
 };
 let activeMediaTabId = null;
 let mediaRenderSignature = null;
@@ -339,7 +340,7 @@ function createMediaItem(item, tab, helper, itemsById) {
   details.textContent = formatMediaDetails(item);
   copy.append(name, details);
   row.append(kind, copy);
-  if (["direct", "hls"].includes(item.kind)) {
+  if (["direct", "hls", "dash"].includes(item.kind)) {
     const downloadItem = itemsById.get(item.selectedMediaId) || item;
     row.append(createMediaDownloadButton(item, downloadItem, tab, helper));
   }
@@ -428,9 +429,9 @@ function downloadButtonPresentation(availability, helper, item) {
 }
 
 function helperCanDownload(item, helper) {
-  return item.kind === "direct"
-    ? helper.canDownloadDirect === true
-    : helper.canDownloadHls === true;
+  if (item.kind === "direct") return helper.canDownloadDirect === true;
+  if (item.kind === "hls") return helper.canDownloadHls === true;
+  return helper.canDownloadDash === true;
 }
 
 async function setupMediaHelper(button, helper) {
@@ -475,6 +476,7 @@ async function readMediaHelperStatus(force = false) {
         status: "unavailable",
         canDownloadDirect: false,
         canDownloadHls: false,
+        canDownloadDash: false,
         error: response?.error || "Could not read Media Helper status.",
       };
 }
@@ -486,7 +488,9 @@ function helperSummary(helper) {
     return "Media found · Media Helper is not installed.";
   if (
     helper.status === "ready" &&
-    (helper.canDownloadDirect || helper.canDownloadHls)
+    (helper.canDownloadDirect ||
+      helper.canDownloadHls ||
+      helper.canDownloadDash)
   )
     return `Media Helper ${helper.helperVersion || ""} ready.`.trim();
   if (helper.status === "ready")
@@ -588,8 +592,13 @@ function mediaJobDetails(job) {
     Number.isFinite(duration) &&
     duration > 0
   ) {
-    const percent = Math.min(100, Math.round((processedSeconds / duration) * 100));
-    const size = Number.isFinite(downloaded) ? ` · ${formatBytes(downloaded)}` : "";
+    const percent = Math.min(
+      100,
+      Math.round((processedSeconds / duration) * 100),
+    );
+    const size = Number.isFinite(downloaded)
+      ? ` · ${formatBytes(downloaded)}`
+      : "";
     return `${percent}% · ${formatDuration(processedSeconds)} / ${formatDuration(duration)}${size}`;
   }
   if (Number.isFinite(downloaded) && Number.isFinite(total) && total > 0) {

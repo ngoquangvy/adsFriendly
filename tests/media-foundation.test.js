@@ -22,6 +22,7 @@ import {
   tryHlsProbeAttempts,
 } from "../src/main-world/network-capture.js";
 import { createHlsDownloadPlan } from "../src/media/hls-download-plan.js";
+import { parseDashManifest } from "../src/media/dash-parser.js";
 import { downloadResourcesInParallel } from "../src/media/parallel-downloader.js";
 import {
   getMediaDownloadAvailability,
@@ -37,13 +38,10 @@ import { EVENTS, createRegisteredEvent } from "../src/runtime/event-catalog.js";
 import { normalizeMediaRequestContext } from "../src/media/contracts.js";
 
 test("offers a helper setup action independently from downloadable media", () => {
-  assert.deepEqual(
-    helperSetupPresentation({ status: "permission_required" }),
-    {
-      label: "Allow helper connection",
-      title: "Allow AdsFriendly to communicate with the installed Media Helper.",
-    },
-  );
+  assert.deepEqual(helperSetupPresentation({ status: "permission_required" }), {
+    label: "Allow helper connection",
+    title: "Allow AdsFriendly to communicate with the installed Media Helper.",
+  });
   assert.equal(helperSetupPresentation({ status: "ready" }), null);
   assert.equal(
     helperSetupPresentation({ status: "not_installed" }).label,
@@ -85,6 +83,55 @@ test("classifies direct, HLS, DASH, and blob media without treating segments as 
   );
   assert.equal(
     isLikelyMediaSegment("https://cdn.example/movie.mp4", "video/mp4"),
+    false,
+  );
+});
+
+test("parses a static DASH manifest into video and audio choices", () => {
+  const parsed = parseDashManifest(
+    "https://cdn.example/movie/manifest.mpd",
+    `<?xml version="1.0"?>
+      <MPD type="static" mediaPresentationDuration="PT1H26M3.5S">
+        <Period>
+          <AdaptationSet contentType="video" mimeType="video/mp4">
+            <Representation id="v720" bandwidth="2200000" width="1280" height="720" codecs="avc1.64001f" />
+            <Representation id="v1080" bandwidth="4800000" width="1920" height="1080" codecs="avc1.640028" />
+          </AdaptationSet>
+          <AdaptationSet contentType="audio" mimeType="audio/mp4" lang="vi">
+            <Representation id="a1" bandwidth="128000" codecs="mp4a.40.2" />
+          </AdaptationSet>
+        </Period>
+      </MPD>`,
+  );
+  assert.equal(parsed.status, "ready");
+  assert.equal(parsed.streamType, "vod");
+  assert.equal(parsed.duration, 5163.5);
+  assert.deepEqual(
+    parsed.variants.map((variant) => variant.resolution.height),
+    [720, 1080],
+  );
+  assert.equal(parsed.audioTracks[0].language, "vi");
+  assert.equal(parsed.drm, "none");
+});
+
+test("DASH parsing identifies dynamic streams and DRM protection", () => {
+  const parsed = parseDashManifest(
+    "https://cdn.example/live.mpd",
+    `<MPD type="dynamic"><Period><AdaptationSet contentType="video">
+      <ContentProtection schemeIdUri="urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed" value="Widevine" />
+      <Representation id="video" bandwidth="1000000" width="640" height="360" />
+    </AdaptationSet></Period></MPD>`,
+  );
+  assert.equal(parsed.streamType, "live");
+  assert.equal(parsed.drm, "confirmed");
+  assert.equal(
+    getMediaDownloadAvailability({
+      kind: "dash",
+      probeStatus: "ready",
+      streamType: parsed.streamType,
+      drm: parsed.drm,
+      variants: parsed.variants,
+    }).supported,
     false,
   );
 });

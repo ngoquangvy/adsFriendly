@@ -476,7 +476,7 @@ async function writeAll(
 function requestHeaders(job: DownloadJob) {
   return {
     Referer: job.candidate.pageUrl,
-    "User-Agent": "AdsFriendlyMediaHelper/0.3",
+    "User-Agent": "AdsFriendlyMediaHelper/0.4",
   };
 }
 

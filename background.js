@@ -3159,8 +3159,8 @@ var AdsFriendlyBackground = (() => {
   var DOWNLOAD_JOB_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
   function normalizeMediaDownloadJob(value = {}) {
     const candidate = value.candidate;
-    if (!candidate || !["direct", "hls"].includes(candidate.kind)) {
-      throw new Error("[MediaDownload] Direct or HLS candidate required.");
+    if (!candidate || !["direct", "hls", "dash"].includes(candidate.kind)) {
+      throw new Error("[MediaDownload] Direct, HLS, or DASH candidate required.");
     }
     const shared = {
       id: requiredString2(candidate.id, "candidate.id"),
@@ -3222,6 +3222,19 @@ var AdsFriendlyBackground = (() => {
       }
       if (candidate.drm === "suspected" || candidate.drm === "confirmed")
         return { supported: false, reason: "DRM-protected stream." };
+      return { supported: true, reason: null };
+    }
+    if (candidate.kind === "dash") {
+      if (candidate.probeStatus !== "ready")
+        return { supported: false, reason: "DASH manifest is not ready." };
+      if (candidate.drm === "suspected" || candidate.drm === "confirmed")
+        return { supported: false, reason: "DRM-protected stream." };
+      if (candidate.streamType === "live")
+        return { supported: false, reason: "Live DASH is not supported yet." };
+      if (candidate.streamType !== "vod")
+        return { supported: false, reason: "Unknown DASH stream type." };
+      if (!candidate.variants?.length && !candidate.audioTracks?.length)
+        return { supported: false, reason: "DASH manifest has no media tracks." };
       return { supported: true, reason: null };
     }
     if (candidate.kind !== "hls")
@@ -3334,6 +3347,7 @@ var AdsFriendlyBackground = (() => {
   var MEDIA_HELPER_CAPABILITIES = Object.freeze({
     DIRECT_HTTP_DOWNLOAD: "download.direct_http",
     HLS_VOD_DOWNLOAD: "download.hls_vod",
+    DASH_VOD_DOWNLOAD: "download.dash_vod",
     FFMPEG_MUX: "mux.ffmpeg"
   });
   function normalizeHelperEvent(value = {}) {
@@ -3433,6 +3447,7 @@ var AdsFriendlyBackground = (() => {
         capabilities,
         canDownloadDirect: capabilities[MEDIA_HELPER_CAPABILITIES.DIRECT_HTTP_DOWNLOAD] === true,
         canDownloadHls: capabilities[MEDIA_HELPER_CAPABILITIES.HLS_VOD_DOWNLOAD] === true,
+        canDownloadDash: capabilities[MEDIA_HELPER_CAPABILITIES.DASH_VOD_DOWNLOAD] === true,
         canMuxWithFfmpeg: capabilities[MEDIA_HELPER_CAPABILITIES.FFMPEG_MUX] === true
       });
     } catch (error) {
@@ -3603,6 +3618,7 @@ var AdsFriendlyBackground = (() => {
       installed: status === MEDIA_HELPER_STATES.READY,
       canDownloadDirect: false,
       canDownloadHls: false,
+      canDownloadDash: false,
       canMuxWithFfmpeg: false,
       helperVersion: null,
       capabilities: {},
@@ -3686,12 +3702,12 @@ var AdsFriendlyBackground = (() => {
         reason: "Media Helper must be installed and available to download video."
       };
     }
-    const capabilityReady = candidate.kind === "direct" ? helper.canDownloadDirect : helper.canDownloadHls;
+    const capabilityReady = candidate.kind === "direct" ? helper.canDownloadDirect : candidate.kind === "hls" ? helper.canDownloadHls : helper.canDownloadDash;
     if (!capabilityReady) {
       return {
         status: "helper_not_ready",
         helper,
-        reason: candidate.kind === "direct" ? "This Media Helper build cannot download direct media yet." : "This Media Helper build does not execute HLS downloads yet."
+        reason: candidate.kind === "direct" ? "This Media Helper build cannot download direct media yet." : candidate.kind === "hls" ? "This Media Helper build does not execute HLS downloads yet." : "This Media Helper build does not execute DASH downloads yet."
       };
     }
     const job = normalizeMediaDownloadJob({

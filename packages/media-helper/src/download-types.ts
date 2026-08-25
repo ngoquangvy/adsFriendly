@@ -1,6 +1,6 @@
 export interface DownloadCandidate {
   id: string;
-  kind: "direct" | "hls";
+  kind: "direct" | "hls" | "dash";
   pageUrl: string;
   sourceUrl: string | null;
   manifestUrl: string | null;

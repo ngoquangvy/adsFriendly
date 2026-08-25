@@ -71,7 +71,9 @@ async function createJob({ tabId, mediaId } = {}) {
   const capabilityReady =
     candidate.kind === "direct"
       ? helper.canDownloadDirect
-      : helper.canDownloadHls;
+      : candidate.kind === "hls"
+        ? helper.canDownloadHls
+        : helper.canDownloadDash;
   if (!capabilityReady) {
     return {
       status: "helper_not_ready",
@@ -79,7 +81,9 @@ async function createJob({ tabId, mediaId } = {}) {
       reason:
         candidate.kind === "direct"
           ? "This Media Helper build cannot download direct media yet."
-          : "This Media Helper build does not execute HLS downloads yet.",
+          : candidate.kind === "hls"
+            ? "This Media Helper build does not execute HLS downloads yet."
+            : "This Media Helper build does not execute DASH downloads yet.",
     };
   }
   const job = normalizeMediaDownloadJob({

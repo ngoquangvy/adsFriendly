@@ -580,7 +580,7 @@ var AdsFriendlyMediaFrame = (() => {
       });
     }
     function scheduleManifestProbe(candidate) {
-      if (candidate.kind !== "hls" || !candidate.manifestUrl || requestedProbes.has(candidate.id))
+      if (!["hls", "dash"].includes(candidate.kind) || !candidate.manifestUrl || requestedProbes.has(candidate.id))
         return;
       requestedProbes.add(candidate.id);
       for (const delay of [150, 750, 2e3]) {
@@ -590,8 +590,9 @@ var AdsFriendlyMediaFrame = (() => {
           window.postMessage(
             {
               source: "adsfriendly-content",
-              type: "PROBE_HLS_MANIFEST",
+              type: "PROBE_MEDIA_MANIFEST",
               mediaId: candidate.id,
+              kind: candidate.kind,
               manifestUrl: candidate.manifestUrl
             },
             "*"

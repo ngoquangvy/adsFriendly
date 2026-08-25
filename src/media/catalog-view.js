@@ -13,6 +13,7 @@ export function createMediaCatalogViewSignature({
           helperVersion: helper.helperVersion,
           canDownloadDirect: helper.canDownloadDirect,
           canDownloadHls: helper.canDownloadHls,
+          canDownloadDash: helper.canDownloadDash,
           error: helper.error,
         }
       : null,
@@ -52,7 +53,8 @@ export function helperSetupPresentation(helper) {
   if (helper.status === "permission_required") {
     return {
       label: "Allow helper connection",
-      title: "Allow AdsFriendly to communicate with the installed Media Helper.",
+      title:
+        "Allow AdsFriendly to communicate with the installed Media Helper.",
     };
   }
   if (helper.status === "not_installed") {
@@ -73,7 +75,7 @@ export function formatMediaDetails(item) {
       ? `${item.relatedCount} Blob signals · tracing one source`
       : "Blob signal · tracing network source";
   if (item.kind === "direct") return "Direct video file";
-  if (item.kind === "dash") return "DASH found · parser comes next";
+  if (item.kind === "dash") return dashDetails(item);
   if (item.kind !== "hls") return "Media source found";
 
   if (
@@ -150,6 +152,26 @@ export function formatMediaDetails(item) {
   if (item.drm === "suspected") facts.push("DRM suspected");
   else if (item.encryptionMethods?.length) facts.push("Encrypted");
   return facts.filter(Boolean).join(" · ") || "HLS manifest ready";
+}
+
+function dashDetails(item) {
+  if (item.probeStatus === "failed") return "DASH manifest request failed";
+  if (item.probeStatus === "unsupported") return "DASH manifest not supported";
+  if (item.probeStatus !== "ready")
+    return "DASH manifest found · reading tracks";
+  const facts = [item.streamType === "live" ? "Live DASH" : "DASH VOD"];
+  if (Number.isFinite(item.duration) && item.duration > 0)
+    facts.push(formatDuration(item.duration));
+  const qualities = [...(item.variants || [])]
+    .sort(compareVariantQuality)
+    .map(variantLabel)
+    .filter((label, index, labels) => label && labels.indexOf(label) === index)
+    .slice(0, 4);
+  if (qualities.length) facts.push(qualities.join(" · "));
+  if (item.audioTracks?.length) facts.push(`${item.audioTracks.length} audio`);
+  if (item.subtitles?.length) facts.push(`${item.subtitles.length} subtitles`);
+  if (["suspected", "confirmed"].includes(item.drm)) facts.push("DRM");
+  return facts.join(" · ");
 }
 
 function resolvedHlsDetails(item) {

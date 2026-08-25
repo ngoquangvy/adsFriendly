@@ -101,12 +101,19 @@ test("built helper downloads direct media with ranges, cancellation, and resume"
 });
 
 test("built helper remuxes a discontinuous HLS VOD with FFmpeg", async (t) => {
-  if (!(await executableAvailable("ffmpeg")) || !(await executableAvailable("ffprobe"))) {
+  if (
+    !(await executableAvailable("ffmpeg")) ||
+    !(await executableAvailable("ffprobe"))
+  ) {
     t.skip("FFmpeg integration tools are not installed.");
     return;
   }
-  const fixtureDirectory = await mkdtemp(join(tmpdir(), "adsfriendly-hls-fixture-"));
-  const outputDirectory = await mkdtemp(join(tmpdir(), "adsfriendly-hls-output-"));
+  const fixtureDirectory = await mkdtemp(
+    join(tmpdir(), "adsfriendly-hls-fixture-"),
+  );
+  const outputDirectory = await mkdtemp(
+    join(tmpdir(), "adsfriendly-hls-output-"),
+  );
   t.after(() => rm(fixtureDirectory, { recursive: true, force: true }));
   t.after(() => rm(outputDirectory, { recursive: true, force: true }));
   const manifestPath = join(fixtureDirectory, "index.m3u8");
@@ -144,7 +151,7 @@ test("built helper remuxes a discontinuous HLS VOD with FFmpeg", async (t) => {
       join(fixtureDirectory, "segment%03d.ts"),
       manifestPath,
     ],
-    { windowsHide: true },
+    { windowsHide: true, cwd: fixtureDirectory },
   );
   const playlist = await readFile(manifestPath, "utf8");
   await writeFile(
@@ -154,7 +161,9 @@ test("built helper remuxes a discontinuous HLS VOD with FFmpeg", async (t) => {
 
   const server = createServer(async (request, response) => {
     try {
-      const filename = basename(new URL(request.url, "http://fixture").pathname);
+      const filename = basename(
+        new URL(request.url, "http://fixture").pathname,
+      );
       const bytes = await readFile(join(fixtureDirectory, filename));
       response.setHeader(
         "content-type",
@@ -184,9 +193,136 @@ test("built helper remuxes a discontinuous HLS VOD with FFmpeg", async (t) => {
   const completed = await frames.next(
     (event) =>
       event.requestId === "hls-download-1" &&
-      [MEDIA_HELPER_EVENTS.DOWNLOAD_COMPLETED, MEDIA_HELPER_EVENTS.ERROR].includes(
-        event.type,
-      ),
+      [
+        MEDIA_HELPER_EVENTS.DOWNLOAD_COMPLETED,
+        MEDIA_HELPER_EVENTS.ERROR,
+      ].includes(event.type),
+  );
+  assert.equal(
+    completed.type,
+    MEDIA_HELPER_EVENTS.DOWNLOAD_COMPLETED,
+    completed.payload.message,
+  );
+  const probe = JSON.parse(
+    (
+      await execFileAsync(
+        "ffprobe",
+        [
+          "-v",
+          "error",
+          "-show_entries",
+          "format=duration:stream=codec_type",
+          "-of",
+          "json",
+          completed.payload.outputPath,
+        ],
+        { windowsHide: true },
+      )
+    ).stdout,
+  );
+  assert.ok(Number(probe.format.duration) >= 1.5);
+  assert.deepEqual(
+    [...new Set(probe.streams.map((stream) => stream.codec_type))].sort(),
+    ["audio", "video"],
+  );
+});
+
+test("built helper downloads and muxes a static DASH VOD with FFmpeg", async (t) => {
+  if (
+    !(await executableAvailable("ffmpeg")) ||
+    !(await executableAvailable("ffprobe"))
+  ) {
+    t.skip("FFmpeg integration tools are not installed.");
+    return;
+  }
+  const fixtureDirectory = await mkdtemp(
+    join(tmpdir(), "adsfriendly-dash-fixture-"),
+  );
+  const outputDirectory = await mkdtemp(
+    join(tmpdir(), "adsfriendly-dash-output-"),
+  );
+  t.after(() => rm(fixtureDirectory, { recursive: true, force: true }));
+  t.after(() => rm(outputDirectory, { recursive: true, force: true }));
+  const manifestPath = join(fixtureDirectory, "manifest.mpd");
+  await execFileAsync(
+    "ffmpeg",
+    [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-f",
+      "lavfi",
+      "-i",
+      "testsrc=size=160x90:rate=10",
+      "-f",
+      "lavfi",
+      "-i",
+      "sine=frequency=660:sample_rate=44100",
+      "-t",
+      "2",
+      "-map",
+      "0:v:0",
+      "-map",
+      "1:a:0",
+      "-c:v",
+      "libx264",
+      "-preset",
+      "ultrafast",
+      "-pix_fmt",
+      "yuv420p",
+      "-c:a",
+      "aac",
+      "-seg_duration",
+      "0.5",
+      "-use_template",
+      "1",
+      "-use_timeline",
+      "1",
+      "-f",
+      "dash",
+      manifestPath,
+    ],
+    { windowsHide: true, cwd: fixtureDirectory },
+  );
+
+  const server = createServer(async (request, response) => {
+    try {
+      const filename = basename(
+        new URL(request.url, "http://fixture").pathname,
+      );
+      const bytes = await readFile(join(fixtureDirectory, filename));
+      response.setHeader(
+        "content-type",
+        filename.endsWith(".mpd")
+          ? "application/dash+xml"
+          : "video/iso.segment",
+      );
+      response.end(bytes);
+    } catch {
+      response.writeHead(404).end();
+    }
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const address = server.address();
+  const manifestUrl = `http://127.0.0.1:${address.port}/manifest.mpd`;
+  const child = spawnHelper();
+  t.after(() => child.kill());
+  const frames = createFrameReader(child.stdout);
+  child.stdin.write(
+    frame(dashDownloadRequest("dash-download-1", manifestUrl, outputDirectory)),
+  );
+  const started = await frames.next(
+    (event) => event.type === MEDIA_HELPER_EVENTS.DOWNLOAD_STARTED,
+  );
+  assert.equal(started.payload.adapterId, "dash-ffmpeg");
+  const completed = await frames.next(
+    (event) =>
+      event.requestId === "dash-download-1" &&
+      [
+        MEDIA_HELPER_EVENTS.DOWNLOAD_COMPLETED,
+        MEDIA_HELPER_EVENTS.ERROR,
+      ].includes(event.type),
   );
   assert.equal(
     completed.type,
@@ -267,6 +403,35 @@ function hlsDownloadRequest(jobId, manifestUrl, outputDirectory) {
         mimeType: "application/vnd.apple.mpegurl",
         duration: 2,
         segmentCount: 4,
+        requestContext: {
+          referrer: manifestUrl,
+          documentUrl: manifestUrl,
+          method: "GET",
+          credentials: "omit",
+          requiresBrowserSession: false,
+        },
+      },
+    },
+  };
+}
+
+function dashDownloadRequest(jobId, manifestUrl, outputDirectory) {
+  return {
+    type: MEDIA_HELPER_REQUESTS.DOWNLOAD_START,
+    requestId: jobId,
+    protocolVersion: MEDIA_HELPER_PROTOCOL_VERSION,
+    payload: {
+      jobId,
+      connections: 4,
+      outputDirectory,
+      candidate: {
+        id: "dash-test",
+        kind: "dash",
+        pageUrl: manifestUrl,
+        manifestUrl,
+        title: "fixture-dash",
+        mimeType: "application/dash+xml",
+        duration: 2,
         requestContext: {
           referrer: manifestUrl,
           documentUrl: manifestUrl,

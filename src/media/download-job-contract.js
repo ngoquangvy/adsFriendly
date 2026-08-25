@@ -3,8 +3,8 @@ export const DOWNLOAD_JOB_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 export function normalizeMediaDownloadJob(value = {}) {
   const candidate = value.candidate;
-  if (!candidate || !["direct", "hls"].includes(candidate.kind)) {
-    throw new Error("[MediaDownload] Direct or HLS candidate required.");
+  if (!candidate || !["direct", "hls", "dash"].includes(candidate.kind)) {
+    throw new Error("[MediaDownload] Direct, HLS, or DASH candidate required.");
   }
   const shared = {
     id: requiredString(candidate.id, "candidate.id"),
@@ -71,6 +71,19 @@ export function getMediaDownloadAvailability(candidate = {}) {
     }
     if (candidate.drm === "suspected" || candidate.drm === "confirmed")
       return { supported: false, reason: "DRM-protected stream." };
+    return { supported: true, reason: null };
+  }
+  if (candidate.kind === "dash") {
+    if (candidate.probeStatus !== "ready")
+      return { supported: false, reason: "DASH manifest is not ready." };
+    if (candidate.drm === "suspected" || candidate.drm === "confirmed")
+      return { supported: false, reason: "DRM-protected stream." };
+    if (candidate.streamType === "live")
+      return { supported: false, reason: "Live DASH is not supported yet." };
+    if (candidate.streamType !== "vod")
+      return { supported: false, reason: "Unknown DASH stream type." };
+    if (!candidate.variants?.length && !candidate.audioTracks?.length)
+      return { supported: false, reason: "DASH manifest has no media tracks." };
     return { supported: true, reason: null };
   }
   if (candidate.kind !== "hls")

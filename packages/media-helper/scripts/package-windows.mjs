@@ -133,9 +133,20 @@ async function verifyExecutable(path) {
   ) {
     throw new Error("Packaged helper returned an invalid HLS capability.");
   }
+  if (
+    typeof response.payload?.capabilities?.["download.dash_vod"] !== "boolean"
+  ) {
+    throw new Error("Packaged helper returned an invalid DASH capability.");
+  }
   process.stdout.write(
     `Verified packaged helper ${response.payload.helperVersion}; HLS ${
-      response.payload.capabilities["download.hls_vod"] ? "enabled" : "unavailable"
+      response.payload.capabilities["download.hls_vod"]
+        ? "enabled"
+        : "unavailable"
+    }; DASH ${
+      response.payload.capabilities["download.dash_vod"]
+        ? "enabled"
+        : "unavailable"
     }.\n`,
   );
 }

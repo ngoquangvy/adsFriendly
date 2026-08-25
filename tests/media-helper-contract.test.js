@@ -160,6 +160,31 @@ test("helper HLS context carries routing facts without arbitrary headers", () =>
   assert.equal("headers" in payload.candidate.requestContext, false);
 });
 
+test("helper accepts a normalized static DASH download", () => {
+  const payload = normalizeHelperDownloadPayload({
+    jobId: "dash-1",
+    candidate: {
+      id: "media-dash",
+      kind: "dash",
+      pageUrl: "https://video.example/watch",
+      manifestUrl: "https://cdn.example/manifest.mpd",
+      duration: 120,
+      requestContext: {
+        documentUrl: "https://video.example/watch",
+        referrer: "https://video.example/",
+        credentials: "omit",
+      },
+    },
+  });
+  assert.equal(payload.candidate.kind, "dash");
+  assert.equal(
+    payload.candidate.manifestUrl,
+    "https://cdn.example/manifest.mpd",
+  );
+  assert.equal(payload.candidate.duration, 120);
+  assert.equal(payload.candidate.segmentCount, null);
+});
+
 test("native host errors distinguish a missing helper from a broken helper", () => {
   assert.equal(
     classifyNativeMessagingError("Specified native messaging host not found."),
@@ -203,6 +228,7 @@ test("helper status exposes only declared download capabilities", async () => {
           capabilities: {
             [MEDIA_HELPER_CAPABILITIES.DIRECT_HTTP_DOWNLOAD]: true,
             "download.hls_vod": false,
+            "download.dash_vod": true,
             "mux.ffmpeg": true,
             ignored: { nested: true },
           },
@@ -214,10 +240,12 @@ test("helper status exposes only declared download capabilities", async () => {
     assert.equal(status.status, MEDIA_HELPER_STATES.READY);
     assert.equal(status.canDownloadDirect, true);
     assert.equal(status.canDownloadHls, false);
+    assert.equal(status.canDownloadDash, true);
     assert.equal(status.canMuxWithFfmpeg, true);
     assert.deepEqual(status.capabilities, {
       "download.direct_http": true,
       "download.hls_vod": false,
+      "download.dash_vod": true,
       "mux.ffmpeg": true,
     });
   } finally {

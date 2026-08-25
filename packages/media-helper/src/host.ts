@@ -15,14 +15,16 @@ import {
 import { DownloadAdapterRegistry } from "./adapter-registry.js";
 import { directHttpAdapter } from "./direct-http-adapter.js";
 import { hlsFfmpegAdapter } from "./hls-ffmpeg-adapter.js";
+import { dashFfmpegAdapter } from "./dash-ffmpeg-adapter.js";
 import { DownloadJobManager } from "./job-manager.js";
 
-const HELPER_VERSION = "0.3.0";
+const HELPER_VERSION = "0.4.0";
 const callerOrigin = process.argv[2] || null;
 const reader = new NativeMessageReader();
 const adapters = new DownloadAdapterRegistry([
   directHttpAdapter,
   hlsFfmpegAdapter,
+  dashFfmpegAdapter,
 ]);
 const jobs = new DownloadJobManager(adapters);
 
@@ -113,6 +115,7 @@ async function inspectCapabilities() {
   return {
     [MEDIA_HELPER_CAPABILITIES.DIRECT_HTTP_DOWNLOAD]: true,
     [MEDIA_HELPER_CAPABILITIES.HLS_VOD_DOWNLOAD]: ffmpeg.available,
+    [MEDIA_HELPER_CAPABILITIES.DASH_VOD_DOWNLOAD]: ffmpeg.available,
     [MEDIA_HELPER_CAPABILITIES.FFMPEG_MUX]: ffmpeg.available,
     ffmpeg,
   };

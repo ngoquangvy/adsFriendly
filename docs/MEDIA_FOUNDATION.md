@@ -102,20 +102,22 @@ extension runtime page and generated bundle are no longer shipped. It can be
 removed after the native helper reaches feature parity.
 
 Blob sources (including the common YouTube player case) remain discovery-only:
-the blob URL does not reveal the underlying adaptive streams. DASH probing and
-blob resolution are later slices. Duplicate unresolved Blob handles from the
-same page player are grouped in the popup. Probe results and download jobs are not
-training labels or video-ad classifications.
+the blob URL does not reveal the underlying adaptive streams. The observer now
+probes both HLS and DASH manifests seen below a Blob-backed player. Static,
+unencrypted DASH VOD is parsed in the extension and downloaded through the
+helper; unresolved MediaSource buffers remain a later slice. Duplicate unresolved
+Blob handles from the same page player are grouped in the popup. Probe results
+and download jobs are not training labels or video-ad classifications.
 
 ## Optional helper boundary
 
 `src/media/helper-contract.js` is the versioned, language-neutral protocol
-contract shared by the extension and `packages/media-helper/`. Helper 0.3 has
+contract shared by the extension and `packages/media-helper/`. Helper 0.4 has
 an adapter registry, a Direct HTTP MP4/WebM adapter with parallel byte-range
-requests, progress, cancellation, and resume metadata, and an FFmpeg-backed HLS
-VOD adapter. HLS preflight rejects live/encrypted streams, bounds the manifest
-tree, validates referenced network resources, and supports discontinuities that
-FFmpeg can remux into MP4. The background bridge keeps transient job status in
+requests, progress, cancellation, and resume metadata, plus FFmpeg-backed HLS
+and DASH VOD adapters. Adaptive preflight rejects live/encrypted streams, bounds
+manifest input, validates referenced network resources, and supports HLS
+discontinuities that FFmpeg can remux into MP4. The background bridge keeps transient job status in
 `chrome.storage.session`; these records remain separate from Settings packages
 and training data.
 

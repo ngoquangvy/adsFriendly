@@ -445,6 +445,19 @@ var AdsFriendlyPopup = (() => {
         return { supported: false, reason: "DRM-protected stream." };
       return { supported: true, reason: null };
     }
+    if (candidate.kind === "dash") {
+      if (candidate.probeStatus !== "ready")
+        return { supported: false, reason: "DASH manifest is not ready." };
+      if (candidate.drm === "suspected" || candidate.drm === "confirmed")
+        return { supported: false, reason: "DRM-protected stream." };
+      if (candidate.streamType === "live")
+        return { supported: false, reason: "Live DASH is not supported yet." };
+      if (candidate.streamType !== "vod")
+        return { supported: false, reason: "Unknown DASH stream type." };
+      if (!candidate.variants?.length && !candidate.audioTracks?.length)
+        return { supported: false, reason: "DASH manifest has no media tracks." };
+      return { supported: true, reason: null };
+    }
     if (candidate.kind !== "hls")
       return {
         supported: false,
@@ -506,6 +519,7 @@ var AdsFriendlyPopup = (() => {
         helperVersion: helper.helperVersion,
         canDownloadDirect: helper.canDownloadDirect,
         canDownloadHls: helper.canDownloadHls,
+        canDownloadDash: helper.canDownloadDash,
         error: helper.error
       } : null,
       items: items.map(mediaRenderFacts)
@@ -559,7 +573,7 @@ ${item.title || "blob"}`;
     if (item.kind === "blob")
       return item.relatedCount > 1 ? `${item.relatedCount} Blob signals \xB7 tracing one source` : "Blob signal \xB7 tracing network source";
     if (item.kind === "direct") return "Direct video file";
-    if (item.kind === "dash") return "DASH found \xB7 parser comes next";
+    if (item.kind === "dash") return dashDetails(item);
     if (item.kind !== "hls") return "Media source found";
     if (item.resolvedStream && item.selectedMediaId && item.selectedMediaId !== item.id)
       return resolvedHlsDetails(item);
@@ -604,6 +618,21 @@ ${item.title || "blob"}`;
     if (item.drm === "suspected") facts.push("DRM suspected");
     else if (item.encryptionMethods?.length) facts.push("Encrypted");
     return facts.filter(Boolean).join(" \xB7 ") || "HLS manifest ready";
+  }
+  function dashDetails(item) {
+    if (item.probeStatus === "failed") return "DASH manifest request failed";
+    if (item.probeStatus === "unsupported") return "DASH manifest not supported";
+    if (item.probeStatus !== "ready")
+      return "DASH manifest found \xB7 reading tracks";
+    const facts = [item.streamType === "live" ? "Live DASH" : "DASH VOD"];
+    if (Number.isFinite(item.duration) && item.duration > 0)
+      facts.push(formatDuration(item.duration));
+    const qualities = [...item.variants || []].sort(compareVariantQuality).map(variantLabel).filter((label, index, labels) => label && labels.indexOf(label) === index).slice(0, 4);
+    if (qualities.length) facts.push(qualities.join(" \xB7 "));
+    if (item.audioTracks?.length) facts.push(`${item.audioTracks.length} audio`);
+    if (item.subtitles?.length) facts.push(`${item.subtitles.length} subtitles`);
+    if (["suspected", "confirmed"].includes(item.drm)) facts.push("DRM");
+    return facts.join(" \xB7 ");
   }
   function resolvedHlsDetails(item) {
     const stream = item.resolvedStream;
@@ -710,7 +739,8 @@ ${item.title || "blob"}`;
   var mediaHelperStatus = {
     status: "checking",
     canDownloadDirect: false,
-    canDownloadHls: false
+    canDownloadHls: false,
+    canDownloadDash: false
   };
   var activeMediaTabId = null;
   var mediaRenderSignature = null;
@@ -972,7 +1002,7 @@ ${item.title || "blob"}`;
     details.textContent = formatMediaDetails(item);
     copy.append(name, details);
     row.append(kind, copy);
-    if (["direct", "hls"].includes(item.kind)) {
+    if (["direct", "hls", "dash"].includes(item.kind)) {
       const downloadItem = itemsById.get(item.selectedMediaId) || item;
       row.append(createMediaDownloadButton(item, downloadItem, tab, helper));
     }
@@ -1056,7 +1086,9 @@ ${item.title || "blob"}`;
     };
   }
   function helperCanDownload(item, helper) {
-    return item.kind === "direct" ? helper.canDownloadDirect === true : helper.canDownloadHls === true;
+    if (item.kind === "direct") return helper.canDownloadDirect === true;
+    if (item.kind === "hls") return helper.canDownloadHls === true;
+    return helper.canDownloadDash === true;
   }
   async function setupMediaHelper(button, helper) {
     try {
@@ -1097,6 +1129,7 @@ ${item.title || "blob"}`;
       status: "unavailable",
       canDownloadDirect: false,
       canDownloadHls: false,
+      canDownloadDash: false,
       error: response?.error || "Could not read Media Helper status."
     };
   }
@@ -1105,7 +1138,7 @@ ${item.title || "blob"}`;
       return "Media found \xB7 allow Media Helper connection to download.";
     if (helper.status === "not_installed")
       return "Media found \xB7 Media Helper is not installed.";
-    if (helper.status === "ready" && (helper.canDownloadDirect || helper.canDownloadHls))
+    if (helper.status === "ready" && (helper.canDownloadDirect || helper.canDownloadHls || helper.canDownloadDash))
       return `Media Helper ${helper.helperVersion || ""} ready.`.trim();
     if (helper.status === "ready")
       return "Media Helper connected \xB7 downloader update required.";
@@ -1195,7 +1228,10 @@ ${item.title || "blob"}`;
     const processedSeconds = job.progress?.processedSeconds;
     const duration = job.progress?.duration;
     if (Number.isFinite(processedSeconds) && Number.isFinite(duration) && duration > 0) {
-      const percent = Math.min(100, Math.round(processedSeconds / duration * 100));
+      const percent = Math.min(
+        100,
+        Math.round(processedSeconds / duration * 100)
+      );
       const size = Number.isFinite(downloaded) ? ` \xB7 ${formatBytes(downloaded)}` : "";
       return `${percent}% \xB7 ${formatDuration2(processedSeconds)} / ${formatDuration2(duration)}${size}`;
     }

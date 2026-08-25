@@ -3,6 +3,7 @@ import { notifyContentScript } from "./bridge.js";
 import { createMediaCandidateFromSource } from "../media/detection.js";
 import { MEDIA_DETECTION_SOURCES, MEDIA_KINDS } from "../media/contracts.js";
 import { parseHlsManifest } from "../media/hls-parser.js";
+import { parseDashManifest } from "../media/dash-parser.js";
 import { createHlsProbeAttempts } from "../media/hls-probe-adapters.js";
 import {
   createMediaProbeGate,
@@ -77,10 +78,17 @@ function installFetchCapture(policy, inspect, resolveAttempts) {
     const requestContext = createFetchRequestContext(args, url, finalUrl);
     const mimeType = response.headers.get("content-type");
     const candidate = reportMediaSource(finalUrl, mimeType);
-    if (url && finalUrl !== url && candidate?.kind === MEDIA_KINDS.HLS) {
+    if (
+      url &&
+      finalUrl !== url &&
+      [MEDIA_KINDS.HLS, MEDIA_KINDS.DASH].includes(candidate?.kind)
+    ) {
       reportMediaSource(url, mimeType);
     }
-    if (isManifestLike(finalUrl) || candidate?.kind === MEDIA_KINDS.HLS) {
+    if (
+      isManifestLike(finalUrl) ||
+      [MEDIA_KINDS.HLS, MEDIA_KINDS.DASH].includes(candidate?.kind)
+    ) {
       response
         .clone()
         .text()
@@ -91,7 +99,10 @@ function installFetchCapture(policy, inspect, resolveAttempts) {
             candidate,
             requestContext,
           );
-          if (!isUsableMediaProbe(primaryProbe)) {
+          if (
+            primaryProbe?.kind === MEDIA_KINDS.HLS &&
+            !isUsableMediaProbe(primaryProbe)
+          ) {
             resolveAttempts({
               manifestUrl: finalUrl,
               body,
@@ -127,16 +138,23 @@ function installXhrCapture(policy, inspect, resolveAttempts) {
       if (
         this.__adsfriendly_url &&
         url !== this.__adsfriendly_url &&
-        candidate?.kind === MEDIA_KINDS.HLS
+        [MEDIA_KINDS.HLS, MEDIA_KINDS.DASH].includes(candidate?.kind)
       ) {
         reportMediaSource(this.__adsfriendly_url, mimeType);
       }
-      if (!isManifestLike(url) && candidate?.kind !== MEDIA_KINDS.HLS) return;
+      if (
+        !isManifestLike(url) &&
+        ![MEDIA_KINDS.HLS, MEDIA_KINDS.DASH].includes(candidate?.kind)
+      )
+        return;
       readXhrResponseBody(this)
         .then((body) => {
           if (typeof body !== "string") return;
           const primaryProbe = inspect(url, body, candidate, requestContext);
-          if (!isUsableMediaProbe(primaryProbe)) {
+          if (
+            primaryProbe?.kind === MEDIA_KINDS.HLS &&
+            !isUsableMediaProbe(primaryProbe)
+          ) {
             resolveAttempts({
               manifestUrl: url,
               body,
@@ -185,16 +203,25 @@ function installFallbackProbe({
       stopped ||
       messageEvent.source !== window ||
       messageEvent.data?.source !== "adsfriendly-content" ||
-      messageEvent.data?.type !== "PROBE_HLS_MANIFEST" ||
+      !["PROBE_HLS_MANIFEST", "PROBE_MEDIA_MANIFEST"].includes(
+        messageEvent.data?.type,
+      ) ||
       !policy.can(CAPABILITIES.MEDIA_OBSERVE)
     )
       return;
     const manifestUrl = probeGate.claim(messageEvent.data.manifestUrl);
     if (!manifestUrl) return;
+    const requestedKind =
+      messageEvent.data.kind === MEDIA_KINDS.DASH
+        ? MEDIA_KINDS.DASH
+        : MEDIA_KINDS.HLS;
     const candidate = createMediaCandidateFromSource({
       pageUrl: location.href,
       sourceUrl: manifestUrl,
-      mimeType: "application/vnd.apple.mpegurl",
+      mimeType:
+        requestedKind === MEDIA_KINDS.DASH
+          ? "application/dash+xml"
+          : "application/vnd.apple.mpegurl",
       title: document.title || null,
       detectedBy: MEDIA_DETECTION_SOURCES.NETWORK,
     });
@@ -221,7 +248,11 @@ function installFallbackProbe({
           finalCandidate,
           createFallbackRequestContext(manifestUrl, finalUrl),
         );
-        if (isUsableMediaProbe(primaryProbe)) return primaryProbe;
+        if (
+          requestedKind === MEDIA_KINDS.DASH ||
+          isUsableMediaProbe(primaryProbe)
+        )
+          return primaryProbe;
 
         return (
           (await resolveAttempts({
@@ -314,29 +345,41 @@ function inspectManifest(
   resolutionAttempt = null,
 ) {
   analyzeManifest(manifestUrl, body);
-  let hlsCandidate = candidate;
+  let manifestCandidate = candidate;
   if (
-    hlsCandidate?.kind !== MEDIA_KINDS.HLS &&
+    ![MEDIA_KINDS.HLS, MEDIA_KINDS.DASH].includes(manifestCandidate?.kind) &&
     typeof body === "string" &&
     body
       .replace(/^\uFEFF/, "")
       .trimStart()
       .startsWith("#EXTM3U")
   ) {
-    hlsCandidate = reportMediaSource(
+    manifestCandidate = reportMediaSource(
       manifestUrl,
       "application/vnd.apple.mpegurl",
     );
   }
-  if (hlsCandidate?.kind !== MEDIA_KINDS.HLS) return null;
-  const probe = parseHlsManifest(manifestUrl, body);
+  if (
+    manifestCandidate?.kind !== MEDIA_KINDS.DASH &&
+    typeof body === "string" &&
+    /^\s*(?:<\?xml[^>]*>\s*)?<MPD\b/i.test(body.replace(/^\uFEFF/, ""))
+  ) {
+    manifestCandidate = reportMediaSource(manifestUrl, "application/dash+xml");
+  }
+  if (![MEDIA_KINDS.HLS, MEDIA_KINDS.DASH].includes(manifestCandidate?.kind))
+    return null;
+  const parsedProbe =
+    manifestCandidate.kind === MEDIA_KINDS.DASH
+      ? parseDashManifest(manifestUrl, body)
+      : parseHlsManifest(manifestUrl, body);
+  const probe = { kind: manifestCandidate.kind, ...parsedProbe };
   notifyContentScript({
     type: "REGISTERED_EVENT",
     event: createRegisteredEvent(EVENTS.MEDIA_PROBED, {
-      mediaId: hlsCandidate.id,
+      mediaId: manifestCandidate.id,
       pageUrl: location.href,
-      manifestUrl: hlsCandidate.manifestUrl,
-      kind: MEDIA_KINDS.HLS,
+      manifestUrl: manifestCandidate.manifestUrl,
+      kind: manifestCandidate.kind,
       ...probe,
       requestContext,
       resolutionAttempt,
@@ -346,14 +389,14 @@ function inspectManifest(
 }
 
 function reportProbeFailure(manifestUrl, candidate, error) {
-  if (candidate?.kind !== MEDIA_KINDS.HLS) return;
+  if (![MEDIA_KINDS.HLS, MEDIA_KINDS.DASH].includes(candidate?.kind)) return;
   notifyContentScript({
     type: "REGISTERED_EVENT",
     event: createRegisteredEvent(EVENTS.MEDIA_PROBED, {
       mediaId: candidate.id,
       pageUrl: location.href,
       manifestUrl,
-      kind: MEDIA_KINDS.HLS,
+      kind: candidate.kind,
       status: "failed",
       error,
     }),
