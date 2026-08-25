@@ -56,9 +56,13 @@ class CdpSession {
 }
 
 async function main() {
-  const urls = process.argv.slice(2).length
-    ? process.argv.slice(2)
-    : DEFAULT_URLS;
+  const argumentsList = process.argv.slice(2);
+  const expectResolvedHls = argumentsList.includes("--expect-resolved-hls");
+  const requestedUrls = argumentsList.filter(
+    (value) => value !== "--" && value !== "--expect-resolved-hls",
+  );
+  const urls = requestedUrls.length ? requestedUrls : DEFAULT_URLS;
+  const protectionMode = process.env.PROTECTION_MODE || "auto";
   const profileDir = path.join(tmpdir(), `adsfriendly-live-e2e-${Date.now()}`);
   const chrome = spawn(
     CHROME,
@@ -106,7 +110,7 @@ async function main() {
       await setExtensionState(worker, {
         appSettings: {
           enabled: true,
-          protectionMode: "auto",
+          protectionMode,
           featureOverrides: {},
         },
         isEnabled: true,
@@ -125,13 +129,30 @@ async function main() {
     }
 
     console.log(JSON.stringify({ mode, extensionId, results }, null, 2));
-    if (results.some((result) => result.error)) process.exitCode = 1;
+    if (
+      results.some((result) => result.error) ||
+      (expectResolvedHls &&
+        results.some((result) => !hasResolvedHls(result.mediaCatalogs)))
+    )
+      process.exitCode = 1;
   } finally {
     sessions.forEach((session) => session.close());
     chrome.kill();
     await waitForExit(chrome);
     await rmWithRetry(profileDir);
   }
+}
+
+function hasResolvedHls(catalogs = {}) {
+  return Object.values(catalogs)
+    .flat()
+    .some(
+      (item) =>
+        item.kind === "hls" &&
+        ["ready", "resolved"].includes(item.resolutionStatus) &&
+        item.resolvedStream?.streamType === "vod" &&
+        item.resolvedStream.segmentCount > 0,
+    );
 }
 
 async function testSite(harness, url) {
@@ -167,8 +188,10 @@ async function testSite(harness, url) {
       `(() => ({ x: Math.round(window.innerWidth / 2), y: Math.min(420, Math.round(window.innerHeight / 2)) }))()`,
     );
 
-    await dispatchClick(page, clickPoint.x, clickPoint.y);
-    await delay(Number(process.env.CLICK_WAIT_MS || 4500));
+    if (process.env.SKIP_CLICK !== "1") {
+      await dispatchClick(page, clickPoint.x, clickPoint.y);
+      await delay(Number(process.env.CLICK_WAIT_MS || 4500));
+    }
 
     const afterClick = await inspectPage(page);
     const afterTargets = await listTargets();

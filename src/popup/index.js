@@ -9,6 +9,7 @@ import {
 } from "../media/download-job-contract.js";
 import {
   createMediaCatalogViewSignature,
+  formatMediaDetails,
   selectVisibleMediaItems,
 } from "../media/catalog-view.js";
 import { mediaCatalogSessionKey } from "../media/storage-keys.js";
@@ -318,7 +319,7 @@ function createMediaItem(item, tab, helper, itemsById) {
   name.title = sourceUrl;
   const details = document.createElement("span");
   details.className = "media-details";
-  details.textContent = mediaDetails(item);
+  details.textContent = formatMediaDetails(item);
   copy.append(name, details);
   row.append(kind, copy);
   if (["direct", "hls"].includes(item.kind)) {
@@ -587,144 +588,6 @@ function downloadUnavailableLabel(reason = "") {
     return "Waiting";
   if (reason.includes("no media")) return "No media";
   return "Unavailable";
-}
-
-function mediaDetails(item) {
-  if (item.kind === "blob")
-    return item.relatedCount > 1
-      ? `${item.relatedCount} Blob signals · tracing one source`
-      : "Blob signal · tracing network source";
-  if (item.kind === "direct") return "Direct video file";
-  if (item.kind === "dash") return "DASH found · parser comes next";
-  if (item.kind !== "hls") return "Media source found";
-
-  if (
-    item.resolvedStream &&
-    item.selectedMediaId &&
-    item.selectedMediaId !== item.id
-  )
-    return resolvedHlsDetails(item);
-
-  if (item.probeStatus === "failed")
-    return item.probeError === "fallback_fetch_blocked"
-      ? "HLS · page/CORS blocked manifest reading"
-      : "HLS · manifest request or parse failed";
-  if (item.probeStatus === "unsupported")
-    return "HLS · manifest format not supported";
-  if (item.probeStatus !== "ready")
-    return "HLS manifest found · reading qualities";
-
-  if (item.playlistType === "unknown")
-    return "HLS endpoint · waiting for media playlist";
-
-  const facts = [];
-  if (item.playlistType === "master") {
-    const qualityLabels = [...(item.variants || [])]
-      .sort(compareVariantQuality)
-      .map(variantLabel)
-      .filter(
-        (label, index, labels) => label && labels.indexOf(label) === index,
-      )
-      .slice(0, 4);
-    facts.push(
-      qualityLabels.length
-        ? qualityLabels.join(" · ")
-        : item.iframeVariants?.length
-          ? `${item.iframeVariants.length} preview streams · waiting for primary stream`
-          : "Master playlist · waiting for quality streams",
-    );
-    if (item.childManifestIds?.length)
-      facts.push(`${item.childManifestIds.length} active child streams`);
-  } else {
-    if (item.streamType === "unknown")
-      return "HLS media playlist · waiting for segments";
-    const streamLabel =
-      item.streamType === "live"
-        ? item.lowLatency
-          ? "Low-latency live"
-          : "Live stream"
-        : "VOD stream";
-    facts.push(
-      item.parentManifestIds?.length ? `Variant ${streamLabel}` : streamLabel,
-    );
-    if (Number.isFinite(item.duration) && item.duration > 0)
-      facts.push(formatDuration(item.duration));
-    if (Number.isInteger(item.segmentCount) && item.segmentCount > 0)
-      facts.push(`${item.segmentCount} segments`);
-    if (
-      Number.isInteger(item.partialSegmentCount) &&
-      item.partialSegmentCount > 0
-    )
-      facts.push(`${item.partialSegmentCount} parts`);
-    if (
-      Number.isInteger(item.skippedSegmentCount) &&
-      item.skippedSegmentCount > 0
-    )
-      facts.push(`${item.skippedSegmentCount} skipped`);
-    if (
-      item.streamType === "live" &&
-      !item.segmentCount &&
-      !item.partialSegmentCount
-    )
-      facts.push("waiting for segments");
-  }
-  if (item.audioTracks?.length) facts.push(`${item.audioTracks.length} audio`);
-  if (item.subtitles?.length) facts.push(`${item.subtitles.length} subtitles`);
-  if (item.drm === "suspected") facts.push("DRM suspected");
-  else if (item.encryptionMethods?.length) facts.push("Encrypted");
-  return facts.filter(Boolean).join(" · ") || "HLS manifest ready";
-}
-
-function resolvedHlsDetails(item) {
-  const stream = item.resolvedStream;
-  const facts = ["Resolved"];
-  if (stream.resolution?.height) facts.push(`${stream.resolution.height}p`);
-  else if (stream.bandwidth)
-    facts.push(
-      stream.bandwidth >= 1_000_000
-        ? `${(stream.bandwidth / 1_000_000).toFixed(1)} Mbps`
-        : `${Math.round(stream.bandwidth / 1000)} Kbps`,
-    );
-  facts.push(stream.streamType === "vod" ? "VOD" : "Live");
-  if (Number.isFinite(stream.duration) && stream.duration > 0)
-    facts.push(formatDuration(stream.duration));
-  if (stream.segmentCount > 0) facts.push(`${stream.segmentCount} segments`);
-  if (stream.partialSegmentCount > 0)
-    facts.push(`${stream.partialSegmentCount} parts`);
-  if (["suspected", "confirmed"].includes(stream.drm)) facts.push("DRM");
-  else if (stream.encryptionMethods?.length) facts.push("Encrypted");
-  if (item.resolvedRequestContext?.requiresBrowserSession)
-    facts.push("browser session");
-  return facts.join(" · ");
-}
-
-function compareVariantQuality(left, right) {
-  return (
-    (right.resolution?.height || 0) - (left.resolution?.height || 0) ||
-    (right.averageBandwidth || right.bandwidth || 0) -
-      (left.averageBandwidth || left.bandwidth || 0)
-  );
-}
-
-function variantLabel(variant) {
-  if (variant.resolution?.height) return `${variant.resolution.height}p`;
-  const bandwidth = variant.averageBandwidth || variant.bandwidth;
-  if (!Number.isFinite(bandwidth)) return null;
-  return bandwidth >= 1_000_000
-    ? `${(bandwidth / 1_000_000).toFixed(1)} Mbps`
-    : `${Math.round(bandwidth / 1000)} Kbps`;
-}
-
-function formatDuration(seconds) {
-  const rounded = Math.round(seconds);
-  const hours = Math.floor(rounded / 3600);
-  const minutes = Math.floor((rounded % 3600) / 60);
-  const remainingSeconds = rounded % 60;
-  if (hours)
-    return `${hours}:${String(minutes).padStart(2, "0")}:${String(
-      remainingSeconds,
-    ).padStart(2, "0")}`;
-  return `${minutes}:${String(remainingSeconds).padStart(2, "0")}`;
 }
 
 function mediaDisplayName(item, sourceUrl) {

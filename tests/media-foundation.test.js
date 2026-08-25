@@ -29,6 +29,7 @@ import {
 } from "../src/media/download-job-contract.js";
 import {
   createMediaCatalogViewSignature,
+  formatMediaDetails,
   selectVisibleMediaItems,
 } from "../src/media/catalog-view.js";
 import { EVENTS, createRegisteredEvent } from "../src/runtime/event-catalog.js";
@@ -914,4 +915,44 @@ test("media popup groups duplicate unresolved blobs from one player", () => {
   assert.equal(items.length, 1);
   assert.equal(items[0].id, "blob-2");
   assert.equal(items[0].relatedCount, 2);
+});
+
+test("media popup renders a resolved token endpoint instead of Waiting", () => {
+  const token = {
+    id: "token-endpoint",
+    kind: "hls",
+    firstSeenAt: 10,
+    probeStatus: "ready",
+    playlistType: "unknown",
+    resolutionStatus: "resolved",
+    selectedMediaId: "clear-playlist",
+    resolvedStream: {
+      id: "clear-playlist",
+      streamType: "vod",
+      duration: 5163.209,
+      segmentCount: 1726,
+      partialSegmentCount: 0,
+      encryptionMethods: [],
+    },
+  };
+  const clearPlaylist = {
+    id: "clear-playlist",
+    kind: "hls",
+    firstSeenAt: 11,
+    parentManifestIds: [token.id],
+    probeStatus: "ready",
+    playlistType: "media",
+    streamType: "vod",
+    duration: 5163.209,
+    segmentCount: 1726,
+  };
+  const visible = selectVisibleMediaItems([token, clearPlaylist]);
+  assert.deepEqual(
+    visible.map((item) => item.id),
+    [token.id],
+  );
+  assert.equal(
+    formatMediaDetails(visible[0]),
+    "Resolved · VOD · 1:26:03 · 1726 segments",
+  );
 });
