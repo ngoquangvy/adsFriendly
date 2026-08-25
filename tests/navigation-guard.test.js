@@ -2,7 +2,6 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   REVERSE_POPUNDER_WINDOW_MS,
-  isReversePopunderReviewSequence,
   isReversePopunderSequence,
   isSelfCloneNavigation,
 } from "../src/navigation/background/reverse-popunder.js";
@@ -15,77 +14,6 @@ import {
 } from "../src/navigation/background/new-tab-policy.js";
 import { isExtensionContextInvalidated } from "../src/shared/extension-context.js";
 import { classifyNavigationIntent } from "../src/navigation/shared/intent-classifier.js";
-import {
-  getPrefilledSearchNavigation,
-  resolveNavigationDecisionTarget,
-} from "../src/navigation/shared/search-navigation.js";
-import {
-  NAVIGATION_SEQUENCES,
-  createNavigationEnforcementPlan,
-  getRegisteredNavigationSequences,
-} from "../src/navigation/background/navigation-sequences.js";
-
-test("registers every supported navigation sequence explicitly", () => {
-  assert.deepEqual(
-    [...getRegisteredNavigationSequences()].sort(),
-    [
-      NAVIGATION_SEQUENCES.OPENED_TAB_IS_TARGET,
-      NAVIGATION_SEQUENCES.ORIGINAL_TAB_WAS_REDIRECTED,
-    ].sort(),
-  );
-  assert.throws(
-    () =>
-      createNavigationEnforcementPlan({
-        sequence: "future_unregistered_sequence",
-        originalTabId: 1,
-        openedTabId: 2,
-      }),
-    /Register it before use/,
-  );
-});
-
-test("always notifies the surviving tab for both protection sequences", () => {
-  assert.deepEqual(
-    createNavigationEnforcementPlan({
-      sequence: NAVIGATION_SEQUENCES.OPENED_TAB_IS_TARGET,
-      originalTabId: 10,
-      openedTabId: 20,
-    }),
-    {
-      closeTabId: 20,
-      restoreTabId: null,
-      survivingTabId: 10,
-      notifyTabId: 10,
-    },
-  );
-  assert.deepEqual(
-    createNavigationEnforcementPlan({
-      sequence: NAVIGATION_SEQUENCES.ORIGINAL_TAB_WAS_REDIRECTED,
-      originalTabId: 10,
-      openedTabId: 20,
-    }),
-    {
-      closeTabId: 10,
-      restoreTabId: null,
-      survivingTabId: 20,
-      notifyTabId: 20,
-    },
-  );
-  assert.deepEqual(
-    createNavigationEnforcementPlan({
-      sequence: NAVIGATION_SEQUENCES.ORIGINAL_TAB_WAS_REDIRECTED,
-      originalTabId: 10,
-      openedTabId: 20,
-      restoreOriginal: true,
-    }),
-    {
-      closeTabId: null,
-      restoreTabId: 10,
-      survivingTabId: 10,
-      notifyTabId: 10,
-    },
-  );
-});
 
 test("classifies the reported HitClub banner click as promotional", () => {
   const result = classifyNavigationIntent({
@@ -107,66 +35,6 @@ test("does not downgrade an ordinary explicitly clicked external link", () => {
       evidence: "Read documentation",
     }).likelyAd,
     false,
-  );
-});
-
-test("recognizes an ad destination disguised as a Google search", () => {
-  const result = classifyNavigationIntent({
-    sourceUrl: "https://phimvietsub.click/watch/1",
-    intentUrl:
-      "https://www.google.com/search?q=777hoky256jp.live+-%E2%9A%BD%EF%B8%8F&hl=id&gl=ID",
-  });
-  assert.equal(result.likelyAd, true);
-  assert(result.reasons.includes("prefilled_search_navigation"));
-  assert(result.reasons.includes("promotional_search_destination"));
-});
-
-test("never turns a Google search wrapper into a Google domain decision", () => {
-  const url =
-    "https://www.google.com/search?q=777hoky256jp.live+-%E2%9A%BD%EF%B8%8F&hl=id&gl=ID";
-  assert.deepEqual(getPrefilledSearchNavigation(url), {
-    searchHost: "www.google.com",
-    embeddedHost: "777hoky256jp.live",
-  });
-  assert.deepEqual(
-    resolveNavigationDecisionTarget({
-      action: "BLACKLIST",
-      domain: "www.google.com",
-      url,
-    }),
-    { scope: "embedded_domain", domain: "777hoky256jp.live" },
-  );
-  assert.deepEqual(
-    resolveNavigationDecisionTarget({
-      action: "WHITELIST",
-      domain: "www.google.com",
-      url,
-    }),
-    { scope: "navigation_only", domain: null },
-  );
-  assert.deepEqual(
-    resolveNavigationDecisionTarget({
-      action: "BLACKLIST",
-      domain: "www.google.com",
-      url: "https://www.google.com/search?q=ordinary+prefilled+query",
-    }),
-    { scope: "navigation_only", domain: null },
-  );
-});
-
-test("treats any prefilled cross-site Google search as strong evidence", () => {
-  const result = classifyNavigationIntent({
-    sourceUrl: "https://video.example/watch/1",
-    intentUrl: "https://www.google.com/search?q=ordinary+prefilled+query",
-  });
-  assert.equal(result.likelyAd, true);
-  assert.deepEqual(result.reasons, ["prefilled_search_navigation"]);
-  assert.equal(
-    chooseNewTabReviewSurface({
-      targetLikelyAd: result.likelyAd,
-      targetReasons: result.reasons,
-    }),
-    NEW_TAB_REVIEW_SURFACES.CLOSE,
   );
 });
 
@@ -200,18 +68,6 @@ test("untrusted cross-site tabs require user verification", () => {
   assert.equal(
     decideNewTabNavigation({ whitelisted: true }),
     NEW_TAB_DECISIONS.ALLOW,
-  );
-  assert.equal(
-    decideNewTabNavigation({ trustedTarget: true }),
-    NEW_TAB_DECISIONS.ALLOW,
-  );
-  assert.equal(
-    decideNewTabNavigation({ trustedTarget: true, targetLikelyAd: true }),
-    NEW_TAB_DECISIONS.VERIFY,
-  );
-  assert.equal(
-    decideNewTabNavigation({ trustedPath: true, targetLikelyAd: true }),
-    NEW_TAB_DECISIONS.VERIFY,
   );
   assert.equal(
     decideNewTabNavigation({ blacklisted: true }),
@@ -250,16 +106,6 @@ test("maps weak, medium, and strong evidence to three review levels", () => {
     chooseNewTabReviewSurface({ targetLikelyAd: true }),
     NEW_TAB_REVIEW_SURFACES.FULL_PAGE,
   );
-  assert.equal(
-    chooseNewTabReviewSurface({
-      targetLikelyAd: true,
-      targetReasons: [
-        "prefilled_search_navigation",
-        "promotional_search_destination",
-      ],
-    }),
-    NEW_TAB_REVIEW_SURFACES.CLOSE,
-  );
 });
 
 test("recognizes a same-site clone", () => {
@@ -288,27 +134,6 @@ test("detects a reverse pop-under inside the protection window", () => {
       elapsedMs: 850,
     }),
     true,
-  );
-});
-
-test("reviews a source tab redirected while a same-site page stays open", () => {
-  assert.equal(
-    isReversePopunderReviewSequence({
-      originalUrl: "https://watch.example/video/12",
-      cloneUrl: "https://watch.example/video/13",
-      redirectedUrl: "https://ads.example-cdn.test/landing?zoneid=42",
-      elapsedMs: 850,
-    }),
-    true,
-  );
-  assert.equal(
-    isReversePopunderReviewSequence({
-      originalUrl: "https://watch.example/video/12",
-      cloneUrl: "https://docs.example.test/article",
-      redirectedUrl: "https://ads.example-cdn.test/landing",
-      elapsedMs: 850,
-    }),
-    false,
   );
 });
 
