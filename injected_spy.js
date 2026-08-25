@@ -1445,25 +1445,19 @@ var AdsFriendlyMainWorld = (() => {
           reportMediaSource(this.__adsfriendly_url, mimeType);
         }
         if (!isManifestLike(url) && candidate?.kind !== MEDIA_KINDS.HLS) return;
-        try {
-          if (typeof this.responseText === "string") {
-            const primaryProbe = inspect(
-              url,
-              this.responseText,
-              candidate,
-              requestContext2
-            );
-            if (!isUsableMediaProbe(primaryProbe)) {
-              resolveAttempts({
-                manifestUrl: url,
-                body: this.responseText,
-                candidate
-              }).catch(() => {
-              });
-            }
+        readXhrResponseBody(this).then((body) => {
+          if (typeof body !== "string") return;
+          const primaryProbe = inspect(url, body, candidate, requestContext2);
+          if (!isUsableMediaProbe(primaryProbe)) {
+            resolveAttempts({
+              manifestUrl: url,
+              body,
+              candidate
+            }).catch(() => {
+            });
           }
-        } catch {
-        }
+        }).catch(() => {
+        });
       });
       return originalSend.apply(this, args);
     };
@@ -1475,6 +1469,19 @@ var AdsFriendlyMainWorld = (() => {
       if (XMLHttpRequest.prototype.send === sendWrapper)
         XMLHttpRequest.prototype.send = originalSend;
     };
+  }
+  async function readXhrResponseBody(xhr) {
+    const responseType = String(xhr?.responseType || "").toLowerCase();
+    if (!responseType || responseType === "text") {
+      return typeof xhr?.responseText === "string" ? xhr.responseText : null;
+    }
+    if (responseType === "arraybuffer" && xhr?.response instanceof ArrayBuffer) {
+      return new TextDecoder().decode(xhr.response);
+    }
+    if (responseType === "blob" && xhr?.response instanceof Blob) {
+      return xhr.response.text();
+    }
+    return null;
   }
   function installFallbackProbe({
     policy,

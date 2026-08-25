@@ -17,7 +17,10 @@ import {
   normalizeHttpMediaUrl,
 } from "../src/media/probe-gate.js";
 import { createMediaObserverReportKey } from "../src/content/media-observer.js";
-import { tryHlsProbeAttempts } from "../src/main-world/network-capture.js";
+import {
+  readXhrResponseBody,
+  tryHlsProbeAttempts,
+} from "../src/main-world/network-capture.js";
 import { createHlsDownloadPlan } from "../src/media/hls-download-plan.js";
 import { downloadResourcesInParallel } from "../src/media/parallel-downloader.js";
 import {
@@ -325,6 +328,28 @@ test("a directly captured encrypted HLS response resolves through its adapter", 
     if (previousDocument === undefined) delete globalThis.document;
     else globalThis.document = previousDocument;
   }
+});
+
+test("XHR capture decodes text, ArrayBuffer, and Blob manifest bodies", async () => {
+  const manifest = "#EXTM3U\n#EXT-X-TARGETDURATION:4\n";
+  assert.equal(
+    await readXhrResponseBody({ responseType: "", responseText: manifest }),
+    manifest,
+  );
+  assert.equal(
+    await readXhrResponseBody({
+      responseType: "arraybuffer",
+      response: new TextEncoder().encode(manifest).buffer,
+    }),
+    manifest,
+  );
+  assert.equal(
+    await readXhrResponseBody({
+      responseType: "blob",
+      response: new Blob([manifest]),
+    }),
+    manifest,
+  );
 });
 
 test("parses low-latency HLS parts without inventing full segments", () => {
