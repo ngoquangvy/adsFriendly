@@ -3201,6 +3201,7 @@ var AdsFriendlyBackground = (() => {
     MEDIA_DOWNLOAD_CREATE: "media.download.create",
     MEDIA_DOWNLOAD_PAUSE: "media.download.pause",
     MEDIA_DOWNLOAD_OPEN: "media.download.open",
+    MEDIA_DOWNLOAD_CLEAR_HISTORY: "media.download.clear_history",
     MEDIA_DOWNLOAD_REMOVE_HISTORY: "media.download.remove_history",
     MEDIA_DOWNLOAD_REVEAL: "media.download.reveal",
     MEDIA_DOWNLOAD_RESUME: "media.download.resume",
@@ -3230,6 +3231,11 @@ var AdsFriendlyBackground = (() => {
     ),
     [A.MEDIA_DOWNLOAD_OPEN]: action(
       A.MEDIA_DOWNLOAD_OPEN,
+      "background.media-download-jobs",
+      C3.MEDIA_NATIVE_DOWNLOAD
+    ),
+    [A.MEDIA_DOWNLOAD_CLEAR_HISTORY]: action(
+      A.MEDIA_DOWNLOAD_CLEAR_HISTORY,
       "background.media-download-jobs",
       C3.MEDIA_NATIVE_DOWNLOAD
     ),
@@ -3372,6 +3378,58 @@ var AdsFriendlyBackground = (() => {
     if (typeof chrome === "undefined" || !chrome.permissions?.contains)
       return false;
     return chrome.permissions.contains({ permissions });
+  }
+
+  // src/runtime/settings-store.js
+  var SETTINGS_KEY = "appSettings";
+  var DEFAULT_SETTINGS = Object.freeze({
+    enabled: true,
+    protectionMode: PROTECTION_MODES.SAFE,
+    featureOverrides: Object.freeze({}),
+    mediaDownloadConnections: 8
+  });
+  function normalizeSettings(value = {}) {
+    const protectionMode = Object.values(PROTECTION_MODES).includes(
+      value.protectionMode
+    ) ? value.protectionMode : DEFAULT_SETTINGS.protectionMode;
+    return {
+      enabled: value.enabled !== false,
+      protectionMode,
+      featureOverrides: value.featureOverrides && typeof value.featureOverrides === "object" ? { ...value.featureOverrides } : {},
+      mediaDownloadConnections: normalizeMediaDownloadConnections(
+        value.mediaDownloadConnections
+      )
+    };
+  }
+  function normalizeMediaDownloadConnections(value) {
+    const connections = Number(
+      value ?? DEFAULT_SETTINGS.mediaDownloadConnections
+    );
+    return [4, 8, 12, 16].includes(connections) ? connections : DEFAULT_SETTINGS.mediaDownloadConnections;
+  }
+  function migrateLegacySettings(stored = {}) {
+    if (stored[SETTINGS_KEY]) return normalizeSettings(stored[SETTINGS_KEY]);
+    const protectionMode = stored.friendlyMode === false ? PROTECTION_MODES.AUTO : PROTECTION_MODES.SAFE;
+    return normalizeSettings({
+      enabled: stored.isEnabled !== false,
+      protectionMode
+    });
+  }
+  async function loadSettings(storage = chrome.storage.local, { persistMissing = false } = {}) {
+    const stored = await storage.get([SETTINGS_KEY, "isEnabled", "friendlyMode"]);
+    const settings = migrateLegacySettings(stored);
+    if (!stored[SETTINGS_KEY] && persistMissing) {
+      await storage.set({ [SETTINGS_KEY]: settings });
+    }
+    return settings;
+  }
+  function subscribeSettings(listener, storageArea = "local") {
+    const onChanged = (changes, areaName) => {
+      if (areaName !== storageArea || !changes[SETTINGS_KEY]) return;
+      listener(normalizeSettings(changes[SETTINGS_KEY].newValue));
+    };
+    chrome.storage.onChanged.addListener(onChanged);
+    return () => chrome.storage.onChanged.removeListener(onChanged);
   }
 
   // src/media/download-job-contract.js
@@ -3790,6 +3848,24 @@ var AdsFriendlyBackground = (() => {
       removeHistoryEntry(jobId)
     ]);
   }
+  async function clearMediaHelperDownloadHistory() {
+    const snapshot = await chrome.storage.session.get(null);
+    const terminalKeys = Object.entries(snapshot).filter(
+      ([key, value]) => key.startsWith(DOWNLOAD_JOB_PREFIX) && ![
+        "starting",
+        "probing",
+        "downloading",
+        "finalizing",
+        "pausing",
+        "cancelling"
+      ].includes(value?.status)
+    ).map(([key]) => key);
+    await Promise.all([
+      terminalKeys.length ? chrome.storage.session.remove(terminalKeys) : Promise.resolve(),
+      updateHistory(() => [])
+    ]);
+    return { removedCount: terminalKeys.length };
+  }
   async function runMediaHelperOutputAction(action2, outputPath) {
     if (!await hasNativeMessagingPermission()) {
       throw new Error("Native Messaging permission is required.");
@@ -3992,6 +4068,7 @@ var AdsFriendlyBackground = (() => {
       policy,
       handlers: {
         [ACTIONS.MEDIA_DOWNLOAD_CANCEL]: cancelJob,
+        [ACTIONS.MEDIA_DOWNLOAD_CLEAR_HISTORY]: clearJobHistory,
         [ACTIONS.MEDIA_DOWNLOAD_CREATE]: createJob,
         [ACTIONS.MEDIA_DOWNLOAD_PAUSE]: pauseJob,
         [ACTIONS.MEDIA_DOWNLOAD_OPEN]: openJobOutput,
@@ -4037,10 +4114,14 @@ var AdsFriendlyBackground = (() => {
     if (!broker) return { status: "download_disabled" };
     return broker.execute(ACTIONS.MEDIA_DOWNLOAD_REMOVE_HISTORY, payload);
   }
+  async function requestMediaDownloadHistoryClear() {
+    if (!broker) return { status: "download_disabled" };
+    return broker.execute(ACTIONS.MEDIA_DOWNLOAD_CLEAR_HISTORY, {});
+  }
   async function listMediaDownloadJobs() {
     return { status: "ok", items: await listMediaHelperDownloads() };
   }
-  async function createJob({ tabId, mediaId, connections = 8 } = {}) {
+  async function createJob({ tabId, mediaId, connections } = {}) {
     if (!Number.isInteger(tabId) || tabId < 0) return { status: "invalid_tab" };
     if (typeof mediaId !== "string" || !mediaId)
       return { status: "invalid_media" };
@@ -4061,8 +4142,11 @@ var AdsFriendlyBackground = (() => {
       sourceTabId: tabId,
       candidate
     });
+    const settings = await loadSettings();
     return startMediaHelperDownload(job, {
-      connections: normalizeConnections(connections)
+      connections: normalizeMediaDownloadConnections(
+        connections ?? settings.mediaDownloadConnections
+      )
     });
   }
   async function cancelJob({ jobId } = {}) {
@@ -4131,6 +4215,10 @@ var AdsFriendlyBackground = (() => {
     await removeMediaHelperDownloadHistory(jobId);
     return { status: "removed", jobId };
   }
+  async function clearJobHistory() {
+    const { removedCount } = await clearMediaHelperDownloadHistory();
+    return { status: "removed", removedCount };
+  }
   async function restartJob(state, requestedConnections) {
     const candidate = state.candidate || await recoverCandidate(state);
     if (!candidate) {
@@ -4147,9 +4235,10 @@ var AdsFriendlyBackground = (() => {
       sourceTabId: state.sourceTabId,
       candidate
     });
+    const settings = await loadSettings();
     return startMediaHelperDownload(job, {
-      connections: normalizeConnections(
-        requestedConnections ?? state.connections
+      connections: normalizeMediaDownloadConnections(
+        requestedConnections ?? settings.mediaDownloadConnections
       ),
       attempt: Math.max(1, Number(state.attempt) || 1) + 1
     });
@@ -4182,10 +4271,6 @@ var AdsFriendlyBackground = (() => {
     const sessionJob = (await chrome.storage.session.get(key))[key];
     if (sessionJob) return sessionJob;
     return (await listMediaHelperDownloads()).find((item) => item.id === jobId) || null;
-  }
-  function normalizeConnections(value) {
-    const connections = Number(value ?? 8);
-    return [4, 8, 12, 16].includes(connections) ? connections : 8;
   }
   async function removeStaleJobs() {
     const snapshot = await chrome.storage.session.get(null);
@@ -4238,6 +4323,7 @@ var AdsFriendlyBackground = (() => {
     OPEN_MEDIA_DOWNLOAD_OUTPUT: CAPABILITIES.MEDIA_DOWNLOAD,
     REVEAL_MEDIA_DOWNLOAD_OUTPUT: CAPABILITIES.MEDIA_DOWNLOAD,
     REMOVE_MEDIA_DOWNLOAD_HISTORY: CAPABILITIES.MEDIA_DOWNLOAD,
+    CLEAR_MEDIA_DOWNLOAD_HISTORY: CAPABILITIES.MEDIA_DOWNLOAD,
     RESUME_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
     RETRY_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
     GET_MEDIA_DOWNLOAD_JOBS: CAPABILITIES.MEDIA_DOWNLOAD
@@ -4368,7 +4454,8 @@ var AdsFriendlyBackground = (() => {
     if (message.type === "CREATE_MEDIA_DOWNLOAD_JOB")
       return requestMediaDownloadJob({
         tabId: message.tabId,
-        mediaId: message.mediaId
+        mediaId: message.mediaId,
+        connections: message.connections
       });
     if (message.type === "CANCEL_MEDIA_DOWNLOAD_JOB")
       return requestMediaDownloadCancel({ jobId: message.jobId });
@@ -4390,6 +4477,8 @@ var AdsFriendlyBackground = (() => {
       return requestMediaDownloadReveal({ jobId: message.jobId });
     if (message.type === "REMOVE_MEDIA_DOWNLOAD_HISTORY")
       return requestMediaDownloadHistoryRemove({ jobId: message.jobId });
+    if (message.type === "CLEAR_MEDIA_DOWNLOAD_HISTORY")
+      return requestMediaDownloadHistoryClear();
     if (message.type === "GET_MEDIA_DOWNLOAD_JOBS")
       return listMediaDownloadJobs();
     if (message.type === "NEGATIVE_LEARNING")
@@ -4583,48 +4672,6 @@ var AdsFriendlyBackground = (() => {
     }
   }
 
-  // src/runtime/settings-store.js
-  var SETTINGS_KEY = "appSettings";
-  var DEFAULT_SETTINGS = Object.freeze({
-    enabled: true,
-    protectionMode: PROTECTION_MODES.SAFE,
-    featureOverrides: Object.freeze({})
-  });
-  function normalizeSettings(value = {}) {
-    const protectionMode = Object.values(PROTECTION_MODES).includes(
-      value.protectionMode
-    ) ? value.protectionMode : DEFAULT_SETTINGS.protectionMode;
-    return {
-      enabled: value.enabled !== false,
-      protectionMode,
-      featureOverrides: value.featureOverrides && typeof value.featureOverrides === "object" ? { ...value.featureOverrides } : {}
-    };
-  }
-  function migrateLegacySettings(stored = {}) {
-    if (stored[SETTINGS_KEY]) return normalizeSettings(stored[SETTINGS_KEY]);
-    const protectionMode = stored.friendlyMode === false ? PROTECTION_MODES.AUTO : PROTECTION_MODES.SAFE;
-    return normalizeSettings({
-      enabled: stored.isEnabled !== false,
-      protectionMode
-    });
-  }
-  async function loadSettings(storage = chrome.storage.local, { persistMissing = false } = {}) {
-    const stored = await storage.get([SETTINGS_KEY, "isEnabled", "friendlyMode"]);
-    const settings = migrateLegacySettings(stored);
-    if (!stored[SETTINGS_KEY] && persistMissing) {
-      await storage.set({ [SETTINGS_KEY]: settings });
-    }
-    return settings;
-  }
-  function subscribeSettings(listener, storageArea = "local") {
-    const onChanged = (changes, areaName) => {
-      if (areaName !== storageArea || !changes[SETTINGS_KEY]) return;
-      listener(normalizeSettings(changes[SETTINGS_KEY].newValue));
-    };
-    chrome.storage.onChanged.addListener(onChanged);
-    return () => chrome.storage.onChanged.removeListener(onChanged);
-  }
-
   // src/settings-package/schema.js
   var SETTINGS_PACKAGE_SCHEMA = "adsfriendly.settings-package.v1";
   var SETTINGS_PACKAGE_STATE_KEY = "settingsPackageState";
@@ -4734,7 +4781,7 @@ var AdsFriendlyBackground = (() => {
   }
   function hasMeaningfulExistingSettings(snapshot = {}) {
     const settings = normalizeSettings(snapshot.appSettings);
-    const settingsDiffer = settings.enabled !== DEFAULT_SETTINGS.enabled || settings.protectionMode !== DEFAULT_SETTINGS.protectionMode || Object.keys(settings.featureOverrides).length > 0;
+    const settingsDiffer = settings.enabled !== DEFAULT_SETTINGS.enabled || settings.protectionMode !== DEFAULT_SETTINGS.protectionMode || settings.mediaDownloadConnections !== DEFAULT_SETTINGS.mediaDownloadConnections || Object.keys(settings.featureOverrides).length > 0;
     return settingsDiffer || !snapshot.appSettings && (snapshot.isEnabled === false || snapshot.friendlyMode === false) || (snapshot.whitelist?.length || 0) > 0 || (snapshot.blacklist?.length || 0) > 0 || Object.keys(snapshot.userCustomRules || {}).length > 0 || Object.keys(snapshot).some((key) => key.startsWith("p:"));
   }
   function normalizeMetadata(metadata = {}) {

@@ -172,6 +172,8 @@ export function hasMeaningfulExistingSettings(snapshot = {}) {
   const settingsDiffer =
     settings.enabled !== DEFAULT_SETTINGS.enabled ||
     settings.protectionMode !== DEFAULT_SETTINGS.protectionMode ||
+    settings.mediaDownloadConnections !==
+      DEFAULT_SETTINGS.mediaDownloadConnections ||
     Object.keys(settings.featureOverrides).length > 0;
   return (
     settingsDiffer ||

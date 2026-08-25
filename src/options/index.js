@@ -110,6 +110,8 @@ function bindStaticActions() {
   $("btn-dom-export").onclick = exportDomSamples;
   $("btn-dom-clear").onclick = clearDomSamples;
   $("btn-download-refresh").onclick = renderDownloads;
+  $("btn-download-clear").onclick = clearDownloadHistory;
+  $("media-download-connections").onchange = saveDownloadConnections;
   $("btn-reset").onclick = factoryReset;
   bindFeedbackForm();
 }
@@ -140,6 +142,9 @@ async function renderDownloads() {
         : "Media Helper unavailable"
     }`;
     status.style.color = helper?.status === "ready" ? "#94a3b8" : "#f59e0b";
+    $("btn-download-clear").disabled = !jobs.some(
+      (job) => !isActiveDownload(job),
+    );
     if (!jobs.length) {
       const empty = document.createElement("div");
       empty.className = "empty-msg";
@@ -200,6 +205,8 @@ function createDownloadHistoryItem() {
 
 function updateDownloadHistoryItem(row, job, helper) {
   row.dataset.jobId = job.id;
+  const active = isActiveDownload(job);
+  row.classList.toggle("is-terminal", !active);
   const title = row.querySelector(".download-history-title");
   title.textContent =
     job.title || `${String(job.kind || "media").toUpperCase()} download`;
@@ -212,35 +219,23 @@ function updateDownloadHistoryItem(row, job, helper) {
   badge.className = `download-status download-status-${job.status || "unknown"}`;
   badge.textContent = String(job.status || "unknown").toUpperCase();
   const progress = getMediaJobProgress(job);
+  const progressTrack = row.querySelector(".download-progress-track");
+  progressTrack.hidden = !active;
   row.querySelector(".download-progress-bar").style.width =
     `${progress.percent ?? 0}%`;
-  row.querySelector(".download-history-details").textContent =
-    formatMediaJobDetails(job);
-  row.querySelector(".download-output-path").textContent =
-    job.outputPath || "Output file not created yet";
+  const details = row.querySelector(".download-history-details");
+  details.hidden = !active;
+  details.textContent = formatMediaJobDetails(job);
+  const output = row.querySelector(".download-output-path");
+  output.textContent =
+    job.outputPath ||
+    job.error ||
+    (active ? "Preparing output file…" : "No output file");
+  output.title = output.textContent;
   const controls = row.querySelector(".download-history-controls");
-  const selectedConnections = Number(
-    controls.querySelector(".download-connections")?.value,
-  );
   controls.replaceChildren();
-  const connections = document.createElement("select");
-  connections.className = "field-select download-connections";
-  connections.title = "Parallel connections used for retry or resume";
-  for (const value of [4, 8, 12, 16]) {
-    const option = document.createElement("option");
-    option.value = String(value);
-    option.textContent = `${value} connections`;
-    option.selected =
-      value ===
-      (Number.isInteger(selectedConnections)
-        ? selectedConnections
-        : progress.connections);
-    connections.append(option);
-  }
   const primary = getMediaJobPrimaryAction(job);
   const pauseAvailability = getMediaJobPauseAvailability(job);
-  connections.disabled = !primary || ["pause", "cancel"].includes(primary.type);
-  controls.append(connections);
   if (pauseAvailability && !pauseAvailability.supported) {
     const unavailable = document.createElement("button");
     unavailable.className = "btn-secondary download-unavailable";
@@ -251,15 +246,10 @@ function updateDownloadHistoryItem(row, job, helper) {
   }
   if (primary) {
     controls.append(
-      downloadActionButton(
-        primary.label,
-        primary.messageType,
-        job.id,
-        connections,
-        {
-          danger: primary.type === "cancel",
-        },
-      ),
+      downloadActionButton(primary.label, primary.messageType, job.id, {
+        danger: primary.type === "cancel",
+        compact: !active,
+      }),
     );
   }
   if (job.status === "completed" && job.outputPath) {
@@ -270,14 +260,15 @@ function updateDownloadHistoryItem(row, job, helper) {
       "Open",
       "OPEN_MEDIA_DOWNLOAD_OUTPUT",
       job.id,
-      connections,
+      { compact: true },
     );
     const reveal = downloadActionButton(
-      "Open location",
+      "Folder",
       "REVEAL_MEDIA_DOWNLOAD_OUTPUT",
       job.id,
-      connections,
+      { compact: true },
     );
+    reveal.title = "Open file location";
     open.disabled = !outputActionsReady;
     reveal.disabled = !outputActionsReady;
     if (!outputActionsReady) {
@@ -296,13 +287,10 @@ function updateDownloadHistoryItem(row, job, helper) {
     ].includes(job.status)
   ) {
     controls.append(
-      downloadActionButton(
-        "Remove history",
-        "REMOVE_MEDIA_DOWNLOAD_HISTORY",
-        job.id,
-        connections,
-        { danger: true },
-      ),
+      downloadActionButton("Remove", "REMOVE_MEDIA_DOWNLOAD_HISTORY", job.id, {
+        danger: true,
+        compact: true,
+      }),
     );
   }
 }
@@ -311,11 +299,11 @@ function downloadActionButton(
   label,
   messageType,
   jobId,
-  connections,
-  { danger = false } = {},
+  { danger = false, compact = false } = {},
 ) {
   const button = document.createElement("button");
   button.className = danger ? "btn-secondary download-danger" : "btn-secondary";
+  if (compact) button.classList.add("download-compact-action");
   button.textContent = label;
   button.onclick = async () => {
     if (
@@ -330,7 +318,7 @@ function downloadActionButton(
       const response = await chrome.runtime.sendMessage({
         type: messageType,
         jobId,
-        connections: Number(connections.value),
+        connections: Number($("media-download-connections").value || 8),
       });
       if (
         !["started", "pausing", "cancelling", "opened", "removed"].includes(
@@ -352,12 +340,55 @@ function downloadActionButton(
   return button;
 }
 
+function isActiveDownload(job) {
+  return [
+    "starting",
+    "probing",
+    "downloading",
+    "finalizing",
+    "pausing",
+    "cancelling",
+  ].includes(job.status);
+}
+
+async function clearDownloadHistory() {
+  if (
+    !confirm(
+      "Clear all finished download history? Downloaded files will be kept.",
+    )
+  )
+    return;
+  const response = await chrome.runtime.sendMessage({
+    type: "CLEAR_MEDIA_DOWNLOAD_HISTORY",
+  });
+  if (response?.status !== "removed") {
+    $("download-manager-status").textContent =
+      `Could not clear history · ${response?.reason || response?.error || "unknown error"}`;
+    $("download-manager-status").style.color = "#f87171";
+    return;
+  }
+  await renderDownloads();
+}
+
+async function saveDownloadConnections() {
+  const settings = await saveSettings({
+    ...(currentSnapshot.appSettings || {}),
+    mediaDownloadConnections: Number(
+      $("media-download-connections").value || 8,
+    ),
+  });
+  currentSnapshot.appSettings = settings;
+}
+
 async function loadPage() {
   currentSnapshot = await chrome.storage.local.get(null);
   const settings = await loadSettings();
   currentSnapshot.appSettings = settings;
   $("settings-enabled").checked = settings.enabled;
   $("settings-mode").value = settings.protectionMode;
+  $("media-download-connections").value = String(
+    settings.mediaDownloadConnections,
+  );
 
   renderPackageStatus();
   renderStorageHealth();

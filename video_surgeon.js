@@ -495,6 +495,7 @@ var AdsFriendlyVideo = (() => {
     MEDIA_DOWNLOAD_CREATE: "media.download.create",
     MEDIA_DOWNLOAD_PAUSE: "media.download.pause",
     MEDIA_DOWNLOAD_OPEN: "media.download.open",
+    MEDIA_DOWNLOAD_CLEAR_HISTORY: "media.download.clear_history",
     MEDIA_DOWNLOAD_REMOVE_HISTORY: "media.download.remove_history",
     MEDIA_DOWNLOAD_REVEAL: "media.download.reveal",
     MEDIA_DOWNLOAD_RESUME: "media.download.resume",
@@ -524,6 +525,11 @@ var AdsFriendlyVideo = (() => {
     ),
     [A.MEDIA_DOWNLOAD_OPEN]: action(
       A.MEDIA_DOWNLOAD_OPEN,
+      "background.media-download-jobs",
+      C3.MEDIA_NATIVE_DOWNLOAD
+    ),
+    [A.MEDIA_DOWNLOAD_CLEAR_HISTORY]: action(
+      A.MEDIA_DOWNLOAD_CLEAR_HISTORY,
       "background.media-download-jobs",
       C3.MEDIA_NATIVE_DOWNLOAD
     ),
@@ -739,7 +745,8 @@ var AdsFriendlyVideo = (() => {
   var DEFAULT_SETTINGS = Object.freeze({
     enabled: true,
     protectionMode: PROTECTION_MODES.SAFE,
-    featureOverrides: Object.freeze({})
+    featureOverrides: Object.freeze({}),
+    mediaDownloadConnections: 8
   });
   function normalizeSettings(value = {}) {
     const protectionMode = Object.values(PROTECTION_MODES).includes(
@@ -748,8 +755,17 @@ var AdsFriendlyVideo = (() => {
     return {
       enabled: value.enabled !== false,
       protectionMode,
-      featureOverrides: value.featureOverrides && typeof value.featureOverrides === "object" ? { ...value.featureOverrides } : {}
+      featureOverrides: value.featureOverrides && typeof value.featureOverrides === "object" ? { ...value.featureOverrides } : {},
+      mediaDownloadConnections: normalizeMediaDownloadConnections(
+        value.mediaDownloadConnections
+      )
     };
+  }
+  function normalizeMediaDownloadConnections(value) {
+    const connections = Number(
+      value ?? DEFAULT_SETTINGS.mediaDownloadConnections
+    );
+    return [4, 8, 12, 16].includes(connections) ? connections : DEFAULT_SETTINGS.mediaDownloadConnections;
   }
   function migrateLegacySettings(stored = {}) {
     if (stored[SETTINGS_KEY]) return normalizeSettings(stored[SETTINGS_KEY]);

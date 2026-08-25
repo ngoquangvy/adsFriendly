@@ -409,7 +409,8 @@ var AdsFriendlyPicker = (() => {
   var DEFAULT_SETTINGS = Object.freeze({
     enabled: true,
     protectionMode: PROTECTION_MODES.SAFE,
-    featureOverrides: Object.freeze({})
+    featureOverrides: Object.freeze({}),
+    mediaDownloadConnections: 8
   });
   function normalizeSettings(value = {}) {
     const protectionMode = Object.values(PROTECTION_MODES).includes(
@@ -418,8 +419,17 @@ var AdsFriendlyPicker = (() => {
     return {
       enabled: value.enabled !== false,
       protectionMode,
-      featureOverrides: value.featureOverrides && typeof value.featureOverrides === "object" ? { ...value.featureOverrides } : {}
+      featureOverrides: value.featureOverrides && typeof value.featureOverrides === "object" ? { ...value.featureOverrides } : {},
+      mediaDownloadConnections: normalizeMediaDownloadConnections(
+        value.mediaDownloadConnections
+      )
     };
+  }
+  function normalizeMediaDownloadConnections(value) {
+    const connections = Number(
+      value ?? DEFAULT_SETTINGS.mediaDownloadConnections
+    );
+    return [4, 8, 12, 16].includes(connections) ? connections : DEFAULT_SETTINGS.mediaDownloadConnections;
   }
   function migrateLegacySettings(stored = {}) {
     if (stored[SETTINGS_KEY]) return normalizeSettings(stored[SETTINGS_KEY]);

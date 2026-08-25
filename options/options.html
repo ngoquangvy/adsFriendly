@@ -222,6 +222,10 @@
         background: rgba(15, 23, 42, 0.55);
       }
 
+      .download-history-item.is-terminal {
+        padding: 0.75rem 0.85rem;
+      }
+
       .download-history-header,
       .download-history-controls {
         display: flex;
@@ -284,15 +288,46 @@
 
       .download-output-path {
         margin: 0.3rem 0 0.8rem;
-        overflow-wrap: anywhere;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
         color: #64748b;
         font-family: monospace;
       }
 
-      .download-connections {
+      .download-history-item.is-terminal .download-output-path {
+        margin: 0.3rem 0 0.55rem;
+      }
+
+      .download-history-item.is-terminal .download-history-controls {
+        justify-content: flex-start;
+      }
+
+      .download-manager-setting {
+        display: flex;
+        align-items: center;
+        gap: 0.45rem;
+        color: #94a3b8;
+        font-size: 0.72rem;
+      }
+
+      .download-manager-setting .field-select {
         width: auto;
-        min-width: 130px;
-        padding: 0.5rem 0.65rem;
+        min-width: 76px;
+        padding: 0.45rem 0.55rem;
+      }
+
+      .download-manager-actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+      }
+
+      .download-compact-action {
+        padding: 0.35rem 0.55rem;
+        font-size: 0.72rem;
       }
 
       .download-danger {
@@ -427,9 +462,26 @@
                 jobs, and manage completed output files.
               </p>
             </div>
-            <button class="btn-secondary" id="btn-download-refresh">
-              Refresh
-            </button>
+            <div class="download-manager-actions">
+              <label class="download-manager-setting">
+                Parallel connections
+                <select id="media-download-connections" class="field-select">
+                  <option value="4">4</option>
+                  <option value="8" selected>8</option>
+                  <option value="12">12</option>
+                  <option value="16">16</option>
+                </select>
+              </label>
+              <button class="btn-secondary" id="btn-download-refresh">
+                Refresh
+              </button>
+              <button
+                class="btn-secondary download-danger"
+                id="btn-download-clear"
+              >
+                Clear history
+              </button>
+            </div>
           </div>
           <div id="download-manager-status" class="package-status">
             Loading downloads…

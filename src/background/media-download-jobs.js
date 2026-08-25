@@ -1,6 +1,10 @@
 import { ACTIONS } from "../runtime/action-catalog.js";
 import { createActionBroker } from "../runtime/action-broker.js";
 import {
+  loadSettings,
+  normalizeMediaDownloadConnections,
+} from "../runtime/settings-store.js";
+import {
   DOWNLOAD_JOB_MAX_AGE_MS,
   DOWNLOAD_JOB_PREFIX,
   downloadJobKey,
@@ -10,6 +14,7 @@ import {
 import { listDiscoveredMedia } from "./media-catalog.js";
 import {
   cancelMediaHelperDownload,
+  clearMediaHelperDownloadHistory,
   getMediaHelperStatus,
   listMediaHelperDownloads,
   removeMediaHelperDownloadHistory,
@@ -26,6 +31,7 @@ export async function startMediaDownloadJobStore(policy) {
     policy,
     handlers: {
       [ACTIONS.MEDIA_DOWNLOAD_CANCEL]: cancelJob,
+      [ACTIONS.MEDIA_DOWNLOAD_CLEAR_HISTORY]: clearJobHistory,
       [ACTIONS.MEDIA_DOWNLOAD_CREATE]: createJob,
       [ACTIONS.MEDIA_DOWNLOAD_PAUSE]: pauseJob,
       [ACTIONS.MEDIA_DOWNLOAD_OPEN]: openJobOutput,
@@ -80,11 +86,16 @@ export async function requestMediaDownloadHistoryRemove(payload) {
   return broker.execute(ACTIONS.MEDIA_DOWNLOAD_REMOVE_HISTORY, payload);
 }
 
+export async function requestMediaDownloadHistoryClear() {
+  if (!broker) return { status: "download_disabled" };
+  return broker.execute(ACTIONS.MEDIA_DOWNLOAD_CLEAR_HISTORY, {});
+}
+
 export async function listMediaDownloadJobs() {
   return { status: "ok", items: await listMediaHelperDownloads() };
 }
 
-async function createJob({ tabId, mediaId, connections = 8 } = {}) {
+async function createJob({ tabId, mediaId, connections } = {}) {
   if (!Number.isInteger(tabId) || tabId < 0) return { status: "invalid_tab" };
   if (typeof mediaId !== "string" || !mediaId)
     return { status: "invalid_media" };
@@ -107,8 +118,11 @@ async function createJob({ tabId, mediaId, connections = 8 } = {}) {
     sourceTabId: tabId,
     candidate,
   });
+  const settings = await loadSettings();
   return startMediaHelperDownload(job, {
-    connections: normalizeConnections(connections),
+    connections: normalizeMediaDownloadConnections(
+      connections ?? settings.mediaDownloadConnections,
+    ),
   });
 }
 
@@ -188,6 +202,11 @@ async function removeJobHistory({ jobId } = {}) {
   return { status: "removed", jobId };
 }
 
+async function clearJobHistory() {
+  const { removedCount } = await clearMediaHelperDownloadHistory();
+  return { status: "removed", removedCount };
+}
+
 async function restartJob(state, requestedConnections) {
   const candidate = state.candidate || (await recoverCandidate(state));
   if (!candidate) {
@@ -205,9 +224,10 @@ async function restartJob(state, requestedConnections) {
     sourceTabId: state.sourceTabId,
     candidate,
   });
+  const settings = await loadSettings();
   return startMediaHelperDownload(job, {
-    connections: normalizeConnections(
-      requestedConnections ?? state.connections,
+    connections: normalizeMediaDownloadConnections(
+      requestedConnections ?? settings.mediaDownloadConnections,
     ),
     attempt: Math.max(1, Number(state.attempt) || 1) + 1,
   });
@@ -255,11 +275,6 @@ async function readJob(jobId) {
   return (
     (await listMediaHelperDownloads()).find((item) => item.id === jobId) || null
   );
-}
-
-function normalizeConnections(value) {
-  const connections = Number(value ?? 8);
-  return [4, 8, 12, 16].includes(connections) ? connections : 8;
 }
 
 async function removeStaleJobs() {

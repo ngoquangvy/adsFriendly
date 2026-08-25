@@ -6,6 +6,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   enabled: true,
   protectionMode: PROTECTION_MODES.SAFE,
   featureOverrides: Object.freeze({}),
+  mediaDownloadConnections: 8,
 });
 
 export function normalizeSettings(value = {}) {
@@ -21,7 +22,19 @@ export function normalizeSettings(value = {}) {
       value.featureOverrides && typeof value.featureOverrides === "object"
         ? { ...value.featureOverrides }
         : {},
+    mediaDownloadConnections: normalizeMediaDownloadConnections(
+      value.mediaDownloadConnections,
+    ),
   };
+}
+
+export function normalizeMediaDownloadConnections(value) {
+  const connections = Number(
+    value ?? DEFAULT_SETTINGS.mediaDownloadConnections,
+  );
+  return [4, 8, 12, 16].includes(connections)
+    ? connections
+    : DEFAULT_SETTINGS.mediaDownloadConnections;
 }
 
 export function migrateLegacySettings(stored = {}) {

@@ -3,6 +3,7 @@ import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import process from "node:process";
+import { windowsRevealArguments } from "./output-action-arguments.js";
 
 export async function openManagedOutput(rawPath: string): Promise<void> {
   const outputPath = await managedOutputPath(rawPath);
@@ -15,7 +16,7 @@ export async function openManagedOutput(rawPath: string): Promise<void> {
 export async function revealManagedOutput(rawPath: string): Promise<void> {
   const outputPath = await managedOutputPath(rawPath);
   if (process.platform === "win32")
-    return spawnDetached("explorer.exe", ["/select,", outputPath]);
+    return spawnDetached("explorer.exe", windowsRevealArguments(outputPath));
   if (process.platform === "darwin")
     return spawnDetached("open", ["-R", outputPath]);
   return spawnDetached("xdg-open", [resolve(outputPath, "..")]);

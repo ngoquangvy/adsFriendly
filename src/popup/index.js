@@ -406,6 +406,7 @@ function createMediaDownloadButton(item, downloadItem, tab, helper) {
         type: "CREATE_MEDIA_DOWNLOAD_JOB",
         tabId: tab.id,
         mediaId: downloadItem.id,
+        connections: settings?.mediaDownloadConnections ?? 8,
       });
       if (response?.status !== "started")
         throw new Error(
@@ -621,6 +622,7 @@ async function runMediaJobAction(button) {
     const response = await chrome.runtime.sendMessage({
       type: button.dataset.messageType,
       jobId: button.dataset.jobId,
+      connections: settings?.mediaDownloadConnections ?? 8,
     });
     if (!["started", "pausing", "cancelling"].includes(response?.status)) {
       throw new Error(

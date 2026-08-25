@@ -234,6 +234,31 @@ export async function removeMediaHelperDownloadHistory(jobId) {
   ]);
 }
 
+export async function clearMediaHelperDownloadHistory() {
+  const snapshot = await chrome.storage.session.get(null);
+  const terminalKeys = Object.entries(snapshot)
+    .filter(
+      ([key, value]) =>
+        key.startsWith(DOWNLOAD_JOB_PREFIX) &&
+        ![
+          "starting",
+          "probing",
+          "downloading",
+          "finalizing",
+          "pausing",
+          "cancelling",
+        ].includes(value?.status),
+    )
+    .map(([key]) => key);
+  await Promise.all([
+    terminalKeys.length
+      ? chrome.storage.session.remove(terminalKeys)
+      : Promise.resolve(),
+    updateHistory(() => []),
+  ]);
+  return { removedCount: terminalKeys.length };
+}
+
 export async function runMediaHelperOutputAction(action, outputPath) {
   if (!(await hasNativeMessagingPermission())) {
     throw new Error("Native Messaging permission is required.");

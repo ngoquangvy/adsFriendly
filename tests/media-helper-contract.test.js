@@ -21,11 +21,20 @@ import {
   normalizeHelperDownloadPayload,
   normalizeHelperRequest,
 } from "../src/media/helper-contract.js";
+import { windowsRevealArguments } from "../packages/media-helper/src/output-action-arguments.js";
 import {
   MEDIA_HELPER_STATES,
   classifyNativeMessagingError,
   getMediaHelperStatus,
 } from "../src/background/media-helper-bridge.js";
+
+test("Windows reveal keeps the Explorer select switch and path together", () => {
+  const outputPath =
+    "C:\\Users\\Example User\\Downloads\\AdsFriendly\\funny video.mp4";
+  assert.deepEqual(windowsRevealArguments(outputPath), [
+    `/select,${outputPath}`,
+  ]);
+});
 
 test("ad protection is extension-only while the media helper stays optional", () => {
   assert.equal(

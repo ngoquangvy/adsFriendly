@@ -9,6 +9,7 @@ export const ACTIONS = Object.freeze({
   MEDIA_DOWNLOAD_CREATE: "media.download.create",
   MEDIA_DOWNLOAD_PAUSE: "media.download.pause",
   MEDIA_DOWNLOAD_OPEN: "media.download.open",
+  MEDIA_DOWNLOAD_CLEAR_HISTORY: "media.download.clear_history",
   MEDIA_DOWNLOAD_REMOVE_HISTORY: "media.download.remove_history",
   MEDIA_DOWNLOAD_REVEAL: "media.download.reveal",
   MEDIA_DOWNLOAD_RESUME: "media.download.resume",
@@ -40,6 +41,11 @@ export const ACTION_CATALOG = Object.freeze({
   ),
   [A.MEDIA_DOWNLOAD_OPEN]: action(
     A.MEDIA_DOWNLOAD_OPEN,
+    "background.media-download-jobs",
+    C.MEDIA_NATIVE_DOWNLOAD,
+  ),
+  [A.MEDIA_DOWNLOAD_CLEAR_HISTORY]: action(
+    A.MEDIA_DOWNLOAD_CLEAR_HISTORY,
     "background.media-download-jobs",
     C.MEDIA_NATIVE_DOWNLOAD,
   ),

@@ -35,6 +35,7 @@ import {
 import {
   listMediaDownloadJobs,
   requestMediaDownloadCancel,
+  requestMediaDownloadHistoryClear,
   requestMediaDownloadJob,
   requestMediaDownloadHistoryRemove,
   requestMediaDownloadOpen,
@@ -83,6 +84,7 @@ const MESSAGE_CAPABILITIES = Object.freeze({
   OPEN_MEDIA_DOWNLOAD_OUTPUT: CAPABILITIES.MEDIA_DOWNLOAD,
   REVEAL_MEDIA_DOWNLOAD_OUTPUT: CAPABILITIES.MEDIA_DOWNLOAD,
   REMOVE_MEDIA_DOWNLOAD_HISTORY: CAPABILITIES.MEDIA_DOWNLOAD,
+  CLEAR_MEDIA_DOWNLOAD_HISTORY: CAPABILITIES.MEDIA_DOWNLOAD,
   RESUME_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
   RETRY_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
   GET_MEDIA_DOWNLOAD_JOBS: CAPABILITIES.MEDIA_DOWNLOAD,
@@ -219,6 +221,7 @@ async function route(message, sender) {
     return requestMediaDownloadJob({
       tabId: message.tabId,
       mediaId: message.mediaId,
+      connections: message.connections,
     });
   if (message.type === "CANCEL_MEDIA_DOWNLOAD_JOB")
     return requestMediaDownloadCancel({ jobId: message.jobId });
@@ -240,6 +243,8 @@ async function route(message, sender) {
     return requestMediaDownloadReveal({ jobId: message.jobId });
   if (message.type === "REMOVE_MEDIA_DOWNLOAD_HISTORY")
     return requestMediaDownloadHistoryRemove({ jobId: message.jobId });
+  if (message.type === "CLEAR_MEDIA_DOWNLOAD_HISTORY")
+    return requestMediaDownloadHistoryClear();
   if (message.type === "GET_MEDIA_DOWNLOAD_JOBS")
     return listMediaDownloadJobs();
   if (message.type === "NEGATIVE_LEARNING")

@@ -60,6 +60,7 @@ test("media download job creation is registered as a user action", () => {
     ACTIONS.MEDIA_DOWNLOAD_RETRY,
     ACTIONS.MEDIA_DOWNLOAD_OPEN,
     ACTIONS.MEDIA_DOWNLOAD_REVEAL,
+    ACTIONS.MEDIA_DOWNLOAD_CLEAR_HISTORY,
     ACTIONS.MEDIA_DOWNLOAD_REMOVE_HISTORY,
   ]) {
     assert.equal(
