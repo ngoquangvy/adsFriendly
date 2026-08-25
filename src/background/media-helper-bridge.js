@@ -7,6 +7,7 @@ import {
   normalizeHelperEvent,
 } from "../media/helper-contract.js";
 import {
+  DOWNLOAD_HISTORY_KEY,
   DOWNLOAD_JOB_PREFIX,
   downloadJobKey,
   normalizeMediaDownloadJob,
@@ -19,6 +20,7 @@ let cachedStatus = null;
 let cachedAt = 0;
 let statusPromise = null;
 const activePorts = new Map();
+let historyWriteChain = Promise.resolve();
 
 export const MEDIA_HELPER_STATES = Object.freeze({
   PERMISSION_REQUIRED: "permission_required",
@@ -107,14 +109,19 @@ async function probeMediaHelperStatus(timeoutMs) {
 
 export async function startMediaHelperDownload(
   rawJob,
-  { connections = 8 } = {},
+  { connections = 8, attempt = 1 } = {},
 ) {
   if (!(await hasNativeMessagingPermission())) {
     throw new Error("Native Messaging permission is required.");
   }
   const job = normalizeMediaDownloadJob(rawJob);
-  if (activePorts.has(job.id))
+  const previousConnection = activePorts.get(job.id);
+  if (previousConnection && !previousConnection.terminal)
     throw new Error("Download job is already active.");
+  if (previousConnection) {
+    activePorts.delete(job.id);
+    previousConnection.port.disconnect();
+  }
   const requestId = randomId();
   const port = chrome.runtime.connectNative(MEDIA_HELPER_HOST_NAME);
   const state = {
@@ -123,6 +130,9 @@ export async function startMediaHelperDownload(
     kind: job.candidate.kind,
     title: job.candidate.title,
     sourceTabId: job.sourceTabId,
+    candidate: job.candidate,
+    connections,
+    attempt,
     createdAt: job.createdAt,
     updatedAt: Date.now(),
     status: "starting",
@@ -130,24 +140,25 @@ export async function startMediaHelperDownload(
     outputPath: null,
     error: null,
   };
-  activePorts.set(job.id, {
+  await removeHistoryEntry(job.id);
+  const connection = {
     port,
     requestId,
     terminal: false,
+    terminalStatus: "cancelled",
     queue: Promise.resolve(),
-  });
+  };
+  activePorts.set(job.id, connection);
   await persistJobState(state);
 
   port.onMessage.addListener((rawEvent) => {
-    const connection = activePorts.get(job.id);
-    if (!connection) return;
+    if (activePorts.get(job.id) !== connection) return;
     connection.queue = connection.queue.then(() =>
       handleJobEvent(job.id, requestId, rawEvent),
     );
   });
   port.onDisconnect.addListener(() => {
-    const connection = activePorts.get(job.id);
-    if (!connection) return;
+    if (activePorts.get(job.id) !== connection) return;
     const message =
       chrome.runtime.lastError?.message || "Media Helper disconnected.";
     void connection.queue
@@ -172,26 +183,89 @@ export async function startMediaHelperDownload(
   return { status: "started", jobId: job.id };
 }
 
-export async function cancelMediaHelperDownload(jobId) {
+export async function cancelMediaHelperDownload(
+  jobId,
+  { terminalStatus = "cancelled" } = {},
+) {
   const connection = activePorts.get(jobId);
   if (!connection) return { status: "not_running" };
+  connection.terminalStatus =
+    terminalStatus === "paused" ? "paused" : "cancelled";
   connection.port.postMessage({
     type: MEDIA_HELPER_REQUESTS.DOWNLOAD_CANCEL,
     requestId: connection.requestId,
     protocolVersion: MEDIA_HELPER_PROTOCOL_VERSION,
     payload: { jobId },
   });
-  await updateJobState(jobId, { status: "cancelling" });
-  return { status: "cancelling", jobId };
+  const status =
+    connection.terminalStatus === "paused" ? "pausing" : "cancelling";
+  await updateJobState(jobId, { status });
+  return { status, jobId };
 }
 
 export async function listMediaHelperDownloads() {
-  const snapshot = await chrome.storage.session.get(null);
-  return Object.entries(snapshot)
+  const [snapshot, local] = await Promise.all([
+    chrome.storage.session.get(null),
+    chrome.storage.local.get(DOWNLOAD_HISTORY_KEY),
+  ]);
+  const sessionJobs = Object.entries(snapshot)
     .filter(([key]) => key.startsWith(DOWNLOAD_JOB_PREFIX))
     .map(([, value]) => value)
-    .filter((value) => value && typeof value === "object")
-    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    .filter((value) => value && typeof value === "object");
+  const history = Array.isArray(local[DOWNLOAD_HISTORY_KEY])
+    ? local[DOWNLOAD_HISTORY_KEY]
+    : [];
+  const merged = new Map(
+    history
+      .filter((value) => value && typeof value === "object" && value.id)
+      .map((value) => [value.id, { ...value, historyOnly: true }]),
+  );
+  for (const job of sessionJobs) merged.set(job.id, job);
+  return [...merged.values()].sort(
+    (a, b) =>
+      (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0),
+  );
+}
+
+export async function removeMediaHelperDownloadHistory(jobId) {
+  await Promise.all([
+    chrome.storage.session.remove(downloadJobKey(jobId)),
+    removeHistoryEntry(jobId),
+  ]);
+}
+
+export async function runMediaHelperOutputAction(action, outputPath) {
+  if (!(await hasNativeMessagingPermission())) {
+    throw new Error("Native Messaging permission is required.");
+  }
+  const type =
+    action === "open"
+      ? MEDIA_HELPER_REQUESTS.OUTPUT_OPEN
+      : action === "reveal"
+        ? MEDIA_HELPER_REQUESTS.OUTPUT_REVEAL
+        : null;
+  if (!type) throw new Error("Unknown Media Helper output action.");
+  const requestId = randomId();
+  const response = normalizeHelperEvent(
+    await withTimeout(
+      chrome.runtime.sendNativeMessage(MEDIA_HELPER_HOST_NAME, {
+        type,
+        requestId,
+        protocolVersion: MEDIA_HELPER_PROTOCOL_VERSION,
+        payload: { outputPath },
+      }),
+      DEFAULT_TIMEOUT_MS,
+    ),
+  );
+  if (response.requestId !== requestId)
+    throw new Error("Media Helper returned a mismatched request ID.");
+  if (response.type === MEDIA_HELPER_EVENTS.ERROR)
+    throw new Error(
+      response.payload.message || "Media Helper output action failed.",
+    );
+  if (response.type !== MEDIA_HELPER_EVENTS.OUTPUT_OPENED)
+    throw new Error(`Unexpected Media Helper event: ${response.type}.`);
+  return { status: "opened", action, outputPath };
 }
 
 async function handleJobEvent(jobId, requestId, rawEvent) {
@@ -220,8 +294,12 @@ async function handleJobEvent(jobId, requestId, rawEvent) {
       return;
     }
     if (event.type === MEDIA_HELPER_EVENTS.DOWNLOAD_CANCELLED) {
+      const terminalStatus =
+        activePorts.get(jobId)?.terminalStatus === "paused"
+          ? "paused"
+          : "cancelled";
       markTerminal(jobId);
-      await updateJobState(jobId, { status: "cancelled" });
+      await updateJobState(jobId, { status: terminalStatus });
       activePorts.get(jobId)?.port.disconnect();
       return;
     }
@@ -253,7 +331,54 @@ async function updateJobState(jobId, changes) {
   const key = downloadJobKey(jobId);
   const current = (await chrome.storage.session.get(key))[key];
   if (!current) return;
-  await persistJobState({ ...current, ...changes, updatedAt: Date.now() });
+  const next = { ...current, ...changes, updatedAt: Date.now() };
+  await persistJobState(next);
+  if (["completed", "failed", "cancelled", "paused"].includes(next.status))
+    await persistHistoryEntry(next);
+}
+
+async function persistHistoryEntry(state) {
+  const safeState = {
+    id: state.id,
+    mediaId: state.mediaId,
+    kind: state.kind,
+    title: state.title,
+    sourceTabId: state.sourceTabId,
+    createdAt: state.createdAt,
+    updatedAt: state.updatedAt,
+    status: state.status,
+    progress: state.progress ? { ...state.progress } : null,
+    outputPath: state.outputPath,
+    error: state.error,
+    connections: state.connections,
+    attempt: state.attempt,
+  };
+  return updateHistory((history) =>
+    [safeState, ...history.filter((item) => item?.id !== state.id)].slice(
+      0,
+      100,
+    ),
+  );
+}
+
+async function removeHistoryEntry(jobId) {
+  return updateHistory((history) =>
+    history.filter((item) => item?.id !== jobId),
+  );
+}
+
+function updateHistory(mutate) {
+  const operation = historyWriteChain.then(async () => {
+    const local = await chrome.storage.local.get(DOWNLOAD_HISTORY_KEY);
+    const history = Array.isArray(local[DOWNLOAD_HISTORY_KEY])
+      ? local[DOWNLOAD_HISTORY_KEY]
+      : [];
+    const next = mutate(history);
+    if (JSON.stringify(next) === JSON.stringify(history)) return;
+    await chrome.storage.local.set({ [DOWNLOAD_HISTORY_KEY]: next });
+  });
+  historyWriteChain = operation.catch(() => {});
+  return operation;
 }
 
 export function classifyNativeMessagingError(message = "") {

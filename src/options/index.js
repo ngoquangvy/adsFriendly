@@ -12,6 +12,15 @@ import {
   clearDomTrainingSamples,
   listDomTrainingSamples,
 } from "../storage/training-store.js";
+import {
+  DOWNLOAD_HISTORY_KEY,
+  DOWNLOAD_JOB_PREFIX,
+} from "../media/download-job-contract.js";
+import {
+  formatMediaJobDetails,
+  getMediaJobPrimaryAction,
+  getMediaJobProgress,
+} from "../media/download-job-view.js";
 
 const $ = (id) => document.getElementById(id);
 const whitelistEl = $("whitelist-list");
@@ -20,6 +29,7 @@ const domSamplesEl = $("dom-samples-container");
 const packageStatusEl = $("package-status");
 let currentSnapshot = {};
 let storageRefreshTimer = null;
+let downloadRefreshTimer = null;
 
 initialize().catch((error) => showPackageStatus(error.message, true));
 window.addEventListener("unhandledrejection", (event) => {
@@ -37,9 +47,22 @@ async function initialize() {
     chrome.storage.onChanged.removeListener(handleStorageChange),
   );
   await loadPage();
+  await renderDownloads();
+  if (location.hash === "#downloads")
+    $("downloads").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function handleStorageChange(changes, areaName) {
+  if (
+    areaName === "session" &&
+    Object.keys(changes).some((key) => key.startsWith(DOWNLOAD_JOB_PREFIX))
+  ) {
+    scheduleDownloadRefresh();
+    return;
+  }
+  if (areaName === "local" && DOWNLOAD_HISTORY_KEY in changes) {
+    scheduleDownloadRefresh();
+  }
   if (areaName !== "local") return;
   const keys = Object.keys(changes);
   const affectsSettings = keys.some(
@@ -57,6 +80,14 @@ function handleStorageChange(changes, areaName) {
   storageRefreshTimer = setTimeout(() => {
     loadPage().catch((error) => showPackageStatus(error.message, true));
   }, 80);
+}
+
+function scheduleDownloadRefresh() {
+  if (downloadRefreshTimer) return;
+  downloadRefreshTimer = setTimeout(() => {
+    downloadRefreshTimer = null;
+    void renderDownloads();
+  }, 250);
 }
 
 function bindStaticActions() {
@@ -77,8 +108,238 @@ function bindStaticActions() {
   $("btn-dom-refresh").onclick = renderDomSamples;
   $("btn-dom-export").onclick = exportDomSamples;
   $("btn-dom-clear").onclick = clearDomSamples;
+  $("btn-download-refresh").onclick = renderDownloads;
   $("btn-reset").onclick = factoryReset;
   bindFeedbackForm();
+}
+
+async function renderDownloads() {
+  const container = $("download-job-manager");
+  const status = $("download-manager-status");
+  if (!container || !status) return;
+  try {
+    const [jobsResponse, helper] = await Promise.all([
+      chrome.runtime.sendMessage({ type: "GET_MEDIA_DOWNLOAD_JOBS" }),
+      chrome.runtime.sendMessage({ type: "GET_MEDIA_HELPER_STATUS" }),
+    ]);
+    const jobs = Array.isArray(jobsResponse?.items) ? jobsResponse.items : [];
+    const activeCount = jobs.filter((job) =>
+      [
+        "starting",
+        "probing",
+        "downloading",
+        "finalizing",
+        "pausing",
+        "cancelling",
+      ].includes(job.status),
+    ).length;
+    status.textContent = `${jobs.length} jobs · ${activeCount} active · ${
+      helper?.status === "ready"
+        ? `Media Helper ${helper.helperVersion || "ready"}`
+        : "Media Helper unavailable"
+    }`;
+    status.style.color = helper?.status === "ready" ? "#94a3b8" : "#f59e0b";
+    if (!jobs.length) {
+      const empty = document.createElement("div");
+      empty.className = "empty-msg";
+      empty.textContent = "No download history yet.";
+      container.replaceChildren(empty);
+      return;
+    }
+    container.querySelector(".empty-msg")?.remove();
+    const existing = new Map(
+      [...container.querySelectorAll(".download-history-item")].map((row) => [
+        row.dataset.jobId,
+        row,
+      ]),
+    );
+    const visibleIds = new Set();
+    for (const job of jobs) {
+      visibleIds.add(job.id);
+      const row = existing.get(job.id) || createDownloadHistoryItem();
+      updateDownloadHistoryItem(row, job, helper);
+      container.append(row);
+    }
+    for (const [jobId, row] of existing) {
+      if (!visibleIds.has(jobId)) row.remove();
+    }
+  } catch (error) {
+    status.textContent = `Downloads unavailable · ${error.message}`;
+    status.style.color = "#f87171";
+  }
+}
+
+function createDownloadHistoryItem() {
+  const row = document.createElement("article");
+  row.className = "download-history-item";
+  const header = document.createElement("div");
+  header.className = "download-history-header";
+  const title = document.createElement("div");
+  title.className = "download-history-title";
+  const badge = document.createElement("span");
+  badge.className = "download-status";
+  header.append(title, badge);
+
+  const progressTrack = document.createElement("div");
+  progressTrack.className = "download-progress-track";
+  const progressBar = document.createElement("div");
+  progressBar.className = "download-progress-bar";
+  progressTrack.append(progressBar);
+
+  const details = document.createElement("div");
+  details.className = "download-history-details";
+  const output = document.createElement("div");
+  output.className = "download-output-path";
+
+  const controls = document.createElement("div");
+  controls.className = "download-history-controls";
+  row.append(header, progressTrack, details, output, controls);
+  return row;
+}
+
+function updateDownloadHistoryItem(row, job, helper) {
+  row.dataset.jobId = job.id;
+  const title = row.querySelector(".download-history-title");
+  title.textContent =
+    job.title || `${String(job.kind || "media").toUpperCase()} download`;
+  title.title =
+    job.outputPath ||
+    job.candidate?.manifestUrl ||
+    job.candidate?.sourceUrl ||
+    "";
+  const badge = row.querySelector(".download-status");
+  badge.className = `download-status download-status-${job.status || "unknown"}`;
+  badge.textContent = String(job.status || "unknown").toUpperCase();
+  const progress = getMediaJobProgress(job);
+  row.querySelector(".download-progress-bar").style.width =
+    `${progress.percent ?? 0}%`;
+  row.querySelector(".download-history-details").textContent =
+    formatMediaJobDetails(job);
+  row.querySelector(".download-output-path").textContent =
+    job.outputPath || "Output file not created yet";
+  const controls = row.querySelector(".download-history-controls");
+  const selectedConnections = Number(
+    controls.querySelector(".download-connections")?.value,
+  );
+  controls.replaceChildren();
+  const connections = document.createElement("select");
+  connections.className = "field-select download-connections";
+  connections.title = "Parallel connections used for retry or resume";
+  for (const value of [4, 8, 12, 16]) {
+    const option = document.createElement("option");
+    option.value = String(value);
+    option.textContent = `${value} connections`;
+    option.selected =
+      value ===
+      (Number.isInteger(selectedConnections)
+        ? selectedConnections
+        : progress.connections);
+    connections.append(option);
+  }
+  const primary = getMediaJobPrimaryAction(job);
+  connections.disabled = !primary || ["pause", "cancel"].includes(primary.type);
+  controls.append(connections);
+  if (primary) {
+    controls.append(
+      downloadActionButton(
+        primary.label,
+        primary.messageType,
+        job.id,
+        connections,
+        {
+          danger: primary.type === "cancel",
+        },
+      ),
+    );
+  }
+  if (job.status === "completed" && job.outputPath) {
+    const outputActionsReady =
+      helper?.capabilities?.["output.open"] === true &&
+      helper?.capabilities?.["output.reveal"] === true;
+    const open = downloadActionButton(
+      "Open",
+      "OPEN_MEDIA_DOWNLOAD_OUTPUT",
+      job.id,
+      connections,
+    );
+    const reveal = downloadActionButton(
+      "Open location",
+      "REVEAL_MEDIA_DOWNLOAD_OUTPUT",
+      job.id,
+      connections,
+    );
+    open.disabled = !outputActionsReady;
+    reveal.disabled = !outputActionsReady;
+    if (!outputActionsReady) {
+      open.title = reveal.title = "Update Media Helper to use output actions.";
+    }
+    controls.append(open, reveal);
+  }
+  if (
+    ![
+      "starting",
+      "probing",
+      "downloading",
+      "finalizing",
+      "pausing",
+      "cancelling",
+    ].includes(job.status)
+  ) {
+    controls.append(
+      downloadActionButton(
+        "Remove history",
+        "REMOVE_MEDIA_DOWNLOAD_HISTORY",
+        job.id,
+        connections,
+        { danger: true },
+      ),
+    );
+  }
+}
+
+function downloadActionButton(
+  label,
+  messageType,
+  jobId,
+  connections,
+  { danger = false } = {},
+) {
+  const button = document.createElement("button");
+  button.className = danger ? "btn-secondary download-danger" : "btn-secondary";
+  button.textContent = label;
+  button.onclick = async () => {
+    if (
+      messageType === "REMOVE_MEDIA_DOWNLOAD_HISTORY" &&
+      !confirm("Remove this history entry? The downloaded file will be kept.")
+    )
+      return;
+    button.disabled = true;
+    const original = button.textContent;
+    button.textContent = "Working…";
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: messageType,
+        jobId,
+        connections: Number(connections.value),
+      });
+      if (
+        !["started", "pausing", "cancelling", "opened", "removed"].includes(
+          response?.status,
+        )
+      )
+        throw new Error(
+          response?.reason || response?.error || "Download action failed.",
+        );
+      await renderDownloads();
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = original;
+      $("download-manager-status").textContent =
+        `Action failed · ${error.message}`;
+      $("download-manager-status").style.color = "#f87171";
+    }
+  };
+  return button;
 }
 
 async function loadPage() {

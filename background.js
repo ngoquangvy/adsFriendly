@@ -3199,6 +3199,12 @@ var AdsFriendlyBackground = (() => {
   var ACTIONS = Object.freeze({
     MEDIA_DOWNLOAD_CANCEL: "media.download.cancel",
     MEDIA_DOWNLOAD_CREATE: "media.download.create",
+    MEDIA_DOWNLOAD_PAUSE: "media.download.pause",
+    MEDIA_DOWNLOAD_OPEN: "media.download.open",
+    MEDIA_DOWNLOAD_REMOVE_HISTORY: "media.download.remove_history",
+    MEDIA_DOWNLOAD_REVEAL: "media.download.reveal",
+    MEDIA_DOWNLOAD_RESUME: "media.download.resume",
+    MEDIA_DOWNLOAD_RETRY: "media.download.retry",
     VIDEO_ACCELERATE_AUTOMATIC: "video.accelerate.automatic",
     VIDEO_ACCELERATE_USER: "video.accelerate.user",
     VIDEO_RESTORE_PLAYBACK: "video.restore_playback",
@@ -3214,6 +3220,36 @@ var AdsFriendlyBackground = (() => {
     ),
     [A.MEDIA_DOWNLOAD_CREATE]: action(
       A.MEDIA_DOWNLOAD_CREATE,
+      "background.media-download-jobs",
+      C3.MEDIA_NATIVE_DOWNLOAD
+    ),
+    [A.MEDIA_DOWNLOAD_PAUSE]: action(
+      A.MEDIA_DOWNLOAD_PAUSE,
+      "background.media-download-jobs",
+      C3.MEDIA_NATIVE_DOWNLOAD
+    ),
+    [A.MEDIA_DOWNLOAD_OPEN]: action(
+      A.MEDIA_DOWNLOAD_OPEN,
+      "background.media-download-jobs",
+      C3.MEDIA_NATIVE_DOWNLOAD
+    ),
+    [A.MEDIA_DOWNLOAD_REMOVE_HISTORY]: action(
+      A.MEDIA_DOWNLOAD_REMOVE_HISTORY,
+      "background.media-download-jobs",
+      C3.MEDIA_NATIVE_DOWNLOAD
+    ),
+    [A.MEDIA_DOWNLOAD_REVEAL]: action(
+      A.MEDIA_DOWNLOAD_REVEAL,
+      "background.media-download-jobs",
+      C3.MEDIA_NATIVE_DOWNLOAD
+    ),
+    [A.MEDIA_DOWNLOAD_RESUME]: action(
+      A.MEDIA_DOWNLOAD_RESUME,
+      "background.media-download-jobs",
+      C3.MEDIA_NATIVE_DOWNLOAD
+    ),
+    [A.MEDIA_DOWNLOAD_RETRY]: action(
+      A.MEDIA_DOWNLOAD_RETRY,
       "background.media-download-jobs",
       C3.MEDIA_NATIVE_DOWNLOAD
     ),
@@ -3340,6 +3376,7 @@ var AdsFriendlyBackground = (() => {
 
   // src/media/download-job-contract.js
   var DOWNLOAD_JOB_PREFIX = "adsfriendly.mediaDownloadJob.";
+  var DOWNLOAD_HISTORY_KEY = "mediaDownloadHistory";
   var DOWNLOAD_JOB_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
   function normalizeMediaDownloadJob(value = {}) {
     const candidate = value.candidate;
@@ -3517,7 +3554,9 @@ var AdsFriendlyBackground = (() => {
     HELLO: "helper.hello",
     GET_CAPABILITIES: "helper.capabilities.get",
     DOWNLOAD_START: "download.start",
-    DOWNLOAD_CANCEL: "download.cancel"
+    DOWNLOAD_CANCEL: "download.cancel",
+    OUTPUT_OPEN: "output.open",
+    OUTPUT_REVEAL: "output.reveal"
   });
   var MEDIA_HELPER_EVENTS = Object.freeze({
     READY: "helper.ready",
@@ -3526,13 +3565,16 @@ var AdsFriendlyBackground = (() => {
     DOWNLOAD_PROGRESS: "download.progress",
     DOWNLOAD_COMPLETED: "download.completed",
     DOWNLOAD_CANCELLED: "download.cancelled",
+    OUTPUT_OPENED: "output.opened",
     ERROR: "helper.error"
   });
   var MEDIA_HELPER_CAPABILITIES = Object.freeze({
     DIRECT_HTTP_DOWNLOAD: "download.direct_http",
     HLS_VOD_DOWNLOAD: "download.hls_vod",
     DASH_VOD_DOWNLOAD: "download.dash_vod",
-    FFMPEG_MUX: "mux.ffmpeg"
+    FFMPEG_MUX: "mux.ffmpeg",
+    OUTPUT_OPEN: "output.open",
+    OUTPUT_REVEAL: "output.reveal"
   });
   function normalizeHelperEvent(value = {}) {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -3569,6 +3611,7 @@ var AdsFriendlyBackground = (() => {
   var cachedAt = 0;
   var statusPromise = null;
   var activePorts = /* @__PURE__ */ new Map();
+  var historyWriteChain = Promise.resolve();
   var MEDIA_HELPER_STATES = Object.freeze({
     PERMISSION_REQUIRED: "permission_required",
     NOT_INSTALLED: "not_installed",
@@ -3643,13 +3686,18 @@ var AdsFriendlyBackground = (() => {
       });
     }
   }
-  async function startMediaHelperDownload(rawJob, { connections = 8 } = {}) {
+  async function startMediaHelperDownload(rawJob, { connections = 8, attempt = 1 } = {}) {
     if (!await hasNativeMessagingPermission()) {
       throw new Error("Native Messaging permission is required.");
     }
     const job = normalizeMediaDownloadJob(rawJob);
-    if (activePorts.has(job.id))
+    const previousConnection = activePorts.get(job.id);
+    if (previousConnection && !previousConnection.terminal)
       throw new Error("Download job is already active.");
+    if (previousConnection) {
+      activePorts.delete(job.id);
+      previousConnection.port.disconnect();
+    }
     const requestId = randomId4();
     const port = chrome.runtime.connectNative(MEDIA_HELPER_HOST_NAME);
     const state = {
@@ -3658,6 +3706,9 @@ var AdsFriendlyBackground = (() => {
       kind: job.candidate.kind,
       title: job.candidate.title,
       sourceTabId: job.sourceTabId,
+      candidate: job.candidate,
+      connections,
+      attempt,
       createdAt: job.createdAt,
       updatedAt: Date.now(),
       status: "starting",
@@ -3665,23 +3716,24 @@ var AdsFriendlyBackground = (() => {
       outputPath: null,
       error: null
     };
-    activePorts.set(job.id, {
+    await removeHistoryEntry(job.id);
+    const connection = {
       port,
       requestId,
       terminal: false,
+      terminalStatus: "cancelled",
       queue: Promise.resolve()
-    });
+    };
+    activePorts.set(job.id, connection);
     await persistJobState(state);
     port.onMessage.addListener((rawEvent) => {
-      const connection = activePorts.get(job.id);
-      if (!connection) return;
+      if (activePorts.get(job.id) !== connection) return;
       connection.queue = connection.queue.then(
         () => handleJobEvent(job.id, requestId, rawEvent)
       );
     });
     port.onDisconnect.addListener(() => {
-      const connection = activePorts.get(job.id);
-      if (!connection) return;
+      if (activePorts.get(job.id) !== connection) return;
       const message = chrome.runtime.lastError?.message || "Media Helper disconnected.";
       void connection.queue.finally(async () => {
         activePorts.delete(job.id);
@@ -3703,21 +3755,68 @@ var AdsFriendlyBackground = (() => {
     });
     return { status: "started", jobId: job.id };
   }
-  async function cancelMediaHelperDownload(jobId) {
+  async function cancelMediaHelperDownload(jobId, { terminalStatus = "cancelled" } = {}) {
     const connection = activePorts.get(jobId);
     if (!connection) return { status: "not_running" };
+    connection.terminalStatus = terminalStatus === "paused" ? "paused" : "cancelled";
     connection.port.postMessage({
       type: MEDIA_HELPER_REQUESTS.DOWNLOAD_CANCEL,
       requestId: connection.requestId,
       protocolVersion: MEDIA_HELPER_PROTOCOL_VERSION,
       payload: { jobId }
     });
-    await updateJobState(jobId, { status: "cancelling" });
-    return { status: "cancelling", jobId };
+    const status = connection.terminalStatus === "paused" ? "pausing" : "cancelling";
+    await updateJobState(jobId, { status });
+    return { status, jobId };
   }
   async function listMediaHelperDownloads() {
-    const snapshot = await chrome.storage.session.get(null);
-    return Object.entries(snapshot).filter(([key]) => key.startsWith(DOWNLOAD_JOB_PREFIX)).map(([, value]) => value).filter((value) => value && typeof value === "object").sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    const [snapshot, local] = await Promise.all([
+      chrome.storage.session.get(null),
+      chrome.storage.local.get(DOWNLOAD_HISTORY_KEY)
+    ]);
+    const sessionJobs = Object.entries(snapshot).filter(([key]) => key.startsWith(DOWNLOAD_JOB_PREFIX)).map(([, value]) => value).filter((value) => value && typeof value === "object");
+    const history = Array.isArray(local[DOWNLOAD_HISTORY_KEY]) ? local[DOWNLOAD_HISTORY_KEY] : [];
+    const merged = new Map(
+      history.filter((value) => value && typeof value === "object" && value.id).map((value) => [value.id, { ...value, historyOnly: true }])
+    );
+    for (const job of sessionJobs) merged.set(job.id, job);
+    return [...merged.values()].sort(
+      (a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0)
+    );
+  }
+  async function removeMediaHelperDownloadHistory(jobId) {
+    await Promise.all([
+      chrome.storage.session.remove(downloadJobKey(jobId)),
+      removeHistoryEntry(jobId)
+    ]);
+  }
+  async function runMediaHelperOutputAction(action2, outputPath) {
+    if (!await hasNativeMessagingPermission()) {
+      throw new Error("Native Messaging permission is required.");
+    }
+    const type = action2 === "open" ? MEDIA_HELPER_REQUESTS.OUTPUT_OPEN : action2 === "reveal" ? MEDIA_HELPER_REQUESTS.OUTPUT_REVEAL : null;
+    if (!type) throw new Error("Unknown Media Helper output action.");
+    const requestId = randomId4();
+    const response = normalizeHelperEvent(
+      await withTimeout(
+        chrome.runtime.sendNativeMessage(MEDIA_HELPER_HOST_NAME, {
+          type,
+          requestId,
+          protocolVersion: MEDIA_HELPER_PROTOCOL_VERSION,
+          payload: { outputPath }
+        }),
+        DEFAULT_TIMEOUT_MS
+      )
+    );
+    if (response.requestId !== requestId)
+      throw new Error("Media Helper returned a mismatched request ID.");
+    if (response.type === MEDIA_HELPER_EVENTS.ERROR)
+      throw new Error(
+        response.payload.message || "Media Helper output action failed."
+      );
+    if (response.type !== MEDIA_HELPER_EVENTS.OUTPUT_OPENED)
+      throw new Error(`Unexpected Media Helper event: ${response.type}.`);
+    return { status: "opened", action: action2, outputPath };
   }
   async function handleJobEvent(jobId, requestId, rawEvent) {
     try {
@@ -3745,8 +3844,9 @@ var AdsFriendlyBackground = (() => {
         return;
       }
       if (event2.type === MEDIA_HELPER_EVENTS.DOWNLOAD_CANCELLED) {
+        const terminalStatus = activePorts.get(jobId)?.terminalStatus === "paused" ? "paused" : "cancelled";
         markTerminal(jobId);
-        await updateJobState(jobId, { status: "cancelled" });
+        await updateJobState(jobId, { status: terminalStatus });
         activePorts.get(jobId)?.port.disconnect();
         return;
       }
@@ -3775,7 +3875,50 @@ var AdsFriendlyBackground = (() => {
     const key = downloadJobKey(jobId);
     const current = (await chrome.storage.session.get(key))[key];
     if (!current) return;
-    await persistJobState({ ...current, ...changes, updatedAt: Date.now() });
+    const next = { ...current, ...changes, updatedAt: Date.now() };
+    await persistJobState(next);
+    if (["completed", "failed", "cancelled", "paused"].includes(next.status))
+      await persistHistoryEntry(next);
+  }
+  async function persistHistoryEntry(state) {
+    const safeState = {
+      id: state.id,
+      mediaId: state.mediaId,
+      kind: state.kind,
+      title: state.title,
+      sourceTabId: state.sourceTabId,
+      createdAt: state.createdAt,
+      updatedAt: state.updatedAt,
+      status: state.status,
+      progress: state.progress ? { ...state.progress } : null,
+      outputPath: state.outputPath,
+      error: state.error,
+      connections: state.connections,
+      attempt: state.attempt
+    };
+    return updateHistory(
+      (history) => [safeState, ...history.filter((item) => item?.id !== state.id)].slice(
+        0,
+        100
+      )
+    );
+  }
+  async function removeHistoryEntry(jobId) {
+    return updateHistory(
+      (history) => history.filter((item) => item?.id !== jobId)
+    );
+  }
+  function updateHistory(mutate) {
+    const operation = historyWriteChain.then(async () => {
+      const local = await chrome.storage.local.get(DOWNLOAD_HISTORY_KEY);
+      const history = Array.isArray(local[DOWNLOAD_HISTORY_KEY]) ? local[DOWNLOAD_HISTORY_KEY] : [];
+      const next = mutate(history);
+      if (JSON.stringify(next) === JSON.stringify(history)) return;
+      await chrome.storage.local.set({ [DOWNLOAD_HISTORY_KEY]: next });
+    });
+    historyWriteChain = operation.catch(() => {
+    });
+    return operation;
   }
   function classifyNativeMessagingError(message = "") {
     if (/host.*not found|specified native messaging host not found|not registered/i.test(
@@ -3849,7 +3992,13 @@ var AdsFriendlyBackground = (() => {
       policy,
       handlers: {
         [ACTIONS.MEDIA_DOWNLOAD_CANCEL]: cancelJob,
-        [ACTIONS.MEDIA_DOWNLOAD_CREATE]: createJob
+        [ACTIONS.MEDIA_DOWNLOAD_CREATE]: createJob,
+        [ACTIONS.MEDIA_DOWNLOAD_PAUSE]: pauseJob,
+        [ACTIONS.MEDIA_DOWNLOAD_OPEN]: openJobOutput,
+        [ACTIONS.MEDIA_DOWNLOAD_REMOVE_HISTORY]: removeJobHistory,
+        [ACTIONS.MEDIA_DOWNLOAD_REVEAL]: revealJobOutput,
+        [ACTIONS.MEDIA_DOWNLOAD_RESUME]: resumeJob,
+        [ACTIONS.MEDIA_DOWNLOAD_RETRY]: retryJob
       }
     });
     return () => {
@@ -3864,10 +4013,34 @@ var AdsFriendlyBackground = (() => {
     if (!broker) return { status: "download_disabled" };
     return broker.execute(ACTIONS.MEDIA_DOWNLOAD_CANCEL, payload);
   }
+  async function requestMediaDownloadPause(payload) {
+    if (!broker) return { status: "download_disabled" };
+    return broker.execute(ACTIONS.MEDIA_DOWNLOAD_PAUSE, payload);
+  }
+  async function requestMediaDownloadResume(payload) {
+    if (!broker) return { status: "download_disabled" };
+    return broker.execute(ACTIONS.MEDIA_DOWNLOAD_RESUME, payload);
+  }
+  async function requestMediaDownloadRetry(payload) {
+    if (!broker) return { status: "download_disabled" };
+    return broker.execute(ACTIONS.MEDIA_DOWNLOAD_RETRY, payload);
+  }
+  async function requestMediaDownloadOpen(payload) {
+    if (!broker) return { status: "download_disabled" };
+    return broker.execute(ACTIONS.MEDIA_DOWNLOAD_OPEN, payload);
+  }
+  async function requestMediaDownloadReveal(payload) {
+    if (!broker) return { status: "download_disabled" };
+    return broker.execute(ACTIONS.MEDIA_DOWNLOAD_REVEAL, payload);
+  }
+  async function requestMediaDownloadHistoryRemove(payload) {
+    if (!broker) return { status: "download_disabled" };
+    return broker.execute(ACTIONS.MEDIA_DOWNLOAD_REMOVE_HISTORY, payload);
+  }
   async function listMediaDownloadJobs() {
     return { status: "ok", items: await listMediaHelperDownloads() };
   }
-  async function createJob({ tabId, mediaId } = {}) {
+  async function createJob({ tabId, mediaId, connections = 8 } = {}) {
     if (!Number.isInteger(tabId) || tabId < 0) return { status: "invalid_tab" };
     if (typeof mediaId !== "string" || !mediaId)
       return { status: "invalid_media" };
@@ -3880,6 +4053,113 @@ var AdsFriendlyBackground = (() => {
     const availability = getMediaDownloadAvailability(candidate);
     if (!availability.supported)
       return { status: "unsupported", reason: availability.reason };
+    const helperFailure = await helperFailureFor(candidate);
+    if (helperFailure) return helperFailure;
+    const job = normalizeMediaDownloadJob({
+      id: randomId5(),
+      createdAt: Date.now(),
+      sourceTabId: tabId,
+      candidate
+    });
+    return startMediaHelperDownload(job, {
+      connections: normalizeConnections(connections)
+    });
+  }
+  async function cancelJob({ jobId } = {}) {
+    if (typeof jobId !== "string" || !jobId) return { status: "invalid_job" };
+    return cancelMediaHelperDownload(jobId);
+  }
+  async function pauseJob({ jobId } = {}) {
+    const state = await readJob(jobId);
+    if (!state) return { status: "job_not_found" };
+    if (state.progress?.resumable !== true)
+      return {
+        status: "pause_unsupported",
+        reason: "This download adapter cannot resume partial data yet."
+      };
+    return cancelMediaHelperDownload(jobId, { terminalStatus: "paused" });
+  }
+  async function resumeJob(payload = {}) {
+    const state = await readJob(payload.jobId);
+    if (!state) return { status: "job_not_found" };
+    if (state.status !== "paused")
+      return { status: "not_paused", reason: "Only a paused job can resume." };
+    return restartJob(state, payload.connections);
+  }
+  async function retryJob(payload = {}) {
+    const state = await readJob(payload.jobId);
+    if (!state) return { status: "job_not_found" };
+    if (!["cancelled", "failed"].includes(state.status)) {
+      return {
+        status: "retry_unavailable",
+        reason: "Only a cancelled or failed job can be retried."
+      };
+    }
+    return restartJob(state, payload.connections);
+  }
+  async function openJobOutput({ jobId } = {}) {
+    return runJobOutputAction(jobId, "open");
+  }
+  async function revealJobOutput({ jobId } = {}) {
+    return runJobOutputAction(jobId, "reveal");
+  }
+  async function runJobOutputAction(jobId, action2) {
+    const state = await readJob(jobId);
+    if (!state?.outputPath)
+      return {
+        status: "output_not_found",
+        reason: "This job has no saved output file."
+      };
+    return runMediaHelperOutputAction(action2, state.outputPath);
+  }
+  async function removeJobHistory({ jobId } = {}) {
+    const state = await readJob(jobId);
+    if (!state) return { status: "job_not_found" };
+    if ([
+      "starting",
+      "probing",
+      "downloading",
+      "finalizing",
+      "pausing",
+      "cancelling"
+    ].includes(state.status)) {
+      return {
+        status: "job_active",
+        reason: "Stop the active download before removing its history."
+      };
+    }
+    await removeMediaHelperDownloadHistory(jobId);
+    return { status: "removed", jobId };
+  }
+  async function restartJob(state, requestedConnections) {
+    const candidate = state.candidate || await recoverCandidate(state);
+    if (!candidate) {
+      return {
+        status: "media_not_found",
+        reason: "The original media source is no longer available. Reopen its video page."
+      };
+    }
+    const helperFailure = await helperFailureFor(candidate);
+    if (helperFailure) return helperFailure;
+    const job = normalizeMediaDownloadJob({
+      id: state.id,
+      createdAt: Date.now(),
+      sourceTabId: state.sourceTabId,
+      candidate
+    });
+    return startMediaHelperDownload(job, {
+      connections: normalizeConnections(
+        requestedConnections ?? state.connections
+      ),
+      attempt: Math.max(1, Number(state.attempt) || 1) + 1
+    });
+  }
+  async function recoverCandidate(state) {
+    if (!Number.isInteger(state.sourceTabId) || !state.mediaId) return null;
+    const response = await listDiscoveredMedia(state.sourceTabId);
+    return response.items.find((item) => item.id === state.mediaId) || null;
+  }
+  async function helperFailureFor(candidate) {
     const helper = await getMediaHelperStatus({ force: true });
     if (helper.status !== "ready") {
       return {
@@ -3889,24 +4169,23 @@ var AdsFriendlyBackground = (() => {
       };
     }
     const capabilityReady = candidate.kind === "direct" ? helper.canDownloadDirect : candidate.kind === "hls" ? helper.canDownloadHls : helper.canDownloadDash;
-    if (!capabilityReady) {
-      return {
-        status: "helper_not_ready",
-        helper,
-        reason: candidate.kind === "direct" ? "This Media Helper build cannot download direct media yet." : candidate.kind === "hls" ? "This Media Helper build does not execute HLS downloads yet." : "This Media Helper build does not execute DASH downloads yet."
-      };
-    }
-    const job = normalizeMediaDownloadJob({
-      id: randomId5(),
-      createdAt: Date.now(),
-      sourceTabId: tabId,
-      candidate
-    });
-    return startMediaHelperDownload(job, { connections: 8 });
+    if (capabilityReady) return null;
+    return {
+      status: "helper_not_ready",
+      helper,
+      reason: candidate.kind === "direct" ? "This Media Helper build cannot download direct media yet." : candidate.kind === "hls" ? "This Media Helper build does not execute HLS downloads yet." : "This Media Helper build does not execute DASH downloads yet."
+    };
   }
-  async function cancelJob({ jobId } = {}) {
-    if (typeof jobId !== "string" || !jobId) return { status: "invalid_job" };
-    return cancelMediaHelperDownload(jobId);
+  async function readJob(jobId) {
+    if (typeof jobId !== "string" || !jobId) return null;
+    const key = downloadJobKey(jobId);
+    const sessionJob = (await chrome.storage.session.get(key))[key];
+    if (sessionJob) return sessionJob;
+    return (await listMediaHelperDownloads()).find((item) => item.id === jobId) || null;
+  }
+  function normalizeConnections(value) {
+    const connections = Number(value ?? 8);
+    return [4, 8, 12, 16].includes(connections) ? connections : 8;
   }
   async function removeStaleJobs() {
     const snapshot = await chrome.storage.session.get(null);
@@ -3955,6 +4234,12 @@ var AdsFriendlyBackground = (() => {
     GET_MEDIA_HELPER_STATUS: CAPABILITIES.MEDIA_DOWNLOAD,
     CREATE_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
     CANCEL_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
+    PAUSE_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
+    OPEN_MEDIA_DOWNLOAD_OUTPUT: CAPABILITIES.MEDIA_DOWNLOAD,
+    REVEAL_MEDIA_DOWNLOAD_OUTPUT: CAPABILITIES.MEDIA_DOWNLOAD,
+    REMOVE_MEDIA_DOWNLOAD_HISTORY: CAPABILITIES.MEDIA_DOWNLOAD,
+    RESUME_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
+    RETRY_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
     GET_MEDIA_DOWNLOAD_JOBS: CAPABILITIES.MEDIA_DOWNLOAD
   });
   function registerMessageRouter(policy) {
@@ -4087,6 +4372,24 @@ var AdsFriendlyBackground = (() => {
       });
     if (message.type === "CANCEL_MEDIA_DOWNLOAD_JOB")
       return requestMediaDownloadCancel({ jobId: message.jobId });
+    if (message.type === "PAUSE_MEDIA_DOWNLOAD_JOB")
+      return requestMediaDownloadPause({ jobId: message.jobId });
+    if (message.type === "RESUME_MEDIA_DOWNLOAD_JOB")
+      return requestMediaDownloadResume({
+        jobId: message.jobId,
+        connections: message.connections
+      });
+    if (message.type === "RETRY_MEDIA_DOWNLOAD_JOB")
+      return requestMediaDownloadRetry({
+        jobId: message.jobId,
+        connections: message.connections
+      });
+    if (message.type === "OPEN_MEDIA_DOWNLOAD_OUTPUT")
+      return requestMediaDownloadOpen({ jobId: message.jobId });
+    if (message.type === "REVEAL_MEDIA_DOWNLOAD_OUTPUT")
+      return requestMediaDownloadReveal({ jobId: message.jobId });
+    if (message.type === "REMOVE_MEDIA_DOWNLOAD_HISTORY")
+      return requestMediaDownloadHistoryRemove({ jobId: message.jobId });
     if (message.type === "GET_MEDIA_DOWNLOAD_JOBS")
       return listMediaDownloadJobs();
     if (message.type === "NEGATIVE_LEARNING")

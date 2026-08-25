@@ -37,6 +37,11 @@ import {
   helperSetupPresentation,
   selectVisibleMediaItems,
 } from "../src/media/catalog-view.js";
+import {
+  formatMediaJobDetails,
+  getMediaJobPrimaryAction,
+  getMediaJobProgress,
+} from "../src/media/download-job-view.js";
 import { EVENTS, createRegisteredEvent } from "../src/runtime/event-catalog.js";
 import { normalizeMediaRequestContext } from "../src/media/contracts.js";
 import { installBlobSourceTracer } from "../src/main-world/blob-source-tracer.js";
@@ -77,6 +82,60 @@ test("offers a helper setup action independently from downloadable media", () =>
       { downloadableCount: 1, drmBlockedCount: 0 },
     ),
     "Media found · Media Helper took too long to start.",
+  );
+});
+
+test("download job view exposes speed, connections, and resumable actions", () => {
+  const active = {
+    id: "job-1",
+    status: "downloading",
+    connections: 12,
+    progress: {
+      downloadedBytes: 5 * 1024 * 1024,
+      totalBytes: 20 * 1024 * 1024,
+      bytesPerSecond: 2 * 1024 * 1024,
+      resumable: true,
+      resumedBytes: 1024,
+    },
+  };
+  assert.deepEqual(getMediaJobProgress(active), {
+    percent: 25,
+    downloadedBytes: 5 * 1024 * 1024,
+    totalBytes: 20 * 1024 * 1024,
+    bytesPerSecond: 2 * 1024 * 1024,
+    processedSeconds: null,
+    duration: null,
+    resumedBytes: 1024,
+    resumable: true,
+    connections: 12,
+  });
+  assert.equal(
+    formatMediaJobDetails(active),
+    "25% · 5.0 MB / 20.0 MB · 2.0 MB/s · resumed 1 KB · 12 connections",
+  );
+  assert.equal(getMediaJobPrimaryAction(active).type, "pause");
+  assert.equal(
+    getMediaJobPrimaryAction({ ...active, status: "paused" }).type,
+    "resume",
+  );
+  assert.equal(
+    getMediaJobPrimaryAction({ ...active, status: "cancelled" }).type,
+    "retry",
+  );
+  assert.equal(
+    getMediaJobPrimaryAction({
+      ...active,
+      progress: { ...active.progress, resumable: false },
+    }).type,
+    "cancel",
+  );
+  assert.equal(
+    getMediaJobPrimaryAction({
+      ...active,
+      status: "cancelled",
+      historyOnly: true,
+    }),
+    null,
   );
 });
 

@@ -208,6 +208,98 @@
         font-size: 0.68rem;
         font-family: monospace;
       }
+
+      .download-history-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+      }
+
+      .download-history-item {
+        padding: 1rem;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 12px;
+        background: rgba(15, 23, 42, 0.55);
+      }
+
+      .download-history-header,
+      .download-history-controls {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.65rem;
+        flex-wrap: wrap;
+      }
+
+      .download-history-title {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-weight: 700;
+        color: #e2e8f0;
+      }
+
+      .download-status {
+        padding: 3px 8px;
+        border-radius: 999px;
+        background: rgba(96, 165, 250, 0.12);
+        color: #93c5fd;
+        font-size: 0.68rem;
+        font-weight: 800;
+      }
+
+      .download-status-completed {
+        background: rgba(34, 197, 94, 0.12);
+        color: #86efac;
+      }
+
+      .download-status-failed,
+      .download-status-cancelled {
+        background: rgba(248, 113, 113, 0.1);
+        color: #fca5a5;
+      }
+
+      .download-progress-track {
+        height: 6px;
+        margin: 0.8rem 0;
+        overflow: hidden;
+        border-radius: 999px;
+        background: rgba(148, 163, 184, 0.12);
+      }
+
+      .download-progress-bar {
+        height: 100%;
+        border-radius: inherit;
+        background: linear-gradient(90deg, #22c55e, #38bdf8);
+        transition: width 0.25s ease;
+      }
+
+      .download-history-details,
+      .download-output-path {
+        color: #94a3b8;
+        font-size: 0.78rem;
+        line-height: 1.5;
+      }
+
+      .download-output-path {
+        margin: 0.3rem 0 0.8rem;
+        overflow-wrap: anywhere;
+        color: #64748b;
+        font-family: monospace;
+      }
+
+      .download-connections {
+        width: auto;
+        min-width: 130px;
+        padding: 0.5rem 0.65rem;
+      }
+
+      .download-danger {
+        border-color: rgba(248, 113, 113, 0.3);
+        background: rgba(248, 113, 113, 0.08);
+        color: #fca5a5;
+      }
     </style>
   </head>
   <body>
@@ -308,6 +400,43 @@
           <p style="color: #64748b; font-size: 0.72rem; margin: 0.7rem 0 0">
             Training and telemetry use a separate local database. Block history,
             counters, and private identifiers are never included in a package.
+          </p>
+        </div>
+      </section>
+
+      <section
+        id="downloads"
+        class="config-section"
+        style="margin-bottom: 2rem; scroll-margin-top: 1.5rem"
+      >
+        <div class="card" style="border-left: 4px solid #38bdf8">
+          <div class="download-history-header" style="align-items: flex-start">
+            <div>
+              <h2 style="color: #38bdf8; margin-bottom: 0.45rem">
+                Download Manager
+              </h2>
+              <p style="color: #94a3b8; font-size: 0.82rem; margin: 0 0 1rem">
+                Track speed and connections, pause resumable downloads, retry
+                jobs, and manage completed output files.
+              </p>
+            </div>
+            <button class="btn-secondary" id="btn-download-refresh">
+              Refresh
+            </button>
+          </div>
+          <div id="download-manager-status" class="package-status">
+            Loading downloads…
+          </div>
+          <div
+            id="download-job-manager"
+            class="download-history-list"
+            style="margin-top: 0.8rem"
+          >
+            <div class="empty-msg">No download history yet.</div>
+          </div>
+          <p style="color: #64748b; font-size: 0.72rem; margin: 0.8rem 0 0">
+            Remove history keeps the downloaded file. Open and Open location
+            require the current Media Helper.
           </p>
         </div>
       </section>

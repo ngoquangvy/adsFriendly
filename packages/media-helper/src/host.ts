@@ -17,8 +17,9 @@ import { directHttpAdapter } from "./direct-http-adapter.js";
 import { hlsFfmpegAdapter } from "./hls-ffmpeg-adapter.js";
 import { dashFfmpegAdapter } from "./dash-ffmpeg-adapter.js";
 import { DownloadJobManager } from "./job-manager.js";
+import { openManagedOutput, revealManagedOutput } from "./output-actions.js";
 
-const HELPER_VERSION = "0.4.0";
+const HELPER_VERSION = "0.5.0";
 const callerOrigin = process.argv[2] || null;
 const reader = new NativeMessageReader();
 const adapters = new DownloadAdapterRegistry([
@@ -100,6 +101,28 @@ async function handleMessage(rawMessage: unknown): Promise<void> {
       }
       return;
     }
+    if (
+      request.type === MEDIA_HELPER_REQUESTS.OUTPUT_OPEN ||
+      request.type === MEDIA_HELPER_REQUESTS.OUTPUT_REVEAL
+    ) {
+      const outputPath = request.payload?.outputPath;
+      if (typeof outputPath !== "string" || !outputPath) {
+        throw new Error("Output action requires payload.outputPath.");
+      }
+      if (request.type === MEDIA_HELPER_REQUESTS.OUTPUT_OPEN)
+        await openManagedOutput(outputPath);
+      else await revealManagedOutput(outputPath);
+      writeMessage(
+        createHelperEvent(MEDIA_HELPER_EVENTS.OUTPUT_OPENED, requestId, {
+          action:
+            request.type === MEDIA_HELPER_REQUESTS.OUTPUT_OPEN
+              ? "open"
+              : "reveal",
+          outputPath,
+        }),
+      );
+      return;
+    }
     writeError(
       requestId,
       "not_implemented",
@@ -117,6 +140,8 @@ async function inspectCapabilities() {
     [MEDIA_HELPER_CAPABILITIES.HLS_VOD_DOWNLOAD]: ffmpeg.available,
     [MEDIA_HELPER_CAPABILITIES.DASH_VOD_DOWNLOAD]: ffmpeg.available,
     [MEDIA_HELPER_CAPABILITIES.FFMPEG_MUX]: ffmpeg.available,
+    [MEDIA_HELPER_CAPABILITIES.OUTPUT_OPEN]: true,
+    [MEDIA_HELPER_CAPABILITIES.OUTPUT_REVEAL]: true,
     ffmpeg,
   };
 }

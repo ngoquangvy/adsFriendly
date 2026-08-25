@@ -107,6 +107,24 @@ test("media helper messages are versioned and normalized", () => {
   assert.equal(event.protocolVersion, MEDIA_HELPER_PROTOCOL_VERSION);
   assert.equal(event.payload.helperVersion, "0.1.0");
   assert.equal(normalizeHelperEvent(event).type, MEDIA_HELPER_EVENTS.READY);
+
+  const openRequest = normalizeHelperRequest({
+    type: MEDIA_HELPER_REQUESTS.OUTPUT_OPEN,
+    requestId: "open-1",
+    protocolVersion: MEDIA_HELPER_PROTOCOL_VERSION,
+    payload: { outputPath: "C:\\Users\\Test\\Downloads\\video.mp4" },
+  });
+  assert.equal(openRequest.type, MEDIA_HELPER_REQUESTS.OUTPUT_OPEN);
+  assert.equal(
+    openRequest.payload.outputPath,
+    "C:\\Users\\Test\\Downloads\\video.mp4",
+  );
+  assert.equal(
+    createHelperEvent(MEDIA_HELPER_EVENTS.OUTPUT_OPENED, "open-1", {
+      action: "open",
+    }).type,
+    MEDIA_HELPER_EVENTS.OUTPUT_OPENED,
+  );
 });
 
 test("direct helper download payload is normalized at the protocol boundary", () => {

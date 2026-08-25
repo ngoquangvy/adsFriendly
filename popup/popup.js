@@ -505,6 +505,133 @@ var AdsFriendlyPopup = (() => {
     return url;
   }
 
+  // src/media/download-job-view.js
+  var ACTIVE_STATUSES = /* @__PURE__ */ new Set([
+    "starting",
+    "probing",
+    "downloading",
+    "finalizing"
+  ]);
+  function getMediaJobProgress(job = {}) {
+    const progress = job.progress || {};
+    const downloadedBytes = finiteOrNull(progress.downloadedBytes);
+    const totalBytes = finiteOrNull(progress.totalBytes);
+    const processedSeconds = finiteOrNull(progress.processedSeconds);
+    const duration = finiteOrNull(progress.duration);
+    let percent = null;
+    if (duration > 0 && processedSeconds !== null) {
+      percent = Math.min(100, Math.round(processedSeconds / duration * 100));
+    } else if (totalBytes > 0 && downloadedBytes !== null) {
+      percent = Math.min(100, Math.round(downloadedBytes / totalBytes * 100));
+    }
+    return {
+      percent,
+      downloadedBytes,
+      totalBytes,
+      bytesPerSecond: finiteOrNull(progress.bytesPerSecond),
+      processedSeconds,
+      duration,
+      resumedBytes: finiteOrNull(progress.resumedBytes),
+      resumable: progress.resumable === true,
+      connections: normalizeConnections(job.connections)
+    };
+  }
+  function getMediaJobPrimaryAction(job = {}) {
+    if (job.historyOnly === true) return null;
+    if (job.status === "paused")
+      return {
+        type: "resume",
+        label: "Resume",
+        messageType: "RESUME_MEDIA_DOWNLOAD_JOB"
+      };
+    if (["cancelled", "failed"].includes(job.status))
+      return {
+        type: "retry",
+        label: "Retry",
+        messageType: "RETRY_MEDIA_DOWNLOAD_JOB"
+      };
+    if (!ACTIVE_STATUSES.has(job.status)) return null;
+    if (job.progress?.resumable === true)
+      return {
+        type: "pause",
+        label: "Pause",
+        messageType: "PAUSE_MEDIA_DOWNLOAD_JOB"
+      };
+    return {
+      type: "cancel",
+      label: "Cancel",
+      messageType: "CANCEL_MEDIA_DOWNLOAD_JOB"
+    };
+  }
+  function formatMediaJobDetails(job = {}) {
+    const progress = getMediaJobProgress(job);
+    const connectionFact = `${progress.connections} connections`;
+    if (job.status === "completed") {
+      const size = progress.totalBytes ?? progress.downloadedBytes;
+      return [
+        "Completed",
+        size !== null ? formatBytes(size) : null,
+        connectionFact
+      ].filter(Boolean).join(" \xB7 ");
+    }
+    if (job.status === "failed")
+      return ["Failed", job.error || "unknown error", connectionFact].filter(Boolean).join(" \xB7 ");
+    if (["cancelled", "paused"].includes(job.status)) {
+      return [
+        job.status === "paused" ? "Paused" : "Cancelled",
+        progress.downloadedBytes !== null ? `${formatBytes(progress.downloadedBytes)} downloaded` : null,
+        progress.resumable ? "partial data kept" : null,
+        connectionFact
+      ].filter(Boolean).join(" \xB7 ");
+    }
+    if (job.status === "cancelling") return `Stopping \xB7 ${connectionFact}`;
+    if (job.status === "pausing") return `Pausing \xB7 ${connectionFact}`;
+    const facts = [];
+    if (progress.percent !== null) facts.push(`${progress.percent}%`);
+    if (progress.duration > 0 && progress.processedSeconds !== null) {
+      facts.push(
+        `${formatDuration(progress.processedSeconds)} / ${formatDuration(progress.duration)}`
+      );
+    }
+    if (progress.downloadedBytes !== null) {
+      facts.push(
+        progress.totalBytes > 0 ? `${formatBytes(progress.downloadedBytes)} / ${formatBytes(progress.totalBytes)}` : formatBytes(progress.downloadedBytes)
+      );
+    }
+    if (progress.bytesPerSecond > 0)
+      facts.push(`${formatBytes(progress.bytesPerSecond)}/s`);
+    if (progress.resumedBytes > 0)
+      facts.push(`resumed ${formatBytes(progress.resumedBytes)}`);
+    facts.push(connectionFact);
+    if (facts.length === 1) facts.unshift(capitalize(job.status || "starting"));
+    return facts.join(" \xB7 ");
+  }
+  function formatBytes(bytes) {
+    const value = Math.max(0, Number(bytes) || 0);
+    if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(1)} GB`;
+    if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MB`;
+    return `${Math.round(value / 1024)} KB`;
+  }
+  function formatDuration(seconds) {
+    const total = Math.max(0, Math.round(Number(seconds) || 0));
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor(total % 3600 / 60);
+    const remaining = total % 60;
+    return hours ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remaining).padStart(2, "0")}` : `${minutes}:${String(remaining).padStart(2, "0")}`;
+  }
+  function finiteOrNull(value) {
+    if (value === null || value === void 0 || value === "") return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  }
+  function normalizeConnections(value) {
+    const connections = Number(value);
+    return Number.isInteger(connections) && connections > 0 ? connections : 8;
+  }
+  function capitalize(value) {
+    return value ? `${value[0].toUpperCase()}${value.slice(1)}` : "Starting";
+  }
+
   // src/media/catalog-view.js
   function createMediaCatalogViewSignature({
     tabId = null,
@@ -664,7 +791,7 @@ var AdsFriendlyPopup = (() => {
         item.parentManifestIds?.length ? `Variant ${streamLabel}` : streamLabel
       );
       if (Number.isFinite(item.duration) && item.duration > 0)
-        facts.push(formatDuration(item.duration));
+        facts.push(formatDuration2(item.duration));
       if (Number.isInteger(item.segmentCount) && item.segmentCount > 0)
         facts.push(`${item.segmentCount} segments`);
       if (Number.isInteger(item.partialSegmentCount) && item.partialSegmentCount > 0)
@@ -707,7 +834,7 @@ var AdsFriendlyPopup = (() => {
     const facts = [`Blob resolved to ${kind}`];
     if (stream.resolution?.height) facts.push(`${stream.resolution.height}p`);
     if (Number.isFinite(stream.duration) && stream.duration > 0)
-      facts.push(formatDuration(stream.duration));
+      facts.push(formatDuration2(stream.duration));
     if (["suspected", "confirmed"].includes(stream.drm)) facts.push("DRM");
     return facts.join(" \xB7 ");
   }
@@ -718,7 +845,7 @@ var AdsFriendlyPopup = (() => {
       return "DASH manifest found \xB7 reading tracks";
     const facts = [item.streamType === "live" ? "Live DASH" : "DASH VOD"];
     if (Number.isFinite(item.duration) && item.duration > 0)
-      facts.push(formatDuration(item.duration));
+      facts.push(formatDuration2(item.duration));
     const qualities = [...item.variants || []].sort(compareVariantQuality).map(variantLabel).filter((label, index, labels) => label && labels.indexOf(label) === index).slice(0, 4);
     if (qualities.length) facts.push(qualities.join(" \xB7 "));
     if (item.audioTracks?.length) facts.push(`${item.audioTracks.length} audio`);
@@ -736,7 +863,7 @@ var AdsFriendlyPopup = (() => {
       );
     facts.push(stream.streamType === "vod" ? "VOD" : "Live");
     if (Number.isFinite(stream.duration) && stream.duration > 0)
-      facts.push(formatDuration(stream.duration));
+      facts.push(formatDuration2(stream.duration));
     if (stream.segmentCount > 0) facts.push(`${stream.segmentCount} segments`);
     if (stream.partialSegmentCount > 0)
       facts.push(`${stream.partialSegmentCount} parts`);
@@ -755,7 +882,7 @@ var AdsFriendlyPopup = (() => {
     if (!Number.isFinite(bandwidth)) return null;
     return bandwidth >= 1e6 ? `${(bandwidth / 1e6).toFixed(1)} Mbps` : `${Math.round(bandwidth / 1e3)} Kbps`;
   }
-  function formatDuration(seconds) {
+  function formatDuration2(seconds) {
     const rounded = Math.round(seconds);
     const hours = Math.floor(rounded / 3600);
     const minutes = Math.floor(rounded % 3600 / 60);
@@ -861,6 +988,7 @@ ${blobTitleKey(item.title)}`;
   var mediaHelperAction = document.getElementById("media-helper-action");
   var mediaList = document.getElementById("media-list");
   var mediaJobList = document.getElementById("media-job-list");
+  var mediaManagerLink = document.getElementById("media-manager-link");
   var MODE_DESCRIPTIONS = Object.freeze({
     safe: "Verified rules; no predictive DOM actions",
     assist: "Detect and ask before hiding",
@@ -877,6 +1005,7 @@ ${blobTitleKey(item.title)}`;
   var activeMediaTabId = null;
   var mediaRenderSignature = null;
   var scheduledMediaRefresh = null;
+  var hasMediaDownloadJobs = false;
   initialize().catch(
     (error) => console.error("[AdsFriendly Popup] initialization failed", error)
   );
@@ -899,6 +1028,11 @@ ${blobTitleKey(item.title)}`;
   mediaHelperAction.addEventListener("click", async () => {
     mediaHelperAction.disabled = true;
     await setupMediaHelper(mediaHelperAction, mediaHelperStatus);
+  });
+  mediaManagerLink.addEventListener("click", () => {
+    void chrome.tabs.create({
+      url: chrome.runtime.getURL("options/options.html#downloads")
+    });
   });
   document.getElementById("settings-btn").addEventListener("click", () => {
     chrome.runtime.openOptionsPage();
@@ -1073,6 +1207,9 @@ ${blobTitleKey(item.title)}`;
   }
   function commitMediaCatalog({ status, items = [], tab = null, helper = null }) {
     const visibleItems = selectVisibleMediaItems(items);
+    if (!visibleItems.length && hasMediaDownloadJobs && /Open an HTTP video page|No MP4, WebM, HLS, or DASH/i.test(status)) {
+      status = "No media on this tab \xB7 downloads remain available below.";
+    }
     const downloadState = getMediaCatalogDownloadState(items);
     const signature = createMediaCatalogViewSignature({
       tabId: tab?.id ?? null,
@@ -1285,6 +1422,7 @@ ${blobTitleKey(item.title)}`;
   }
   function renderMediaJobs(items) {
     const visible = items.slice(0, 4);
+    hasMediaDownloadJobs = visible.length > 0;
     const existing = new Map(
       [...mediaJobList.children].map((row) => [row.dataset.jobId, row])
     );
@@ -1299,6 +1437,15 @@ ${blobTitleKey(item.title)}`;
       if (!visibleIds.has(jobId)) row.remove();
     }
     mediaJobList.hidden = visible.length === 0;
+    mediaManagerLink.hidden = visible.length === 0;
+    if (visible.length && mediaCount.textContent === "0" && /Open an HTTP video page|No MP4, WebM, HLS, or DASH/i.test(
+      mediaStatus.textContent
+    )) {
+      setText(
+        mediaStatus,
+        "No media on this tab \xB7 downloads remain available below."
+      );
+    }
   }
   function createMediaJobItem() {
     const row = document.createElement("div");
@@ -1319,67 +1466,45 @@ ${blobTitleKey(item.title)}`;
       row.querySelector(".media-job-label"),
       job.title || String(job.kind || "media").toUpperCase()
     );
-    setText(row.querySelector(".media-job-detail"), mediaJobDetails(job));
-    let cancel = row.querySelector(".media-cancel");
-    if (["starting", "probing", "downloading", "finalizing"].includes(job.status)) {
-      if (!cancel) {
-        cancel = document.createElement("button");
-        cancel.className = "media-download media-cancel";
-        cancel.textContent = "Cancel";
-        cancel.addEventListener("click", async () => {
-          cancel.disabled = true;
-          cancel.textContent = "Stopping\u2026";
-          await chrome.runtime.sendMessage({
-            type: "CANCEL_MEDIA_DOWNLOAD_JOB",
-            jobId: cancel.dataset.jobId
-          });
-          await updateMediaJobs();
-        });
-        row.append(cancel);
+    setText(row.querySelector(".media-job-detail"), formatMediaJobDetails(job));
+    const action = getMediaJobPrimaryAction(job);
+    let button = row.querySelector(".media-job-action");
+    if (!action) {
+      button?.remove();
+      return;
+    }
+    if (!button) {
+      button = document.createElement("button");
+      button.className = "media-download media-job-action";
+      button.addEventListener("click", () => runMediaJobAction(button));
+      row.append(button);
+    }
+    button.disabled = false;
+    button.classList.toggle("media-cancel", action.type === "cancel");
+    button.textContent = action.label;
+    button.dataset.jobId = job.id;
+    button.dataset.messageType = action.messageType;
+    button.dataset.actionType = action.type;
+  }
+  async function runMediaJobAction(button) {
+    button.disabled = true;
+    button.textContent = button.dataset.actionType === "pause" ? "Pausing\u2026" : button.dataset.actionType === "cancel" ? "Stopping\u2026" : "Starting\u2026";
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: button.dataset.messageType,
+        jobId: button.dataset.jobId
+      });
+      if (!["started", "pausing", "cancelling"].includes(response?.status)) {
+        throw new Error(
+          response?.reason || response?.error || "Job action failed."
+        );
       }
-      cancel.dataset.jobId = job.id;
-    } else {
-      cancel?.remove();
+      await updateMediaJobs();
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = "Retry action";
+      button.title = error?.message || String(error);
     }
-  }
-  function mediaJobDetails(job) {
-    if (job.status === "completed")
-      return `Completed \xB7 ${job.outputPath || "saved"}`;
-    if (job.status === "failed")
-      return `Failed \xB7 ${job.error || "unknown error"}`;
-    if (job.status === "cancelled")
-      return "Cancelled \xB7 resume available on retry";
-    if (job.status === "cancelling") return "Stopping\u2026";
-    const downloaded = job.progress?.downloadedBytes;
-    const total = job.progress?.totalBytes;
-    const processedSeconds = job.progress?.processedSeconds;
-    const duration = job.progress?.duration;
-    if (Number.isFinite(processedSeconds) && Number.isFinite(duration) && duration > 0) {
-      const percent = Math.min(
-        100,
-        Math.round(processedSeconds / duration * 100)
-      );
-      const size = Number.isFinite(downloaded) ? ` \xB7 ${formatBytes(downloaded)}` : "";
-      return `${percent}% \xB7 ${formatDuration2(processedSeconds)} / ${formatDuration2(duration)}${size}`;
-    }
-    if (Number.isFinite(downloaded) && Number.isFinite(total) && total > 0) {
-      const percent = Math.min(100, Math.round(downloaded / total * 100));
-      const speed = Number.isFinite(job.progress?.bytesPerSecond) ? ` \xB7 ${formatBytes(job.progress.bytesPerSecond)}/s` : "";
-      return `${percent}% \xB7 ${formatBytes(downloaded)} / ${formatBytes(total)}${speed}`;
-    }
-    return `${job.status || "starting"}\u2026`;
-  }
-  function formatDuration2(seconds) {
-    const total = Math.max(0, Math.round(seconds));
-    const hours = Math.floor(total / 3600);
-    const minutes = Math.floor(total % 3600 / 60);
-    const remaining = total % 60;
-    return hours ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remaining).padStart(2, "0")}` : `${minutes}:${String(remaining).padStart(2, "0")}`;
-  }
-  function formatBytes(bytes) {
-    if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
-    if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
-    return `${Math.max(0, Math.round(bytes / 1024))} KB`;
   }
   function downloadUnavailableLabel(reason = "") {
     if (reason.includes("DRM")) return "DRM";

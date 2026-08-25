@@ -42,6 +42,8 @@ test("built helper completes a framed Native Messaging handshake", async () => {
   assert.equal(response.protocolVersion, MEDIA_HELPER_PROTOCOL_VERSION);
   assert.equal(response.payload.callerOrigin, "chrome-extension://test/");
   assert.equal(typeof response.payload.capabilities, "object");
+  assert.equal(response.payload.capabilities["output.open"], true);
+  assert.equal(response.payload.capabilities["output.reveal"], true);
 });
 
 test("built helper downloads direct media with ranges, cancellation, and resume", async (t) => {

@@ -6,12 +6,15 @@ own navigation protection, DOM protection, and shared media discovery. All
 user-initiated video downloads require this helper; there is no second browser
 download backend to keep in sync.
 
-The helper is the only video download backend. Version 0.4 implements Direct
+The helper is the only video download backend. Version 0.5 implements Direct
 HTTP MP4/WebM downloads with bounded parallel Range requests, progress,
 cancellation, and resumable `.part` metadata, plus completed unencrypted HLS VOD
 and static unencrypted DASH VOD downloads through FFmpeg. The adaptive adapters
 preflight bounded manifests, reject live/encrypted streams and unsafe
 private-network resources, and mux the selected video and audio tracks into MP4.
+It can also open a completed output or reveal it in the operating system file
+manager. Output actions are restricted to regular files inside the user's
+managed Downloads directory.
 Blob resolution remains a separate discovery adapter so extending it does not
 change the extension's ad-protection runtime.
 

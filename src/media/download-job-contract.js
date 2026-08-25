@@ -1,4 +1,5 @@
 export const DOWNLOAD_JOB_PREFIX = "adsfriendly.mediaDownloadJob.";
+export const DOWNLOAD_HISTORY_KEY = "mediaDownloadHistory";
 export const DOWNLOAD_JOB_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 export function normalizeMediaDownloadJob(value = {}) {

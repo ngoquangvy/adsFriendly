@@ -7,6 +7,12 @@ import {
 export const ACTIONS = Object.freeze({
   MEDIA_DOWNLOAD_CANCEL: "media.download.cancel",
   MEDIA_DOWNLOAD_CREATE: "media.download.create",
+  MEDIA_DOWNLOAD_PAUSE: "media.download.pause",
+  MEDIA_DOWNLOAD_OPEN: "media.download.open",
+  MEDIA_DOWNLOAD_REMOVE_HISTORY: "media.download.remove_history",
+  MEDIA_DOWNLOAD_REVEAL: "media.download.reveal",
+  MEDIA_DOWNLOAD_RESUME: "media.download.resume",
+  MEDIA_DOWNLOAD_RETRY: "media.download.retry",
   VIDEO_ACCELERATE_AUTOMATIC: "video.accelerate.automatic",
   VIDEO_ACCELERATE_USER: "video.accelerate.user",
   VIDEO_RESTORE_PLAYBACK: "video.restore_playback",
@@ -24,6 +30,36 @@ export const ACTION_CATALOG = Object.freeze({
   ),
   [A.MEDIA_DOWNLOAD_CREATE]: action(
     A.MEDIA_DOWNLOAD_CREATE,
+    "background.media-download-jobs",
+    C.MEDIA_NATIVE_DOWNLOAD,
+  ),
+  [A.MEDIA_DOWNLOAD_PAUSE]: action(
+    A.MEDIA_DOWNLOAD_PAUSE,
+    "background.media-download-jobs",
+    C.MEDIA_NATIVE_DOWNLOAD,
+  ),
+  [A.MEDIA_DOWNLOAD_OPEN]: action(
+    A.MEDIA_DOWNLOAD_OPEN,
+    "background.media-download-jobs",
+    C.MEDIA_NATIVE_DOWNLOAD,
+  ),
+  [A.MEDIA_DOWNLOAD_REMOVE_HISTORY]: action(
+    A.MEDIA_DOWNLOAD_REMOVE_HISTORY,
+    "background.media-download-jobs",
+    C.MEDIA_NATIVE_DOWNLOAD,
+  ),
+  [A.MEDIA_DOWNLOAD_REVEAL]: action(
+    A.MEDIA_DOWNLOAD_REVEAL,
+    "background.media-download-jobs",
+    C.MEDIA_NATIVE_DOWNLOAD,
+  ),
+  [A.MEDIA_DOWNLOAD_RESUME]: action(
+    A.MEDIA_DOWNLOAD_RESUME,
+    "background.media-download-jobs",
+    C.MEDIA_NATIVE_DOWNLOAD,
+  ),
+  [A.MEDIA_DOWNLOAD_RETRY]: action(
+    A.MEDIA_DOWNLOAD_RETRY,
     "background.media-download-jobs",
     C.MEDIA_NATIVE_DOWNLOAD,
   ),

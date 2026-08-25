@@ -765,6 +765,138 @@ var AdsFriendlyOptions = (() => {
     });
   }
 
+  // src/media/download-job-contract.js
+  var DOWNLOAD_JOB_PREFIX = "adsfriendly.mediaDownloadJob.";
+  var DOWNLOAD_HISTORY_KEY = "mediaDownloadHistory";
+  var DOWNLOAD_JOB_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
+
+  // src/media/download-job-view.js
+  var ACTIVE_STATUSES = /* @__PURE__ */ new Set([
+    "starting",
+    "probing",
+    "downloading",
+    "finalizing"
+  ]);
+  function getMediaJobProgress(job = {}) {
+    const progress = job.progress || {};
+    const downloadedBytes = finiteOrNull(progress.downloadedBytes);
+    const totalBytes = finiteOrNull(progress.totalBytes);
+    const processedSeconds = finiteOrNull(progress.processedSeconds);
+    const duration = finiteOrNull(progress.duration);
+    let percent = null;
+    if (duration > 0 && processedSeconds !== null) {
+      percent = Math.min(100, Math.round(processedSeconds / duration * 100));
+    } else if (totalBytes > 0 && downloadedBytes !== null) {
+      percent = Math.min(100, Math.round(downloadedBytes / totalBytes * 100));
+    }
+    return {
+      percent,
+      downloadedBytes,
+      totalBytes,
+      bytesPerSecond: finiteOrNull(progress.bytesPerSecond),
+      processedSeconds,
+      duration,
+      resumedBytes: finiteOrNull(progress.resumedBytes),
+      resumable: progress.resumable === true,
+      connections: normalizeConnections(job.connections)
+    };
+  }
+  function getMediaJobPrimaryAction(job = {}) {
+    if (job.historyOnly === true) return null;
+    if (job.status === "paused")
+      return {
+        type: "resume",
+        label: "Resume",
+        messageType: "RESUME_MEDIA_DOWNLOAD_JOB"
+      };
+    if (["cancelled", "failed"].includes(job.status))
+      return {
+        type: "retry",
+        label: "Retry",
+        messageType: "RETRY_MEDIA_DOWNLOAD_JOB"
+      };
+    if (!ACTIVE_STATUSES.has(job.status)) return null;
+    if (job.progress?.resumable === true)
+      return {
+        type: "pause",
+        label: "Pause",
+        messageType: "PAUSE_MEDIA_DOWNLOAD_JOB"
+      };
+    return {
+      type: "cancel",
+      label: "Cancel",
+      messageType: "CANCEL_MEDIA_DOWNLOAD_JOB"
+    };
+  }
+  function formatMediaJobDetails(job = {}) {
+    const progress = getMediaJobProgress(job);
+    const connectionFact = `${progress.connections} connections`;
+    if (job.status === "completed") {
+      const size = progress.totalBytes ?? progress.downloadedBytes;
+      return [
+        "Completed",
+        size !== null ? formatBytes(size) : null,
+        connectionFact
+      ].filter(Boolean).join(" \xB7 ");
+    }
+    if (job.status === "failed")
+      return ["Failed", job.error || "unknown error", connectionFact].filter(Boolean).join(" \xB7 ");
+    if (["cancelled", "paused"].includes(job.status)) {
+      return [
+        job.status === "paused" ? "Paused" : "Cancelled",
+        progress.downloadedBytes !== null ? `${formatBytes(progress.downloadedBytes)} downloaded` : null,
+        progress.resumable ? "partial data kept" : null,
+        connectionFact
+      ].filter(Boolean).join(" \xB7 ");
+    }
+    if (job.status === "cancelling") return `Stopping \xB7 ${connectionFact}`;
+    if (job.status === "pausing") return `Pausing \xB7 ${connectionFact}`;
+    const facts = [];
+    if (progress.percent !== null) facts.push(`${progress.percent}%`);
+    if (progress.duration > 0 && progress.processedSeconds !== null) {
+      facts.push(
+        `${formatDuration(progress.processedSeconds)} / ${formatDuration(progress.duration)}`
+      );
+    }
+    if (progress.downloadedBytes !== null) {
+      facts.push(
+        progress.totalBytes > 0 ? `${formatBytes(progress.downloadedBytes)} / ${formatBytes(progress.totalBytes)}` : formatBytes(progress.downloadedBytes)
+      );
+    }
+    if (progress.bytesPerSecond > 0)
+      facts.push(`${formatBytes(progress.bytesPerSecond)}/s`);
+    if (progress.resumedBytes > 0)
+      facts.push(`resumed ${formatBytes(progress.resumedBytes)}`);
+    facts.push(connectionFact);
+    if (facts.length === 1) facts.unshift(capitalize(job.status || "starting"));
+    return facts.join(" \xB7 ");
+  }
+  function formatBytes(bytes) {
+    const value = Math.max(0, Number(bytes) || 0);
+    if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(1)} GB`;
+    if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MB`;
+    return `${Math.round(value / 1024)} KB`;
+  }
+  function formatDuration(seconds) {
+    const total = Math.max(0, Math.round(Number(seconds) || 0));
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor(total % 3600 / 60);
+    const remaining = total % 60;
+    return hours ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remaining).padStart(2, "0")}` : `${minutes}:${String(remaining).padStart(2, "0")}`;
+  }
+  function finiteOrNull(value) {
+    if (value === null || value === void 0 || value === "") return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  }
+  function normalizeConnections(value) {
+    const connections = Number(value);
+    return Number.isInteger(connections) && connections > 0 ? connections : 8;
+  }
+  function capitalize(value) {
+    return value ? `${value[0].toUpperCase()}${value.slice(1)}` : "Starting";
+  }
+
   // src/options/index.js
   var $ = (id) => document.getElementById(id);
   var whitelistEl = $("whitelist-list");
@@ -773,6 +905,7 @@ var AdsFriendlyOptions = (() => {
   var packageStatusEl = $("package-status");
   var currentSnapshot = {};
   var storageRefreshTimer = null;
+  var downloadRefreshTimer = null;
   initialize().catch((error) => showPackageStatus(error.message, true));
   window.addEventListener("unhandledrejection", (event) => {
     showPackageStatus(
@@ -789,8 +922,18 @@ var AdsFriendlyOptions = (() => {
       () => chrome.storage.onChanged.removeListener(handleStorageChange)
     );
     await loadPage();
+    await renderDownloads();
+    if (location.hash === "#downloads")
+      $("downloads").scrollIntoView({ behavior: "smooth", block: "start" });
   }
   function handleStorageChange(changes, areaName) {
+    if (areaName === "session" && Object.keys(changes).some((key) => key.startsWith(DOWNLOAD_JOB_PREFIX))) {
+      scheduleDownloadRefresh();
+      return;
+    }
+    if (areaName === "local" && DOWNLOAD_HISTORY_KEY in changes) {
+      scheduleDownloadRefresh();
+    }
     if (areaName !== "local") return;
     const keys = Object.keys(changes);
     const affectsSettings = keys.some(
@@ -807,6 +950,13 @@ var AdsFriendlyOptions = (() => {
     storageRefreshTimer = setTimeout(() => {
       loadPage().catch((error) => showPackageStatus(error.message, true));
     }, 80);
+  }
+  function scheduleDownloadRefresh() {
+    if (downloadRefreshTimer) return;
+    downloadRefreshTimer = setTimeout(() => {
+      downloadRefreshTimer = null;
+      void renderDownloads();
+    }, 250);
   }
   function bindStaticActions() {
     $("btn-package-export").onclick = exportSettingsPackage;
@@ -826,8 +976,199 @@ var AdsFriendlyOptions = (() => {
     $("btn-dom-refresh").onclick = renderDomSamples;
     $("btn-dom-export").onclick = exportDomSamples;
     $("btn-dom-clear").onclick = clearDomSamples;
+    $("btn-download-refresh").onclick = renderDownloads;
     $("btn-reset").onclick = factoryReset;
     bindFeedbackForm();
+  }
+  async function renderDownloads() {
+    const container = $("download-job-manager");
+    const status = $("download-manager-status");
+    if (!container || !status) return;
+    try {
+      const [jobsResponse, helper] = await Promise.all([
+        chrome.runtime.sendMessage({ type: "GET_MEDIA_DOWNLOAD_JOBS" }),
+        chrome.runtime.sendMessage({ type: "GET_MEDIA_HELPER_STATUS" })
+      ]);
+      const jobs = Array.isArray(jobsResponse?.items) ? jobsResponse.items : [];
+      const activeCount = jobs.filter(
+        (job) => [
+          "starting",
+          "probing",
+          "downloading",
+          "finalizing",
+          "pausing",
+          "cancelling"
+        ].includes(job.status)
+      ).length;
+      status.textContent = `${jobs.length} jobs \xB7 ${activeCount} active \xB7 ${helper?.status === "ready" ? `Media Helper ${helper.helperVersion || "ready"}` : "Media Helper unavailable"}`;
+      status.style.color = helper?.status === "ready" ? "#94a3b8" : "#f59e0b";
+      if (!jobs.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty-msg";
+        empty.textContent = "No download history yet.";
+        container.replaceChildren(empty);
+        return;
+      }
+      container.querySelector(".empty-msg")?.remove();
+      const existing = new Map(
+        [...container.querySelectorAll(".download-history-item")].map((row) => [
+          row.dataset.jobId,
+          row
+        ])
+      );
+      const visibleIds = /* @__PURE__ */ new Set();
+      for (const job of jobs) {
+        visibleIds.add(job.id);
+        const row = existing.get(job.id) || createDownloadHistoryItem();
+        updateDownloadHistoryItem(row, job, helper);
+        container.append(row);
+      }
+      for (const [jobId, row] of existing) {
+        if (!visibleIds.has(jobId)) row.remove();
+      }
+    } catch (error) {
+      status.textContent = `Downloads unavailable \xB7 ${error.message}`;
+      status.style.color = "#f87171";
+    }
+  }
+  function createDownloadHistoryItem() {
+    const row = document.createElement("article");
+    row.className = "download-history-item";
+    const header = document.createElement("div");
+    header.className = "download-history-header";
+    const title = document.createElement("div");
+    title.className = "download-history-title";
+    const badge = document.createElement("span");
+    badge.className = "download-status";
+    header.append(title, badge);
+    const progressTrack = document.createElement("div");
+    progressTrack.className = "download-progress-track";
+    const progressBar = document.createElement("div");
+    progressBar.className = "download-progress-bar";
+    progressTrack.append(progressBar);
+    const details = document.createElement("div");
+    details.className = "download-history-details";
+    const output = document.createElement("div");
+    output.className = "download-output-path";
+    const controls = document.createElement("div");
+    controls.className = "download-history-controls";
+    row.append(header, progressTrack, details, output, controls);
+    return row;
+  }
+  function updateDownloadHistoryItem(row, job, helper) {
+    row.dataset.jobId = job.id;
+    const title = row.querySelector(".download-history-title");
+    title.textContent = job.title || `${String(job.kind || "media").toUpperCase()} download`;
+    title.title = job.outputPath || job.candidate?.manifestUrl || job.candidate?.sourceUrl || "";
+    const badge = row.querySelector(".download-status");
+    badge.className = `download-status download-status-${job.status || "unknown"}`;
+    badge.textContent = String(job.status || "unknown").toUpperCase();
+    const progress = getMediaJobProgress(job);
+    row.querySelector(".download-progress-bar").style.width = `${progress.percent ?? 0}%`;
+    row.querySelector(".download-history-details").textContent = formatMediaJobDetails(job);
+    row.querySelector(".download-output-path").textContent = job.outputPath || "Output file not created yet";
+    const controls = row.querySelector(".download-history-controls");
+    const selectedConnections = Number(
+      controls.querySelector(".download-connections")?.value
+    );
+    controls.replaceChildren();
+    const connections = document.createElement("select");
+    connections.className = "field-select download-connections";
+    connections.title = "Parallel connections used for retry or resume";
+    for (const value of [4, 8, 12, 16]) {
+      const option = document.createElement("option");
+      option.value = String(value);
+      option.textContent = `${value} connections`;
+      option.selected = value === (Number.isInteger(selectedConnections) ? selectedConnections : progress.connections);
+      connections.append(option);
+    }
+    const primary = getMediaJobPrimaryAction(job);
+    connections.disabled = !primary || ["pause", "cancel"].includes(primary.type);
+    controls.append(connections);
+    if (primary) {
+      controls.append(
+        downloadActionButton(
+          primary.label,
+          primary.messageType,
+          job.id,
+          connections,
+          {
+            danger: primary.type === "cancel"
+          }
+        )
+      );
+    }
+    if (job.status === "completed" && job.outputPath) {
+      const outputActionsReady = helper?.capabilities?.["output.open"] === true && helper?.capabilities?.["output.reveal"] === true;
+      const open = downloadActionButton(
+        "Open",
+        "OPEN_MEDIA_DOWNLOAD_OUTPUT",
+        job.id,
+        connections
+      );
+      const reveal = downloadActionButton(
+        "Open location",
+        "REVEAL_MEDIA_DOWNLOAD_OUTPUT",
+        job.id,
+        connections
+      );
+      open.disabled = !outputActionsReady;
+      reveal.disabled = !outputActionsReady;
+      if (!outputActionsReady) {
+        open.title = reveal.title = "Update Media Helper to use output actions.";
+      }
+      controls.append(open, reveal);
+    }
+    if (![
+      "starting",
+      "probing",
+      "downloading",
+      "finalizing",
+      "pausing",
+      "cancelling"
+    ].includes(job.status)) {
+      controls.append(
+        downloadActionButton(
+          "Remove history",
+          "REMOVE_MEDIA_DOWNLOAD_HISTORY",
+          job.id,
+          connections,
+          { danger: true }
+        )
+      );
+    }
+  }
+  function downloadActionButton(label, messageType, jobId, connections, { danger = false } = {}) {
+    const button = document.createElement("button");
+    button.className = danger ? "btn-secondary download-danger" : "btn-secondary";
+    button.textContent = label;
+    button.onclick = async () => {
+      if (messageType === "REMOVE_MEDIA_DOWNLOAD_HISTORY" && !confirm("Remove this history entry? The downloaded file will be kept."))
+        return;
+      button.disabled = true;
+      const original = button.textContent;
+      button.textContent = "Working\u2026";
+      try {
+        const response = await chrome.runtime.sendMessage({
+          type: messageType,
+          jobId,
+          connections: Number(connections.value)
+        });
+        if (!["started", "pausing", "cancelling", "opened", "removed"].includes(
+          response?.status
+        ))
+          throw new Error(
+            response?.reason || response?.error || "Download action failed."
+          );
+        await renderDownloads();
+      } catch (error) {
+        button.disabled = false;
+        button.textContent = original;
+        $("download-manager-status").textContent = `Action failed \xB7 ${error.message}`;
+        $("download-manager-status").style.color = "#f87171";
+      }
+    };
+    return button;
   }
   async function loadPage() {
     currentSnapshot = await chrome.storage.local.get(null);

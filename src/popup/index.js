@@ -8,6 +8,10 @@ import {
   getMediaDownloadAvailability,
 } from "../media/download-job-contract.js";
 import {
+  formatMediaJobDetails,
+  getMediaJobPrimaryAction,
+} from "../media/download-job-view.js";
+import {
   createMediaCatalogViewSignature,
   formatMediaDetails,
   formatMediaHelperSummary,
@@ -27,6 +31,7 @@ const mediaStatus = document.getElementById("media-status");
 const mediaHelperAction = document.getElementById("media-helper-action");
 const mediaList = document.getElementById("media-list");
 const mediaJobList = document.getElementById("media-job-list");
+const mediaManagerLink = document.getElementById("media-manager-link");
 
 const MODE_DESCRIPTIONS = Object.freeze({
   safe: "Verified rules; no predictive DOM actions",
@@ -45,6 +50,7 @@ let mediaHelperStatus = {
 let activeMediaTabId = null;
 let mediaRenderSignature = null;
 let scheduledMediaRefresh = null;
+let hasMediaDownloadJobs = false;
 initialize().catch((error) =>
   console.error("[AdsFriendly Popup] initialization failed", error),
 );
@@ -70,6 +76,12 @@ modeSelect.addEventListener("change", async () => {
 mediaHelperAction.addEventListener("click", async () => {
   mediaHelperAction.disabled = true;
   await setupMediaHelper(mediaHelperAction, mediaHelperStatus);
+});
+
+mediaManagerLink.addEventListener("click", () => {
+  void chrome.tabs.create({
+    url: chrome.runtime.getURL("options/options.html#downloads"),
+  });
 });
 
 document.getElementById("settings-btn").addEventListener("click", () => {
@@ -276,6 +288,13 @@ async function renderMediaCatalog(tab) {
 
 function commitMediaCatalog({ status, items = [], tab = null, helper = null }) {
   const visibleItems = selectVisibleMediaItems(items);
+  if (
+    !visibleItems.length &&
+    hasMediaDownloadJobs &&
+    /Open an HTTP video page|No MP4, WebM, HLS, or DASH/i.test(status)
+  ) {
+    status = "No media on this tab · downloads remain available below.";
+  }
   const downloadState = getMediaCatalogDownloadState(items);
   const signature = createMediaCatalogViewSignature({
     tabId: tab?.id ?? null,
@@ -513,6 +532,7 @@ async function updateMediaJobs() {
 
 function renderMediaJobs(items) {
   const visible = items.slice(0, 4);
+  hasMediaDownloadJobs = visible.length > 0;
   const existing = new Map(
     [...mediaJobList.children].map((row) => [row.dataset.jobId, row]),
   );
@@ -527,6 +547,19 @@ function renderMediaJobs(items) {
     if (!visibleIds.has(jobId)) row.remove();
   }
   mediaJobList.hidden = visible.length === 0;
+  mediaManagerLink.hidden = visible.length === 0;
+  if (
+    visible.length &&
+    mediaCount.textContent === "0" &&
+    /Open an HTTP video page|No MP4, WebM, HLS, or DASH/i.test(
+      mediaStatus.textContent,
+    )
+  ) {
+    setText(
+      mediaStatus,
+      "No media on this tab · downloads remain available below.",
+    );
+  }
 }
 
 function createMediaJobItem() {
@@ -549,82 +582,51 @@ function updateMediaJobItem(row, job) {
     row.querySelector(".media-job-label"),
     job.title || String(job.kind || "media").toUpperCase(),
   );
-  setText(row.querySelector(".media-job-detail"), mediaJobDetails(job));
-  let cancel = row.querySelector(".media-cancel");
-  if (
-    ["starting", "probing", "downloading", "finalizing"].includes(job.status)
-  ) {
-    if (!cancel) {
-      cancel = document.createElement("button");
-      cancel.className = "media-download media-cancel";
-      cancel.textContent = "Cancel";
-      cancel.addEventListener("click", async () => {
-        cancel.disabled = true;
-        cancel.textContent = "Stopping…";
-        await chrome.runtime.sendMessage({
-          type: "CANCEL_MEDIA_DOWNLOAD_JOB",
-          jobId: cancel.dataset.jobId,
-        });
-        await updateMediaJobs();
-      });
-      row.append(cancel);
+  setText(row.querySelector(".media-job-detail"), formatMediaJobDetails(job));
+  const action = getMediaJobPrimaryAction(job);
+  let button = row.querySelector(".media-job-action");
+  if (!action) {
+    button?.remove();
+    return;
+  }
+  if (!button) {
+    button = document.createElement("button");
+    button.className = "media-download media-job-action";
+    button.addEventListener("click", () => runMediaJobAction(button));
+    row.append(button);
+  }
+  button.disabled = false;
+  button.classList.toggle("media-cancel", action.type === "cancel");
+  button.textContent = action.label;
+  button.dataset.jobId = job.id;
+  button.dataset.messageType = action.messageType;
+  button.dataset.actionType = action.type;
+}
+
+async function runMediaJobAction(button) {
+  button.disabled = true;
+  button.textContent =
+    button.dataset.actionType === "pause"
+      ? "Pausing…"
+      : button.dataset.actionType === "cancel"
+        ? "Stopping…"
+        : "Starting…";
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: button.dataset.messageType,
+      jobId: button.dataset.jobId,
+    });
+    if (!["started", "pausing", "cancelling"].includes(response?.status)) {
+      throw new Error(
+        response?.reason || response?.error || "Job action failed.",
+      );
     }
-    cancel.dataset.jobId = job.id;
-  } else {
-    cancel?.remove();
+    await updateMediaJobs();
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = "Retry action";
+    button.title = error?.message || String(error);
   }
-}
-
-function mediaJobDetails(job) {
-  if (job.status === "completed")
-    return `Completed · ${job.outputPath || "saved"}`;
-  if (job.status === "failed")
-    return `Failed · ${job.error || "unknown error"}`;
-  if (job.status === "cancelled")
-    return "Cancelled · resume available on retry";
-  if (job.status === "cancelling") return "Stopping…";
-  const downloaded = job.progress?.downloadedBytes;
-  const total = job.progress?.totalBytes;
-  const processedSeconds = job.progress?.processedSeconds;
-  const duration = job.progress?.duration;
-  if (
-    Number.isFinite(processedSeconds) &&
-    Number.isFinite(duration) &&
-    duration > 0
-  ) {
-    const percent = Math.min(
-      100,
-      Math.round((processedSeconds / duration) * 100),
-    );
-    const size = Number.isFinite(downloaded)
-      ? ` · ${formatBytes(downloaded)}`
-      : "";
-    return `${percent}% · ${formatDuration(processedSeconds)} / ${formatDuration(duration)}${size}`;
-  }
-  if (Number.isFinite(downloaded) && Number.isFinite(total) && total > 0) {
-    const percent = Math.min(100, Math.round((downloaded / total) * 100));
-    const speed = Number.isFinite(job.progress?.bytesPerSecond)
-      ? ` · ${formatBytes(job.progress.bytesPerSecond)}/s`
-      : "";
-    return `${percent}% · ${formatBytes(downloaded)} / ${formatBytes(total)}${speed}`;
-  }
-  return `${job.status || "starting"}…`;
-}
-
-function formatDuration(seconds) {
-  const total = Math.max(0, Math.round(seconds));
-  const hours = Math.floor(total / 3600);
-  const minutes = Math.floor((total % 3600) / 60);
-  const remaining = total % 60;
-  return hours
-    ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remaining).padStart(2, "0")}`
-    : `${minutes}:${String(remaining).padStart(2, "0")}`;
-}
-
-function formatBytes(bytes) {
-  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
-  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
-  return `${Math.max(0, Math.round(bytes / 1024))} KB`;
 }
 
 function downloadUnavailableLabel(reason = "") {

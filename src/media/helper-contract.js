@@ -6,6 +6,8 @@ export const MEDIA_HELPER_REQUESTS = Object.freeze({
   GET_CAPABILITIES: "helper.capabilities.get",
   DOWNLOAD_START: "download.start",
   DOWNLOAD_CANCEL: "download.cancel",
+  OUTPUT_OPEN: "output.open",
+  OUTPUT_REVEAL: "output.reveal",
 });
 
 export const MEDIA_HELPER_EVENTS = Object.freeze({
@@ -15,6 +17,7 @@ export const MEDIA_HELPER_EVENTS = Object.freeze({
   DOWNLOAD_PROGRESS: "download.progress",
   DOWNLOAD_COMPLETED: "download.completed",
   DOWNLOAD_CANCELLED: "download.cancelled",
+  OUTPUT_OPENED: "output.opened",
   ERROR: "helper.error",
 });
 
@@ -23,6 +26,8 @@ export const MEDIA_HELPER_CAPABILITIES = Object.freeze({
   HLS_VOD_DOWNLOAD: "download.hls_vod",
   DASH_VOD_DOWNLOAD: "download.dash_vod",
   FFMPEG_MUX: "mux.ffmpeg",
+  OUTPUT_OPEN: "output.open",
+  OUTPUT_REVEAL: "output.reveal",
 });
 
 export function normalizeHelperRequest(value = {}) {

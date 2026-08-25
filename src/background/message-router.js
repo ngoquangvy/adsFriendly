@@ -36,6 +36,12 @@ import {
   listMediaDownloadJobs,
   requestMediaDownloadCancel,
   requestMediaDownloadJob,
+  requestMediaDownloadHistoryRemove,
+  requestMediaDownloadOpen,
+  requestMediaDownloadPause,
+  requestMediaDownloadResume,
+  requestMediaDownloadRetry,
+  requestMediaDownloadReveal,
 } from "./media-download-jobs.js";
 import { getMediaHelperStatus } from "./media-helper-bridge.js";
 
@@ -73,6 +79,12 @@ const MESSAGE_CAPABILITIES = Object.freeze({
   GET_MEDIA_HELPER_STATUS: CAPABILITIES.MEDIA_DOWNLOAD,
   CREATE_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
   CANCEL_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
+  PAUSE_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
+  OPEN_MEDIA_DOWNLOAD_OUTPUT: CAPABILITIES.MEDIA_DOWNLOAD,
+  REVEAL_MEDIA_DOWNLOAD_OUTPUT: CAPABILITIES.MEDIA_DOWNLOAD,
+  REMOVE_MEDIA_DOWNLOAD_HISTORY: CAPABILITIES.MEDIA_DOWNLOAD,
+  RESUME_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
+  RETRY_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
   GET_MEDIA_DOWNLOAD_JOBS: CAPABILITIES.MEDIA_DOWNLOAD,
 });
 
@@ -210,6 +222,24 @@ async function route(message, sender) {
     });
   if (message.type === "CANCEL_MEDIA_DOWNLOAD_JOB")
     return requestMediaDownloadCancel({ jobId: message.jobId });
+  if (message.type === "PAUSE_MEDIA_DOWNLOAD_JOB")
+    return requestMediaDownloadPause({ jobId: message.jobId });
+  if (message.type === "RESUME_MEDIA_DOWNLOAD_JOB")
+    return requestMediaDownloadResume({
+      jobId: message.jobId,
+      connections: message.connections,
+    });
+  if (message.type === "RETRY_MEDIA_DOWNLOAD_JOB")
+    return requestMediaDownloadRetry({
+      jobId: message.jobId,
+      connections: message.connections,
+    });
+  if (message.type === "OPEN_MEDIA_DOWNLOAD_OUTPUT")
+    return requestMediaDownloadOpen({ jobId: message.jobId });
+  if (message.type === "REVEAL_MEDIA_DOWNLOAD_OUTPUT")
+    return requestMediaDownloadReveal({ jobId: message.jobId });
+  if (message.type === "REMOVE_MEDIA_DOWNLOAD_HISTORY")
+    return requestMediaDownloadHistoryRemove({ jobId: message.jobId });
   if (message.type === "GET_MEDIA_DOWNLOAD_JOBS")
     return listMediaDownloadJobs();
   if (message.type === "NEGATIVE_LEARNING")
