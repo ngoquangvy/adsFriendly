@@ -41,6 +41,7 @@ export function selectVisibleMediaItems(items = [], maximum = 8) {
   );
   const visible = [];
   const blobGroups = new Map();
+  const resolvedBlobGroupKeys = resolvedBlobGroupKeysByPage(items);
   for (const item of sorted) {
     if (item.kind !== "blob" && blobResolvedSourceIds.has(item.id)) continue;
     if (item.kind === "hls" && item.parentManifestIds?.length) continue;
@@ -48,7 +49,7 @@ export function selectVisibleMediaItems(items = [], maximum = 8) {
       visible.push(item);
       continue;
     }
-    const key = `${item.pageUrl || ""}\n${item.title || "blob"}`;
+    const key = blobGroupKey(item, resolvedBlobGroupKeys);
     const existing = blobGroups.get(key);
     if (existing) {
       existing.relatedCount += 1;
@@ -137,7 +138,11 @@ export function formatMediaHelperSummary(helper, downloadState) {
     return "Media Helper connected · downloader update required.";
   if (helper.status === "incompatible")
     return "Media Helper version is incompatible.";
-  return "Media found · Media Helper is unavailable.";
+  if (/timed out/i.test(helper.error || ""))
+    return "Media found · Media Helper took too long to start.";
+  if (/exited|disconnected/i.test(helper.error || ""))
+    return "Media found · Media Helper exited during startup.";
+  return "Media found · Media Helper connection failed.";
 }
 
 export function formatMediaDetails(item) {
@@ -344,6 +349,45 @@ function readableMediaTitle(value) {
   if (!title || title.length > 160) return null;
   if (/^[a-f0-9]{24,}$/i.test(title)) return null;
   return title;
+}
+
+function resolvedBlobGroupKeysByPage(items) {
+  const byPage = new Map();
+  for (const item of items) {
+    if (item.kind !== "blob" || !item.selectedMediaId) continue;
+    const pageUrl = item.pageUrl || "";
+    const matches = byPage.get(pageUrl) || [];
+    matches.push(item);
+    byPage.set(pageUrl, matches);
+  }
+  return new Map(
+    [...byPage].flatMap(([pageUrl, matches]) =>
+      matches.length === 1
+        ? [[pageUrl, `${pageUrl}\n${blobTitleKey(matches[0].title)}`]]
+        : [],
+    ),
+  );
+}
+
+function blobGroupKey(item, resolvedGroupKeys) {
+  const pageUrl = item.pageUrl || "";
+  if (!item.selectedMediaId && isGenericBlobTitle(item.title)) {
+    const resolvedKey = resolvedGroupKeys.get(pageUrl);
+    if (resolvedKey) return resolvedKey;
+  }
+  return `${pageUrl}\n${blobTitleKey(item.title)}`;
+}
+
+function blobTitleKey(value) {
+  return readableMediaTitle(value)?.toLowerCase() || "blob";
+}
+
+function isGenericBlobTitle(value) {
+  const title = typeof value === "string" ? value.trim() : "";
+  return (
+    !readableMediaTitle(title) ||
+    /^(blob|blob media stream|media stream)$/i.test(title)
+  );
 }
 
 function mediaRenderFacts(item) {

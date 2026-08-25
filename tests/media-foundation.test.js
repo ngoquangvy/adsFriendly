@@ -68,6 +68,16 @@ test("offers a helper setup action independently from downloadable media", () =>
     ),
     null,
   );
+  assert.equal(
+    formatMediaHelperSummary(
+      {
+        status: "unavailable",
+        error: "Media Helper handshake timed out.",
+      },
+      { downloadableCount: 1, drmBlockedCount: 0 },
+    ),
+    "Media found · Media Helper took too long to start.",
+  );
 });
 
 test("classifies direct, HLS, DASH, and blob media without treating segments as videos", () => {
@@ -1241,6 +1251,66 @@ test("media popup keeps the resolved Blob when grouping player handles", () => {
   assert.equal(items[0].id, "blob-resolved");
   assert.equal(items[0].selectedMediaId, "hls-source");
   assert.equal(items[0].relatedCount, 2);
+});
+
+test("media popup folds a generic Blob signal into the only resolved player", () => {
+  const items = selectVisibleMediaItems([
+    {
+      id: "blob-resolved",
+      kind: "blob",
+      pageUrl: "https://video.example/watch",
+      title: "Try Not To Laugh",
+      firstSeenAt: 10,
+      selectedMediaId: "hls-source",
+      resolvedKind: "hls",
+      resolvedMediaIds: ["hls-source"],
+      blobTrace: { candidateIds: ["hls-source"] },
+    },
+    {
+      id: "blob-generic",
+      kind: "blob",
+      pageUrl: "https://video.example/watch",
+      title: "Blob media stream",
+      firstSeenAt: 20,
+    },
+    {
+      id: "hls-source",
+      kind: "hls",
+      firstSeenAt: 15,
+    },
+  ]);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].id, "blob-resolved");
+  assert.equal(items[0].relatedCount, 2);
+});
+
+test("media popup does not fold a generic Blob into ambiguous resolved players", () => {
+  const items = selectVisibleMediaItems([
+    {
+      id: "blob-resolved-1",
+      kind: "blob",
+      pageUrl: "https://video.example/watch",
+      title: "Player one",
+      selectedMediaId: "hls-1",
+      firstSeenAt: 10,
+    },
+    {
+      id: "blob-resolved-2",
+      kind: "blob",
+      pageUrl: "https://video.example/watch",
+      title: "Player two",
+      selectedMediaId: "hls-2",
+      firstSeenAt: 20,
+    },
+    {
+      id: "blob-generic",
+      kind: "blob",
+      pageUrl: "https://video.example/watch",
+      title: "Blob media stream",
+      firstSeenAt: 30,
+    },
+  ]);
+  assert.equal(items.length, 3);
 });
 
 test("media popup renders a resolved token endpoint instead of Waiting", () => {

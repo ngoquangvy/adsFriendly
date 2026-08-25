@@ -12,8 +12,9 @@ import {
   normalizeMediaDownloadJob,
 } from "../media/download-job-contract.js";
 
-const DEFAULT_TIMEOUT_MS = 3000;
+const DEFAULT_TIMEOUT_MS = 8000;
 const STATUS_CACHE_MS = 15_000;
+const FAILED_STATUS_CACHE_MS = 2_000;
 let cachedStatus = null;
 let cachedAt = 0;
 let statusPromise = null;
@@ -31,7 +32,11 @@ export async function getMediaHelperStatus({
   force = false,
   timeoutMs = DEFAULT_TIMEOUT_MS,
 } = {}) {
-  if (!force && cachedStatus && Date.now() - cachedAt < STATUS_CACHE_MS) {
+  const cacheDuration =
+    cachedStatus?.status === MEDIA_HELPER_STATES.READY
+      ? STATUS_CACHE_MS
+      : FAILED_STATUS_CACHE_MS;
+  if (!force && cachedStatus && Date.now() - cachedAt < cacheDuration) {
     return cachedStatus;
   }
   if (!force && statusPromise) return statusPromise;
