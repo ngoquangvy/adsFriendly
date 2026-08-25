@@ -3994,10 +3994,12 @@ var AdsFriendlyBackground = (() => {
       protectionMode
     });
   }
-  async function loadSettings(storage = chrome.storage.local) {
+  async function loadSettings(storage = chrome.storage.local, { persistMissing = false } = {}) {
     const stored = await storage.get([SETTINGS_KEY, "isEnabled", "friendlyMode"]);
     const settings = migrateLegacySettings(stored);
-    if (!stored[SETTINGS_KEY]) await storage.set({ [SETTINGS_KEY]: settings });
+    if (!stored[SETTINGS_KEY] && persistMissing) {
+      await storage.set({ [SETTINGS_KEY]: settings });
+    }
     return settings;
   }
   function subscribeSettings(listener, storageArea = "local") {
@@ -4090,6 +4092,7 @@ var AdsFriendlyBackground = (() => {
     const oldPathKeys = Object.keys(current).filter(
       (key) => key.startsWith("p:")
     );
+    const transactionId = createPackageTransactionId();
     const updates = {
       ...packageToStorage(settingsPackage),
       [SETTINGS_PACKAGE_STATE_KEY]: {
@@ -4097,23 +4100,28 @@ var AdsFriendlyBackground = (() => {
         initialized: true,
         source,
         package: settingsPackage.metadata,
-        installed_at: Date.now()
+        installed_at: Date.now(),
+        transaction_id: transactionId
       }
     };
     await storage.set(updates);
-    const saved = await storage.get(Object.keys(updates));
-    for (const [key, expected] of Object.entries(updates)) {
-      if (JSON.stringify(saved[key]) !== JSON.stringify(expected))
-        throw new Error(`Could not verify imported setting: ${key}.`);
+    const saved = await storage.get(SETTINGS_PACKAGE_STATE_KEY);
+    if (saved[SETTINGS_PACKAGE_STATE_KEY]?.transaction_id !== transactionId) {
+      throw new Error("Could not verify imported settings transaction.");
     }
     const obsoletePathKeys = oldPathKeys.filter((key) => !(key in updates));
     if (obsoletePathKeys.length) await storage.remove(obsoletePathKeys);
     return settingsPackage;
   }
+  function createPackageTransactionId() {
+    if (typeof globalThis.crypto?.randomUUID === "function")
+      return globalThis.crypto.randomUUID();
+    return `settings-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
   function hasMeaningfulExistingSettings(snapshot = {}) {
     const settings = normalizeSettings(snapshot.appSettings);
     const settingsDiffer = settings.enabled !== DEFAULT_SETTINGS.enabled || settings.protectionMode !== DEFAULT_SETTINGS.protectionMode || Object.keys(settings.featureOverrides).length > 0;
-    return settingsDiffer || (snapshot.whitelist?.length || 0) > 0 || (snapshot.blacklist?.length || 0) > 0 || Object.keys(snapshot.userCustomRules || {}).length > 0 || Object.keys(snapshot).some((key) => key.startsWith("p:"));
+    return settingsDiffer || !snapshot.appSettings && (snapshot.isEnabled === false || snapshot.friendlyMode === false) || (snapshot.whitelist?.length || 0) > 0 || (snapshot.blacklist?.length || 0) > 0 || Object.keys(snapshot.userCustomRules || {}).length > 0 || Object.keys(snapshot).some((key) => key.startsWith("p:"));
   }
   function normalizeMetadata(metadata = {}) {
     return {
@@ -4472,11 +4480,24 @@ var AdsFriendlyBackground = (() => {
         seedBaselinePatterns();
         return () => chrome.runtime.onInstalled.removeListener(seedBaselinePatterns);
       },
-      "background.settings-package-seed": () => initializeBundledSettingsPackage(),
+      "background.settings-package-seed": async () => {
+        try {
+          await initializeBundledSettingsPackage();
+        } catch (error) {
+          console.error(
+            "[AdsFriendly Background] Bundled settings initialization failed",
+            error
+          );
+        }
+      },
       "background.training-store-migration": () => migrateLegacyTrainingStorage()
     }
   });
-  controller.start().then(() => loadSettings()).then((settings) => controller.updateSettings(settings)).catch(
+  controller.start().then(
+    () => loadSettings(chrome.storage.local, {
+      persistMissing: true
+    })
+  ).then((settings) => controller.updateSettings(settings)).catch(
     (error) => console.error("[AdsFriendly Background] MainController failed", error)
   );
 })();

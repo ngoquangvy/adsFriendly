@@ -1066,10 +1066,12 @@ var AdsFriendlyMediaFrame = (() => {
       protectionMode
     });
   }
-  async function loadSettings(storage = chrome.storage.local) {
+  async function loadSettings(storage = chrome.storage.local, { persistMissing = false } = {}) {
     const stored = await storage.get([SETTINGS_KEY, "isEnabled", "friendlyMode"]);
     const settings = migrateLegacySettings(stored);
-    if (!stored[SETTINGS_KEY]) await storage.set({ [SETTINGS_KEY]: settings });
+    if (!stored[SETTINGS_KEY] && persistMissing) {
+      await storage.set({ [SETTINGS_KEY]: settings });
+    }
     return settings;
   }
   function subscribeSettings(listener, storageArea = "local") {

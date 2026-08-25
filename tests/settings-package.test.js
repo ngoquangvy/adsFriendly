@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  SETTINGS_PACKAGE_STATE_KEY,
   SETTINGS_PACKAGE_SCHEMA,
   createSettingsPackage,
   normalizeSettingsPackage,
@@ -8,6 +9,7 @@ import {
   summarizeSettingsPackage,
 } from "../src/settings-package/schema.js";
 import { initializeBundledSettingsPackage } from "../src/background/settings-package-seed.js";
+import { loadSettings } from "../src/runtime/settings-store.js";
 import {
   getResponsiveLayout,
   ruleMatchesResponsiveLayout,
@@ -162,11 +164,52 @@ test("bundled package initializes a fresh installation once", async () => {
   assert.equal(snapshot.settingsPackageState.source, "bundled");
 });
 
+test("settings readers do not race the bundled package on a fresh install", async () => {
+  const storage = createStorage();
+  const settings = await loadSettings(storage);
+  assert.equal(settings.protectionMode, "safe");
+  assert.equal((await storage.get(null)).appSettings, undefined);
+});
+
+test("package verification tolerates an immediate valid mode change", async () => {
+  const storage = createStorage();
+  let changedAfterImport = false;
+  const concurrentStorage = {
+    set: storage.set,
+    remove: storage.remove,
+    async get(keys) {
+      if (keys === SETTINGS_PACKAGE_STATE_KEY && !changedAfterImport) {
+        changedAfterImport = true;
+        await storage.set({
+          appSettings: {
+            enabled: true,
+            protectionMode: "auto",
+            featureOverrides: {},
+          },
+        });
+      }
+      return storage.get(keys);
+    },
+  };
+  await replaceSettingsWithPackage(examplePackage, concurrentStorage, "test");
+  assert.equal(
+    (await storage.get("appSettings")).appSettings.protectionMode,
+    "auto",
+  );
+  assert.equal(changedAfterImport, true);
+});
+
 test("responsive DOM rules do not leak from desktop into mobile layouts", () => {
   assert.equal(getResponsiveLayout(390), "compact");
   assert.equal(getResponsiveLayout(1280), "wide");
-  assert.equal(ruleMatchesResponsiveLayout({ layout: "wide" }, "compact"), false);
-  assert.equal(ruleMatchesResponsiveLayout({ layout: "compact" }, "compact"), true);
+  assert.equal(
+    ruleMatchesResponsiveLayout({ layout: "wide" }, "compact"),
+    false,
+  );
+  assert.equal(
+    ruleMatchesResponsiveLayout({ layout: "compact" }, "compact"),
+    true,
+  );
   assert.equal(ruleMatchesResponsiveLayout({ layout: "any" }, "compact"), true);
   assert.equal(ruleMatchesResponsiveLayout(".legacy-rule", "compact"), true);
 });

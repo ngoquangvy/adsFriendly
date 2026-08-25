@@ -119,6 +119,7 @@ export async function replaceSettingsWithPackage(
   const oldPathKeys = Object.keys(current).filter((key) =>
     key.startsWith("p:"),
   );
+  const transactionId = createPackageTransactionId();
   const updates = {
     ...packageToStorage(settingsPackage),
     [SETTINGS_PACKAGE_STATE_KEY]: {
@@ -127,17 +128,26 @@ export async function replaceSettingsWithPackage(
       source,
       package: settingsPackage.metadata,
       installed_at: Date.now(),
+      transaction_id: transactionId,
     },
   };
   await storage.set(updates);
-  const saved = await storage.get(Object.keys(updates));
-  for (const [key, expected] of Object.entries(updates)) {
-    if (JSON.stringify(saved[key]) !== JSON.stringify(expected))
-      throw new Error(`Could not verify imported setting: ${key}.`);
+  // chrome.storage.local.set() is atomic. Verify the transaction marker rather
+  // than every mutable setting: another context may legitimately change mode
+  // immediately after the import commits.
+  const saved = await storage.get(SETTINGS_PACKAGE_STATE_KEY);
+  if (saved[SETTINGS_PACKAGE_STATE_KEY]?.transaction_id !== transactionId) {
+    throw new Error("Could not verify imported settings transaction.");
   }
   const obsoletePathKeys = oldPathKeys.filter((key) => !(key in updates));
   if (obsoletePathKeys.length) await storage.remove(obsoletePathKeys);
   return settingsPackage;
+}
+
+function createPackageTransactionId() {
+  if (typeof globalThis.crypto?.randomUUID === "function")
+    return globalThis.crypto.randomUUID();
+  return `settings-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 export function summarizeSettingsPackage(packageInput) {
@@ -165,6 +175,8 @@ export function hasMeaningfulExistingSettings(snapshot = {}) {
     Object.keys(settings.featureOverrides).length > 0;
   return (
     settingsDiffer ||
+    (!snapshot.appSettings &&
+      (snapshot.isEnabled === false || snapshot.friendlyMode === false)) ||
     (snapshot.whitelist?.length || 0) > 0 ||
     (snapshot.blacklist?.length || 0) > 0 ||
     Object.keys(snapshot.userCustomRules || {}).length > 0 ||

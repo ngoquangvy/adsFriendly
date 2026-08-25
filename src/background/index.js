@@ -32,15 +32,29 @@ const controller = createMainController({
       return () =>
         chrome.runtime.onInstalled.removeListener(seedBaselinePatterns);
     },
-    "background.settings-package-seed": () =>
-      initializeBundledSettingsPackage(),
+    "background.settings-package-seed": async () => {
+      try {
+        await initializeBundledSettingsPackage();
+      } catch (error) {
+        // A missing or conflicting optional default package must not prevent
+        // navigation protection, messaging, or the media catalog from starting.
+        console.error(
+          "[AdsFriendly Background] Bundled settings initialization failed",
+          error,
+        );
+      }
+    },
     "background.training-store-migration": () => migrateLegacyTrainingStorage(),
   },
 });
 
 controller
   .start()
-  .then(() => loadSettings())
+  .then(() =>
+    loadSettings(chrome.storage.local, {
+      persistMissing: true,
+    }),
+  )
   .then((settings) => controller.updateSettings(settings))
   .catch((error) =>
     console.error("[AdsFriendly Background] MainController failed", error),

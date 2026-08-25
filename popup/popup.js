@@ -407,10 +407,12 @@ var AdsFriendlyPopup = (() => {
       protectionMode
     });
   }
-  async function loadSettings(storage = chrome.storage.local) {
+  async function loadSettings(storage = chrome.storage.local, { persistMissing = false } = {}) {
     const stored = await storage.get([SETTINGS_KEY, "isEnabled", "friendlyMode"]);
     const settings2 = migrateLegacySettings(stored);
-    if (!stored[SETTINGS_KEY]) await storage.set({ [SETTINGS_KEY]: settings2 });
+    if (!stored[SETTINGS_KEY] && persistMissing) {
+      await storage.set({ [SETTINGS_KEY]: settings2 });
+    }
     return settings2;
   }
   async function saveSettings(nextSettings, storage = chrome.storage.local) {

@@ -36,10 +36,18 @@ export function migrateLegacySettings(stored = {}) {
   });
 }
 
-export async function loadSettings(storage = chrome.storage.local) {
+export async function loadSettings(
+  storage = chrome.storage.local,
+  { persistMissing = false } = {},
+) {
   const stored = await storage.get([SETTINGS_KEY, "isEnabled", "friendlyMode"]);
   const settings = migrateLegacySettings(stored);
-  if (!stored[SETTINGS_KEY]) await storage.set({ [SETTINGS_KEY]: settings });
+  // Content scripts, frames, popups, and the background can start together on
+  // a fresh install. Only the background may persist migration after the
+  // bundled package seed has completed; readers must not race that import.
+  if (!stored[SETTINGS_KEY] && persistMissing) {
+    await storage.set({ [SETTINGS_KEY]: settings });
+  }
   return settings;
 }
 

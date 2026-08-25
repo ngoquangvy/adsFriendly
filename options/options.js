@@ -403,10 +403,12 @@ var AdsFriendlyOptions = (() => {
       protectionMode
     });
   }
-  async function loadSettings(storage = chrome.storage.local) {
+  async function loadSettings(storage = chrome.storage.local, { persistMissing = false } = {}) {
     const stored = await storage.get([SETTINGS_KEY, "isEnabled", "friendlyMode"]);
     const settings = migrateLegacySettings(stored);
-    if (!stored[SETTINGS_KEY]) await storage.set({ [SETTINGS_KEY]: settings });
+    if (!stored[SETTINGS_KEY] && persistMissing) {
+      await storage.set({ [SETTINGS_KEY]: settings });
+    }
     return settings;
   }
   async function saveSettings(nextSettings, storage = chrome.storage.local) {
@@ -527,6 +529,7 @@ var AdsFriendlyOptions = (() => {
     const oldPathKeys = Object.keys(current).filter(
       (key) => key.startsWith("p:")
     );
+    const transactionId = createPackageTransactionId();
     const updates = {
       ...packageToStorage(settingsPackage),
       [SETTINGS_PACKAGE_STATE_KEY]: {
@@ -534,18 +537,23 @@ var AdsFriendlyOptions = (() => {
         initialized: true,
         source,
         package: settingsPackage.metadata,
-        installed_at: Date.now()
+        installed_at: Date.now(),
+        transaction_id: transactionId
       }
     };
     await storage.set(updates);
-    const saved = await storage.get(Object.keys(updates));
-    for (const [key, expected] of Object.entries(updates)) {
-      if (JSON.stringify(saved[key]) !== JSON.stringify(expected))
-        throw new Error(`Could not verify imported setting: ${key}.`);
+    const saved = await storage.get(SETTINGS_PACKAGE_STATE_KEY);
+    if (saved[SETTINGS_PACKAGE_STATE_KEY]?.transaction_id !== transactionId) {
+      throw new Error("Could not verify imported settings transaction.");
     }
     const obsoletePathKeys = oldPathKeys.filter((key) => !(key in updates));
     if (obsoletePathKeys.length) await storage.remove(obsoletePathKeys);
     return settingsPackage;
+  }
+  function createPackageTransactionId() {
+    if (typeof globalThis.crypto?.randomUUID === "function")
+      return globalThis.crypto.randomUUID();
+    return `settings-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   }
   function summarizeSettingsPackage(packageInput) {
     const settingsPackage = normalizeSettingsPackage(packageInput);
