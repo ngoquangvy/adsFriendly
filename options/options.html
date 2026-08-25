@@ -300,6 +300,13 @@
         background: rgba(248, 113, 113, 0.08);
         color: #fca5a5;
       }
+
+      .download-unavailable:disabled {
+        border-color: rgba(148, 163, 184, 0.16);
+        background: rgba(148, 163, 184, 0.06);
+        color: #64748b;
+        cursor: help;
+      }
     </style>
   </head>
   <body>
@@ -435,6 +442,9 @@
             <div class="empty-msg">No download history yet.</div>
           </div>
           <p style="color: #64748b; font-size: 0.72rem; margin: 0.8rem 0 0">
+            Pause/Resume is available for Direct HTTP Range downloads. HLS and
+            DASH currently use Cancel/Retry because FFmpeg cannot resume partial
+            output yet.<br />
             Remove history keeps the downloaded file. Open and Open location
             require the current Media Helper.
           </p>

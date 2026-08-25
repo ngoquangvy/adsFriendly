@@ -58,21 +58,51 @@ export function getMediaJobPrimaryAction(job = {}) {
   };
 }
 
+export function getMediaJobPauseAvailability(job = {}) {
+  if (!ACTIVE_STATUSES.has(job.status)) return null;
+  if (job.progress?.resumable === true)
+    return { supported: true, label: "Pause", reason: null };
+  if (["hls", "dash"].includes(job.kind)) {
+    return {
+      supported: false,
+      label: "Pause unavailable",
+      reason: `${job.kind.toUpperCase()} downloads run through FFmpeg and cannot resume partial output yet.`,
+    };
+  }
+  if (job.kind === "direct" && job.progress) {
+    return {
+      supported: false,
+      label: "Pause unavailable",
+      reason: "This server does not support resumable HTTP Range downloads.",
+    };
+  }
+  return {
+    supported: false,
+    label: "Checking pause…",
+    reason:
+      "Pause becomes available after the server confirms HTTP Range support.",
+  };
+}
+
 export function formatMediaJobDetails(job = {}) {
   const progress = getMediaJobProgress(job);
   const connectionFact = `${progress.connections} connections`;
+  const speedFact = `Speed ${formatBytes(
+    ACTIVE_STATUSES.has(job.status) ? progress.bytesPerSecond || 0 : 0,
+  )}/s`;
   if (job.status === "completed") {
     const size = progress.totalBytes ?? progress.downloadedBytes;
     return [
       "Completed",
       size !== null ? formatBytes(size) : null,
+      speedFact,
       connectionFact,
     ]
       .filter(Boolean)
       .join(" · ");
   }
   if (job.status === "failed")
-    return ["Failed", job.error || "unknown error", connectionFact]
+    return ["Failed", job.error || "unknown error", speedFact, connectionFact]
       .filter(Boolean)
       .join(" · ");
   if (["cancelled", "paused"].includes(job.status)) {
@@ -82,13 +112,16 @@ export function formatMediaJobDetails(job = {}) {
         ? `${formatBytes(progress.downloadedBytes)} downloaded`
         : null,
       progress.resumable ? "partial data kept" : null,
+      speedFact,
       connectionFact,
     ]
       .filter(Boolean)
       .join(" · ");
   }
-  if (job.status === "cancelling") return `Stopping · ${connectionFact}`;
-  if (job.status === "pausing") return `Pausing · ${connectionFact}`;
+  if (job.status === "cancelling")
+    return `Stopping · ${speedFact} · ${connectionFact}`;
+  if (job.status === "pausing")
+    return `Pausing · ${speedFact} · ${connectionFact}`;
 
   const facts = [];
   if (progress.percent !== null) facts.push(`${progress.percent}%`);
@@ -104,8 +137,7 @@ export function formatMediaJobDetails(job = {}) {
         : formatBytes(progress.downloadedBytes),
     );
   }
-  if (progress.bytesPerSecond > 0)
-    facts.push(`${formatBytes(progress.bytesPerSecond)}/s`);
+  facts.push(speedFact);
   if (progress.resumedBytes > 0)
     facts.push(`resumed ${formatBytes(progress.resumedBytes)}`);
   facts.push(connectionFact);

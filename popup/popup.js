@@ -563,29 +563,60 @@ var AdsFriendlyPopup = (() => {
       messageType: "CANCEL_MEDIA_DOWNLOAD_JOB"
     };
   }
+  function getMediaJobPauseAvailability(job = {}) {
+    if (!ACTIVE_STATUSES.has(job.status)) return null;
+    if (job.progress?.resumable === true)
+      return { supported: true, label: "Pause", reason: null };
+    if (["hls", "dash"].includes(job.kind)) {
+      return {
+        supported: false,
+        label: "Pause unavailable",
+        reason: `${job.kind.toUpperCase()} downloads run through FFmpeg and cannot resume partial output yet.`
+      };
+    }
+    if (job.kind === "direct" && job.progress) {
+      return {
+        supported: false,
+        label: "Pause unavailable",
+        reason: "This server does not support resumable HTTP Range downloads."
+      };
+    }
+    return {
+      supported: false,
+      label: "Checking pause\u2026",
+      reason: "Pause becomes available after the server confirms HTTP Range support."
+    };
+  }
   function formatMediaJobDetails(job = {}) {
     const progress = getMediaJobProgress(job);
     const connectionFact = `${progress.connections} connections`;
+    const speedFact = `Speed ${formatBytes(
+      ACTIVE_STATUSES.has(job.status) ? progress.bytesPerSecond || 0 : 0
+    )}/s`;
     if (job.status === "completed") {
       const size = progress.totalBytes ?? progress.downloadedBytes;
       return [
         "Completed",
         size !== null ? formatBytes(size) : null,
+        speedFact,
         connectionFact
       ].filter(Boolean).join(" \xB7 ");
     }
     if (job.status === "failed")
-      return ["Failed", job.error || "unknown error", connectionFact].filter(Boolean).join(" \xB7 ");
+      return ["Failed", job.error || "unknown error", speedFact, connectionFact].filter(Boolean).join(" \xB7 ");
     if (["cancelled", "paused"].includes(job.status)) {
       return [
         job.status === "paused" ? "Paused" : "Cancelled",
         progress.downloadedBytes !== null ? `${formatBytes(progress.downloadedBytes)} downloaded` : null,
         progress.resumable ? "partial data kept" : null,
+        speedFact,
         connectionFact
       ].filter(Boolean).join(" \xB7 ");
     }
-    if (job.status === "cancelling") return `Stopping \xB7 ${connectionFact}`;
-    if (job.status === "pausing") return `Pausing \xB7 ${connectionFact}`;
+    if (job.status === "cancelling")
+      return `Stopping \xB7 ${speedFact} \xB7 ${connectionFact}`;
+    if (job.status === "pausing")
+      return `Pausing \xB7 ${speedFact} \xB7 ${connectionFact}`;
     const facts = [];
     if (progress.percent !== null) facts.push(`${progress.percent}%`);
     if (progress.duration > 0 && progress.processedSeconds !== null) {
@@ -598,8 +629,7 @@ var AdsFriendlyPopup = (() => {
         progress.totalBytes > 0 ? `${formatBytes(progress.downloadedBytes)} / ${formatBytes(progress.totalBytes)}` : formatBytes(progress.downloadedBytes)
       );
     }
-    if (progress.bytesPerSecond > 0)
-      facts.push(`${formatBytes(progress.bytesPerSecond)}/s`);
+    facts.push(speedFact);
     if (progress.resumedBytes > 0)
       facts.push(`resumed ${formatBytes(progress.resumedBytes)}`);
     facts.push(connectionFact);
@@ -1468,6 +1498,7 @@ ${blobTitleKey(item.title)}`;
     );
     setText(row.querySelector(".media-job-detail"), formatMediaJobDetails(job));
     const action = getMediaJobPrimaryAction(job);
+    const pauseAvailability = getMediaJobPauseAvailability(job);
     let button = row.querySelector(".media-job-action");
     if (!action) {
       button?.remove();
@@ -1482,6 +1513,7 @@ ${blobTitleKey(item.title)}`;
     button.disabled = false;
     button.classList.toggle("media-cancel", action.type === "cancel");
     button.textContent = action.label;
+    button.title = action.type === "cancel" && pauseAvailability?.supported === false ? `${pauseAvailability.reason} Cancel is still available.` : "";
     button.dataset.jobId = job.id;
     button.dataset.messageType = action.messageType;
     button.dataset.actionType = action.type;

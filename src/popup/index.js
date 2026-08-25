@@ -9,6 +9,7 @@ import {
 } from "../media/download-job-contract.js";
 import {
   formatMediaJobDetails,
+  getMediaJobPauseAvailability,
   getMediaJobPrimaryAction,
 } from "../media/download-job-view.js";
 import {
@@ -584,6 +585,7 @@ function updateMediaJobItem(row, job) {
   );
   setText(row.querySelector(".media-job-detail"), formatMediaJobDetails(job));
   const action = getMediaJobPrimaryAction(job);
+  const pauseAvailability = getMediaJobPauseAvailability(job);
   let button = row.querySelector(".media-job-action");
   if (!action) {
     button?.remove();
@@ -598,6 +600,10 @@ function updateMediaJobItem(row, job) {
   button.disabled = false;
   button.classList.toggle("media-cancel", action.type === "cancel");
   button.textContent = action.label;
+  button.title =
+    action.type === "cancel" && pauseAvailability?.supported === false
+      ? `${pauseAvailability.reason} Cancel is still available.`
+      : "";
   button.dataset.jobId = job.id;
   button.dataset.messageType = action.messageType;
   button.dataset.actionType = action.type;

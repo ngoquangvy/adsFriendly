@@ -39,6 +39,7 @@ import {
 } from "../src/media/catalog-view.js";
 import {
   formatMediaJobDetails,
+  getMediaJobPauseAvailability,
   getMediaJobPrimaryAction,
   getMediaJobProgress,
 } from "../src/media/download-job-view.js";
@@ -111,9 +112,10 @@ test("download job view exposes speed, connections, and resumable actions", () =
   });
   assert.equal(
     formatMediaJobDetails(active),
-    "25% · 5.0 MB / 20.0 MB · 2.0 MB/s · resumed 1 KB · 12 connections",
+    "25% · 5.0 MB / 20.0 MB · Speed 2.0 MB/s · resumed 1 KB · 12 connections",
   );
   assert.equal(getMediaJobPrimaryAction(active).type, "pause");
+  assert.equal(getMediaJobPauseAvailability(active).supported, true);
   assert.equal(
     getMediaJobPrimaryAction({ ...active, status: "paused" }).type,
     "resume",
@@ -137,6 +139,19 @@ test("download job view exposes speed, connections, and resumable actions", () =
     }),
     null,
   );
+  const hls = {
+    status: "downloading",
+    kind: "hls",
+    connections: 8,
+    progress: { bytesPerSecond: null, resumable: false },
+  };
+  assert.equal(formatMediaJobDetails(hls), "Speed 0 KB/s · 8 connections");
+  assert.deepEqual(getMediaJobPauseAvailability(hls), {
+    supported: false,
+    label: "Pause unavailable",
+    reason:
+      "HLS downloads run through FFmpeg and cannot resume partial output yet.",
+  });
 });
 
 test("classifies direct, HLS, DASH, and blob media without treating segments as videos", () => {

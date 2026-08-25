@@ -18,6 +18,7 @@ import {
 } from "../media/download-job-contract.js";
 import {
   formatMediaJobDetails,
+  getMediaJobPauseAvailability,
   getMediaJobPrimaryAction,
   getMediaJobProgress,
 } from "../media/download-job-view.js";
@@ -237,8 +238,17 @@ function updateDownloadHistoryItem(row, job, helper) {
     connections.append(option);
   }
   const primary = getMediaJobPrimaryAction(job);
+  const pauseAvailability = getMediaJobPauseAvailability(job);
   connections.disabled = !primary || ["pause", "cancel"].includes(primary.type);
   controls.append(connections);
+  if (pauseAvailability && !pauseAvailability.supported) {
+    const unavailable = document.createElement("button");
+    unavailable.className = "btn-secondary download-unavailable";
+    unavailable.textContent = pauseAvailability.label;
+    unavailable.title = pauseAvailability.reason;
+    unavailable.disabled = true;
+    controls.append(unavailable);
+  }
   if (primary) {
     controls.append(
       downloadActionButton(
