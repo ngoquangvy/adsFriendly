@@ -204,8 +204,18 @@ export const FEATURE_CATALOG = Object.freeze([
     C.LEARNING_FEEDBACK,
   ]),
 
-  feature("main-world.network-capture", "main-world", C.MEDIA_OBSERVE),
-  feature("main-world.blob-source-tracer", "main-world", C.MEDIA_OBSERVE),
+  feature("main-world.network-capture", "main-world", C.CORE_MESSAGING, [
+    C.MEDIA_OBSERVE,
+  ]),
+  feature(
+    "main-world.player-source-observer",
+    "main-world",
+    C.CORE_MESSAGING,
+    [C.MEDIA_OBSERVE],
+  ),
+  feature("main-world.blob-source-tracer", "main-world", C.CORE_MESSAGING, [
+    C.MEDIA_OBSERVE,
+  ]),
   feature("main-world.eme-observer", "main-world", C.MEDIA_OBSERVE),
   feature("main-world.timer-control", "main-world", C.VIDEO_AUTO_ACTION),
 ]);

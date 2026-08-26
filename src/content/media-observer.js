@@ -177,7 +177,10 @@ export function startMediaObserver() {
     )
       return;
     requestedProbes.add(candidate.id);
-    for (const delay of [150, 750, 2_000]) {
+    // The browser/player gets the first chance to expose a successful response
+    // or child playlist. Re-fetching signed manifests repeatedly can consume a
+    // single-use token, so the active fallback is intentionally attempted once.
+    for (const delay of [750]) {
       const timerId = setTimeout(() => {
         probeTimers.delete(timerId);
         if (stopped) return;

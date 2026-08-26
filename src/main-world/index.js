@@ -1,5 +1,6 @@
 import { onContentMessage } from "./bridge.js";
 import { installNetworkCapture } from "./network-capture.js";
+import { installPlayerSourceObserver } from "./player-source-observer.js";
 import { installBlobSourceTracer } from "./blob-source-tracer.js";
 import { installEmeObserver } from "./eme-observer.js";
 import { installTimerControl, setAdMode } from "./timer-control.js";
@@ -17,6 +18,8 @@ const controller = createMainController({
   watchSettings: false,
   implementations: {
     "main-world.network-capture": ({ policy }) => installNetworkCapture(policy),
+    "main-world.player-source-observer": ({ policy }) =>
+      installPlayerSourceObserver(policy),
     "main-world.blob-source-tracer": ({ policy }) =>
       installBlobSourceTracer(policy),
     "main-world.eme-observer": () => installEmeObserver(),

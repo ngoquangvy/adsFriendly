@@ -18,9 +18,12 @@ import {
 } from "../src/media/probe-gate.js";
 import { createMediaObserverReportKey } from "../src/content/media-observer.js";
 import {
+  createContextualProbeInit,
   readXhrResponseBody,
   tryHlsProbeAttempts,
 } from "../src/main-world/network-capture.js";
+import { createRequestContextRegistry } from "../src/main-world/request-context-registry.js";
+import { extractJwPlayerSources } from "../src/main-world/player-source-observer.js";
 import { createHlsDownloadPlan } from "../src/media/hls-download-plan.js";
 import { parseDashManifest } from "../src/media/dash-parser.js";
 import { downloadResourcesInParallel } from "../src/media/parallel-downloader.js";
@@ -53,6 +56,10 @@ import {
   findRelatedMediaObservations,
   rememberMediaObservation,
 } from "../src/main-world/media-observation-ledger.js";
+import {
+  MEDIA_RESOLUTION_STRATEGIES,
+  MEDIA_RESOLUTION_STRATEGY_CATALOG,
+} from "../src/media/resolution-strategy-catalog.js";
 
 test("offers a helper setup action independently from downloadable media", () => {
   assert.deepEqual(helperSetupPresentation({ status: "permission_required" }), {
@@ -936,6 +943,211 @@ test("catalog links a discovered child playlist back to its HLS master", () => {
   const linkedChild = items.find((item) => item.id === child.id);
   assert.deepEqual(linkedMaster.childManifestIds, [child.id]);
   assert.deepEqual(linkedChild.parentManifestIds, [master.id]);
+});
+
+test("passive resolver promotes a playable child after a master probe is rejected", () => {
+  const catalog = createMediaCatalog();
+  const pageUrl = "https://video.example/watch";
+  const frameMetadata = {
+    frameId: 7,
+    frameUrl: "https://embed.example/player/42",
+  };
+  const master = createMediaCandidateFromSource({
+    pageUrl,
+    sourceUrl: "https://embed.example/hls/session/master.m3u8",
+    detectedBy: "network",
+  });
+  const child = createMediaCandidateFromSource({
+    pageUrl,
+    sourceUrl: "https://embed.example/hls/session/720p/index.m3u8",
+    detectedBy: "network",
+  });
+  catalog.add(
+    120,
+    createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, master, frameMetadata),
+  );
+  catalog.add(
+    120,
+    createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, child, frameMetadata),
+  );
+  catalog.applyProbe(
+    120,
+    createRegisteredEvent(
+      EVENTS.MEDIA_PROBED,
+      {
+        mediaId: master.id,
+        pageUrl,
+        manifestUrl: master.manifestUrl,
+        kind: "hls",
+        status: "failed",
+        error: "manifest_http_403",
+      },
+      frameMetadata,
+    ),
+  );
+  catalog.applyProbe(
+    120,
+    createRegisteredEvent(
+      EVENTS.MEDIA_PROBED,
+      {
+        mediaId: child.id,
+        pageUrl,
+        manifestUrl: child.manifestUrl,
+        kind: "hls",
+        status: "ready",
+        playlistType: "media",
+        streamType: "vod",
+        duration: 3_600,
+        segmentCount: 720,
+      },
+      frameMetadata,
+    ),
+  );
+
+  const resolved = catalog.list(120).find((item) => item.id === master.id);
+  assert.equal(resolved.resolutionStatus, "resolved");
+  assert.equal(resolved.selectedMediaId, child.id);
+  assert.equal(
+    resolved.resolutionStrategy,
+    MEDIA_RESOLUTION_STRATEGIES.OBSERVED_CHILD,
+  );
+  assert.equal(resolved.resolvedStream.resolution.height, 720);
+  assert.match(formatMediaDetails(resolved), /^Resolved · 720p · VOD/);
+});
+
+test("passive resolver refuses an otherwise similar child from another frame", () => {
+  const catalog = createMediaCatalog();
+  const pageUrl = "https://video.example/watch";
+  const master = createMediaCandidateFromSource({
+    pageUrl,
+    sourceUrl: "https://embed.example/hls/session/master.m3u8",
+    detectedBy: "network",
+  });
+  const child = createMediaCandidateFromSource({
+    pageUrl,
+    sourceUrl: "https://embed.example/hls/session/720p/index.m3u8",
+    detectedBy: "network",
+  });
+  catalog.add(
+    121,
+    createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, master, {
+      frameId: 4,
+      frameUrl: "https://embed.example/content",
+    }),
+  );
+  catalog.add(
+    121,
+    createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, child, {
+      frameId: 9,
+      frameUrl: "https://embed.example/advert",
+    }),
+  );
+  catalog.applyProbe(
+    121,
+    createRegisteredEvent(
+      EVENTS.MEDIA_PROBED,
+      {
+        mediaId: child.id,
+        pageUrl,
+        manifestUrl: child.manifestUrl,
+        kind: "hls",
+        status: "ready",
+        playlistType: "media",
+        streamType: "vod",
+        duration: 30,
+        segmentCount: 6,
+      },
+      { frameId: 9, frameUrl: "https://embed.example/advert" },
+    ),
+  );
+
+  const unresolved = catalog.list(121).find((item) => item.id === master.id);
+  assert.equal(unresolved.selectedMediaId, null);
+  assert.equal(unresolved.resolutionStatus, "waiting");
+});
+
+test("media resolution strategies keep passive methods ahead of active probes", () => {
+  assert.deepEqual(
+    MEDIA_RESOLUTION_STRATEGY_CATALOG.map((item) => item.id),
+    [
+      "captured_response",
+      "observed_child",
+      "player_api",
+      "contextual_probe",
+      "bounded_url_adapter",
+    ],
+  );
+  assert.equal(MEDIA_RESOLUTION_STRATEGY_CATALOG[1].maximumExtraRequests, 0);
+  assert.equal(MEDIA_RESOLUTION_STRATEGY_CATALOG.at(-1).maximumExtraRequests, 3);
+});
+
+test("request context registry reuses only recent routing facts", () => {
+  const registry = createRequestContextRegistry({ maximumAgeMs: 1_000 });
+  registry.remember(
+    {
+      requestUrl: "https://cdn.example/master.m3u8",
+      finalUrl: "https://cdn.example/child.m3u8",
+      documentUrl: "https://embed.example/player",
+      parentDocumentUrl: "https://video.example/watch",
+      referrer: "https://embed.example/player",
+      credentials: "include",
+      transport: "fetch",
+    },
+    1_000,
+  );
+  assert.equal(
+    registry.find("https://cdn.example/child.m3u8", 1_500).credentials,
+    "include",
+  );
+  assert.equal(registry.find("https://cdn.example/child.m3u8", 2_001), null);
+  assert.deepEqual(
+    createContextualProbeInit(
+      {
+        documentUrl: "https://embed.example/player",
+        referrer: "https://video.example/watch",
+        credentials: "include",
+      },
+      "https://embed.example/player",
+    ),
+    {
+      credentials: "include",
+      cache: "default",
+      referrer: "https://embed.example/player",
+    },
+  );
+});
+
+test("JWPlayer adapter extracts current HTTP media sources without private state", () => {
+  const previousLocation = globalThis.location;
+  globalThis.location = { href: "https://embed.example/player" };
+  try {
+    const sources = extractJwPlayerSources({
+      getPlaylistItem: () => ({
+        title: "Episode 20",
+        file: "https://cdn.example/master.m3u8",
+        sources: [
+          {
+            file: "https://cdn.example/720p/index.m3u8",
+            type: "application/vnd.apple.mpegurl",
+            label: "720p",
+          },
+          { file: "blob:https://embed.example/ignored" },
+        ],
+      }),
+      getPlaylist: () => [],
+    });
+    assert.deepEqual(
+      sources.map((source) => source.url),
+      [
+        "https://cdn.example/master.m3u8",
+        "https://cdn.example/720p/index.m3u8",
+      ],
+    );
+    assert.equal(sources[1].title, "Episode 20");
+    assert.equal(sources[1].label, "720p");
+  } finally {
+    globalThis.location = previousLocation;
+  }
 });
 
 test("resolver selects the best discovered VOD variant and groups child rows", () => {

@@ -269,8 +269,18 @@ var AdsFriendlyPopup = (() => {
     feature("picker.controller", "picker", C2.DOM_MANUAL_PICKER, [
       C2.LEARNING_FEEDBACK
     ]),
-    feature("main-world.network-capture", "main-world", C2.MEDIA_OBSERVE),
-    feature("main-world.blob-source-tracer", "main-world", C2.MEDIA_OBSERVE),
+    feature("main-world.network-capture", "main-world", C2.CORE_MESSAGING, [
+      C2.MEDIA_OBSERVE
+    ]),
+    feature(
+      "main-world.player-source-observer",
+      "main-world",
+      C2.CORE_MESSAGING,
+      [C2.MEDIA_OBSERVE]
+    ),
+    feature("main-world.blob-source-tracer", "main-world", C2.CORE_MESSAGING, [
+      C2.MEDIA_OBSERVE
+    ]),
     feature("main-world.eme-observer", "main-world", C2.MEDIA_OBSERVE),
     feature("main-world.timer-control", "main-world", C2.VIDEO_AUTO_ACTION)
   ]);
@@ -842,13 +852,13 @@ var AdsFriendlyPopup = (() => {
     if (item.resolvedStream && item.selectedMediaId && item.selectedMediaId !== item.id)
       return resolvedHlsDetails(item);
     if (item.probeStatus === "failed")
-      return item.probeError === "fallback_fetch_blocked" ? "HLS \xB7 page/CORS blocked manifest reading" : "HLS \xB7 manifest request or parse failed";
+      return item.probeError === "manifest_http_403" ? "HLS \xB7 probe rejected (403) \xB7 watching player requests" : item.probeError === "fallback_fetch_blocked" ? "HLS \xB7 page/CORS blocked probe \xB7 watching player requests" : "HLS \xB7 manifest probe failed \xB7 watching player requests";
     if (item.probeStatus === "unsupported")
       return "HLS \xB7 manifest format not supported";
     if (item.probeStatus !== "ready")
-      return "HLS manifest found \xB7 reading qualities";
+      return "HLS source found \xB7 watching player requests";
     if (item.playlistType === "unknown")
-      return "HLS endpoint \xB7 waiting for media playlist";
+      return "HLS endpoint \xB7 watching for a playable stream";
     const facts = [];
     if (item.playlistType === "master") {
       const qualityLabels = [...item.variants || []].sort(compareVariantQuality).map(variantLabel).filter(
@@ -1052,6 +1062,8 @@ ${blobTitleKey(item.title)}`;
       parentManifestIds: item.parentManifestIds,
       childManifestIds: item.childManifestIds,
       resolutionStatus: item.resolutionStatus,
+      resolutionStrategy: item.resolutionStrategy,
+      resolutionConfidence: item.resolutionConfidence,
       resolvedMediaIds: item.resolvedMediaIds,
       selectedMediaId: item.selectedMediaId,
       resolvedStream: item.resolvedStream,

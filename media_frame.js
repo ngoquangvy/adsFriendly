@@ -255,6 +255,7 @@ var AdsFriendlyMediaFrame = (() => {
       requestUrl: optionalString(value.requestUrl),
       finalUrl: optionalString(value.finalUrl),
       documentUrl: optionalString(value.documentUrl),
+      parentDocumentUrl: optionalString(value.parentDocumentUrl),
       referrer: optionalString(value.referrer),
       method: typeof value.method === "string" && value.method ? value.method.toUpperCase().slice(0, 12) : "GET",
       credentials: credentials || "unknown",
@@ -726,7 +727,7 @@ var AdsFriendlyMediaFrame = (() => {
       if (!["hls", "dash"].includes(candidate.kind) || !candidate.manifestUrl || requestedProbes.has(candidate.id))
         return;
       requestedProbes.add(candidate.id);
-      for (const delay of [150, 750, 2e3]) {
+      for (const delay of [750]) {
         const timerId = setTimeout(() => {
           probeTimers.delete(timerId);
           if (stopped) return;
@@ -1071,8 +1072,18 @@ var AdsFriendlyMediaFrame = (() => {
     feature("picker.controller", "picker", C2.DOM_MANUAL_PICKER, [
       C2.LEARNING_FEEDBACK
     ]),
-    feature("main-world.network-capture", "main-world", C2.MEDIA_OBSERVE),
-    feature("main-world.blob-source-tracer", "main-world", C2.MEDIA_OBSERVE),
+    feature("main-world.network-capture", "main-world", C2.CORE_MESSAGING, [
+      C2.MEDIA_OBSERVE
+    ]),
+    feature(
+      "main-world.player-source-observer",
+      "main-world",
+      C2.CORE_MESSAGING,
+      [C2.MEDIA_OBSERVE]
+    ),
+    feature("main-world.blob-source-tracer", "main-world", C2.CORE_MESSAGING, [
+      C2.MEDIA_OBSERVE
+    ]),
     feature("main-world.eme-observer", "main-world", C2.MEDIA_OBSERVE),
     feature("main-world.timer-control", "main-world", C2.VIDEO_AUTO_ACTION)
   ]);

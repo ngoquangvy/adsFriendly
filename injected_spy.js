@@ -281,6 +281,7 @@ var AdsFriendlyMainWorld = (() => {
       requestUrl: optionalString(value.requestUrl),
       finalUrl: optionalString(value.finalUrl),
       documentUrl: optionalString(value.documentUrl),
+      parentDocumentUrl: optionalString(value.parentDocumentUrl),
       referrer: optionalString(value.referrer),
       method: typeof value.method === "string" && value.method ? value.method.toUpperCase().slice(0, 12) : "GET",
       credentials: credentials || "unknown",
@@ -1601,8 +1602,18 @@ ${body}`;
     feature("picker.controller", "picker", C2.DOM_MANUAL_PICKER, [
       C2.LEARNING_FEEDBACK
     ]),
-    feature("main-world.network-capture", "main-world", C2.MEDIA_OBSERVE),
-    feature("main-world.blob-source-tracer", "main-world", C2.MEDIA_OBSERVE),
+    feature("main-world.network-capture", "main-world", C2.CORE_MESSAGING, [
+      C2.MEDIA_OBSERVE
+    ]),
+    feature(
+      "main-world.player-source-observer",
+      "main-world",
+      C2.CORE_MESSAGING,
+      [C2.MEDIA_OBSERVE]
+    ),
+    feature("main-world.blob-source-tracer", "main-world", C2.CORE_MESSAGING, [
+      C2.MEDIA_OBSERVE
+    ]),
     feature("main-world.eme-observer", "main-world", C2.MEDIA_OBSERVE),
     feature("main-world.timer-control", "main-world", C2.VIDEO_AUTO_ACTION)
   ]);
@@ -1737,6 +1748,55 @@ ${body}`;
     }
   }
 
+  // src/main-world/request-context-registry.js
+  function createRequestContextRegistry({
+    maximumEntries = 64,
+    maximumAgeMs = 6e4
+  } = {}) {
+    const contexts = /* @__PURE__ */ new Map();
+    return Object.freeze({
+      remember(context, observedAt = Date.now()) {
+        const normalized = normalizeMediaRequestContext({
+          ...context,
+          observedAt
+        });
+        if (!normalized) return null;
+        for (const value of [normalized.requestUrl, normalized.finalUrl]) {
+          const key = normalizeHttpUrl(value);
+          if (!key) continue;
+          contexts.delete(key);
+          contexts.set(key, normalized);
+        }
+        trim2(observedAt);
+        return { ...normalized };
+      },
+      find(url, now = Date.now()) {
+        trim2(now);
+        const context = contexts.get(normalizeHttpUrl(url));
+        return context ? { ...context } : null;
+      },
+      clear() {
+        contexts.clear();
+      }
+    });
+    function trim2(now) {
+      for (const [key, context] of contexts) {
+        if (now - (context.observedAt || 0) > maximumAgeMs) contexts.delete(key);
+      }
+      while (contexts.size > maximumEntries) {
+        contexts.delete(contexts.keys().next().value);
+      }
+    }
+  }
+  function normalizeHttpUrl(value) {
+    try {
+      const url = new URL(value);
+      return ["http:", "https:"].includes(url.protocol) ? url.href : null;
+    } catch {
+      return null;
+    }
+  }
+
   // src/main-world/media-observation-ledger.js
   var MAXIMUM_OBSERVATIONS = 64;
   var MAXIMUM_AGE_MS = 6e4;
@@ -1795,6 +1855,7 @@ ${body}`;
   function installNetworkCapture(policy) {
     const originalFetch = window.fetch;
     const probeGate = createMediaProbeGate();
+    const requestContexts = createRequestContextRegistry();
     const resolutionTasks = /* @__PURE__ */ new Map();
     const inspect = (manifestUrl, body, candidate, requestContext2 = null, resolutionAttempt = null) => {
       const probe = inspectManifest(
@@ -1815,7 +1876,8 @@ ${body}`;
         ...options,
         originalFetch,
         probeGate,
-        inspect
+        inspect,
+        requestContexts
       }).finally(() => resolutionTasks.delete(options.manifestUrl));
       resolutionTasks.set(options.manifestUrl, task);
       return task;
@@ -1823,15 +1885,22 @@ ${body}`;
     const stopFetchCapture = installFetchCapture(
       policy,
       inspect,
-      resolveAttempts
+      resolveAttempts,
+      requestContexts
     );
-    const stopXhrCapture = installXhrCapture(policy, inspect, resolveAttempts);
+    const stopXhrCapture = installXhrCapture(
+      policy,
+      inspect,
+      resolveAttempts,
+      requestContexts
+    );
     const stopFallbackProbe = installFallbackProbe({
       policy,
       originalFetch,
       probeGate,
       inspect,
-      resolveAttempts
+      resolveAttempts,
+      requestContexts
     });
     return () => {
       stopFetchCapture();
@@ -1839,17 +1908,22 @@ ${body}`;
       stopFallbackProbe();
       resolutionTasks.clear();
       probeGate.clear();
+      requestContexts.clear();
       clearMediaObservations();
     };
   }
-  function installFetchCapture(policy, inspect, resolveAttempts) {
+  function installFetchCapture(policy, inspect, resolveAttempts, requestContexts) {
     const originalFetch = window.fetch;
     const fetchWrapper = async function(...args) {
       const url = requestUrl(args[0]);
+      if (isManifestLike(url)) {
+        requestContexts.remember(createFetchRequestContext(args, url, url));
+      }
       const response = await originalFetch.apply(this, args);
       if (!policy.can(CAPABILITIES.MEDIA_OBSERVE)) return response;
       const finalUrl = response.url || url;
       const requestContext2 = createFetchRequestContext(args, url, finalUrl);
+      requestContexts.remember(requestContext2);
       const mimeType = response.headers.get("content-type");
       const candidate = reportMediaSource(finalUrl, mimeType);
       if (url && finalUrl !== url && [MEDIA_KINDS.HLS, MEDIA_KINDS.DASH].includes(candidate?.kind)) {
@@ -1867,7 +1941,8 @@ ${body}`;
             resolveAttempts({
               manifestUrl: finalUrl,
               body,
-              candidate
+              candidate,
+              requestContext: requestContext2
             }).catch(() => {
             });
           }
@@ -1881,7 +1956,7 @@ ${body}`;
       if (window.fetch === fetchWrapper) window.fetch = originalFetch;
     };
   }
-  function installXhrCapture(policy, inspect, resolveAttempts) {
+  function installXhrCapture(policy, inspect, resolveAttempts, requestContexts) {
     const originalOpen = XMLHttpRequest.prototype.open;
     const originalSend = XMLHttpRequest.prototype.send;
     const openWrapper = function(method, url, ...rest) {
@@ -1890,10 +1965,16 @@ ${body}`;
       return originalOpen.call(this, method, url, ...rest);
     };
     const sendWrapper = function(...args) {
+      if (isManifestLike(this.__adsfriendly_url)) {
+        requestContexts.remember(
+          createXhrRequestContext(this, this.__adsfriendly_url || "")
+        );
+      }
       this.addEventListener("load", () => {
         if (!policy.can(CAPABILITIES.MEDIA_OBSERVE)) return;
         const url = this.responseURL || this.__adsfriendly_url || "";
         const requestContext2 = createXhrRequestContext(this, url);
+        requestContexts.remember(requestContext2);
         const mimeType = this.getResponseHeader("content-type");
         const candidate = reportMediaSource(url, mimeType);
         if (this.__adsfriendly_url && url !== this.__adsfriendly_url && [MEDIA_KINDS.HLS, MEDIA_KINDS.DASH].includes(candidate?.kind)) {
@@ -1908,7 +1989,8 @@ ${body}`;
             resolveAttempts({
               manifestUrl: url,
               body,
-              candidate
+              candidate,
+              requestContext: requestContext2
             }).catch(() => {
             });
           }
@@ -1944,7 +2026,8 @@ ${body}`;
     originalFetch,
     probeGate,
     inspect,
-    resolveAttempts
+    resolveAttempts,
+    requestContexts
   }) {
     let stopped = false;
     const onProbeRequest = (messageEvent) => {
@@ -1962,10 +2045,12 @@ ${body}`;
         title: document.title || null,
         detectedBy: MEDIA_DETECTION_SOURCES.NETWORK
       });
-      originalFetch.call(window, manifestUrl, {
-        credentials: "same-origin",
-        cache: "default"
-      }).then(async (response) => {
+      const observedRequestContext = requestContexts.find(manifestUrl);
+      originalFetch.call(
+        window,
+        manifestUrl,
+        createContextualProbeInit(observedRequestContext)
+      ).then(async (response) => {
         if (!response.ok)
           throw new Error(`manifest_http_${response.status || "error"}`);
         const finalUrl = response.url || manifestUrl;
@@ -1978,14 +2063,19 @@ ${body}`;
           finalUrl,
           body,
           finalCandidate,
-          createFallbackRequestContext(manifestUrl, finalUrl)
+          createFallbackRequestContext(
+            manifestUrl,
+            finalUrl,
+            observedRequestContext
+          )
         );
         if (requestedKind === MEDIA_KINDS.DASH || isUsableMediaProbe(primaryProbe))
           return primaryProbe;
         return await resolveAttempts({
           manifestUrl: finalUrl,
           body,
-          candidate: finalCandidate
+          candidate: finalCandidate,
+          requestContext: observedRequestContext
         }) || primaryProbe;
       }).catch((error) => {
         if (probeGate.state(manifestUrl) !== "pending") return;
@@ -2005,14 +2095,16 @@ ${body}`;
     candidate,
     originalFetch,
     probeGate,
-    inspect
+    inspect,
+    requestContext: requestContext2 = null
   }) {
     for (const attempt of createHlsProbeAttempts(manifestUrl, body)) {
       try {
-        const response = await originalFetch.call(window, attempt.url, {
-          credentials: "same-origin",
-          cache: "default"
-        });
+        const response = await originalFetch.call(
+          window,
+          attempt.url,
+          createContextualProbeInit(requestContext2)
+        );
         if (!response.ok) continue;
         const finalUrl = response.url || attempt.url;
         const alternativeBody = await response.text();
@@ -2030,7 +2122,7 @@ ${body}`;
           finalUrl,
           alternativeBody,
           alternativeCandidate,
-          createFallbackRequestContext(manifestUrl, finalUrl),
+          createFallbackRequestContext(manifestUrl, finalUrl, requestContext2),
           attempt
         );
         if (isUsableMediaProbe(alternativeProbe)) {
@@ -2130,7 +2222,7 @@ ${body}`;
       finalUrl,
       method: init.method || request.method || "GET",
       credentials,
-      referrer: init.referrer || request.referrer || document.referrer,
+      referrer: init.referrer || request.referrer || location.href,
       transport: "fetch"
     });
   }
@@ -2140,19 +2232,32 @@ ${body}`;
       finalUrl,
       method: xhr.__adsfriendly_method || "GET",
       credentials: xhr.withCredentials ? "include" : "same-origin",
-      referrer: document.referrer,
+      referrer: location.href,
       transport: "xhr"
     });
   }
-  function createFallbackRequestContext(manifestUrl, finalUrl = manifestUrl) {
+  function createFallbackRequestContext(manifestUrl, finalUrl = manifestUrl, observedContext = null) {
     return requestContext({
       requestUrl: manifestUrl,
       finalUrl,
       method: "GET",
-      credentials: "same-origin",
-      referrer: document.referrer,
+      credentials: observedContext?.credentials || "same-origin",
+      referrer: observedContext?.referrer || observedContext?.documentUrl || location.href,
       transport: "fallback"
     });
+  }
+  function createContextualProbeInit(observedContext, currentDocumentUrl = globalThis.location?.href || "") {
+    const credentials = ["omit", "same-origin", "include"].includes(
+      observedContext?.credentials
+    ) ? observedContext.credentials : "same-origin";
+    const init = { credentials, cache: "default" };
+    const referrer = [
+      observedContext?.referrer,
+      observedContext?.documentUrl,
+      currentDocumentUrl
+    ].find((value) => sameOrigin(value, currentDocumentUrl));
+    if (referrer) init.referrer = referrer;
+    return init;
   }
   function requestContext({
     requestUrl: sourceUrl,
@@ -2167,6 +2272,7 @@ ${body}`;
       requestUrl: String(sourceUrl || ""),
       finalUrl: String(finalUrl || sourceUrl || ""),
       documentUrl,
+      parentDocumentUrl: String(document.referrer || ""),
       referrer: String(referrer || ""),
       method: String(method || "GET").toUpperCase(),
       credentials,
@@ -2183,6 +2289,209 @@ ${body}`;
     } catch {
       return false;
     }
+  }
+
+  // src/main-world/player-source-observer.js
+  var SCAN_DELAYS_MS = Object.freeze([0, 300, 1e3, 3e3, 8e3, 15e3]);
+  var JW_EVENTS = Object.freeze([
+    "ready",
+    "playlist",
+    "playlistItem",
+    "levels",
+    "levelsChanged",
+    "firstFrame",
+    "play"
+  ]);
+  function installPlayerSourceObserver(policy) {
+    const timers = /* @__PURE__ */ new Set();
+    const observedPlayers = /* @__PURE__ */ new WeakSet();
+    const cleanups = [];
+    let stopped = false;
+    let mutationTimer = null;
+    const stopFactoryWatch = watchJwPlayerFactory(() => scheduleScan(0));
+    for (const delay of SCAN_DELAYS_MS) {
+      scheduleScan(delay);
+    }
+    const mutationObserver = typeof MutationObserver === "function" ? new MutationObserver((mutations) => {
+      if (!mutations.some(containsPossiblePlayer)) return;
+      for (const mutation of mutations) {
+        for (const node of mutation.addedNodes || []) {
+          if (node?.nodeType !== 1 || !node.matches?.("script")) continue;
+          const onLoad = () => scheduleScan(0);
+          node.addEventListener("load", onLoad, { once: true });
+          cleanups.push(() => node.removeEventListener("load", onLoad));
+        }
+      }
+      clearTimeout(mutationTimer);
+      mutationTimer = setTimeout(scan, 100);
+    }) : null;
+    mutationObserver?.observe(document.documentElement, {
+      childList: true,
+      subtree: true
+    });
+    return () => {
+      stopped = true;
+      timers.forEach(clearTimeout);
+      timers.clear();
+      clearTimeout(mutationTimer);
+      mutationObserver?.disconnect();
+      stopFactoryWatch();
+      for (const cleanup of cleanups.reverse()) cleanup();
+    };
+    function scheduleScan(delay) {
+      if (stopped) return;
+      const timerId = setTimeout(() => {
+        timers.delete(timerId);
+        scan();
+      }, delay);
+      timers.add(timerId);
+    }
+    function scan() {
+      if (stopped || !policy.can(CAPABILITIES.MEDIA_OBSERVE)) return;
+      const factory = globalThis.jwplayer;
+      if (typeof factory !== "function") return;
+      const players = [];
+      addPlayer(players, () => factory());
+      document.querySelectorAll?.(".jwplayer[id], [data-jwplayer-id][id]").forEach((element) => addPlayer(players, () => factory(element.id)));
+      for (const player of players) observePlayer(player);
+    }
+    function observePlayer(player) {
+      reportPlayer(player);
+      if (observedPlayers.has(player)) return;
+      observedPlayers.add(player);
+      if (typeof player.on !== "function") return;
+      for (const eventName of JW_EVENTS) {
+        const listener = () => reportPlayer(player);
+        try {
+          player.on(eventName, listener);
+          cleanups.push(() => {
+            try {
+              player.off?.(eventName, listener);
+            } catch {
+            }
+          });
+        } catch {
+        }
+      }
+    }
+    function reportPlayer(player) {
+      if (stopped || !policy.can(CAPABILITIES.MEDIA_OBSERVE)) return;
+      for (const source of extractJwPlayerSources(player)) {
+        const candidate = createMediaCandidateFromSource({
+          pageUrl: location.href,
+          sourceUrl: source.url,
+          mimeType: source.mimeType,
+          title: source.title || document.title || null,
+          detectedBy: MEDIA_DETECTION_SOURCES.PLAYER
+        });
+        if (!candidate) continue;
+        rememberMediaObservation(candidate);
+        notifyContentScript({
+          type: "REGISTERED_EVENT",
+          event: createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, candidate, {
+            playerAdapter: "jwplayer"
+          })
+        });
+      }
+    }
+  }
+  function extractJwPlayerSources(player) {
+    if (!player || typeof player !== "object") return [];
+    const items = [];
+    try {
+      const current = player.getPlaylistItem?.();
+      if (current) items.push(current);
+    } catch {
+    }
+    try {
+      const playlist = player.getPlaylist?.();
+      if (Array.isArray(playlist)) items.push(...playlist);
+    } catch {
+    }
+    const sources = [];
+    for (const item of items) {
+      const title = safeString(item?.title);
+      addSource(sources, item?.file, item?.type, title, item?.label);
+      for (const source of Array.isArray(item?.sources) ? item.sources : []) {
+        addSource(
+          sources,
+          source?.file || source?.src,
+          source?.type,
+          title,
+          source?.label
+        );
+      }
+    }
+    return [
+      ...new Map(sources.map((source) => [source.url, source])).values()
+    ];
+  }
+  function addPlayer(players, readPlayer) {
+    try {
+      const player = readPlayer();
+      if (player && typeof player === "object" && !players.includes(player)) {
+        players.push(player);
+      }
+    } catch {
+    }
+  }
+  function addSource(sources, value, mimeType, title, label) {
+    if (typeof value !== "string" || !value.trim()) return;
+    try {
+      const url = new URL(value, location.href);
+      if (!["http:", "https:"].includes(url.protocol)) return;
+      sources.push({
+        url: url.href,
+        mimeType: safeString(mimeType),
+        title,
+        label: safeString(label)
+      });
+    } catch {
+    }
+  }
+  function safeString(value) {
+    return typeof value === "string" && value.trim() ? value.trim().slice(0, 200) : null;
+  }
+  function containsPossiblePlayer(mutation) {
+    return [...mutation.addedNodes || []].some(
+      (node) => node?.nodeType === 1 && (node.matches?.("script, .jwplayer, [data-jwplayer-id]") || node.querySelector?.(".jwplayer, [data-jwplayer-id]"))
+    );
+  }
+  function watchJwPlayerFactory(onAvailable) {
+    const target = globalThis;
+    const existing = Object.getOwnPropertyDescriptor(target, "jwplayer");
+    if (existing || !Object.isExtensible(target)) return () => {
+    };
+    let active = true;
+    const getter = () => void 0;
+    const setter = (value) => {
+      active = false;
+      Object.defineProperty(target, "jwplayer", {
+        configurable: true,
+        enumerable: true,
+        writable: true,
+        value
+      });
+      if (typeof value === "function") onAvailable();
+    };
+    try {
+      Object.defineProperty(target, "jwplayer", {
+        configurable: true,
+        enumerable: true,
+        get: getter,
+        set: setter
+      });
+    } catch {
+      return () => {
+      };
+    }
+    return () => {
+      if (!active) return;
+      const current = Object.getOwnPropertyDescriptor(target, "jwplayer");
+      if (current?.get === getter && current?.set === setter) {
+        delete target.jwplayer;
+      }
+    };
   }
 
   // src/main-world/blob-source-tracer.js
@@ -2889,6 +3198,7 @@ ${body}`;
     watchSettings: false,
     implementations: {
       "main-world.network-capture": ({ policy }) => installNetworkCapture(policy),
+      "main-world.player-source-observer": ({ policy }) => installPlayerSourceObserver(policy),
       "main-world.blob-source-tracer": ({ policy }) => installBlobSourceTracer(policy),
       "main-world.eme-observer": () => installEmeObserver(),
       "main-world.timer-control": ({ policy }) => installTimerControl(policy)

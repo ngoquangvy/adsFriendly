@@ -93,6 +93,11 @@ async function hydrateCatalog() {
               detectedBy,
             }),
             timestamp: item.lastSeenAt || Date.now(),
+            metadata: {
+              frameId: item.frameId ?? null,
+              frameUrl: item.frameUrl || null,
+              playerAdapter: item.playerAdapters?.[0] || null,
+            },
           });
         } catch {}
       }

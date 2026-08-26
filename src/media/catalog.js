@@ -50,6 +50,15 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
         probeCount: existing?.probeCount || 0,
         lastProbeAt: existing?.lastProbeAt || null,
         lastUsableProbeAt: existing?.lastUsableProbeAt || null,
+        frameId: normalizedFrameId(event.metadata?.frameId, existing?.frameId),
+        frameUrl:
+          normalizedFrameUrl(event.metadata?.frameUrl) ||
+          existing?.frameUrl ||
+          null,
+        playerAdapters: uniqueStrings([
+          ...(existing?.playerAdapters || []),
+          event.metadata?.playerAdapter,
+        ]),
         detectionSources: uniqueStrings([
           ...(existing?.detectionSources || []),
           candidate.detectedBy,
@@ -106,9 +115,15 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
         ),
         probeCount: (existing?.probeCount || 0) + 1,
         lastProbeAt: event.timestamp,
-        lastUsableProbeAt: acceptProbe
+        lastUsableProbeAt: acceptProbe && probeQuality(probe) > 0
           ? event.timestamp
           : existing?.lastUsableProbeAt || existing?.lastProbeAt || null,
+        frameId: normalizedFrameId(event.metadata?.frameId, existing?.frameId),
+        frameUrl:
+          normalizedFrameUrl(event.metadata?.frameUrl) ||
+          existing?.frameUrl ||
+          null,
+        playerAdapters: [...(existing?.playerAdapters || [])],
         detectionSources: uniqueStrings([
           ...(existing?.detectionSources || []),
           MEDIA_DETECTION_SOURCES.NETWORK,
@@ -153,6 +168,12 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
       const item = {
         ...base,
         blobTrace,
+        frameId: normalizedFrameId(event.metadata?.frameId, existing?.frameId),
+        frameUrl:
+          normalizedFrameUrl(event.metadata?.frameUrl) ||
+          existing?.frameUrl ||
+          null,
+        playerAdapters: [...(existing?.playerAdapters || [])],
         detectionSources: uniqueStrings([
           ...(existing?.detectionSources || []),
           MEDIA_DETECTION_SOURCES.PLAYER,
@@ -490,6 +511,7 @@ function cloneItem(item, resolution = null) {
     audioTracks: item.audioTracks.map((track) => ({ ...track })),
     subtitles: item.subtitles.map((track) => ({ ...track })),
     detectionSources: [...item.detectionSources],
+    playerAdapters: [...(item.playerAdapters || [])],
     encryptionMethods: [...(item.encryptionMethods || [])],
     encryptionKeyFormats: [...(item.encryptionKeyFormats || [])],
     drmEvidence: [...(item.drmEvidence || [])],
@@ -538,11 +560,17 @@ function cloneItem(item, resolution = null) {
             ...(resolution.resolvedStream.encryptionKeyFormats || []),
           ],
           drmEvidence: [...(resolution.resolvedStream.drmEvidence || [])],
+          resolutionEvidence: [
+            ...(resolution.resolvedStream.resolutionEvidence || []),
+          ],
         }
       : null,
     resolvedRequestContext: resolution?.resolvedRequestContext
       ? { ...resolution.resolvedRequestContext }
       : null,
+    resolutionStrategy: resolution?.resolutionStrategy || null,
+    resolutionConfidence: resolution?.resolutionConfidence ?? null,
+    resolutionEvidence: [...(resolution?.resolutionEvidence || [])],
   };
 }
 
@@ -561,5 +589,18 @@ function samePageUrl(left, right) {
     return leftUrl.href === rightUrl.href;
   } catch {
     return left === right;
+  }
+}
+
+function normalizedFrameId(value, fallback = null) {
+  return Number.isInteger(value) && value >= 0 ? value : fallback ?? null;
+}
+
+function normalizedFrameUrl(value) {
+  try {
+    const url = new URL(value);
+    return ["http:", "https:"].includes(url.protocol) ? url.href : null;
+  } catch {
+    return null;
   }
 }

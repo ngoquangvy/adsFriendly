@@ -96,6 +96,19 @@ test("media download is an Assist user action, not a Safe capability", () => {
   assert.equal(getCapabilitiesForMode("assist").includes(definition.id), true);
 });
 
+test("player source observer is centrally registered as passive media work", () => {
+  const definition = getFeatureDefinition("main-world.player-source-observer");
+  assert.equal(definition.context, "main-world");
+  assert.deepEqual(definition.capabilities, [
+    CAPABILITIES.CORE_MESSAGING,
+    CAPABILITIES.MEDIA_OBSERVE,
+  ]);
+  assert.deepEqual(
+    getFeatureDefinition("main-world.network-capture").capabilities,
+    [CAPABILITIES.CORE_MESSAGING, CAPABILITIES.MEDIA_OBSERVE],
+  );
+});
+
 test("legacy settings migrate deterministically", () => {
   assert.deepEqual(migrateLegacySettings({ friendlyMode: true }), {
     enabled: true,

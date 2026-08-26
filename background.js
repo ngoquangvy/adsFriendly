@@ -1012,8 +1012,18 @@ var AdsFriendlyBackground = (() => {
     feature("picker.controller", "picker", C2.DOM_MANUAL_PICKER, [
       C2.LEARNING_FEEDBACK
     ]),
-    feature("main-world.network-capture", "main-world", C2.MEDIA_OBSERVE),
-    feature("main-world.blob-source-tracer", "main-world", C2.MEDIA_OBSERVE),
+    feature("main-world.network-capture", "main-world", C2.CORE_MESSAGING, [
+      C2.MEDIA_OBSERVE
+    ]),
+    feature(
+      "main-world.player-source-observer",
+      "main-world",
+      C2.CORE_MESSAGING,
+      [C2.MEDIA_OBSERVE]
+    ),
+    feature("main-world.blob-source-tracer", "main-world", C2.CORE_MESSAGING, [
+      C2.MEDIA_OBSERVE
+    ]),
     feature("main-world.eme-observer", "main-world", C2.MEDIA_OBSERVE),
     feature("main-world.timer-control", "main-world", C2.VIDEO_AUTO_ACTION)
   ]);
@@ -2317,15 +2327,15 @@ var AdsFriendlyBackground = (() => {
   }
   function normalizeMediaResolutionAttempt(value) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-    const strategy = optionalEnumValue(
+    const strategy2 = optionalEnumValue(
       value.strategy,
       ["remove_query_parameter"],
       "resolutionAttempt.strategy"
     );
-    if (!strategy) return null;
+    if (!strategy2) return null;
     return {
       adapterId: optionalString(value.adapterId)?.slice(0, 100) || null,
-      strategy,
+      strategy: strategy2,
       removedQueryKey: optionalString(value.removedQueryKey)?.slice(0, 100) || null,
       evidence: normalizeStrings(value.evidence).slice(0, 20)
     };
@@ -2346,6 +2356,7 @@ var AdsFriendlyBackground = (() => {
       requestUrl: optionalString(value.requestUrl),
       finalUrl: optionalString(value.finalUrl),
       documentUrl: optionalString(value.documentUrl),
+      parentDocumentUrl: optionalString(value.parentDocumentUrl),
       referrer: optionalString(value.referrer),
       method: typeof value.method === "string" && value.method ? value.method.toUpperCase().slice(0, 12) : "GET",
       credentials: credentials || "unknown",
@@ -2616,6 +2627,151 @@ var AdsFriendlyBackground = (() => {
     return SEGMENT_PATH_PATTERN.test(path) || SEGMENT_MIME_TYPES.has(normalizedMime);
   }
 
+  // src/media/resolution-strategy-catalog.js
+  var MEDIA_RESOLUTION_STRATEGIES = Object.freeze({
+    CAPTURED_RESPONSE: "captured_response",
+    OBSERVED_CHILD: "observed_child",
+    PLAYER_API: "player_api",
+    CONTEXTUAL_PROBE: "contextual_probe",
+    BOUNDED_URL_ADAPTER: "bounded_url_adapter"
+  });
+  var S = MEDIA_RESOLUTION_STRATEGIES;
+  var MEDIA_RESOLUTION_STRATEGY_CATALOG = Object.freeze([
+    strategy(S.CAPTURED_RESPONSE, 100, 0, "passive"),
+    strategy(S.OBSERVED_CHILD, 90, 0, "passive"),
+    strategy(S.PLAYER_API, 80, 0, "passive"),
+    strategy(S.CONTEXTUAL_PROBE, 60, 1, "active"),
+    strategy(S.BOUNDED_URL_ADAPTER, 40, 3, "active")
+  ]);
+  var STRATEGY_BY_ID = new Map(
+    MEDIA_RESOLUTION_STRATEGY_CATALOG.map((definition) => [
+      definition.id,
+      definition
+    ])
+  );
+  validateCatalog2();
+  function findPassiveHlsChildMatches(items = [], { maximumAgeMs = 6e4 } = {}) {
+    const playerCandidateIds = new Set(
+      items.filter((item) => item.kind === "blob").flatMap((item) => item.blobTrace?.candidateIds || [])
+    );
+    const children = items.filter(isUsableMediaPlaylist);
+    const matches = [];
+    for (const parent of items.filter(needsPassiveChild)) {
+      const ranked = children.filter((child) => child.id !== parent.id).map(
+        (child) => passiveMatch(parent, child, playerCandidateIds, maximumAgeMs)
+      ).filter(Boolean).sort(
+        (left, right) => right.confidence - left.confidence || (right.child.duration || 0) - (left.child.duration || 0) || (right.child.lastSeenAt || 0) - (left.child.lastSeenAt || 0)
+      );
+      const selected = ranked[0];
+      if (!selected || selected.confidence < 0.8) continue;
+      const alternative = ranked[1];
+      if (alternative && selected.confidence - alternative.confidence < 0.08 && !selected.evidence.includes("player-linked")) {
+        continue;
+      }
+      matches.push({
+        parentId: parent.id,
+        childId: selected.child.id,
+        strategyId: S.OBSERVED_CHILD,
+        confidence: selected.confidence,
+        evidence: selected.evidence
+      });
+    }
+    return matches;
+  }
+  function passiveMatch(parent, child, playerCandidateIds, maximumAgeMs) {
+    if (!sameFrame(parent, child) || !sameOrigin(parent, child)) return null;
+    const age = observationDistance(parent, child);
+    if (!Number.isFinite(age) || age > maximumAgeMs) return null;
+    const evidence = ["same-frame", "same-origin"];
+    let confidence = 0.65;
+    if (age <= 15e3) {
+      confidence += 0.1;
+      evidence.push("nearby-observation");
+    }
+    if (sharedPathPrefix(parent.manifestUrl, child.manifestUrl)) {
+      confidence += 0.1;
+      evidence.push("shared-path");
+    }
+    if (playerCandidateIds.has(child.id) || child.detectionSources?.includes("player")) {
+      confidence += 0.15;
+      evidence.push("player-linked");
+    }
+    if (Number.isFinite(child.duration) && child.duration >= 60) {
+      confidence += 0.05;
+      evidence.push("content-duration");
+    }
+    return {
+      child,
+      confidence: Math.min(1, Number(confidence.toFixed(2))),
+      evidence
+    };
+  }
+  function needsPassiveChild(item) {
+    if (item.kind !== "hls") return false;
+    if (isUsableMediaPlaylist(item)) return false;
+    return item.probeStatus === "discovered" || item.probeStatus === "failed" || item.playlistType === "unknown" || item.playlistType === "master" && !item.variants?.length;
+  }
+  function isUsableMediaPlaylist(item) {
+    return item.kind === "hls" && item.probeStatus === "ready" && item.playlistType === "media" && ["vod", "live"].includes(item.streamType) && ((item.segmentCount || 0) > 0 || (item.partialSegmentCount || 0) > 0);
+  }
+  function sameFrame(left, right) {
+    if (Number.isInteger(left.frameId) && Number.isInteger(right.frameId)) {
+      return left.frameId === right.frameId;
+    }
+    const leftUrl = normalizedDocumentUrl(left.frameUrl);
+    const rightUrl = normalizedDocumentUrl(right.frameUrl);
+    return Boolean(leftUrl && rightUrl && leftUrl === rightUrl);
+  }
+  function sameOrigin(left, right) {
+    try {
+      return new URL(left.manifestUrl).origin === new URL(right.manifestUrl).origin;
+    } catch {
+      return false;
+    }
+  }
+  function observationDistance(left, right) {
+    const leftAt = left.firstSeenAt || left.lastSeenAt;
+    const rightAt = right.firstSeenAt || right.lastSeenAt;
+    return Number.isFinite(leftAt) && Number.isFinite(rightAt) ? Math.abs(leftAt - rightAt) : Infinity;
+  }
+  function sharedPathPrefix(left, right) {
+    try {
+      const leftParts = new URL(left).pathname.split("/").filter(Boolean);
+      const rightParts = new URL(right).pathname.split("/").filter(Boolean);
+      let shared = 0;
+      while (shared < leftParts.length && shared < rightParts.length && leftParts[shared] === rightParts[shared]) {
+        shared += 1;
+      }
+      return shared >= 2;
+    } catch {
+      return false;
+    }
+  }
+  function normalizedDocumentUrl(value) {
+    try {
+      const url = new URL(value);
+      url.hash = "";
+      return url.href;
+    } catch {
+      return null;
+    }
+  }
+  function strategy(id, priority, maximumExtraRequests, trigger) {
+    return Object.freeze({ id, priority, maximumExtraRequests, trigger });
+  }
+  function validateCatalog2() {
+    const ids = Object.values(MEDIA_RESOLUTION_STRATEGIES);
+    if (new Set(ids).size !== ids.length) {
+      throw new Error("[MediaResolution] Duplicate strategy ID.");
+    }
+    for (const id of ids) {
+      const definition = STRATEGY_BY_ID.get(id);
+      if (!definition || definition.id !== id) {
+        throw new Error(`[MediaResolution] Strategy "${id}" is not registered.`);
+      }
+    }
+  }
+
   // src/media/hls-resolver.js
   function resolveHlsSources(items = []) {
     const annotations = new Map(
@@ -2645,6 +2801,18 @@ var AdsFriendlyBackground = (() => {
         }
       }
     }
+    for (const match of findPassiveHlsChildMatches(items)) {
+      const parent = items.find((item) => item.id === match.parentId);
+      const child = items.find((item) => item.id === match.childId);
+      if (parent && child) {
+        connect(parent, child, "passive_child", {
+          strategyId: match.strategyId,
+          confidence: match.confidence,
+          evidence: match.evidence,
+          ...qualityFromUrl(child.manifestUrl)
+        });
+      }
+    }
     const resolved = /* @__PURE__ */ new Map();
     for (const item of items) {
       const relation = annotations.get(item.id);
@@ -2661,7 +2829,10 @@ var AdsFriendlyBackground = (() => {
         resolvedMediaIds: [...new Set(streams.map((stream) => stream.item.id))],
         selectedMediaId: selected?.item.id || null,
         resolvedStream: selected ? summarizeStream(selected) : null,
-        resolvedRequestContext: selected ? chooseRequestContext(selected.item.requestContexts) : chooseRequestContext(item.requestContexts)
+        resolvedRequestContext: selected ? chooseRequestContext(selected.item.requestContexts) : chooseRequestContext(item.requestContexts),
+        resolutionStrategy: selected?.strategyId || null,
+        resolutionConfidence: selected?.confidence ?? null,
+        resolutionEvidence: [...selected?.evidence || []]
       });
     }
     return resolved;
@@ -2693,21 +2864,28 @@ var AdsFriendlyBackground = (() => {
     const byId = new Map(items.map((item) => [item.id, item]));
     const streams = [];
     const visited = /* @__PURE__ */ new Set();
-    const visit = (item, quality = null) => {
+    const visit = (item, quality = null, strategy2 = itemStrategy(item)) => {
       const visitKey = `${item.id}:${quality?.height || 0}:${quality?.bandwidth || 0}`;
       if (visited.has(visitKey)) return;
       visited.add(visitKey);
       if (item.playlistType === "media") {
-        streams.push({ item, quality, readiness: mediaReadiness(item) });
+        streams.push({
+          item,
+          quality,
+          readiness: mediaReadiness(item),
+          ...strategy2
+        });
         return;
       }
       for (const edge of annotations.get(item.id)?.edges || []) {
-        if (!["variant", "redirect"].includes(edge.kind)) continue;
+        if (!["variant", "redirect", "passive_child"].includes(edge.kind))
+          continue;
         const child = byId.get(edge.childId);
         if (!child) continue;
         visit(
           child,
-          edge.kind === "variant" ? variantQuality(edge.metadata) : quality
+          ["variant", "passive_child"].includes(edge.kind) ? variantQuality(edge.metadata) : quality,
+          edgeStrategy(edge, child)
         );
       }
     };
@@ -2734,7 +2912,14 @@ var AdsFriendlyBackground = (() => {
     return (readinessRank[right.readiness] || 0) - (readinessRank[left.readiness] || 0) || (right.quality?.height || 0) - (left.quality?.height || 0) || (right.quality?.bandwidth || 0) - (left.quality?.bandwidth || 0) || (right.item.segmentCount || 0) - (left.item.segmentCount || 0);
   }
   function summarizeStream(stream) {
-    const { item, quality, readiness } = stream;
+    const {
+      item,
+      quality,
+      readiness,
+      strategyId,
+      confidence,
+      evidence
+    } = stream;
     return {
       id: item.id,
       manifestUrl: item.manifestUrl,
@@ -2747,7 +2932,10 @@ var AdsFriendlyBackground = (() => {
       drm: item.drm,
       encryptionMethods: [...item.encryptionMethods || []],
       resolution: quality?.resolution || null,
-      bandwidth: quality?.bandwidth || null
+      bandwidth: quality?.bandwidth || null,
+      resolutionStrategy: strategyId || null,
+      resolutionConfidence: confidence ?? null,
+      resolutionEvidence: [...evidence || []]
     };
   }
   function variantQuality(variant = {}) {
@@ -2765,8 +2953,73 @@ var AdsFriendlyBackground = (() => {
       resolvedMediaIds: [],
       selectedMediaId: null,
       resolvedStream: null,
-      resolvedRequestContext: null
+      resolvedRequestContext: null,
+      resolutionStrategy: null,
+      resolutionConfidence: null,
+      resolutionEvidence: []
     };
+  }
+  function edgeStrategy(edge, child) {
+    if (edge.kind === "passive_child") {
+      return {
+        strategyId: edge.metadata?.strategyId || MEDIA_RESOLUTION_STRATEGIES.OBSERVED_CHILD,
+        confidence: edge.metadata?.confidence ?? 0.8,
+        evidence: [...edge.metadata?.evidence || []]
+      };
+    }
+    if (edge.kind === "redirect") {
+      return {
+        strategyId: MEDIA_RESOLUTION_STRATEGIES.CAPTURED_RESPONSE,
+        confidence: 0.98,
+        evidence: ["request-redirect"]
+      };
+    }
+    const childStrategy = itemStrategy(child);
+    return {
+      ...childStrategy,
+      evidence: [...childStrategy.evidence, "master-variant"]
+    };
+  }
+  function itemStrategy(item) {
+    if (item.resolutionAttempt) {
+      return {
+        strategyId: MEDIA_RESOLUTION_STRATEGIES.BOUNDED_URL_ADAPTER,
+        confidence: 0.9,
+        evidence: ["validated-url-adapter"]
+      };
+    }
+    const requestContext = chooseRequestContext(item.requestContexts);
+    if (requestContext?.transport === "fallback") {
+      return {
+        strategyId: MEDIA_RESOLUTION_STRATEGIES.CONTEXTUAL_PROBE,
+        confidence: 0.9,
+        evidence: ["contextual-probe"]
+      };
+    }
+    if (item.playerAdapters?.length || item.detectionSources?.includes("player")) {
+      return {
+        strategyId: MEDIA_RESOLUTION_STRATEGIES.PLAYER_API,
+        confidence: 0.9,
+        evidence: ["public-player-api"]
+      };
+    }
+    return {
+      strategyId: MEDIA_RESOLUTION_STRATEGIES.CAPTURED_RESPONSE,
+      confidence: 1,
+      evidence: ["parsed-media-playlist"]
+    };
+  }
+  function qualityFromUrl(value) {
+    try {
+      const match = /(?:^|[\/_-])(\d{3,4})p(?:[\/_.-]|$)/i.exec(
+        new URL(value).pathname
+      );
+      const height = Number(match?.[1]);
+      if (!Number.isInteger(height) || height < 144 || height > 4320) return {};
+      return { resolution: { width: null, height } };
+    } catch {
+      return {};
+    }
   }
   function normalizeUrl(value) {
     try {
@@ -2809,6 +3062,12 @@ var AdsFriendlyBackground = (() => {
           probeCount: existing?.probeCount || 0,
           lastProbeAt: existing?.lastProbeAt || null,
           lastUsableProbeAt: existing?.lastUsableProbeAt || null,
+          frameId: normalizedFrameId(event2.metadata?.frameId, existing?.frameId),
+          frameUrl: normalizedFrameUrl(event2.metadata?.frameUrl) || existing?.frameUrl || null,
+          playerAdapters: uniqueStrings([
+            ...existing?.playerAdapters || [],
+            event2.metadata?.playerAdapter
+          ]),
           detectionSources: uniqueStrings([
             ...existing?.detectionSources || [],
             candidate.detectedBy
@@ -2859,7 +3118,10 @@ var AdsFriendlyBackground = (() => {
           ),
           probeCount: (existing?.probeCount || 0) + 1,
           lastProbeAt: event2.timestamp,
-          lastUsableProbeAt: acceptProbe ? event2.timestamp : existing?.lastUsableProbeAt || existing?.lastProbeAt || null,
+          lastUsableProbeAt: acceptProbe && probeQuality(probe) > 0 ? event2.timestamp : existing?.lastUsableProbeAt || existing?.lastProbeAt || null,
+          frameId: normalizedFrameId(event2.metadata?.frameId, existing?.frameId),
+          frameUrl: normalizedFrameUrl(event2.metadata?.frameUrl) || existing?.frameUrl || null,
+          playerAdapters: [...existing?.playerAdapters || []],
           detectionSources: uniqueStrings([
             ...existing?.detectionSources || [],
             MEDIA_DETECTION_SOURCES.NETWORK
@@ -2902,6 +3164,9 @@ var AdsFriendlyBackground = (() => {
         const item = {
           ...base,
           blobTrace,
+          frameId: normalizedFrameId(event2.metadata?.frameId, existing?.frameId),
+          frameUrl: normalizedFrameUrl(event2.metadata?.frameUrl) || existing?.frameUrl || null,
+          playerAdapters: [...existing?.playerAdapters || []],
           detectionSources: uniqueStrings([
             ...existing?.detectionSources || [],
             MEDIA_DETECTION_SOURCES.PLAYER
@@ -3215,6 +3480,7 @@ var AdsFriendlyBackground = (() => {
       audioTracks: item.audioTracks.map((track) => ({ ...track })),
       subtitles: item.subtitles.map((track) => ({ ...track })),
       detectionSources: [...item.detectionSources],
+      playerAdapters: [...item.playerAdapters || []],
       encryptionMethods: [...item.encryptionMethods || []],
       encryptionKeyFormats: [...item.encryptionKeyFormats || []],
       drmEvidence: [...item.drmEvidence || []],
@@ -3253,9 +3519,15 @@ var AdsFriendlyBackground = (() => {
         encryptionKeyFormats: [
           ...resolution.resolvedStream.encryptionKeyFormats || []
         ],
-        drmEvidence: [...resolution.resolvedStream.drmEvidence || []]
+        drmEvidence: [...resolution.resolvedStream.drmEvidence || []],
+        resolutionEvidence: [
+          ...resolution.resolvedStream.resolutionEvidence || []
+        ]
       } : null,
-      resolvedRequestContext: resolution?.resolvedRequestContext ? { ...resolution.resolvedRequestContext } : null
+      resolvedRequestContext: resolution?.resolvedRequestContext ? { ...resolution.resolvedRequestContext } : null,
+      resolutionStrategy: resolution?.resolutionStrategy || null,
+      resolutionConfidence: resolution?.resolutionConfidence ?? null,
+      resolutionEvidence: [...resolution?.resolutionEvidence || []]
     };
   }
   function assertTabId(tabId) {
@@ -3272,6 +3544,17 @@ var AdsFriendlyBackground = (() => {
       return leftUrl.href === rightUrl.href;
     } catch {
       return left === right;
+    }
+  }
+  function normalizedFrameId(value, fallback = null) {
+    return Number.isInteger(value) && value >= 0 ? value : fallback ?? null;
+  }
+  function normalizedFrameUrl(value) {
+    try {
+      const url = new URL(value);
+      return ["http:", "https:"].includes(url.protocol) ? url.href : null;
+    } catch {
+      return null;
     }
   }
 
@@ -3364,7 +3647,12 @@ var AdsFriendlyBackground = (() => {
                 ...item,
                 detectedBy
               }),
-              timestamp: item.lastSeenAt || Date.now()
+              timestamp: item.lastSeenAt || Date.now(),
+              metadata: {
+                frameId: item.frameId ?? null,
+                frameUrl: item.frameUrl || null,
+                playerAdapter: item.playerAdapters?.[0] || null
+              }
             });
           } catch {
           }
@@ -3838,6 +4126,7 @@ var AdsFriendlyBackground = (() => {
       requestUrl: optionalString2(value.requestUrl),
       finalUrl: optionalString2(value.finalUrl),
       documentUrl: optionalString2(value.documentUrl),
+      parentDocumentUrl: optionalString2(value.parentDocumentUrl),
       referrer: optionalString2(value.referrer),
       method: typeof value.method === "string" ? value.method : "GET",
       credentials: ["omit", "same-origin", "include", "unknown"].includes(

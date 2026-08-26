@@ -166,15 +166,17 @@ export function formatMediaDetails(item) {
     return resolvedHlsDetails(item);
 
   if (item.probeStatus === "failed")
-    return item.probeError === "fallback_fetch_blocked"
-      ? "HLS · page/CORS blocked manifest reading"
-      : "HLS · manifest request or parse failed";
+    return item.probeError === "manifest_http_403"
+      ? "HLS · probe rejected (403) · watching player requests"
+      : item.probeError === "fallback_fetch_blocked"
+        ? "HLS · page/CORS blocked probe · watching player requests"
+        : "HLS · manifest probe failed · watching player requests";
   if (item.probeStatus === "unsupported")
     return "HLS · manifest format not supported";
   if (item.probeStatus !== "ready")
-    return "HLS manifest found · reading qualities";
+    return "HLS source found · watching player requests";
   if (item.playlistType === "unknown")
-    return "HLS endpoint · waiting for media playlist";
+    return "HLS endpoint · watching for a playable stream";
 
   const facts = [];
   if (item.playlistType === "master") {
@@ -447,6 +449,8 @@ function mediaRenderFacts(item) {
     parentManifestIds: item.parentManifestIds,
     childManifestIds: item.childManifestIds,
     resolutionStatus: item.resolutionStatus,
+    resolutionStrategy: item.resolutionStrategy,
+    resolutionConfidence: item.resolutionConfidence,
     resolvedMediaIds: item.resolvedMediaIds,
     selectedMediaId: item.selectedMediaId,
     resolvedStream: item.resolvedStream,

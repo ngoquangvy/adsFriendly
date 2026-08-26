@@ -12,6 +12,7 @@ export interface DownloadCandidate {
     requestUrl: string | null;
     finalUrl: string | null;
     documentUrl: string | null;
+    parentDocumentUrl: string | null;
     referrer: string | null;
     method: string;
     credentials: "omit" | "same-origin" | "include" | "unknown";

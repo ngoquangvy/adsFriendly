@@ -222,6 +222,7 @@ function normalizeDownloadRequestContext(value) {
     requestUrl: optionalString(value.requestUrl),
     finalUrl: optionalString(value.finalUrl),
     documentUrl: optionalString(value.documentUrl),
+    parentDocumentUrl: optionalString(value.parentDocumentUrl),
     referrer: optionalString(value.referrer),
     method: typeof value.method === "string" ? value.method : "GET",
     credentials: ["omit", "same-origin", "include", "unknown"].includes(

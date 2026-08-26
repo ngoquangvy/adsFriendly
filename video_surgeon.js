@@ -354,8 +354,18 @@ var AdsFriendlyVideo = (() => {
     feature("picker.controller", "picker", C2.DOM_MANUAL_PICKER, [
       C2.LEARNING_FEEDBACK
     ]),
-    feature("main-world.network-capture", "main-world", C2.MEDIA_OBSERVE),
-    feature("main-world.blob-source-tracer", "main-world", C2.MEDIA_OBSERVE),
+    feature("main-world.network-capture", "main-world", C2.CORE_MESSAGING, [
+      C2.MEDIA_OBSERVE
+    ]),
+    feature(
+      "main-world.player-source-observer",
+      "main-world",
+      C2.CORE_MESSAGING,
+      [C2.MEDIA_OBSERVE]
+    ),
+    feature("main-world.blob-source-tracer", "main-world", C2.CORE_MESSAGING, [
+      C2.MEDIA_OBSERVE
+    ]),
     feature("main-world.eme-observer", "main-world", C2.MEDIA_OBSERVE),
     feature("main-world.timer-control", "main-world", C2.VIDEO_AUTO_ACTION)
   ]);

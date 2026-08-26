@@ -1,3 +1,8 @@
+import {
+  MEDIA_RESOLUTION_STRATEGIES,
+  findPassiveHlsChildMatches,
+} from "./resolution-strategy-catalog.js";
+
 export function resolveHlsSources(items = []) {
   const annotations = new Map(
     items.map((item) => [
@@ -30,6 +35,19 @@ export function resolveHlsSources(items = []) {
     }
   }
 
+  for (const match of findPassiveHlsChildMatches(items)) {
+    const parent = items.find((item) => item.id === match.parentId);
+    const child = items.find((item) => item.id === match.childId);
+    if (parent && child) {
+      connect(parent, child, "passive_child", {
+        strategyId: match.strategyId,
+        confidence: match.confidence,
+        evidence: match.evidence,
+        ...qualityFromUrl(child.manifestUrl),
+      });
+    }
+  }
+
   const resolved = new Map();
   for (const item of items) {
     const relation = annotations.get(item.id);
@@ -49,6 +67,10 @@ export function resolveHlsSources(items = []) {
       resolvedRequestContext: selected
         ? chooseRequestContext(selected.item.requestContexts)
         : chooseRequestContext(item.requestContexts),
+      resolutionStrategy:
+        selected?.strategyId || null,
+      resolutionConfidence: selected?.confidence ?? null,
+      resolutionEvidence: [...(selected?.evidence || [])],
     });
   }
   return resolved;
@@ -94,21 +116,30 @@ function collectMediaStreams(root, annotations, items) {
   const streams = [];
   const visited = new Set();
 
-  const visit = (item, quality = null) => {
+  const visit = (item, quality = null, strategy = itemStrategy(item)) => {
     const visitKey = `${item.id}:${quality?.height || 0}:${quality?.bandwidth || 0}`;
     if (visited.has(visitKey)) return;
     visited.add(visitKey);
     if (item.playlistType === "media") {
-      streams.push({ item, quality, readiness: mediaReadiness(item) });
+      streams.push({
+        item,
+        quality,
+        readiness: mediaReadiness(item),
+        ...strategy,
+      });
       return;
     }
     for (const edge of annotations.get(item.id)?.edges || []) {
-      if (!["variant", "redirect"].includes(edge.kind)) continue;
+      if (!["variant", "redirect", "passive_child"].includes(edge.kind))
+        continue;
       const child = byId.get(edge.childId);
       if (!child) continue;
       visit(
         child,
-        edge.kind === "variant" ? variantQuality(edge.metadata) : quality,
+        ["variant", "passive_child"].includes(edge.kind)
+          ? variantQuality(edge.metadata)
+          : quality,
+        edgeStrategy(edge, child),
       );
     }
   };
@@ -152,7 +183,14 @@ function compareResolvedStreams(left, right) {
 }
 
 function summarizeStream(stream) {
-  const { item, quality, readiness } = stream;
+  const {
+    item,
+    quality,
+    readiness,
+    strategyId,
+    confidence,
+    evidence,
+  } = stream;
   return {
     id: item.id,
     manifestUrl: item.manifestUrl,
@@ -166,6 +204,9 @@ function summarizeStream(stream) {
     encryptionMethods: [...(item.encryptionMethods || [])],
     resolution: quality?.resolution || null,
     bandwidth: quality?.bandwidth || null,
+    resolutionStrategy: strategyId || null,
+    resolutionConfidence: confidence ?? null,
+    resolutionEvidence: [...(evidence || [])],
   };
 }
 
@@ -186,7 +227,77 @@ function emptyResolution(relation) {
     selectedMediaId: null,
     resolvedStream: null,
     resolvedRequestContext: null,
+    resolutionStrategy: null,
+    resolutionConfidence: null,
+    resolutionEvidence: [],
   };
+}
+
+function edgeStrategy(edge, child) {
+  if (edge.kind === "passive_child") {
+    return {
+      strategyId:
+        edge.metadata?.strategyId ||
+        MEDIA_RESOLUTION_STRATEGIES.OBSERVED_CHILD,
+      confidence: edge.metadata?.confidence ?? 0.8,
+      evidence: [...(edge.metadata?.evidence || [])],
+    };
+  }
+  if (edge.kind === "redirect") {
+    return {
+      strategyId: MEDIA_RESOLUTION_STRATEGIES.CAPTURED_RESPONSE,
+      confidence: 0.98,
+      evidence: ["request-redirect"],
+    };
+  }
+  const childStrategy = itemStrategy(child);
+  return {
+    ...childStrategy,
+    evidence: [...childStrategy.evidence, "master-variant"],
+  };
+}
+
+function itemStrategy(item) {
+  if (item.resolutionAttempt) {
+    return {
+      strategyId: MEDIA_RESOLUTION_STRATEGIES.BOUNDED_URL_ADAPTER,
+      confidence: 0.9,
+      evidence: ["validated-url-adapter"],
+    };
+  }
+  const requestContext = chooseRequestContext(item.requestContexts);
+  if (requestContext?.transport === "fallback") {
+    return {
+      strategyId: MEDIA_RESOLUTION_STRATEGIES.CONTEXTUAL_PROBE,
+      confidence: 0.9,
+      evidence: ["contextual-probe"],
+    };
+  }
+  if (item.playerAdapters?.length || item.detectionSources?.includes("player")) {
+    return {
+      strategyId: MEDIA_RESOLUTION_STRATEGIES.PLAYER_API,
+      confidence: 0.9,
+      evidence: ["public-player-api"],
+    };
+  }
+  return {
+    strategyId: MEDIA_RESOLUTION_STRATEGIES.CAPTURED_RESPONSE,
+    confidence: 1,
+    evidence: ["parsed-media-playlist"],
+  };
+}
+
+function qualityFromUrl(value) {
+  try {
+    const match = /(?:^|[\/_-])(\d{3,4})p(?:[\/_.-]|$)/i.exec(
+      new URL(value).pathname,
+    );
+    const height = Number(match?.[1]);
+    if (!Number.isInteger(height) || height < 144 || height > 4320) return {};
+    return { resolution: { width: null, height } };
+  } catch {
+    return {};
+  }
 }
 
 function normalizeUrl(value) {

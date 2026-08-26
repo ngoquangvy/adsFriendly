@@ -11,6 +11,7 @@ import {
 } from "../media/probe-gate.js";
 import { EVENTS, createRegisteredEvent } from "../runtime/event-catalog.js";
 import { CAPABILITIES } from "../runtime/feature-catalog.js";
+import { createRequestContextRegistry } from "./request-context-registry.js";
 import {
   clearMediaObservations,
   rememberMediaObservation,
@@ -19,6 +20,7 @@ import {
 export function installNetworkCapture(policy) {
   const originalFetch = window.fetch;
   const probeGate = createMediaProbeGate();
+  const requestContexts = createRequestContextRegistry();
   const resolutionTasks = new Map();
   const inspect = (
     manifestUrl,
@@ -46,6 +48,7 @@ export function installNetworkCapture(policy) {
       originalFetch,
       probeGate,
       inspect,
+      requestContexts,
     }).finally(() => resolutionTasks.delete(options.manifestUrl));
     resolutionTasks.set(options.manifestUrl, task);
     return task;
@@ -54,14 +57,21 @@ export function installNetworkCapture(policy) {
     policy,
     inspect,
     resolveAttempts,
+    requestContexts,
   );
-  const stopXhrCapture = installXhrCapture(policy, inspect, resolveAttempts);
+  const stopXhrCapture = installXhrCapture(
+    policy,
+    inspect,
+    resolveAttempts,
+    requestContexts,
+  );
   const stopFallbackProbe = installFallbackProbe({
     policy,
     originalFetch,
     probeGate,
     inspect,
     resolveAttempts,
+    requestContexts,
   });
   return () => {
     stopFetchCapture();
@@ -69,18 +79,28 @@ export function installNetworkCapture(policy) {
     stopFallbackProbe();
     resolutionTasks.clear();
     probeGate.clear();
+    requestContexts.clear();
     clearMediaObservations();
   };
 }
 
-function installFetchCapture(policy, inspect, resolveAttempts) {
+function installFetchCapture(
+  policy,
+  inspect,
+  resolveAttempts,
+  requestContexts,
+) {
   const originalFetch = window.fetch;
   const fetchWrapper = async function (...args) {
     const url = requestUrl(args[0]);
+    if (isManifestLike(url)) {
+      requestContexts.remember(createFetchRequestContext(args, url, url));
+    }
     const response = await originalFetch.apply(this, args);
     if (!policy.can(CAPABILITIES.MEDIA_OBSERVE)) return response;
     const finalUrl = response.url || url;
     const requestContext = createFetchRequestContext(args, url, finalUrl);
+    requestContexts.remember(requestContext);
     const mimeType = response.headers.get("content-type");
     const candidate = reportMediaSource(finalUrl, mimeType);
     if (
@@ -112,6 +132,7 @@ function installFetchCapture(policy, inspect, resolveAttempts) {
               manifestUrl: finalUrl,
               body,
               candidate,
+              requestContext,
             }).catch(() => {});
           }
         })
@@ -125,7 +146,7 @@ function installFetchCapture(policy, inspect, resolveAttempts) {
   };
 }
 
-function installXhrCapture(policy, inspect, resolveAttempts) {
+function installXhrCapture(policy, inspect, resolveAttempts, requestContexts) {
   const originalOpen = XMLHttpRequest.prototype.open;
   const originalSend = XMLHttpRequest.prototype.send;
   const openWrapper = function (method, url, ...rest) {
@@ -134,10 +155,16 @@ function installXhrCapture(policy, inspect, resolveAttempts) {
     return originalOpen.call(this, method, url, ...rest);
   };
   const sendWrapper = function (...args) {
+    if (isManifestLike(this.__adsfriendly_url)) {
+      requestContexts.remember(
+        createXhrRequestContext(this, this.__adsfriendly_url || ""),
+      );
+    }
     this.addEventListener("load", () => {
       if (!policy.can(CAPABILITIES.MEDIA_OBSERVE)) return;
       const url = this.responseURL || this.__adsfriendly_url || "";
       const requestContext = createXhrRequestContext(this, url);
+      requestContexts.remember(requestContext);
       const mimeType = this.getResponseHeader("content-type");
       const candidate = reportMediaSource(url, mimeType);
       if (
@@ -164,6 +191,7 @@ function installXhrCapture(policy, inspect, resolveAttempts) {
               manifestUrl: url,
               body,
               candidate,
+              requestContext,
             }).catch(() => {});
           }
         })
@@ -201,6 +229,7 @@ function installFallbackProbe({
   probeGate,
   inspect,
   resolveAttempts,
+  requestContexts,
 }) {
   let stopped = false;
   const onProbeRequest = (messageEvent) => {
@@ -230,11 +259,13 @@ function installFallbackProbe({
       title: document.title || null,
       detectedBy: MEDIA_DETECTION_SOURCES.NETWORK,
     });
+    const observedRequestContext = requestContexts.find(manifestUrl);
     originalFetch
-      .call(window, manifestUrl, {
-        credentials: "same-origin",
-        cache: "default",
-      })
+      .call(
+        window,
+        manifestUrl,
+        createContextualProbeInit(observedRequestContext),
+      )
       .then(async (response) => {
         if (!response.ok)
           throw new Error(`manifest_http_${response.status || "error"}`);
@@ -251,7 +282,11 @@ function installFallbackProbe({
           finalUrl,
           body,
           finalCandidate,
-          createFallbackRequestContext(manifestUrl, finalUrl),
+          createFallbackRequestContext(
+            manifestUrl,
+            finalUrl,
+            observedRequestContext,
+          ),
         );
         if (
           requestedKind === MEDIA_KINDS.DASH ||
@@ -264,6 +299,7 @@ function installFallbackProbe({
             manifestUrl: finalUrl,
             body,
             candidate: finalCandidate,
+            requestContext: observedRequestContext,
           })) || primaryProbe
         );
       })
@@ -287,13 +323,15 @@ export async function tryHlsProbeAttempts({
   originalFetch,
   probeGate,
   inspect,
+  requestContext = null,
 }) {
   for (const attempt of createHlsProbeAttempts(manifestUrl, body)) {
     try {
-      const response = await originalFetch.call(window, attempt.url, {
-        credentials: "same-origin",
-        cache: "default",
-      });
+      const response = await originalFetch.call(
+        window,
+        attempt.url,
+        createContextualProbeInit(requestContext),
+      );
       if (!response.ok) continue;
       const finalUrl = response.url || attempt.url;
       const alternativeBody = await response.text();
@@ -312,7 +350,7 @@ export async function tryHlsProbeAttempts({
         finalUrl,
         alternativeBody,
         alternativeCandidate,
-        createFallbackRequestContext(manifestUrl, finalUrl),
+        createFallbackRequestContext(manifestUrl, finalUrl, requestContext),
         attempt,
       );
       // TRAINING_BACKLOG: MEDIA_RESOLUTION_STRATEGY
@@ -447,7 +485,7 @@ function createFetchRequestContext(args, originalUrl, finalUrl) {
     finalUrl,
     method: init.method || request.method || "GET",
     credentials,
-    referrer: init.referrer || request.referrer || document.referrer,
+    referrer: init.referrer || request.referrer || location.href,
     transport: "fetch",
   });
 }
@@ -458,20 +496,44 @@ function createXhrRequestContext(xhr, finalUrl) {
     finalUrl,
     method: xhr.__adsfriendly_method || "GET",
     credentials: xhr.withCredentials ? "include" : "same-origin",
-    referrer: document.referrer,
+    referrer: location.href,
     transport: "xhr",
   });
 }
 
-function createFallbackRequestContext(manifestUrl, finalUrl = manifestUrl) {
+function createFallbackRequestContext(
+  manifestUrl,
+  finalUrl = manifestUrl,
+  observedContext = null,
+) {
   return requestContext({
     requestUrl: manifestUrl,
     finalUrl,
     method: "GET",
-    credentials: "same-origin",
-    referrer: document.referrer,
+    credentials: observedContext?.credentials || "same-origin",
+    referrer:
+      observedContext?.referrer || observedContext?.documentUrl || location.href,
     transport: "fallback",
   });
+}
+
+export function createContextualProbeInit(
+  observedContext,
+  currentDocumentUrl = globalThis.location?.href || "",
+) {
+  const credentials = ["omit", "same-origin", "include"].includes(
+    observedContext?.credentials,
+  )
+    ? observedContext.credentials
+    : "same-origin";
+  const init = { credentials, cache: "default" };
+  const referrer = [
+    observedContext?.referrer,
+    observedContext?.documentUrl,
+    currentDocumentUrl,
+  ].find((value) => sameOrigin(value, currentDocumentUrl));
+  if (referrer) init.referrer = referrer;
+  return init;
 }
 
 function requestContext({
@@ -487,6 +549,7 @@ function requestContext({
     requestUrl: String(sourceUrl || ""),
     finalUrl: String(finalUrl || sourceUrl || ""),
     documentUrl,
+    parentDocumentUrl: String(document.referrer || ""),
     referrer: String(referrer || ""),
     method: String(method || "GET").toUpperCase(),
     credentials,

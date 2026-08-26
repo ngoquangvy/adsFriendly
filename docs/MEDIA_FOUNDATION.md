@@ -62,6 +62,14 @@ The HLS resolver keeps multiple observations of a tokenized endpoint and does
 not let a later empty envelope replace an already usable media playlist. It
 links request redirects and master variants, selects the best discovered VOD
 stream by readiness and quality, and exposes one logical source in the popup.
+Resolution methods are registered in one ordered catalog. Already captured
+response bodies are preferred, followed by a child playlist that the same
+frame/player has demonstrably loaded, a public player API adapter, one
+context-aware probe, and finally a bounded URL adapter. A passive child is
+accepted only when frame, origin, observation time, and optional player/path
+evidence clear a fixed confidence threshold; ambiguous children from separate
+players or ad frames are not joined. Strategy results remain session metadata
+and do not become training labels.
 When a bounded encrypted-envelope adapter resolves a usable playlist, its
 strategy evidence is retained only as `resolutionAttempt` session metadata. It
 is not a training label. The future schema and validation boundary are pinned
@@ -70,6 +78,10 @@ so this signal is reconsidered when training work resumes.
 Request routing facts (document/referrer URL, transport, credentials mode, and
 whether the browser session is required) stay in `chrome.storage.session`.
 Cookie, authorization, and arbitrary request-header values are never captured.
+The request context distinguishes the current frame document from its parent
+document. Browser Fetch continues to own forbidden headers such as `Origin`;
+the extension replays only a recent, normalized credentials/referrer context
+that is valid for the current frame instead of injecting arbitrary headers.
 
 HLS protection is classified explicitly. Plain `AES-128` with the identity key
 format is encrypted HLS, not DRM. `SAMPLE-AES` without stronger evidence remains
@@ -88,6 +100,19 @@ manifest once from the browser cache/network. The fallback inherits the page's
 origin, referrer, and same-origin cookies; a bounded gate prevents repeated
 requests. A blocked fallback is reported explicitly instead of remaining in an
 indefinite “reading qualities” state.
+
+The low-level network, Blob, and public-player hooks are registered as core
+bootstrap features so they exist before an early player consumes its first
+token. Their policies still require `media.observe` before parsing or reporting
+media, so installing the hooks early does not enable the Media catalog in Safe
+mode or while protection is disabled.
+
+The active fallback is intentionally scheduled once after a short passive
+grace period. Repeating it can consume signed or single-use manifest URLs.
+Failure changes the visible state to a reason such as HTTP 403 or a blocked
+page/CORS probe while network and player observers continue listening for a
+usable child. JWPlayer integration uses only its public playlist and quality
+events in the page MAIN world; player-private state is never inspected.
 
 ## Legacy browser download slice
 
