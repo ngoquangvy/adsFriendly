@@ -88,8 +88,11 @@ higher-scoring registered strategy first.
 This runtime memory is not a training label. It must never contain full URLs,
 Referer/Origin values, User-Agent values, cookies, authorization data, key
 URLs, key bytes, manifest bodies, or media bytes. Browser key responses remain
-in page memory for a bounded time, are removed from persisted download state,
-and temporary Helper key files are deleted on success, failure, or cancel.
+in page memory for a bounded time. A key-sized response held briefly to resolve
+a response/manifest parsing race becomes eligible only when its exact URL is
+subsequently declared by the parsed manifest. Key data is removed from
+persisted download state, and temporary Helper key files are deleted on
+success, failure, or cancel.
 
 Before this signal becomes training data, add a separate versioned
 `media_access_strategy` schema, opt-in export, host hashing/generalization,

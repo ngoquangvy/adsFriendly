@@ -88,6 +88,7 @@ import {
   getAesKeyHandoff,
   rememberHlsKeyUris,
 } from "../src/main-world/aes-key-handoff.js";
+import { collectAesKeyHandoffTargets } from "../src/background/media-download-jobs.js";
 
 test("offers a helper setup action independently from downloadable media", () => {
   assert.deepEqual(helperSetupPresentation({ status: "permission_required" }), {
@@ -170,6 +171,71 @@ test("browser AES handoff captures only keys declared by an identity HLS manifes
   } finally {
     clearAesKeyHandoffs();
   }
+});
+
+test("browser AES handoff survives a key response that wins the manifest parse race", async () => {
+  const manifestUrl = "https://cdn.example/video/child.m3u8";
+  const keyUrl = "https://cdn.example/video/racing-key.bin";
+  const keyBytes = Buffer.from("0123456789abcdef");
+  clearAesKeyHandoffs();
+  try {
+    assert.equal(
+      await captureFetchAesKey(
+        keyUrl,
+        new Response(keyBytes, {
+          headers: {
+            "content-length": String(keyBytes.length),
+            "content-type": "application/octet-stream",
+          },
+        }),
+      ),
+      true,
+    );
+    assert.deepEqual(getAesKeyHandoff(manifestUrl), []);
+    rememberHlsKeyUris(
+      manifestUrl,
+      '#EXTM3U\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI="racing-key.bin"\n#EXTINF:4,\nsegment.ts',
+    );
+    assert.equal(
+      getAesKeyHandoff(manifestUrl)[0].data,
+      keyBytes.toString("base64"),
+    );
+  } finally {
+    clearAesKeyHandoffs();
+  }
+});
+
+test("AES handoff targets retain validated master-child URLs and iframe IDs", () => {
+  const child = {
+    id: "child",
+    kind: "hls",
+    manifestUrl: "https://cdn.example/720p/index.m3u8",
+    frameId: 7,
+    parentManifestIds: ["master"],
+  };
+  const targets = collectAesKeyHandoffTargets(child, [
+    {
+      id: "master",
+      kind: "hls",
+      manifestUrl: "https://embed.example/master.m3u8",
+      frameId: 7,
+      childManifestIds: ["child"],
+      variants: [{ url: "https://cdn.example/720p/index.m3u8" }],
+    },
+    {
+      id: "unrelated",
+      kind: "hls",
+      manifestUrl: "https://ads.example/ad.m3u8",
+      frameId: 9,
+    },
+  ]);
+  assert.deepEqual(targets, {
+    manifestUrls: [
+      "https://cdn.example/720p/index.m3u8",
+      "https://embed.example/master.m3u8",
+    ],
+    frameIds: [7],
+  });
 });
 
 test("download job view exposes speed, connections, and resumable actions", () => {

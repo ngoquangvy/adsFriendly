@@ -50,7 +50,7 @@ export function startMediaObserver() {
       clearTimeout(pendingRequest.timeoutId);
       pendingRequest.resolve({
         status: "ready",
-        manifestUrl: messageEvent.data.manifestUrl,
+        requestedManifestUrl: messageEvent.data.requestedManifestUrl,
         keys: Array.isArray(messageEvent.data.keys)
           ? messageEvent.data.keys
           : [],
@@ -107,7 +107,10 @@ export function startMediaObserver() {
 
   const onBackgroundMessage = (message, _sender, sendResponse) => {
     if (message?.type === "GET_MEDIA_AES_KEY_HANDOFF") {
-      requestAesKeyHandoff(message.manifestUrl).then(sendResponse);
+      requestAesKeyHandoff(
+        message.requestedManifestUrl,
+        message.manifestUrls,
+      ).then(sendResponse);
       return true;
     }
     if (message?.type !== "PROBE_OBSERVED_MEDIA") return undefined;
@@ -157,8 +160,11 @@ export function startMediaObserver() {
     aesKeyHandoffRequests.clear();
   };
 
-  function requestAesKeyHandoff(manifestUrl) {
-    if (typeof manifestUrl !== "string" || !/^https?:/i.test(manifestUrl)) {
+  function requestAesKeyHandoff(requestedManifestUrl, manifestUrls) {
+    if (
+      typeof requestedManifestUrl !== "string" ||
+      !/^https?:/i.test(requestedManifestUrl)
+    ) {
       return Promise.resolve({ status: "invalid_manifest", keys: [] });
     }
     const requestId =
@@ -175,7 +181,8 @@ export function startMediaObserver() {
           source: "adsfriendly-content",
           type: "GET_MEDIA_AES_KEY_HANDOFF",
           requestId,
-          manifestUrl,
+          requestedManifestUrl,
+          manifestUrls,
         },
         "*",
       );

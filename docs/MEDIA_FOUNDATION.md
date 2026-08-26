@@ -165,9 +165,13 @@ For identity AES HLS, the Helper first uses bounded request-header profiles
 derived from captured routing facts and the browser's actual User-Agent. If the
 key server rejects every profile but the page player already received the
 declared key, the main-world observer can hand that exact key to the Helper in
-memory. No arbitrary response is captured: the URL must first appear in a
-parsed identity AES key tag. Per-host strategy outcomes are scored locally so a
-successful registered method is preferred on the next download. Sensitive
+memory. To handle a player that requests its key before the manifest clone has
+finished parsing, at most 32 binary responses of an exact AES key size may be
+held in page memory for 15 seconds; a response is never exposed unless its
+exact URL then appears in a parsed identity AES key tag. Master/child manifest
+relations and observed frame IDs bound which page frames may answer the
+handoff. Per-host strategy outcomes are scored locally so a successful
+registered method is preferred on the next download. Sensitive
 headers and key material are excluded from this memory and from persisted job
 history; temporary key files are removed after any terminal outcome. See
 `TRAINING_BACKLOG: MEDIA_ACCESS_STRATEGY` before considering these outcomes for

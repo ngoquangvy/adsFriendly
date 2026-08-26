@@ -6,7 +6,7 @@ import { installDecryptedManifestObserver } from "./decrypted-manifest-observer.
 import { installEmeObserver } from "./eme-observer.js";
 import { installTimerControl, setAdMode } from "./timer-control.js";
 import { createMainController } from "../runtime/main-controller.js";
-import { getAesKeyHandoff } from "./aes-key-handoff.js";
+import { getAesKeyHandoffs } from "./aes-key-handoff.js";
 
 const script = document.currentScript;
 const initialSettings = {
@@ -39,8 +39,9 @@ onContentMessage((message) => {
     notifyContentScript({
       type: "MEDIA_AES_KEY_HANDOFF_RESPONSE",
       requestId: message.requestId,
-      manifestUrl: message.manifestUrl,
-      keys: getAesKeyHandoff(message.manifestUrl),
+      requestedManifestUrl: message.requestedManifestUrl,
+      manifestUrls: message.manifestUrls,
+      keys: getAesKeyHandoffs(message.manifestUrls),
     });
   }
 });

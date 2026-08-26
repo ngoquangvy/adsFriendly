@@ -762,7 +762,7 @@ var AdsFriendlyMediaFrame = (() => {
         clearTimeout(pendingRequest.timeoutId);
         pendingRequest.resolve({
           status: "ready",
-          manifestUrl: messageEvent.data.manifestUrl,
+          requestedManifestUrl: messageEvent.data.requestedManifestUrl,
           keys: Array.isArray(messageEvent.data.keys) ? messageEvent.data.keys : []
         });
         return;
@@ -799,7 +799,10 @@ var AdsFriendlyMediaFrame = (() => {
     window.addEventListener("message", onMainWorldMessage);
     const onBackgroundMessage = (message, _sender, sendResponse) => {
       if (message?.type === "GET_MEDIA_AES_KEY_HANDOFF") {
-        requestAesKeyHandoff(message.manifestUrl).then(sendResponse);
+        requestAesKeyHandoff(
+          message.requestedManifestUrl,
+          message.manifestUrls
+        ).then(sendResponse);
         return true;
       }
       if (message?.type !== "PROBE_OBSERVED_MEDIA") return void 0;
@@ -843,8 +846,8 @@ var AdsFriendlyMediaFrame = (() => {
       }
       aesKeyHandoffRequests.clear();
     };
-    function requestAesKeyHandoff(manifestUrl) {
-      if (typeof manifestUrl !== "string" || !/^https?:/i.test(manifestUrl)) {
+    function requestAesKeyHandoff(requestedManifestUrl, manifestUrls) {
+      if (typeof requestedManifestUrl !== "string" || !/^https?:/i.test(requestedManifestUrl)) {
         return Promise.resolve({ status: "invalid_manifest", keys: [] });
       }
       const requestId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -859,7 +862,8 @@ var AdsFriendlyMediaFrame = (() => {
             source: "adsfriendly-content",
             type: "GET_MEDIA_AES_KEY_HANDOFF",
             requestId,
-            manifestUrl
+            requestedManifestUrl,
+            manifestUrls
           },
           "*"
         );

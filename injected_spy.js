@@ -2030,8 +2030,11 @@ ${body}`;
   var MAX_MANIFESTS = 16;
   var MAX_KEYS_PER_MANIFEST = 16;
   var MAXIMUM_AGE_MS2 = 10 * 60 * 1e3;
+  var RECENT_RESPONSE_MAXIMUM_AGE_MS = 15 * 1e3;
+  var MAX_RECENT_RESPONSES = 32;
   var manifests = /* @__PURE__ */ new Map();
   var capturedKeys = /* @__PURE__ */ new Map();
+  var recentKeySizedResponses = /* @__PURE__ */ new Map();
   function rememberHlsKeyUris(manifestUrl, body, observedAt = Date.now()) {
     const keyUrls = [];
     for (const rawLine of String(body || "").split(/\r?\n/)) {
@@ -2058,6 +2061,10 @@ ${body}`;
     while (manifests.size > MAX_MANIFESTS) {
       manifests.delete(manifests.keys().next().value);
     }
+    for (const url of manifests.get(manifestUrl).keyUrls) {
+      const recent = recentKeySizedResponses.get(url);
+      if (recent) rememberKey(url, recent.bytes, recent.capturedAt);
+    }
     return [...manifests.get(manifestUrl).keyUrls];
   }
   function mayCaptureAesKey(url) {
@@ -2065,22 +2072,27 @@ ${body}`;
     return [...manifests.values()].some((item) => item.keyUrls.includes(url));
   }
   async function captureFetchAesKey(url, response) {
-    if (!mayCaptureAesKey(url) || !response?.ok) return false;
+    if (!response?.ok || !mayInspectResponse(response, mayCaptureAesKey(url))) {
+      return false;
+    }
     const bytes = new Uint8Array(await response.clone().arrayBuffer());
-    return rememberKey(url, bytes);
+    if (mayCaptureAesKey(url)) return rememberKey(url, bytes);
+    return rememberRecentKeySizedResponse(url, bytes);
   }
   async function captureXhrAesKey(url, xhr) {
-    if (!mayCaptureAesKey(url) || Number(xhr?.status) >= 400) return false;
+    if (Number(xhr?.status) >= 400) return false;
+    const declaredKey = mayCaptureAesKey(url);
     const responseType = String(xhr?.responseType || "").toLowerCase();
     let bytes = null;
     if (responseType === "arraybuffer" && xhr.response instanceof ArrayBuffer) {
       bytes = new Uint8Array(xhr.response);
     } else if (responseType === "blob" && xhr.response instanceof Blob) {
       bytes = new Uint8Array(await xhr.response.arrayBuffer());
-    } else if (!responseType || responseType === "text") {
+    } else if (declaredKey && (!responseType || responseType === "text")) {
       bytes = new TextEncoder().encode(String(xhr.responseText || ""));
     }
-    return bytes ? rememberKey(url, bytes) : false;
+    if (!bytes) return false;
+    return declaredKey || mayCaptureAesKey(url) ? rememberKey(url, bytes) : rememberRecentKeySizedResponse(url, bytes);
   }
   function getAesKeyHandoff(manifestUrl, observedAt = Date.now()) {
     prune(observedAt);
@@ -2088,20 +2100,41 @@ ${body}`;
     if (!manifest) return [];
     return manifest.keyUrls.map((url) => capturedKeys.get(url)).filter(Boolean).map((item) => ({ ...item }));
   }
+  function getAesKeyHandoffs(manifestUrls, observedAt = Date.now()) {
+    const keys = /* @__PURE__ */ new Map();
+    for (const manifestUrl of normalizeManifestUrls(manifestUrls)) {
+      for (const key of getAesKeyHandoff(manifestUrl, observedAt)) {
+        keys.set(key.url, key);
+      }
+    }
+    return [...keys.values()].slice(0, MAX_KEYS_PER_MANIFEST);
+  }
   function clearAesKeyHandoffs() {
     manifests.clear();
     capturedKeys.clear();
+    recentKeySizedResponses.clear();
   }
-  function rememberKey(url, bytes) {
-    if (!(bytes instanceof Uint8Array) || !bytes.byteLength || bytes.byteLength > MAX_KEY_BYTES) {
+  function rememberKey(url, bytes, capturedAt = Date.now()) {
+    if (!(bytes instanceof Uint8Array) || !isAesKeySize(bytes.byteLength)) {
       return false;
     }
     capturedKeys.set(url, {
       url,
       data: bytesToBase64(bytes),
       bytes: bytes.byteLength,
-      capturedAt: Date.now()
+      capturedAt
     });
+    recentKeySizedResponses.delete(url);
+    return true;
+  }
+  function rememberRecentKeySizedResponse(url, bytes, capturedAt = Date.now()) {
+    if (!(bytes instanceof Uint8Array) || !isAesKeySize(bytes.byteLength)) {
+      return false;
+    }
+    recentKeySizedResponses.set(url, { bytes: bytes.slice(), capturedAt });
+    while (recentKeySizedResponses.size > MAX_RECENT_RESPONSES) {
+      recentKeySizedResponses.delete(recentKeySizedResponses.keys().next().value);
+    }
     return true;
   }
   function prune(now) {
@@ -2112,6 +2145,31 @@ ${body}`;
     for (const [url, item] of capturedKeys) {
       if (item.capturedAt < cutoff) capturedKeys.delete(url);
     }
+    const recentCutoff = now - RECENT_RESPONSE_MAXIMUM_AGE_MS;
+    for (const [url, item] of recentKeySizedResponses) {
+      if (item.capturedAt < recentCutoff) recentKeySizedResponses.delete(url);
+    }
+  }
+  function mayInspectResponse(response, declaredKey) {
+    if (declaredKey) return true;
+    const length = Number(response.headers?.get?.("content-length"));
+    if (!Number.isFinite(length) || !isAesKeySize(length)) return false;
+    const mimeType = String(response.headers?.get?.("content-type") || "").split(";", 1)[0].trim().toLowerCase();
+    return !(mimeType.startsWith("text/") || mimeType.startsWith("image/") || mimeType.startsWith("audio/") || mimeType.startsWith("video/") || mimeType.includes("json") || mimeType.includes("mpegurl"));
+  }
+  function isAesKeySize(value) {
+    return [16, 24, 32].includes(value) && value <= MAX_KEY_BYTES;
+  }
+  function normalizeManifestUrls(values) {
+    const urls = [];
+    for (const value of Array.isArray(values) ? values.slice(0, 16) : [values]) {
+      try {
+        const url = new URL(value);
+        if (["http:", "https:"].includes(url.protocol)) urls.push(url.href);
+      } catch {
+      }
+    }
+    return [...new Set(urls)];
   }
   function bytesToBase64(bytes) {
     let binary = "";
@@ -3904,8 +3962,9 @@ ${body}`;
       notifyContentScript({
         type: "MEDIA_AES_KEY_HANDOFF_RESPONSE",
         requestId: message.requestId,
-        manifestUrl: message.manifestUrl,
-        keys: getAesKeyHandoff(message.manifestUrl)
+        requestedManifestUrl: message.requestedManifestUrl,
+        manifestUrls: message.manifestUrls,
+        keys: getAesKeyHandoffs(message.manifestUrls)
       });
     }
   });

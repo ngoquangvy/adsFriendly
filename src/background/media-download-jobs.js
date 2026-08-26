@@ -282,35 +282,93 @@ async function attachAesKeyHandoff(tabId, candidate) {
     return candidate;
   }
   try {
-    const options =
-      Number.isInteger(candidate.frameId) && candidate.frameId >= 0
-        ? { frameId: candidate.frameId }
-        : undefined;
+    const catalog = await listDiscoveredMedia(tabId);
+    const targets = collectAesKeyHandoffTargets(candidate, catalog.items || []);
     const message = {
       type: "GET_MEDIA_AES_KEY_HANDOFF",
-      manifestUrl: candidate.manifestUrl,
+      requestedManifestUrl: candidate.manifestUrl,
+      manifestUrls: targets.manifestUrls,
     };
-    const response = options
-      ? await chrome.tabs.sendMessage(tabId, message, options)
-      : await chrome.tabs.sendMessage(tabId, message);
-    if (
-      response?.status !== "ready" ||
-      response.manifestUrl !== candidate.manifestUrl ||
-      !response.keys?.length
-    ) {
-      return candidate;
+    const keys = new Map();
+    for (const frameId of targets.frameIds) {
+      try {
+        const response =
+          frameId === null
+            ? await chrome.tabs.sendMessage(tabId, message)
+            : await chrome.tabs.sendMessage(tabId, message, { frameId });
+        if (
+          response?.status !== "ready" ||
+          response.requestedManifestUrl !== candidate.manifestUrl
+        ) {
+          continue;
+        }
+        for (const key of response.keys || []) {
+          if (key?.url) keys.set(key.url, key);
+        }
+      } catch {}
     }
+    if (!keys.size) return candidate;
     return {
       ...candidate,
       keyHandoff: {
         kind: "hls_aes_keys",
         manifestUrl: candidate.manifestUrl,
-        keys: response.keys,
+        keys: [...keys.values()].slice(0, 16),
       },
     };
   } catch {
     return candidate;
   }
+}
+
+export function collectAesKeyHandoffTargets(candidate, items = []) {
+  const relatedIds = new Set([
+    candidate.id,
+    candidate.selectedMediaId,
+    ...(candidate.parentManifestIds || []),
+    ...(candidate.childManifestIds || []),
+    ...(candidate.resolvedMediaIds || []),
+  ]);
+  const related = [candidate];
+  for (const item of items) {
+    if (
+      relatedIds.has(item.id) ||
+      (item.parentManifestIds || []).includes(candidate.id) ||
+      (item.childManifestIds || []).includes(candidate.id) ||
+      (item.resolvedMediaIds || []).includes(candidate.id)
+    ) {
+      related.push(item);
+    }
+  }
+  const manifestUrls = uniqueHttpUrls(
+    related.flatMap((item) => [
+      item.manifestUrl,
+      item.resolvedStream?.manifestUrl,
+      ...(item.variants || []).map((variant) => variant.url),
+    ]),
+  ).slice(0, 16);
+  const frameIds = [
+    ...new Set(
+      related
+        .map((item) => item.frameId)
+        .filter((frameId) => Number.isInteger(frameId) && frameId >= 0),
+    ),
+  ].slice(0, 8);
+  return {
+    manifestUrls,
+    frameIds: frameIds.length ? frameIds : [null],
+  };
+}
+
+function uniqueHttpUrls(values) {
+  const urls = [];
+  for (const value of values) {
+    try {
+      const url = new URL(value);
+      if (["http:", "https:"].includes(url.protocol)) urls.push(url.href);
+    } catch {}
+  }
+  return [...new Set(urls)];
 }
 
 async function recoverCandidate(state) {
