@@ -97,6 +97,7 @@ import {
   YOUTUBE_PLAYER_STAGES,
   parseYouTubePlayerResponse,
 } from "../src/media/youtube-player-response.js";
+import { findYouTubePlayerUrl } from "../src/main-world/youtube-player-response-adapter.js";
 import {
   beginHlsManifestInspection,
   captureFetchAesKey,
@@ -323,6 +324,85 @@ test("YouTube player response merges direct video and audio formats into a ready
   assert.equal(item.probeStatus, "ready");
   assert.equal(item.variants.filter((track) => track.sourceUrl).length, 1);
   assert.equal(item.audioTracks.filter((track) => track.sourceUrl).length, 1);
+});
+
+test("YouTube n challenge tracks become Helper-ready when Player JS is known", () => {
+  const mediaUrl = (itag, mimeType, extra = "") =>
+    `https://r1.googlevideo.com/videoplayback?id=asset-1&itag=${itag}&mime=${encodeURIComponent(mimeType)}&dur=20&clen=1000&sig=ok&n=unresolved${extra}`;
+  const playerUrl =
+    "https://www.youtube.com/s/player/b7457b7c/player_ias.vflset/en_US/base.js";
+  const observation = parseYouTubePlayerResponse(
+    {
+      playabilityStatus: { status: "OK" },
+      videoDetails: { videoId: "video-1", title: "Example" },
+      streamingData: {
+        adaptiveFormats: [
+          {
+            itag: 137,
+            mimeType: "video/mp4",
+            width: 1920,
+            height: 1080,
+            url: mediaUrl("137", "video/mp4", "&size=1920x1080"),
+          },
+          {
+            itag: 140,
+            mimeType: "audio/mp4",
+            url: mediaUrl("140", "audio/mp4"),
+          },
+        ],
+      },
+    },
+    {
+      pageUrl: "https://www.youtube.com/watch?v=video-1",
+      playerUrl,
+    },
+  );
+
+  assert.equal(
+    observation.diagnostic.stage,
+    YOUTUBE_PLAYER_STAGES.N_TRANSFORM_PENDING,
+  );
+  assert.equal(observation.candidates.length, 3);
+  const catalog = createMediaCatalog();
+  for (const candidate of observation.candidates)
+    catalog.add(7, createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, candidate));
+  const [item] = catalog.list(7);
+  assert.equal(item.playerUrl, playerUrl);
+  assert.equal(item.probeStatus, "ready");
+  assert.equal(item.variants[0].urlResolution, "n_transform_pending");
+  assert.equal(item.audioTracks[0].urlResolution, "n_transform_pending");
+  assert.match(formatMediaDetails(item), /Helper resolves n/i);
+  assert.equal(getMediaDownloadAvailability(item).supported, true);
+});
+
+test("YouTube Player JS URL is discovered from page configuration or scripts", () => {
+  const configured = findYouTubePlayerUrl({
+    windowObject: {
+      ytcfg: {
+        get: (key) =>
+          key === "PLAYER_JS_URL"
+            ? "/s/player/b7457b7c/player_ias.vflset/en_US/base.js"
+            : null,
+      },
+    },
+    documentObject: { querySelectorAll: () => [] },
+  });
+  assert.equal(
+    configured,
+    "https://www.youtube.com/s/player/b7457b7c/player_ias.vflset/en_US/base.js",
+  );
+
+  const scripted = findYouTubePlayerUrl({
+    windowObject: {},
+    documentObject: {
+      querySelectorAll: () => [
+        {
+          src: "https://www.youtube.com/s/player/1234abcd/player_ias.vflset/en_US/base.js",
+        },
+      ],
+    },
+  });
+  assert.match(scripted, /\/s\/player\/1234abcd\//);
 });
 
 test("YouTube format descriptors cannot erase a resolved network track", () => {

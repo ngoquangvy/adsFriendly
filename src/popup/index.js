@@ -62,6 +62,7 @@ let mediaHelperStatus = {
   canDownloadDecryptedHls: false,
   canDownloadDash: false,
   canDownloadAdaptive: false,
+  canResolveYouTubePlayerJs: false,
   canSelectContainer: false,
 };
 let activeMediaTabId = null;
@@ -661,7 +662,12 @@ function helperCanDownload(item, helper) {
       (item.probeSource !== "decrypted_blob" ||
         helper.canDownloadDecryptedHls === true)
     );
-  if (item.kind === "adaptive") return helper.canDownloadAdaptive === true;
+  if (item.kind === "adaptive")
+    return (
+      helper.canDownloadAdaptive === true &&
+      (item.acquisitionProfile !== "youtube_player_js_challenge" ||
+        helper.canResolveYouTubePlayerJs === true)
+    );
   return helper.canDownloadDash === true;
 }
 
@@ -711,6 +717,7 @@ async function readMediaHelperStatus(force = false) {
         canDownloadDecryptedHls: false,
         canDownloadDash: false,
         canDownloadAdaptive: false,
+        canResolveYouTubePlayerJs: false,
         canSelectContainer: false,
         error: response?.error || "Could not read Media Helper status.",
       };

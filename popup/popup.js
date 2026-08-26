@@ -1701,6 +1701,8 @@ var AdsFriendlyPopup = (() => {
     );
     if (Number.isFinite(item.duration) && item.duration > 0)
       facts.push(formatDuration2(item.duration));
+    if (acquisition?.stage === "n_transform_pending")
+      facts.push("Helper resolves n");
     return facts.join(" \xB7 ");
   }
   function youtubeAcquisitionMessage(diagnostic2) {
@@ -2127,6 +2129,7 @@ ${blobTitleKey(item.title)}`;
     canDownloadDecryptedHls: false,
     canDownloadDash: false,
     canDownloadAdaptive: false,
+    canResolveYouTubePlayerJs: false,
     canSelectContainer: false
   };
   var activeMediaTabId = null;
@@ -2640,7 +2643,8 @@ ${blobTitleKey(item.title)}`;
     if (item.kind === "direct") return helper.canDownloadDirect === true;
     if (item.kind === "hls")
       return helper.canDownloadHls === true && (item.probeSource !== "decrypted_blob" || helper.canDownloadDecryptedHls === true);
-    if (item.kind === "adaptive") return helper.canDownloadAdaptive === true;
+    if (item.kind === "adaptive")
+      return helper.canDownloadAdaptive === true && (item.acquisitionProfile !== "youtube_player_js_challenge" || helper.canResolveYouTubePlayerJs === true);
     return helper.canDownloadDash === true;
   }
   async function setupMediaHelper(button, helper) {
@@ -2686,6 +2690,7 @@ ${blobTitleKey(item.title)}`;
       canDownloadDecryptedHls: false,
       canDownloadDash: false,
       canDownloadAdaptive: false,
+      canResolveYouTubePlayerJs: false,
       canSelectContainer: false,
       error: response?.error || "Could not read Media Helper status."
     };

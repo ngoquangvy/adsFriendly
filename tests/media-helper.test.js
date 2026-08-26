@@ -52,6 +52,10 @@ test("built helper completes a framed Native Messaging handshake", async () => {
     response.payload.capabilities["output.container_selection"],
     true,
   );
+  assert.equal(
+    response.payload.capabilities["resolve.youtube_player_js"],
+    true,
+  );
 });
 
 test("built helper times out a stalled HLS preflight with a precise stage", async (t) => {

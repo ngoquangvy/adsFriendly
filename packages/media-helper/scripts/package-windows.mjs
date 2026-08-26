@@ -156,6 +156,11 @@ async function verifyExecutable(path) {
   ) {
     throw new Error("Packaged helper returned an invalid DASH capability.");
   }
+  if (response.payload?.capabilities?.["resolve.youtube_player_js"] !== true) {
+    throw new Error(
+      "Packaged helper omitted its YouTube Player JS resolver capability.",
+    );
+  }
   process.stdout.write(
     `Verified packaged helper ${response.payload.helperVersion}; HLS ${
       response.payload.capabilities["download.hls_vod"]

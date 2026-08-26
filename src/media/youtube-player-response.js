@@ -25,7 +25,7 @@ export const YOUTUBE_PLAYER_STAGES = Object.freeze({
 
 export function parseYouTubePlayerResponse(
   response,
-  { pageUrl, title = null, input = "player_response" } = {},
+  { pageUrl, title = null, input = "player_response", playerUrl = null } = {},
 ) {
   if (!response || typeof response !== "object" || !isYouTubePage(pageUrl))
     return null;
@@ -41,6 +41,7 @@ export function parseYouTubePlayerResponse(
   ].slice(0, 100);
   const descriptors = formats.map(normalizeFormatDescriptor).filter(Boolean);
   const directCandidates = [];
+  const nTransformCandidates = [];
   let signatureCipherCount = 0;
   let nTransformCount = 0;
 
@@ -59,6 +60,22 @@ export function parseYouTubePlayerResponse(
     }
     if (sourceUrl.searchParams.has("n")) {
       nTransformCount += 1;
+      const parsedTrack = parseYouTubePlaybackTrack(sourceUrl.href, {
+        mimeType: format.mimeType,
+      });
+      if (parsedTrack) {
+        const track = {
+          ...enrichResolvedTrack(parsedTrack, format),
+          urlResolution: "n_transform_pending",
+        };
+        const candidate = createYouTubeAdaptiveCandidate({
+          pageUrl,
+          title: response.videoDetails?.title || title,
+          track,
+          playerUrl,
+        });
+        if (candidate) nTransformCandidates.push(candidate);
+      }
       continue;
     }
     const parsedTrack = parseYouTubePlaybackTrack(sourceUrl.href, {
@@ -70,6 +87,7 @@ export function parseYouTubePlayerResponse(
       pageUrl,
       title: response.videoDetails?.title || title,
       track,
+      playerUrl,
     });
     if (candidate) directCandidates.push(candidate);
   }
@@ -113,6 +131,7 @@ export function parseYouTubePlayerResponse(
     hlsManifestAvailable,
     dashManifestAvailable,
     playabilityStatus,
+    playerUrlAvailable: Boolean(playerUrl),
   });
   const diagnosticCandidate = createPlayerDiagnosticCandidate({
     pageUrl,
@@ -121,10 +140,15 @@ export function parseYouTubePlayerResponse(
     serverAbrStreamingUrl,
     descriptors,
     diagnostic,
+    playerUrl,
   });
 
   return Object.freeze({
-    candidates: [diagnosticCandidate, ...directCandidates],
+    candidates: [
+      diagnosticCandidate,
+      ...directCandidates,
+      ...nTransformCandidates,
+    ],
     diagnostic,
     manifests: Object.freeze({
       hls: hlsManifestAvailable ? streamingData.hlsManifestUrl : null,
@@ -140,6 +164,7 @@ function createPlayerDiagnosticCandidate({
   serverAbrStreamingUrl,
   descriptors,
   diagnostic,
+  playerUrl,
 }) {
   const videoId = youtubeVideoId(pageUrl);
   return normalizeMediaCandidate({
@@ -155,6 +180,7 @@ function createPlayerDiagnosticCandidate({
     provider: "youtube",
     acquisitionProfile: "youtube_player_response",
     acquisitionDiagnostic: diagnostic,
+    playerUrl,
     probeStatus: MEDIA_PROBE_STATES.DISCOVERED,
     probeError: diagnostic.stage,
     streamType: "vod",

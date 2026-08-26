@@ -111,6 +111,9 @@ async function probeMediaHelperStatus(timeoutMs) {
         capabilities[MEDIA_HELPER_CAPABILITIES.DASH_VOD_DOWNLOAD] === true,
       canDownloadAdaptive:
         capabilities[MEDIA_HELPER_CAPABILITIES.ADAPTIVE_HTTP_DOWNLOAD] === true,
+      canResolveYouTubePlayerJs:
+        capabilities[MEDIA_HELPER_CAPABILITIES.YOUTUBE_PLAYER_JS_RESOLUTION] ===
+        true,
       canMuxWithFfmpeg:
         capabilities[MEDIA_HELPER_CAPABILITIES.FFMPEG_MUX] === true,
     });
@@ -496,6 +499,7 @@ function helperStatus(status, details = {}) {
     canSelectContainer: false,
     canDownloadDash: false,
     canDownloadAdaptive: false,
+    canResolveYouTubePlayerJs: false,
     canMuxWithFfmpeg: false,
     helperVersion: null,
     capabilities: {},

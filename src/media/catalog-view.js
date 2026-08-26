@@ -458,6 +458,8 @@ function adaptiveDetails(item) {
   );
   if (Number.isFinite(item.duration) && item.duration > 0)
     facts.push(formatDuration(item.duration));
+  if (acquisition?.stage === "n_transform_pending")
+    facts.push("Helper resolves n");
   return facts.join(" · ");
 }
 

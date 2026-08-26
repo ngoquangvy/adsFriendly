@@ -61,6 +61,7 @@ var AdsFriendlyMediaFrame = (() => {
       mimeType: optionalString(value.mimeType),
       provider: optionalString(value.provider),
       acquisitionProfile: optionalString(value.acquisitionProfile),
+      playerUrl: optionalString(value.playerUrl),
       acquisitionDiagnostic: normalizeMediaAcquisitionDiagnostic(
         value.acquisitionDiagnostic
       ),
@@ -149,7 +150,8 @@ var AdsFriendlyMediaFrame = (() => {
       serverAbrAvailable: value.serverAbrAvailable === true,
       hlsManifestAvailable: value.hlsManifestAvailable === true,
       dashManifestAvailable: value.dashManifestAvailable === true,
-      playabilityStatus: optionalString(value.playabilityStatus)
+      playabilityStatus: optionalString(value.playabilityStatus),
+      playerUrlAvailable: value.playerUrlAvailable === true
     };
   }
   function normalizeMediaProbe(value = {}) {
@@ -819,7 +821,8 @@ var AdsFriendlyMediaFrame = (() => {
   function createYouTubeAdaptiveCandidate({
     pageUrl,
     title = null,
-    track
+    track,
+    playerUrl = null
   }) {
     if (!track || track.provider !== "youtube") return null;
     const videoId = youtubeVideoId(pageUrl);
@@ -839,7 +842,8 @@ var AdsFriendlyMediaFrame = (() => {
       height: track.height,
       resolution: track.resolution,
       qualityLabel: track.qualityLabel,
-      observedAt: track.observedAt
+      observedAt: track.observedAt,
+      urlResolution: track.urlResolution || "resolved"
     };
     return normalizeMediaCandidate({
       id,
@@ -858,7 +862,8 @@ var AdsFriendlyMediaFrame = (() => {
       probeStatus: MEDIA_PROBE_STATES.DISCOVERED,
       streamType: "vod",
       provider: "youtube",
-      acquisitionProfile: "youtube_resolved_tracks"
+      acquisitionProfile: track.urlResolution === "n_transform_pending" ? "youtube_player_js_challenge" : "youtube_resolved_tracks",
+      playerUrl
     });
   }
   function createYouTubeCandidateFromObservedSource({

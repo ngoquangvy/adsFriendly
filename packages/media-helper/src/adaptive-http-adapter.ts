@@ -15,6 +15,7 @@ import type {
   DownloadProgress,
   DownloadResult,
 } from "./download-types.js";
+import { resolveYouTubePlayerTrack } from "./youtube-player-js-resolver.js";
 
 export const adaptiveHttpAdapter: DownloadAdapter = Object.freeze({
   id: "adaptive-http",
@@ -26,10 +27,32 @@ async function downloadAdaptiveHttp(
   job: DownloadJob,
   context: DownloadContext,
 ): Promise<DownloadResult> {
-  const video = selectTrack(job.candidate.variants, "video", job);
-  const audio = selectTrack(job.candidate.audioTracks, "audio", job);
+  let video = selectTrack(job.candidate.variants, "video", job);
+  let audio = selectTrack(job.candidate.audioTracks, "audio", job);
   if (!video || !audio) {
     throw new Error("Resolved adaptive video and audio tracks are required.");
+  }
+  if (
+    video.urlResolution === "n_transform_pending" ||
+    audio.urlResolution === "n_transform_pending"
+  ) {
+    context.progress({
+      phase: "probing",
+      stage: "compatibility_check",
+      downloadedBytes: 0,
+      totalBytes:
+        video.contentLength && audio.contentLength
+          ? video.contentLength + audio.contentLength
+          : null,
+      bytesPerSecond: 0,
+      resumable: false,
+      resumedBytes: 0,
+      duration: job.candidate.duration,
+    });
+    [video, audio] = await Promise.all([
+      resolveYouTubePlayerTrack(video, job.candidate),
+      resolveYouTubePlayerTrack(audio, job.candidate),
+    ]);
   }
 
   const outputDirectory = resolveOutputDirectory(job.outputDirectory);

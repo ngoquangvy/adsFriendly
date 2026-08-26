@@ -20,6 +20,7 @@ export function installYouTubePlayerResponseAdapter(policy) {
       pageUrl: location.href,
       title: document.title || null,
       input,
+      playerUrl: findYouTubePlayerUrl(),
     });
     if (!observation) return null;
     const fingerprint = observationFingerprint(observation);
@@ -73,6 +74,33 @@ export function scanPlayerState(report) {
     if (typeof player?.getPlayerResponse === "function")
       report(player.getPlayerResponse(), "movie_player.getPlayerResponse");
   } catch {}
+}
+
+export function findYouTubePlayerUrl({
+  windowObject = window,
+  documentObject = document,
+} = {}) {
+  const candidates = [];
+  try {
+    if (typeof windowObject.ytcfg?.get === "function")
+      candidates.push(windowObject.ytcfg.get("PLAYER_JS_URL"));
+  } catch {}
+  candidates.push(
+    windowObject.ytplayer?.config?.assets?.js,
+    windowObject.ytplayer?.web_player_context_config?.jsUrl,
+  );
+  try {
+    candidates.push(
+      ...[...documentObject.querySelectorAll('script[src*="/s/player/"]')].map(
+        (script) => script.src,
+      ),
+    );
+  } catch {}
+  for (const candidate of candidates) {
+    const normalized = normalizePlayerUrl(candidate);
+    if (normalized) return normalized;
+  }
+  return null;
 }
 
 function installPlayerFetchCapture(report) {
@@ -192,7 +220,7 @@ function objectValue(value) {
 
 function isPlayerApiUrl(value) {
   try {
-    const url = new URL(value, location.href);
+    const url = new URL(value, "https://www.youtube.com/");
     return isYouTubePage(url.href) && url.pathname === PLAYER_API_PATH;
   } catch {
     return false;
@@ -205,4 +233,22 @@ function requestUrl(input) {
   if (input instanceof Request) return input.url;
   if (input instanceof URL) return input.href;
   return typeof input?.url === "string" ? input.url : String(input);
+}
+
+function normalizePlayerUrl(value) {
+  try {
+    const url = new URL(value, "https://www.youtube.com/");
+    if (
+      !["http:", "https:"].includes(url.protocol) ||
+      !(
+        url.hostname === "youtube.com" || url.hostname.endsWith(".youtube.com")
+      ) ||
+      !/^\/s\/player\/[^/]+\//.test(url.pathname) ||
+      !url.pathname.endsWith(".js")
+    )
+      return null;
+    return url.href;
+  } catch {
+    return null;
+  }
 }

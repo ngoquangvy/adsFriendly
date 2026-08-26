@@ -1,6 +1,6 @@
 {
   "name": "@adsfriendly/media-helper",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "private": true,
   "description": "Optional native media backend for the AdsFriendly ecosystem",
   "type": "module",
@@ -12,5 +12,8 @@
   },
   "devDependencies": {
     "postject": "1.0.0-alpha.6"
+  },
+  "dependencies": {
+    "youtubei.js": "18.0.0"
   }
 }

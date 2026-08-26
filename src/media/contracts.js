@@ -67,6 +67,7 @@ export function normalizeMediaCandidate(value = {}) {
     mimeType: optionalString(value.mimeType),
     provider: optionalString(value.provider),
     acquisitionProfile: optionalString(value.acquisitionProfile),
+    playerUrl: optionalString(value.playerUrl),
     acquisitionDiagnostic: normalizeMediaAcquisitionDiagnostic(
       value.acquisitionDiagnostic,
     ),
@@ -157,6 +158,7 @@ export function normalizeMediaAcquisitionDiagnostic(value) {
     hlsManifestAvailable: value.hlsManifestAvailable === true,
     dashManifestAvailable: value.dashManifestAvailable === true,
     playabilityStatus: optionalString(value.playabilityStatus),
+    playerUrlAvailable: value.playerUrlAvailable === true,
   };
 }
 

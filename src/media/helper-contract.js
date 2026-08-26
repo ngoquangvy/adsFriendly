@@ -2,7 +2,7 @@ import { normalizeMediaDownloadOutput } from "./download-options.js";
 import { isRegisteredMediaAccessStrategy } from "./access-strategy-catalog.js";
 import { normalizeAesKeyHandoffDiagnostic } from "./key-handoff-diagnostics.js";
 
-export const MEDIA_HELPER_PROTOCOL_VERSION = 4;
+export const MEDIA_HELPER_PROTOCOL_VERSION = 5;
 export const MEDIA_HELPER_HOST_NAME = "com.adsfriendly.media_helper";
 
 export const MEDIA_HELPER_REQUESTS = Object.freeze({
@@ -34,6 +34,7 @@ export const MEDIA_HELPER_CAPABILITIES = Object.freeze({
   OUTPUT_CONTAINER_SELECTION: "output.container_selection",
   DASH_VOD_DOWNLOAD: "download.dash_vod",
   ADAPTIVE_HTTP_DOWNLOAD: "download.adaptive_http",
+  YOUTUBE_PLAYER_JS_RESOLUTION: "resolve.youtube_player_js",
   FFMPEG_MUX: "mux.ffmpeg",
   OUTPUT_OPEN: "output.open",
   OUTPUT_REVEAL: "output.reveal",
@@ -164,6 +165,10 @@ export function normalizeHelperDownloadPayload(value = {}) {
         kind === "adaptive"
           ? optionalString(candidate.acquisitionProfile)
           : null,
+      playerUrl:
+        kind === "adaptive"
+          ? normalizeYouTubePlayerUrl(candidate.playerUrl)
+          : null,
       variants:
         kind === "adaptive"
           ? normalizeHelperAdaptiveTracks(candidate.variants, "video")
@@ -219,7 +224,26 @@ function normalizeHelperAdaptiveTracks(value, expectedType) {
       track?.height || track?.resolution?.height,
     ),
     qualityLabel: optionalString(track?.qualityLabel),
+    urlResolution:
+      track?.urlResolution === "n_transform_pending"
+        ? "n_transform_pending"
+        : "resolved",
   }));
+}
+
+function normalizeYouTubePlayerUrl(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const normalized = requiredHttpUrl(value, "candidate.playerUrl");
+  const url = new URL(normalized);
+  if (
+    !(
+      url.hostname === "youtube.com" || url.hostname.endsWith(".youtube.com")
+    ) ||
+    !/^\/s\/player\/[^/]+\//.test(url.pathname) ||
+    !url.pathname.endsWith(".js")
+  )
+    throw new Error("[MediaHelperProtocol] Invalid YouTube player URL.");
+  return url.href;
 }
 
 function normalizeHelperKeyHandoff(value, manifestUrl) {

@@ -469,6 +469,18 @@ async function helperFailureFor(candidate, output) {
       };
     }
   }
+  if (
+    candidate.kind === "adaptive" &&
+    candidate.acquisitionProfile === "youtube_player_js_challenge" &&
+    !helper.canResolveYouTubePlayerJs
+  ) {
+    return {
+      status: "helper_not_ready",
+      helper,
+      reason:
+        "This Media Helper build cannot resolve YouTube Player JS challenges yet.",
+    };
+  }
   const capabilityReady =
     candidate.kind === "direct"
       ? helper.canDownloadDirect

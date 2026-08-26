@@ -419,7 +419,9 @@ test("helper accepts browser-resolved adaptive video and audio tracks", () => {
       title: "Example video",
       duration: 20,
       provider: "youtube",
-      acquisitionProfile: "youtube_resolved_tracks",
+      acquisitionProfile: "youtube_player_js_challenge",
+      playerUrl:
+        "https://www.youtube.com/s/player/b7457b7c/player_ias.vflset/en_US/base.js",
       variants: [
         {
           id: "youtube-video-137",
@@ -430,6 +432,7 @@ test("helper accepts browser-resolved adaptive video and audio tracks", () => {
           width: 1920,
           height: 1080,
           contentLength: 1000,
+          urlResolution: "n_transform_pending",
         },
       ],
       audioTracks: [
@@ -452,7 +455,12 @@ test("helper accepts browser-resolved adaptive video and audio tracks", () => {
 
   assert.equal(payload.candidate.kind, "adaptive");
   assert.equal(payload.candidate.provider, "youtube");
+  assert.match(payload.candidate.playerUrl, /\/s\/player\/b7457b7c\//);
   assert.equal(payload.candidate.variants[0].height, 1080);
+  assert.equal(
+    payload.candidate.variants[0].urlResolution,
+    "n_transform_pending",
+  );
   assert.equal(payload.candidate.audioTracks[0].itag, "140");
   assert.equal(payload.output.container, "mp4");
 });
@@ -504,6 +512,7 @@ test("helper status exposes only declared download capabilities", async () => {
             "download.hls_vod": false,
             "download.dash_vod": true,
             "mux.ffmpeg": true,
+            [MEDIA_HELPER_CAPABILITIES.YOUTUBE_PLAYER_JS_RESOLUTION]: true,
             ignored: { nested: true },
           },
         }),
@@ -518,6 +527,7 @@ test("helper status exposes only declared download capabilities", async () => {
     assert.equal(status.canSelectContainer, true);
     assert.equal(status.canDownloadDash, true);
     assert.equal(status.canMuxWithFfmpeg, true);
+    assert.equal(status.canResolveYouTubePlayerJs, true);
     assert.deepEqual(status.capabilities, {
       "download.direct_http": true,
       "download.hls_vod": false,
@@ -525,6 +535,7 @@ test("helper status exposes only declared download capabilities", async () => {
       "output.container_selection": true,
       "download.dash_vod": true,
       "mux.ffmpeg": true,
+      "resolve.youtube_player_js": true,
     });
   } finally {
     globalThis.chrome = previousChrome;

@@ -2219,6 +2219,7 @@ var AdsFriendlyBackground = (() => {
       mimeType: optionalString(value.mimeType),
       provider: optionalString(value.provider),
       acquisitionProfile: optionalString(value.acquisitionProfile),
+      playerUrl: optionalString(value.playerUrl),
       acquisitionDiagnostic: normalizeMediaAcquisitionDiagnostic(
         value.acquisitionDiagnostic
       ),
@@ -2307,7 +2308,8 @@ var AdsFriendlyBackground = (() => {
       serverAbrAvailable: value.serverAbrAvailable === true,
       hlsManifestAvailable: value.hlsManifestAvailable === true,
       dashManifestAvailable: value.dashManifestAvailable === true,
-      playabilityStatus: optionalString(value.playabilityStatus)
+      playabilityStatus: optionalString(value.playabilityStatus),
+      playerUrlAvailable: value.playerUrlAvailable === true
     };
   }
   function normalizeMediaProbe(value = {}) {
@@ -3393,6 +3395,7 @@ var AdsFriendlyBackground = (() => {
           ...candidate,
           ...preserveExistingProbe ? probeFields(existing) : {},
           ...adaptiveTracks || {},
+          acquisitionDiagnostic: candidate.acquisitionDiagnostic || existing?.acquisitionDiagnostic || null,
           duration: candidate.duration ?? existing?.duration ?? null,
           resolution: candidate.resolution ?? existing?.resolution ?? null,
           requestContexts: mergeRequestContexts(
@@ -3926,6 +3929,7 @@ var AdsFriendlyBackground = (() => {
     );
     const bestVideo = [...variants].sort(compareAdaptiveTrackQuality)[0] || null;
     const bestAudio = [...audioTracks].sort(compareAdaptiveTrackQuality)[0] || null;
+    const playerUrl = candidate.playerUrl || existing?.playerUrl || null;
     return {
       variants,
       audioTracks,
@@ -3934,14 +3938,16 @@ var AdsFriendlyBackground = (() => {
       resolution: bestVideo?.resolution || candidate.resolution || existing?.resolution,
       bandwidth: bestVideo?.bandwidth || candidate.bandwidth || existing?.bandwidth,
       averageBandwidth: bestVideo?.averageBandwidth || candidate.averageBandwidth || existing?.averageBandwidth,
-      probeStatus: variants.some(hasResolvedAdaptiveTrack) && audioTracks.some(hasResolvedAdaptiveTrack) ? MEDIA_PROBE_STATES.READY : MEDIA_PROBE_STATES.DISCOVERED,
+      playerUrl,
+      probeStatus: variants.some((track) => hasAcquirableAdaptiveTrack(track, playerUrl)) && audioTracks.some((track) => hasAcquirableAdaptiveTrack(track, playerUrl)) ? MEDIA_PROBE_STATES.READY : MEDIA_PROBE_STATES.DISCOVERED,
       streamType: "vod"
     };
   }
-  function hasResolvedAdaptiveTrack(track) {
+  function hasAcquirableAdaptiveTrack(track, playerUrl) {
     try {
       const url = new URL(track?.sourceUrl);
-      return ["http:", "https:"].includes(url.protocol);
+      if (!["http:", "https:"].includes(url.protocol)) return false;
+      return track.urlResolution !== "n_transform_pending" || Boolean(playerUrl);
     } catch {
       return false;
     }
@@ -5048,7 +5054,7 @@ var AdsFriendlyBackground = (() => {
   }
 
   // src/media/helper-contract.js
-  var MEDIA_HELPER_PROTOCOL_VERSION = 4;
+  var MEDIA_HELPER_PROTOCOL_VERSION = 5;
   var MEDIA_HELPER_HOST_NAME = "com.adsfriendly.media_helper";
   var MEDIA_HELPER_REQUESTS = Object.freeze({
     HELLO: "helper.hello",
@@ -5077,6 +5083,7 @@ var AdsFriendlyBackground = (() => {
     OUTPUT_CONTAINER_SELECTION: "output.container_selection",
     DASH_VOD_DOWNLOAD: "download.dash_vod",
     ADAPTIVE_HTTP_DOWNLOAD: "download.adaptive_http",
+    YOUTUBE_PLAYER_JS_RESOLUTION: "resolve.youtube_player_js",
     FFMPEG_MUX: "mux.ffmpeg",
     OUTPUT_OPEN: "output.open",
     OUTPUT_REVEAL: "output.reveal"
@@ -5296,6 +5303,7 @@ var AdsFriendlyBackground = (() => {
         canSelectContainer: capabilities[MEDIA_HELPER_CAPABILITIES.OUTPUT_CONTAINER_SELECTION] === true,
         canDownloadDash: capabilities[MEDIA_HELPER_CAPABILITIES.DASH_VOD_DOWNLOAD] === true,
         canDownloadAdaptive: capabilities[MEDIA_HELPER_CAPABILITIES.ADAPTIVE_HTTP_DOWNLOAD] === true,
+        canResolveYouTubePlayerJs: capabilities[MEDIA_HELPER_CAPABILITIES.YOUTUBE_PLAYER_JS_RESOLUTION] === true,
         canMuxWithFfmpeg: capabilities[MEDIA_HELPER_CAPABILITIES.FFMPEG_MUX] === true
       });
     } catch (error) {
@@ -5619,6 +5627,7 @@ var AdsFriendlyBackground = (() => {
       canSelectContainer: false,
       canDownloadDash: false,
       canDownloadAdaptive: false,
+      canResolveYouTubePlayerJs: false,
       canMuxWithFfmpeg: false,
       helperVersion: null,
       capabilities: {},
@@ -6778,6 +6787,13 @@ ${body}`;
           reason: "This Media Helper build cannot select a different output container yet."
         };
       }
+    }
+    if (candidate.kind === "adaptive" && candidate.acquisitionProfile === "youtube_player_js_challenge" && !helper.canResolveYouTubePlayerJs) {
+      return {
+        status: "helper_not_ready",
+        helper,
+        reason: "This Media Helper build cannot resolve YouTube Player JS challenges yet."
+      };
     }
     const capabilityReady = candidate.kind === "direct" ? helper.canDownloadDirect : candidate.kind === "hls" ? candidate.probeSource === "decrypted_blob" ? helper.canDownloadHls && helper.canDownloadDecryptedHls : helper.canDownloadHls : candidate.kind === "dash" ? helper.canDownloadDash : helper.canDownloadAdaptive;
     if (capabilityReady) return null;
@@ -8024,7 +8040,8 @@ ${body}`;
   function createYouTubeAdaptiveCandidate({
     pageUrl,
     title = null,
-    track
+    track,
+    playerUrl = null
   }) {
     if (!track || track.provider !== "youtube") return null;
     const videoId = youtubeVideoId(pageUrl);
@@ -8044,7 +8061,8 @@ ${body}`;
       height: track.height,
       resolution: track.resolution,
       qualityLabel: track.qualityLabel,
-      observedAt: track.observedAt
+      observedAt: track.observedAt,
+      urlResolution: track.urlResolution || "resolved"
     };
     return normalizeMediaCandidate({
       id,
@@ -8063,7 +8081,8 @@ ${body}`;
       probeStatus: MEDIA_PROBE_STATES.DISCOVERED,
       streamType: "vod",
       provider: "youtube",
-      acquisitionProfile: "youtube_resolved_tracks"
+      acquisitionProfile: track.urlResolution === "n_transform_pending" ? "youtube_player_js_challenge" : "youtube_resolved_tracks",
+      playerUrl
     });
   }
   function isYouTubePage(value) {

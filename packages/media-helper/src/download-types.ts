@@ -10,6 +10,7 @@ export interface DownloadCandidate {
   segmentCount: number | null;
   provider: string | null;
   acquisitionProfile: string | null;
+  playerUrl: string | null;
   variants: AdaptiveHttpTrack[];
   audioTracks: AdaptiveHttpTrack[];
   manifestHandoff: {
@@ -73,6 +74,7 @@ export interface AdaptiveHttpTrack {
   width: number | null;
   height: number | null;
   qualityLabel: string | null;
+  urlResolution: "resolved" | "n_transform_pending";
 }
 
 export interface DownloadJob {

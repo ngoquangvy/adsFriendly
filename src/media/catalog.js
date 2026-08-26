@@ -50,6 +50,10 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
         ...candidate,
         ...(preserveExistingProbe ? probeFields(existing) : {}),
         ...(adaptiveTracks || {}),
+        acquisitionDiagnostic:
+          candidate.acquisitionDiagnostic ||
+          existing?.acquisitionDiagnostic ||
+          null,
         duration: candidate.duration ?? existing?.duration ?? null,
         resolution: candidate.resolution ?? existing?.resolution ?? null,
         requestContexts: mergeRequestContexts(
@@ -645,6 +649,7 @@ function mergeAdaptiveTracks(existing, candidate) {
   const bestVideo = [...variants].sort(compareAdaptiveTrackQuality)[0] || null;
   const bestAudio =
     [...audioTracks].sort(compareAdaptiveTrackQuality)[0] || null;
+  const playerUrl = candidate.playerUrl || existing?.playerUrl || null;
   return {
     variants,
     audioTracks,
@@ -663,19 +668,21 @@ function mergeAdaptiveTracks(existing, candidate) {
       bestVideo?.averageBandwidth ||
       candidate.averageBandwidth ||
       existing?.averageBandwidth,
+    playerUrl,
     probeStatus:
-      variants.some(hasResolvedAdaptiveTrack) &&
-      audioTracks.some(hasResolvedAdaptiveTrack)
+      variants.some((track) => hasAcquirableAdaptiveTrack(track, playerUrl)) &&
+      audioTracks.some((track) => hasAcquirableAdaptiveTrack(track, playerUrl))
         ? MEDIA_PROBE_STATES.READY
         : MEDIA_PROBE_STATES.DISCOVERED,
     streamType: "vod",
   };
 }
 
-function hasResolvedAdaptiveTrack(track) {
+function hasAcquirableAdaptiveTrack(track, playerUrl) {
   try {
     const url = new URL(track?.sourceUrl);
-    return ["http:", "https:"].includes(url.protocol);
+    if (!["http:", "https:"].includes(url.protocol)) return false;
+    return track.urlResolution !== "n_transform_pending" || Boolean(playerUrl);
   } catch {
     return false;
   }

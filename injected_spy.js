@@ -87,6 +87,7 @@ var AdsFriendlyMainWorld = (() => {
       mimeType: optionalString(value.mimeType),
       provider: optionalString(value.provider),
       acquisitionProfile: optionalString(value.acquisitionProfile),
+      playerUrl: optionalString(value.playerUrl),
       acquisitionDiagnostic: normalizeMediaAcquisitionDiagnostic(
         value.acquisitionDiagnostic
       ),
@@ -175,7 +176,8 @@ var AdsFriendlyMainWorld = (() => {
       serverAbrAvailable: value.serverAbrAvailable === true,
       hlsManifestAvailable: value.hlsManifestAvailable === true,
       dashManifestAvailable: value.dashManifestAvailable === true,
-      playabilityStatus: optionalString(value.playabilityStatus)
+      playabilityStatus: optionalString(value.playabilityStatus),
+      playerUrlAvailable: value.playerUrlAvailable === true
     };
   }
   function normalizeMediaProbe(value = {}) {
@@ -2818,7 +2820,8 @@ ${body}`;
   function createYouTubeAdaptiveCandidate({
     pageUrl,
     title = null,
-    track
+    track,
+    playerUrl = null
   }) {
     if (!track || track.provider !== "youtube") return null;
     const videoId = youtubeVideoId(pageUrl);
@@ -2838,7 +2841,8 @@ ${body}`;
       height: track.height,
       resolution: track.resolution,
       qualityLabel: track.qualityLabel,
-      observedAt: track.observedAt
+      observedAt: track.observedAt,
+      urlResolution: track.urlResolution || "resolved"
     };
     return normalizeMediaCandidate({
       id,
@@ -2857,7 +2861,8 @@ ${body}`;
       probeStatus: MEDIA_PROBE_STATES.DISCOVERED,
       streamType: "vod",
       provider: "youtube",
-      acquisitionProfile: "youtube_resolved_tracks"
+      acquisitionProfile: track.urlResolution === "n_transform_pending" ? "youtube_player_js_challenge" : "youtube_resolved_tracks",
+      playerUrl
     });
   }
   function createYouTubeCandidateFromObservedSource({
@@ -4472,7 +4477,7 @@ ${body}`;
     STREAMING_DATA_MISSING: "streaming_data_missing",
     PLAYABILITY_BLOCKED: "playability_blocked"
   });
-  function parseYouTubePlayerResponse(response, { pageUrl, title = null, input = "player_response" } = {}) {
+  function parseYouTubePlayerResponse(response, { pageUrl, title = null, input = "player_response", playerUrl = null } = {}) {
     if (!response || typeof response !== "object" || !isYouTubePage(pageUrl))
       return null;
     const pageVideoId = youtubeVideoId(pageUrl);
@@ -4486,6 +4491,7 @@ ${body}`;
     ].slice(0, 100);
     const descriptors = formats.map(normalizeFormatDescriptor).filter(Boolean);
     const directCandidates = [];
+    const nTransformCandidates = [];
     let signatureCipherCount = 0;
     let nTransformCount = 0;
     for (const format of formats) {
@@ -4500,6 +4506,22 @@ ${body}`;
       }
       if (sourceUrl.searchParams.has("n")) {
         nTransformCount += 1;
+        const parsedTrack2 = parseYouTubePlaybackTrack(sourceUrl.href, {
+          mimeType: format.mimeType
+        });
+        if (parsedTrack2) {
+          const track2 = {
+            ...enrichResolvedTrack(parsedTrack2, format),
+            urlResolution: "n_transform_pending"
+          };
+          const candidate2 = createYouTubeAdaptiveCandidate({
+            pageUrl,
+            title: response.videoDetails?.title || title,
+            track: track2,
+            playerUrl
+          });
+          if (candidate2) nTransformCandidates.push(candidate2);
+        }
         continue;
       }
       const parsedTrack = parseYouTubePlaybackTrack(sourceUrl.href, {
@@ -4510,7 +4532,8 @@ ${body}`;
       const candidate = createYouTubeAdaptiveCandidate({
         pageUrl,
         title: response.videoDetails?.title || title,
-        track
+        track,
+        playerUrl
       });
       if (candidate) directCandidates.push(candidate);
     }
@@ -4550,7 +4573,8 @@ ${body}`;
       serverAbrAvailable: Boolean(serverAbrStreamingUrl),
       hlsManifestAvailable,
       dashManifestAvailable,
-      playabilityStatus
+      playabilityStatus,
+      playerUrlAvailable: Boolean(playerUrl)
     });
     const diagnosticCandidate = createPlayerDiagnosticCandidate({
       pageUrl,
@@ -4558,10 +4582,15 @@ ${body}`;
       duration: positiveNumber2(response.videoDetails?.lengthSeconds),
       serverAbrStreamingUrl,
       descriptors,
-      diagnostic
+      diagnostic,
+      playerUrl
     });
     return Object.freeze({
-      candidates: [diagnosticCandidate, ...directCandidates],
+      candidates: [
+        diagnosticCandidate,
+        ...directCandidates,
+        ...nTransformCandidates
+      ],
       diagnostic,
       manifests: Object.freeze({
         hls: hlsManifestAvailable ? streamingData.hlsManifestUrl : null,
@@ -4575,7 +4604,8 @@ ${body}`;
     duration,
     serverAbrStreamingUrl,
     descriptors,
-    diagnostic
+    diagnostic,
+    playerUrl
   }) {
     const videoId = youtubeVideoId(pageUrl);
     return normalizeMediaCandidate({
@@ -4591,6 +4621,7 @@ ${body}`;
       provider: "youtube",
       acquisitionProfile: "youtube_player_response",
       acquisitionDiagnostic: diagnostic,
+      playerUrl,
       probeStatus: MEDIA_PROBE_STATES.DISCOVERED,
       probeError: diagnostic.stage,
       streamType: "vod"
@@ -4719,7 +4750,8 @@ ${body}`;
       const observation = parseYouTubePlayerResponse(response, {
         pageUrl: location.href,
         title: document.title || null,
-        input
+        input,
+        playerUrl: findYouTubePlayerUrl()
       });
       if (!observation) return null;
       const fingerprint = observationFingerprint(observation);
@@ -4769,6 +4801,34 @@ ${body}`;
         report(player.getPlayerResponse(), "movie_player.getPlayerResponse");
     } catch {
     }
+  }
+  function findYouTubePlayerUrl({
+    windowObject = window,
+    documentObject = document
+  } = {}) {
+    const candidates = [];
+    try {
+      if (typeof windowObject.ytcfg?.get === "function")
+        candidates.push(windowObject.ytcfg.get("PLAYER_JS_URL"));
+    } catch {
+    }
+    candidates.push(
+      windowObject.ytplayer?.config?.assets?.js,
+      windowObject.ytplayer?.web_player_context_config?.jsUrl
+    );
+    try {
+      candidates.push(
+        ...[...documentObject.querySelectorAll('script[src*="/s/player/"]')].map(
+          (script2) => script2.src
+        )
+      );
+    } catch {
+    }
+    for (const candidate of candidates) {
+      const normalized = normalizePlayerUrl(candidate);
+      if (normalized) return normalized;
+    }
+    return null;
   }
   function installPlayerFetchCapture(report) {
     const originalFetch = window.fetch;
@@ -4870,7 +4930,7 @@ ${body}`;
   }
   function isPlayerApiUrl(value) {
     try {
-      const url = new URL(value, location.href);
+      const url = new URL(value, "https://www.youtube.com/");
       return isYouTubePage(url.href) && url.pathname === PLAYER_API_PATH;
     } catch {
       return false;
@@ -4882,6 +4942,16 @@ ${body}`;
     if (input instanceof Request) return input.url;
     if (input instanceof URL) return input.href;
     return typeof input?.url === "string" ? input.url : String(input);
+  }
+  function normalizePlayerUrl(value) {
+    try {
+      const url = new URL(value, "https://www.youtube.com/");
+      if (!["http:", "https:"].includes(url.protocol) || !(url.hostname === "youtube.com" || url.hostname.endsWith(".youtube.com")) || !/^\/s\/player\/[^/]+\//.test(url.pathname) || !url.pathname.endsWith(".js"))
+        return null;
+      return url.href;
+    } catch {
+      return null;
+    }
   }
 
   // src/main-world/index.js

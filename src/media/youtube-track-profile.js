@@ -90,6 +90,7 @@ export function createYouTubeAdaptiveCandidate({
   pageUrl,
   title = null,
   track,
+  playerUrl = null,
 }) {
   if (!track || track.provider !== "youtube") return null;
   const videoId = youtubeVideoId(pageUrl);
@@ -110,6 +111,7 @@ export function createYouTubeAdaptiveCandidate({
     resolution: track.resolution,
     qualityLabel: track.qualityLabel,
     observedAt: track.observedAt,
+    urlResolution: track.urlResolution || "resolved",
   };
   return normalizeMediaCandidate({
     id,
@@ -128,7 +130,11 @@ export function createYouTubeAdaptiveCandidate({
     probeStatus: MEDIA_PROBE_STATES.DISCOVERED,
     streamType: "vod",
     provider: "youtube",
-    acquisitionProfile: "youtube_resolved_tracks",
+    acquisitionProfile:
+      track.urlResolution === "n_transform_pending"
+        ? "youtube_player_js_challenge"
+        : "youtube_resolved_tracks",
+    playerUrl,
   });
 }
 
