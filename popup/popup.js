@@ -295,6 +295,12 @@ var AdsFriendlyPopup = (() => {
       C2.MEDIA_OBSERVE
     ]),
     feature(
+      "main-world.youtube-player-response",
+      "main-world",
+      C2.CORE_MESSAGING,
+      [C2.MEDIA_OBSERVE]
+    ),
+    feature(
       "main-world.decrypted-manifest-observer",
       "main-world",
       C2.CORE_MESSAGING,
@@ -1509,8 +1515,19 @@ var AdsFriendlyPopup = (() => {
       (item) => item.kind === "adaptive" && item.provider === "youtube"
     );
     if (adaptive) {
-      const videoCount = adaptive.variants?.length || 0;
-      const audioCount = adaptive.audioTracks?.length || 0;
+      const acquisitionDiagnostic = adaptive.acquisitionDiagnostic;
+      const acquisitionMessage = youtubeAcquisitionMessage(acquisitionDiagnostic);
+      const videoCount = (adaptive.variants || []).filter(
+        hasResolvedTrackUrl
+      ).length;
+      const audioCount = (adaptive.audioTracks || []).filter(
+        hasResolvedTrackUrl
+      ).length;
+      if (!videoCount && !audioCount && acquisitionMessage)
+        return {
+          code: `youtube_${acquisitionDiagnostic.stage}`,
+          message: acquisitionMessage
+        };
       if (!videoCount && !audioCount)
         return {
           code: "youtube_tracks_empty",
@@ -1661,8 +1678,16 @@ var AdsFriendlyPopup = (() => {
   }
   function adaptiveDetails(item) {
     const facts = [item.provider === "youtube" ? "YouTube" : "Adaptive media"];
-    const videos = item.variants || [];
-    const audio = item.audioTracks || [];
+    const videos = (item.variants || []).filter(hasResolvedTrackUrl);
+    const audio = (item.audioTracks || []).filter(hasResolvedTrackUrl);
+    const acquisition = item.acquisitionDiagnostic;
+    if (!videos.length && !audio.length && acquisition) {
+      facts.push(playerAcquisitionLabel(acquisition));
+      if (acquisition.descriptorCount)
+        facts.push(`${acquisition.descriptorCount} format descriptors`);
+      facts.push("direct track URLs unavailable");
+      return facts.join(" \xB7 ");
+    }
     if (videos.length) {
       const best = [...videos].sort(compareVariantQuality)[0];
       facts.push(
@@ -1677,6 +1702,47 @@ var AdsFriendlyPopup = (() => {
     if (Number.isFinite(item.duration) && item.duration > 0)
       facts.push(formatDuration2(item.duration));
     return facts.join(" \xB7 ");
+  }
+  function youtubeAcquisitionMessage(diagnostic2) {
+    if (!diagnostic2?.stage) return null;
+    const descriptors = diagnostic2.descriptorCount ? ` \xB7 ${diagnostic2.descriptorCount} format descriptors` : "";
+    switch (diagnostic2.stage) {
+      case "sabr_resolver_pending":
+        return `YouTube player response found \xB7 SABR endpoint observed${descriptors} \xB7 resolver pending.`;
+      case "n_transform_pending":
+        return `YouTube player response found${descriptors} \xB7 n parameter transform pending.`;
+      case "signature_cipher_pending":
+        return `YouTube player response found${descriptors} \xB7 signature decipher pending.`;
+      case "format_urls_missing":
+        return `YouTube player response found${descriptors} \xB7 format URLs are not exposed.`;
+      case "streaming_data_missing":
+        return "YouTube player response found \xB7 streamingData is missing.";
+      case "playability_blocked":
+        return `YouTube playback is unavailable (${diagnostic2.playabilityStatus || "unknown"}).`;
+      default:
+        return null;
+    }
+  }
+  function playerAcquisitionLabel(diagnostic2) {
+    switch (diagnostic2.stage) {
+      case "sabr_resolver_pending":
+        return "Player response \xB7 SABR";
+      case "n_transform_pending":
+        return "Player response \xB7 n transform pending";
+      case "signature_cipher_pending":
+        return "Player response \xB7 signature pending";
+      case "playability_blocked":
+        return `Playback ${diagnostic2.playabilityStatus || "blocked"}`;
+      default:
+        return "Player response";
+    }
+  }
+  function hasResolvedTrackUrl(track) {
+    try {
+      return ["http:", "https:"].includes(new URL(track?.sourceUrl).protocol);
+    } catch {
+      return false;
+    }
   }
   function resolvedHlsDetails(item) {
     const stream = item.resolvedStream;

@@ -108,6 +108,10 @@ test("player source observer is centrally registered as passive media work", () 
     [CAPABILITIES.CORE_MESSAGING, CAPABILITIES.MEDIA_OBSERVE],
   );
   assert.deepEqual(
+    getFeatureDefinition("main-world.youtube-player-response").capabilities,
+    [CAPABILITIES.CORE_MESSAGING, CAPABILITIES.MEDIA_OBSERVE],
+  );
+  assert.deepEqual(
     getFeatureDefinition("main-world.decrypted-manifest-observer").capabilities,
     [CAPABILITIES.CORE_MESSAGING, CAPABILITIES.MEDIA_OBSERVE],
   );

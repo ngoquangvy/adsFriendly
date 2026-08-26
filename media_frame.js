@@ -61,6 +61,9 @@ var AdsFriendlyMediaFrame = (() => {
       mimeType: optionalString(value.mimeType),
       provider: optionalString(value.provider),
       acquisitionProfile: optionalString(value.acquisitionProfile),
+      acquisitionDiagnostic: normalizeMediaAcquisitionDiagnostic(
+        value.acquisitionDiagnostic
+      ),
       variants: normalizeArray(value.variants),
       iframeVariants: normalizeArray(value.iframeVariants),
       audioTracks: normalizeArray(value.audioTracks),
@@ -123,6 +126,31 @@ var AdsFriendlyMediaFrame = (() => {
       );
     }
     return candidate;
+  }
+  function normalizeMediaAcquisitionDiagnostic(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    return {
+      provider: optionalString(value.provider),
+      input: optionalString(value.input),
+      stage: optionalString(value.stage),
+      descriptorCount: optionalNonNegativeInteger(value.descriptorCount),
+      videoDescriptorCount: optionalNonNegativeInteger(
+        value.videoDescriptorCount
+      ),
+      audioDescriptorCount: optionalNonNegativeInteger(
+        value.audioDescriptorCount
+      ),
+      directVideoCount: optionalNonNegativeInteger(value.directVideoCount),
+      directAudioCount: optionalNonNegativeInteger(value.directAudioCount),
+      signatureCipherCount: optionalNonNegativeInteger(
+        value.signatureCipherCount
+      ),
+      nTransformCount: optionalNonNegativeInteger(value.nTransformCount),
+      serverAbrAvailable: value.serverAbrAvailable === true,
+      hlsManifestAvailable: value.hlsManifestAvailable === true,
+      dashManifestAvailable: value.dashManifestAvailable === true,
+      playabilityStatus: optionalString(value.playabilityStatus)
+    };
   }
   function normalizeMediaProbe(value = {}) {
     const kind = enumValue(
@@ -796,10 +824,7 @@ var AdsFriendlyMediaFrame = (() => {
     if (!track || track.provider !== "youtube") return null;
     const videoId = youtubeVideoId(pageUrl);
     if (!videoId || !isYouTubePage(pageUrl)) return null;
-    const id = stableMediaId(
-      MEDIA_KINDS.ADAPTIVE,
-      `youtube:${videoId}:${track.assetToken || videoId}`
-    );
+    const id = stableMediaId(MEDIA_KINDS.ADAPTIVE, `youtube:${videoId}`);
     const normalizedTrack = {
       id: track.id,
       type: track.type,
@@ -1251,7 +1276,8 @@ var AdsFriendlyMediaFrame = (() => {
       if (payload.kind === "adaptive") {
         const videoTracks = (payload.variants || []).map((track) => track.id || track.itag || track.sourceUrl).filter(Boolean).join(",");
         const audioTracks = (payload.audioTracks || []).map((track) => track.id || track.itag || track.sourceUrl).filter(Boolean).join(",");
-        return `${event2.type}:${mediaId}:${payload.detectedBy || "unknown"}:video=${videoTracks || "none"}:audio=${audioTracks || "none"}`;
+        const acquisition = payload.acquisitionDiagnostic;
+        return `${event2.type}:${mediaId}:${payload.detectedBy || "unknown"}:video=${videoTracks || "none"}:audio=${audioTracks || "none"}:stage=${acquisition?.stage || "none"}:direct=${acquisition?.directVideoCount || 0}+${acquisition?.directAudioCount || 0}`;
       }
       const playbackDuration = payload.kind === "blob" && Number.isFinite(payload.duration) ? Math.round(payload.duration) : "unknown";
       return `${event2.type}:${mediaId}:${payload.detectedBy || "unknown"}:${playbackDuration}:${payload.resolution?.width || 0}x${payload.resolution?.height || 0}`;
@@ -1759,6 +1785,12 @@ var AdsFriendlyMediaFrame = (() => {
     feature("main-world.player-source-observer", "main-world", C2.CORE_MESSAGING, [
       C2.MEDIA_OBSERVE
     ]),
+    feature(
+      "main-world.youtube-player-response",
+      "main-world",
+      C2.CORE_MESSAGING,
+      [C2.MEDIA_OBSERVE]
+    ),
     feature(
       "main-world.decrypted-manifest-observer",
       "main-world",

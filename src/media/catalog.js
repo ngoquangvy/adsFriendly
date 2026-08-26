@@ -664,11 +664,21 @@ function mergeAdaptiveTracks(existing, candidate) {
       candidate.averageBandwidth ||
       existing?.averageBandwidth,
     probeStatus:
-      variants.length && audioTracks.length
+      variants.some(hasResolvedAdaptiveTrack) &&
+      audioTracks.some(hasResolvedAdaptiveTrack)
         ? MEDIA_PROBE_STATES.READY
         : MEDIA_PROBE_STATES.DISCOVERED,
     streamType: "vod",
   };
+}
+
+function hasResolvedAdaptiveTrack(track) {
+  try {
+    const url = new URL(track?.sourceUrl);
+    return ["http:", "https:"].includes(url.protocol);
+  } catch {
+    return false;
+  }
 }
 
 function mergeTrackList(existing = [], incoming = []) {
@@ -677,7 +687,12 @@ function mergeTrackList(existing = [], incoming = []) {
     if (!track || typeof track !== "object") continue;
     const key =
       track.id || `${track.type || "track"}:${track.itag || track.sourceUrl}`;
-    tracks.set(key, { ...(tracks.get(key) || {}), ...track });
+    const previous = tracks.get(key) || {};
+    tracks.set(key, {
+      ...previous,
+      ...track,
+      sourceUrl: track.sourceUrl || previous.sourceUrl || null,
+    });
   }
   return [...tracks.values()];
 }

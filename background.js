@@ -1038,6 +1038,12 @@ var AdsFriendlyBackground = (() => {
       C2.MEDIA_OBSERVE
     ]),
     feature(
+      "main-world.youtube-player-response",
+      "main-world",
+      C2.CORE_MESSAGING,
+      [C2.MEDIA_OBSERVE]
+    ),
+    feature(
       "main-world.decrypted-manifest-observer",
       "main-world",
       C2.CORE_MESSAGING,
@@ -2213,6 +2219,9 @@ var AdsFriendlyBackground = (() => {
       mimeType: optionalString(value.mimeType),
       provider: optionalString(value.provider),
       acquisitionProfile: optionalString(value.acquisitionProfile),
+      acquisitionDiagnostic: normalizeMediaAcquisitionDiagnostic(
+        value.acquisitionDiagnostic
+      ),
       variants: normalizeArray(value.variants),
       iframeVariants: normalizeArray(value.iframeVariants),
       audioTracks: normalizeArray(value.audioTracks),
@@ -2275,6 +2284,31 @@ var AdsFriendlyBackground = (() => {
       );
     }
     return candidate;
+  }
+  function normalizeMediaAcquisitionDiagnostic(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    return {
+      provider: optionalString(value.provider),
+      input: optionalString(value.input),
+      stage: optionalString(value.stage),
+      descriptorCount: optionalNonNegativeInteger(value.descriptorCount),
+      videoDescriptorCount: optionalNonNegativeInteger(
+        value.videoDescriptorCount
+      ),
+      audioDescriptorCount: optionalNonNegativeInteger(
+        value.audioDescriptorCount
+      ),
+      directVideoCount: optionalNonNegativeInteger(value.directVideoCount),
+      directAudioCount: optionalNonNegativeInteger(value.directAudioCount),
+      signatureCipherCount: optionalNonNegativeInteger(
+        value.signatureCipherCount
+      ),
+      nTransformCount: optionalNonNegativeInteger(value.nTransformCount),
+      serverAbrAvailable: value.serverAbrAvailable === true,
+      hlsManifestAvailable: value.hlsManifestAvailable === true,
+      dashManifestAvailable: value.dashManifestAvailable === true,
+      playabilityStatus: optionalString(value.playabilityStatus)
+    };
   }
   function normalizeMediaProbe(value = {}) {
     const kind = enumValue(
@@ -3900,16 +3934,29 @@ var AdsFriendlyBackground = (() => {
       resolution: bestVideo?.resolution || candidate.resolution || existing?.resolution,
       bandwidth: bestVideo?.bandwidth || candidate.bandwidth || existing?.bandwidth,
       averageBandwidth: bestVideo?.averageBandwidth || candidate.averageBandwidth || existing?.averageBandwidth,
-      probeStatus: variants.length && audioTracks.length ? MEDIA_PROBE_STATES.READY : MEDIA_PROBE_STATES.DISCOVERED,
+      probeStatus: variants.some(hasResolvedAdaptiveTrack) && audioTracks.some(hasResolvedAdaptiveTrack) ? MEDIA_PROBE_STATES.READY : MEDIA_PROBE_STATES.DISCOVERED,
       streamType: "vod"
     };
+  }
+  function hasResolvedAdaptiveTrack(track) {
+    try {
+      const url = new URL(track?.sourceUrl);
+      return ["http:", "https:"].includes(url.protocol);
+    } catch {
+      return false;
+    }
   }
   function mergeTrackList(existing = [], incoming = []) {
     const tracks = /* @__PURE__ */ new Map();
     for (const track of [...existing || [], ...incoming || []]) {
       if (!track || typeof track !== "object") continue;
       const key = track.id || `${track.type || "track"}:${track.itag || track.sourceUrl}`;
-      tracks.set(key, { ...tracks.get(key) || {}, ...track });
+      const previous = tracks.get(key) || {};
+      tracks.set(key, {
+        ...previous,
+        ...track,
+        sourceUrl: track.sourceUrl || previous.sourceUrl || null
+      });
     }
     return [...tracks.values()];
   }
@@ -7982,10 +8029,7 @@ ${body}`;
     if (!track || track.provider !== "youtube") return null;
     const videoId = youtubeVideoId(pageUrl);
     if (!videoId || !isYouTubePage(pageUrl)) return null;
-    const id = stableMediaId(
-      MEDIA_KINDS.ADAPTIVE,
-      `youtube:${videoId}:${track.assetToken || videoId}`
-    );
+    const id = stableMediaId(MEDIA_KINDS.ADAPTIVE, `youtube:${videoId}`);
     const normalizedTrack = {
       id: track.id,
       type: track.type,

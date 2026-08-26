@@ -380,6 +380,12 @@ var AdsFriendlyVideo = (() => {
       C2.MEDIA_OBSERVE
     ]),
     feature(
+      "main-world.youtube-player-response",
+      "main-world",
+      C2.CORE_MESSAGING,
+      [C2.MEDIA_OBSERVE]
+    ),
+    feature(
       "main-world.decrypted-manifest-observer",
       "main-world",
       C2.CORE_MESSAGING,

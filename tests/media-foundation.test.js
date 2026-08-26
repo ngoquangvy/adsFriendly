@@ -94,6 +94,10 @@ import {
   parseYouTubePlaybackTrack,
 } from "../src/media/youtube-track-profile.js";
 import {
+  YOUTUBE_PLAYER_STAGES,
+  parseYouTubePlayerResponse,
+} from "../src/media/youtube-player-response.js";
+import {
   beginHlsManifestInspection,
   captureFetchAesKey,
   clearAesKeyHandoffs,
@@ -222,6 +226,142 @@ test("media observer reports separate YouTube video and audio tracks before cata
   assert.notEqual(videoKey, audioKey);
   assert.match(videoKey, /video=youtube-video-137/);
   assert.match(audioKey, /audio=youtube-audio-140/);
+});
+
+test("YouTube player response exposes SABR as an explicit unresolved acquisition stage", () => {
+  const observation = parseYouTubePlayerResponse(
+    {
+      playabilityStatus: { status: "OK" },
+      videoDetails: {
+        videoId: "video-1",
+        title: "Example",
+        lengthSeconds: "1085",
+      },
+      streamingData: {
+        serverAbrStreamingUrl:
+          "https://r1.googlevideo.com/videoplayback?id=asset-1&sabr=1&sig=ok&n=pending",
+        adaptiveFormats: [
+          {
+            itag: 137,
+            mimeType: 'video/mp4; codecs="avc1.640028"',
+            width: 1920,
+            height: 1080,
+            qualityLabel: "1080p",
+            contentLength: "54621642",
+          },
+          {
+            itag: 140,
+            mimeType: 'audio/mp4; codecs="mp4a.40.2"',
+            contentLength: "1730021",
+          },
+        ],
+      },
+    },
+    {
+      pageUrl: "https://www.youtube.com/watch?v=video-1",
+      input: "ytInitialPlayerResponse",
+    },
+  );
+
+  assert.equal(
+    observation.diagnostic.stage,
+    YOUTUBE_PLAYER_STAGES.SABR_RESOLVER_PENDING,
+  );
+  assert.equal(observation.diagnostic.descriptorCount, 2);
+  assert.equal(observation.candidates.length, 1);
+  assert.equal(observation.candidates[0].probeStatus, "discovered");
+  assert.equal(observation.candidates[0].variants[0].sourceUrl, null);
+  const catalog = createMediaCatalog();
+  catalog.add(
+    7,
+    createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, observation.candidates[0]),
+  );
+  const [item] = catalog.list(7);
+  assert.equal(item.probeStatus, "discovered");
+  const state = getMediaCatalogDownloadState([item]);
+  assert.equal(state.diagnosticCode, "youtube_sabr_resolver_pending");
+  assert.match(state.diagnosticMessage, /SABR endpoint observed/i);
+  assert.match(formatMediaDetails(item), /34|2 format descriptors/i);
+});
+
+test("YouTube player response merges direct video and audio formats into a ready asset", () => {
+  const mediaUrl = (itag, mimeType, extra = "") =>
+    `https://r1.googlevideo.com/videoplayback?id=asset-1&itag=${itag}&mime=${encodeURIComponent(mimeType)}&dur=20&clen=1000&sig=ok${extra}`;
+  const observation = parseYouTubePlayerResponse(
+    {
+      playabilityStatus: { status: "OK" },
+      videoDetails: { videoId: "video-1", title: "Example" },
+      streamingData: {
+        adaptiveFormats: [
+          {
+            itag: 137,
+            mimeType: "video/mp4",
+            width: 1920,
+            height: 1080,
+            url: mediaUrl("137", "video/mp4", "&size=1920x1080"),
+          },
+          {
+            itag: 140,
+            mimeType: "audio/mp4",
+            url: mediaUrl("140", "audio/mp4"),
+          },
+        ],
+      },
+    },
+    { pageUrl: "https://www.youtube.com/watch?v=video-1" },
+  );
+  assert.equal(
+    observation.diagnostic.stage,
+    YOUTUBE_PLAYER_STAGES.RESOLVED_TRACKS,
+  );
+  assert.equal(observation.candidates.length, 3);
+
+  const catalog = createMediaCatalog();
+  for (const candidate of observation.candidates)
+    catalog.add(7, createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, candidate));
+  const [item] = catalog.list(7);
+  assert.equal(item.probeStatus, "ready");
+  assert.equal(item.variants.filter((track) => track.sourceUrl).length, 1);
+  assert.equal(item.audioTracks.filter((track) => track.sourceUrl).length, 1);
+});
+
+test("YouTube format descriptors cannot erase a resolved network track", () => {
+  const pageUrl = "https://www.youtube.com/watch?v=video-1";
+  const resolved = createYouTubeCandidateFromObservedSource({
+    pageUrl,
+    sourceUrl:
+      "https://r1.googlevideo.com/videoplayback?id=asset-1&itag=137&mime=video%2Fmp4&dur=20&clen=1000&size=1920x1080&sig=ok",
+    mimeType: "video/mp4",
+  });
+  const diagnostic = parseYouTubePlayerResponse(
+    {
+      playabilityStatus: { status: "OK" },
+      videoDetails: { videoId: "video-1" },
+      streamingData: {
+        serverAbrStreamingUrl:
+          "https://r1.googlevideo.com/videoplayback?id=asset-1&sabr=1&sig=ok&n=pending",
+        adaptiveFormats: [
+          {
+            itag: 137,
+            mimeType: "video/mp4",
+            width: 1920,
+            height: 1080,
+          },
+        ],
+      },
+    },
+    { pageUrl },
+  ).candidates[0];
+  const catalog = createMediaCatalog();
+  catalog.add(7, createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, resolved));
+  catalog.add(7, createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, diagnostic));
+
+  const [item] = catalog.list(7);
+  assert.match(item.variants[0].sourceUrl, /googlevideo\.com\/videoplayback/);
+  assert.equal(
+    new URL(item.variants[0].sourceUrl).searchParams.get("itag"),
+    "137",
+  );
 });
 
 test("YouTube popup diagnostics expose the exact unresolved acquisition stage", () => {

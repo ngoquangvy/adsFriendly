@@ -230,6 +230,12 @@ export const FEATURE_CATALOG = Object.freeze([
     C.MEDIA_OBSERVE,
   ]),
   feature(
+    "main-world.youtube-player-response",
+    "main-world",
+    C.CORE_MESSAGING,
+    [C.MEDIA_OBSERVE],
+  ),
+  feature(
     "main-world.decrypted-manifest-observer",
     "main-world",
     C.CORE_MESSAGING,

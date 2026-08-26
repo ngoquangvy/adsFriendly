@@ -94,10 +94,7 @@ export function createYouTubeAdaptiveCandidate({
   if (!track || track.provider !== "youtube") return null;
   const videoId = youtubeVideoId(pageUrl);
   if (!videoId || !isYouTubePage(pageUrl)) return null;
-  const id = stableMediaId(
-    MEDIA_KINDS.ADAPTIVE,
-    `youtube:${videoId}:${track.assetToken || videoId}`,
-  );
+  const id = stableMediaId(MEDIA_KINDS.ADAPTIVE, `youtube:${videoId}`);
   const normalizedTrack = {
     id: track.id,
     type: track.type,

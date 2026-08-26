@@ -7,6 +7,7 @@ import { installEmeObserver } from "./eme-observer.js";
 import { installTimerControl, setAdMode } from "./timer-control.js";
 import { createMainController } from "../runtime/main-controller.js";
 import { recoverAesKeyHandoffs } from "./aes-key-handoff.js";
+import { installYouTubePlayerResponseAdapter } from "./youtube-player-response-adapter.js";
 
 const script = document.currentScript;
 const initialSettings = {
@@ -22,6 +23,8 @@ const controller = createMainController({
     "main-world.network-capture": ({ policy }) => installNetworkCapture(policy),
     "main-world.player-source-observer": ({ policy }) =>
       installPlayerSourceObserver(policy),
+    "main-world.youtube-player-response": ({ policy }) =>
+      installYouTubePlayerResponseAdapter(policy),
     "main-world.decrypted-manifest-observer": ({ policy }) =>
       installDecryptedManifestObserver(policy),
     "main-world.blob-source-tracer": ({ policy }) =>

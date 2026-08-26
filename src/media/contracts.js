@@ -67,6 +67,9 @@ export function normalizeMediaCandidate(value = {}) {
     mimeType: optionalString(value.mimeType),
     provider: optionalString(value.provider),
     acquisitionProfile: optionalString(value.acquisitionProfile),
+    acquisitionDiagnostic: normalizeMediaAcquisitionDiagnostic(
+      value.acquisitionDiagnostic,
+    ),
     variants: normalizeArray(value.variants),
     iframeVariants: normalizeArray(value.iframeVariants),
     audioTracks: normalizeArray(value.audioTracks),
@@ -129,6 +132,32 @@ export function normalizeMediaCandidate(value = {}) {
     );
   }
   return candidate;
+}
+
+export function normalizeMediaAcquisitionDiagnostic(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return {
+    provider: optionalString(value.provider),
+    input: optionalString(value.input),
+    stage: optionalString(value.stage),
+    descriptorCount: optionalNonNegativeInteger(value.descriptorCount),
+    videoDescriptorCount: optionalNonNegativeInteger(
+      value.videoDescriptorCount,
+    ),
+    audioDescriptorCount: optionalNonNegativeInteger(
+      value.audioDescriptorCount,
+    ),
+    directVideoCount: optionalNonNegativeInteger(value.directVideoCount),
+    directAudioCount: optionalNonNegativeInteger(value.directAudioCount),
+    signatureCipherCount: optionalNonNegativeInteger(
+      value.signatureCipherCount,
+    ),
+    nTransformCount: optionalNonNegativeInteger(value.nTransformCount),
+    serverAbrAvailable: value.serverAbrAvailable === true,
+    hlsManifestAvailable: value.hlsManifestAvailable === true,
+    dashManifestAvailable: value.dashManifestAvailable === true,
+    playabilityStatus: optionalString(value.playabilityStatus),
+  };
 }
 
 export function normalizeMediaProbe(value = {}) {

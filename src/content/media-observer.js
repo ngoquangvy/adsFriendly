@@ -446,7 +446,8 @@ export function createMediaObserverReportKey(event) {
         .map((track) => track.id || track.itag || track.sourceUrl)
         .filter(Boolean)
         .join(",");
-      return `${event.type}:${mediaId}:${payload.detectedBy || "unknown"}:video=${videoTracks || "none"}:audio=${audioTracks || "none"}`;
+      const acquisition = payload.acquisitionDiagnostic;
+      return `${event.type}:${mediaId}:${payload.detectedBy || "unknown"}:video=${videoTracks || "none"}:audio=${audioTracks || "none"}:stage=${acquisition?.stage || "none"}:direct=${acquisition?.directVideoCount || 0}+${acquisition?.directAudioCount || 0}`;
     }
     const playbackDuration =
       payload.kind === "blob" && Number.isFinite(payload.duration)
