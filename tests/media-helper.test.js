@@ -369,11 +369,17 @@ test("built helper downloads HLS encrypted with an AES-128 identity key", async 
   let activeSegmentRequests = 0;
   let maximumConcurrentSegmentRequests = 0;
   const requestedSegments = new Set();
+  const keyUserAgents = [];
   const server = createServer(async (request, response) => {
     try {
       const filename = basename(
         new URL(request.url, "http://fixture").pathname,
       );
+      if (filename === "key.bin") {
+        keyUserAgents.push(request.headers["user-agent"] || "");
+        response.writeHead(403).end();
+        return;
+      }
       if (filename.endsWith(".ts")) {
         requestedSegments.add(filename);
         activeSegmentRequests += 1;
@@ -405,8 +411,30 @@ test("built helper downloads HLS encrypted with an AES-128 identity key", async 
   const child = spawnHelper();
   t.after(() => child.kill());
   const frames = createFrameReader(child.stdout);
+  const keyUrl = `http://127.0.0.1:${address.port}/key.bin`;
   child.stdin.write(
-    frame(hlsDownloadRequest("hls-aes128-1", manifestUrl, outputDirectory)),
+    frame(
+      hlsDownloadRequest(
+        "hls-aes128-1",
+        manifestUrl,
+        outputDirectory,
+        null,
+        null,
+        {
+          browserUserAgent: "AdsFriendly-Test-Browser/123",
+          keyHandoff: {
+            kind: "hls_aes_keys",
+            manifestUrl,
+            keys: [
+              {
+                url: keyUrl,
+                data: Buffer.from("0123456789abcdef").toString("base64"),
+              },
+            ],
+          },
+        },
+      ),
+    ),
   );
   await frames.next(
     (event) => event.type === MEDIA_HELPER_EVENTS.DOWNLOAD_STARTED,
@@ -454,6 +482,53 @@ test("built helper downloads HLS encrypted with an AES-128 identity key", async 
   );
   assert.ok(requestedSegments.size >= 3);
   assert.ok(maximumConcurrentSegmentRequests >= 2);
+  assert.ok(keyUserAgents.length >= 1);
+  assert.ok(
+    keyUserAgents.every((value) => value === "AdsFriendly-Test-Browser/123"),
+  );
+
+  const keyRequestsBeforeLearnedRetry = keyUserAgents.length;
+  child.stdin.write(
+    frame(
+      hlsDownloadRequest(
+        "hls-aes128-learned-2",
+        manifestUrl,
+        outputDirectory,
+        null,
+        null,
+        {
+          browserUserAgent: "AdsFriendly-Test-Browser/123",
+          accessStrategyPreferences: {
+            "127.0.0.1": { browser_key_handoff: 2 },
+          },
+          keyHandoff: {
+            kind: "hls_aes_keys",
+            manifestUrl,
+            keys: [
+              {
+                url: keyUrl,
+                data: Buffer.from("0123456789abcdef").toString("base64"),
+              },
+            ],
+          },
+        },
+      ),
+    ),
+  );
+  const learnedCompletion = await frames.next(
+    (event) =>
+      event.requestId === "hls-aes128-learned-2" &&
+      [
+        MEDIA_HELPER_EVENTS.DOWNLOAD_COMPLETED,
+        MEDIA_HELPER_EVENTS.ERROR,
+      ].includes(event.type),
+  );
+  assert.equal(
+    learnedCompletion.type,
+    MEDIA_HELPER_EVENTS.DOWNLOAD_COMPLETED,
+    learnedCompletion.payload.message,
+  );
+  assert.equal(keyUserAgents.length, keyRequestsBeforeLearnedRetry);
 });
 
 test("built helper resumes cached HLS segments after cancellation", async (t) => {
@@ -820,6 +895,7 @@ function hlsDownloadRequest(
   outputDirectory,
   manifestBody = null,
   profileId = null,
+  options = {},
 ) {
   return {
     type: MEDIA_HELPER_REQUESTS.DOWNLOAD_START,
@@ -830,6 +906,8 @@ function hlsDownloadRequest(
       connections: 4,
       outputDirectory,
       output: profileId ? { profileId } : undefined,
+      browserUserAgent: options.browserUserAgent,
+      accessStrategyPreferences: options.accessStrategyPreferences,
       candidate: {
         id: "hls-test",
         kind: "hls",
@@ -854,6 +932,7 @@ function hlsDownloadRequest(
               revisionId: "fixture-inline-manifest",
             }
           : null,
+        keyHandoff: options.keyHandoff || null,
       },
     },
   };

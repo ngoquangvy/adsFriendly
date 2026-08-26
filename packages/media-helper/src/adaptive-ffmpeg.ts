@@ -5,6 +5,10 @@ import type {
   DownloadJob,
   DownloadProgress,
 } from "./download-types.js";
+import {
+  MEDIA_ACCESS_STRATEGIES,
+  getMediaAccessStrategy,
+} from "../../../src/media/access-strategy-catalog.js";
 
 const PROGRESS_INTERVAL_MS = 200;
 const FFMPEG_START_TIMEOUT_MS = configuredTimeout(
@@ -177,24 +181,96 @@ function adaptiveOutputSpec(job: DownloadJob) {
 }
 
 export function adaptiveRequestHeaders(job: DownloadJob) {
-  const preferred =
-    job.candidate.requestContext?.referrer ||
-    job.candidate.requestContext?.documentUrl ||
-    job.candidate.pageUrl;
-  let referer = job.candidate.pageUrl;
-  try {
-    const parsed = new URL(preferred);
-    if (["http:", "https:"].includes(parsed.protocol)) referer = parsed.href;
-  } catch {}
-  let origin = "null";
-  try {
-    origin = new URL(referer).origin;
-  } catch {}
-  return {
-    Referer: referer.replace(/[\r\n]/g, ""),
-    Origin: origin.replace(/[\r\n]/g, ""),
-    "User-Agent": "AdsFriendlyMediaHelper/0.4",
+  return adaptiveRequestHeaderProfiles(job)[0].headers;
+}
+
+export function adaptiveRequestHeaderProfiles(
+  job: DownloadJob,
+  resourceUrl: string | null = null,
+) {
+  const context = job.candidate.requestContext;
+  const referers = uniqueHttpUrls([
+    context?.referrer,
+    context?.documentUrl,
+    context?.parentDocumentUrl,
+    job.candidate.pageUrl,
+  ]);
+  const userAgent = job.browserUserAgent || "AdsFriendlyMediaHelper/0.11";
+  const profiles = [];
+  const register = (
+    id: string,
+    referer: string,
+    includeOrigin: boolean,
+    baseScore: number,
+  ) => {
+    let origin = "null";
+    try {
+      origin = new URL(referer).origin;
+    } catch {}
+    profiles.push({
+      id,
+      baseScore,
+      headers: {
+        Referer: referer.replace(/[\r\n]/g, ""),
+        ...(includeOrigin ? { Origin: origin.replace(/[\r\n]/g, "") } : {}),
+        "User-Agent": userAgent.replace(/[\r\n]/g, "").slice(0, 512),
+      },
+    });
   };
+  const preferred = referers[0] || job.candidate.pageUrl;
+  register(
+    MEDIA_ACCESS_STRATEGIES.CAPTURED_REFERER_ORIGIN,
+    preferred,
+    true,
+    getMediaAccessStrategy(MEDIA_ACCESS_STRATEGIES.CAPTURED_REFERER_ORIGIN)
+      .baseScore,
+  );
+  register(
+    MEDIA_ACCESS_STRATEGIES.CAPTURED_REFERER,
+    preferred,
+    false,
+    getMediaAccessStrategy(MEDIA_ACCESS_STRATEGIES.CAPTURED_REFERER).baseScore,
+  );
+  for (const referer of referers.slice(1)) {
+    const relation =
+      referer === context?.documentUrl
+        ? MEDIA_ACCESS_STRATEGIES.DOCUMENT_REFERER
+        : referer === context?.parentDocumentUrl
+          ? MEDIA_ACCESS_STRATEGIES.PARENT_REFERER
+          : MEDIA_ACCESS_STRATEGIES.PAGE_REFERER;
+    register(
+      relation,
+      referer,
+      false,
+      getMediaAccessStrategy(relation).baseScore,
+    );
+  }
+  let learned = {};
+  try {
+    learned = resourceUrl
+      ? job.accessStrategyPreferences[
+          new URL(resourceUrl).hostname.toLowerCase()
+        ] || {}
+      : {};
+  } catch {}
+  return profiles
+    .map((profile) => ({
+      ...profile,
+      score: profile.baseScore + (Number(learned[profile.id]) || 0) / 10,
+    }))
+    .sort((left, right) => right.score - left.score);
+}
+
+function uniqueHttpUrls(values: Array<string | null | undefined>) {
+  const urls = [];
+  for (const value of values) {
+    if (typeof value !== "string") continue;
+    try {
+      const url = new URL(value);
+      if (["http:", "https:"].includes(url.protocol)) urls.push(url.href);
+    } catch {}
+  }
+  return [...new Set(urls)];
 }
 
 export function emptyAdaptiveProgress(

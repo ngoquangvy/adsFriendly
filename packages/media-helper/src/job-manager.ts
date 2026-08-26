@@ -34,6 +34,12 @@ export class DownloadJobManager {
             mediaId: job.candidate.id,
             ...progress,
           }),
+        strategy: (strategy) =>
+          emit(MEDIA_HELPER_EVENTS.ACCESS_STRATEGY_RESULT, {
+            jobId: job.jobId,
+            mediaId: job.candidate.id,
+            ...strategy,
+          }),
       })
       .then((result) =>
         emit(MEDIA_HELPER_EVENTS.DOWNLOAD_COMPLETED, {

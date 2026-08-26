@@ -118,6 +118,7 @@ async function createJob({ tabId, mediaId, connections, output } = {}) {
   const handoffResult = await attachManifestHandoff(tabId, candidate);
   if (handoffResult.status !== "ready") return handoffResult;
   candidate = handoffResult.candidate;
+  candidate = await attachAesKeyHandoff(tabId, candidate);
   const job = normalizeMediaDownloadJob({
     id: randomId(),
     createdAt: Date.now(),
@@ -229,6 +230,7 @@ async function restartJob(state, requestedConnections) {
   );
   if (handoffResult.status !== "ready") return handoffResult;
   candidate = handoffResult.candidate;
+  candidate = await attachAesKeyHandoff(state.sourceTabId, candidate);
   const helperFailure = await helperFailureFor(candidate, state.output);
   if (helperFailure) return helperFailure;
   const job = normalizeMediaDownloadJob({
@@ -268,6 +270,47 @@ async function attachManifestHandoff(tabId, candidate) {
     status: "ready",
     candidate: { ...candidate, manifestHandoff: handoff },
   };
+}
+
+async function attachAesKeyHandoff(tabId, candidate) {
+  if (
+    candidate.kind !== "hls" ||
+    !(candidate.encryptionMethods || []).some((method) =>
+      ["AES-128", "SAMPLE-AES"].includes(String(method).toUpperCase()),
+    )
+  ) {
+    return candidate;
+  }
+  try {
+    const options =
+      Number.isInteger(candidate.frameId) && candidate.frameId >= 0
+        ? { frameId: candidate.frameId }
+        : undefined;
+    const message = {
+      type: "GET_MEDIA_AES_KEY_HANDOFF",
+      manifestUrl: candidate.manifestUrl,
+    };
+    const response = options
+      ? await chrome.tabs.sendMessage(tabId, message, options)
+      : await chrome.tabs.sendMessage(tabId, message);
+    if (
+      response?.status !== "ready" ||
+      response.manifestUrl !== candidate.manifestUrl ||
+      !response.keys?.length
+    ) {
+      return candidate;
+    }
+    return {
+      ...candidate,
+      keyHandoff: {
+        kind: "hls_aes_keys",
+        manifestUrl: candidate.manifestUrl,
+        keys: response.keys,
+      },
+    };
+  } catch {
+    return candidate;
+  }
 }
 
 async function recoverCandidate(state) {

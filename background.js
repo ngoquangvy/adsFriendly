@@ -2472,15 +2472,15 @@ var AdsFriendlyBackground = (() => {
   }
   function normalizeMediaResolutionAttempt(value) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-    const strategy2 = optionalEnumValue(
+    const strategy3 = optionalEnumValue(
       value.strategy,
       ["remove_query_parameter"],
       "resolutionAttempt.strategy"
     );
-    if (!strategy2) return null;
+    if (!strategy3) return null;
     return {
       adapterId: optionalString(value.adapterId)?.slice(0, 100) || null,
-      strategy: strategy2,
+      strategy: strategy3,
       removedQueryKey: optionalString(value.removedQueryKey)?.slice(0, 100) || null,
       evidence: normalizeStrings(value.evidence).slice(0, 20)
     };
@@ -3145,7 +3145,7 @@ var AdsFriendlyBackground = (() => {
     const byId = new Map(items.map((item) => [item.id, item]));
     const streams = [];
     const visited = /* @__PURE__ */ new Set();
-    const visit = (item, quality = null, strategy2 = itemStrategy(item)) => {
+    const visit = (item, quality = null, strategy3 = itemStrategy(item)) => {
       const visitKey = `${item.id}:${quality?.height || 0}:${quality?.bandwidth || 0}`;
       if (visited.has(visitKey)) return;
       visited.add(visitKey);
@@ -3154,7 +3154,7 @@ var AdsFriendlyBackground = (() => {
           item,
           quality,
           readiness: mediaReadiness(item),
-          ...strategy2
+          ...strategy3
         });
         return;
       }
@@ -4576,11 +4576,34 @@ var AdsFriendlyBackground = (() => {
           candidate.manifestHandoff,
           candidate
         ),
+        keyHandoff: normalizeAesKeyHandoff(candidate.keyHandoff, candidate),
         requestContext: normalizeDownloadRequestContext(
           candidate.resolvedRequestContext || candidate.requestContext
         )
       }
     };
+  }
+  function normalizeAesKeyHandoff(value, candidate) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    if (value.manifestUrl !== candidate.manifestUrl) {
+      throw new Error("[MediaDownload] AES key handoff does not match manifest.");
+    }
+    const keys = Array.isArray(value.keys) ? value.keys.slice(0, 16).map((item) => normalizeAesKeyEntry(item)).filter(Boolean) : [];
+    return keys.length ? { kind: "hls_aes_keys", manifestUrl: candidate.manifestUrl, keys } : null;
+  }
+  function normalizeAesKeyEntry(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const url = requiredHttpUrl(value.url, "candidate.keyHandoff.keys.url");
+    const data = optionalString2(value.data);
+    if (!data || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) return null;
+    let bytes = null;
+    try {
+      bytes = atob(data).length;
+    } catch {
+      return null;
+    }
+    if (!bytes || bytes > 64 * 1024) return null;
+    return { url, data, bytes };
   }
   function normalizeDownloadManifestHandoff(value, candidate) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -4748,8 +4771,38 @@ var AdsFriendlyBackground = (() => {
     };
   }
 
+  // src/media/access-strategy-catalog.js
+  var MEDIA_ACCESS_STRATEGIES = Object.freeze({
+    CAPTURED_REFERER_ORIGIN: "captured_referer_origin",
+    CAPTURED_REFERER: "captured_referer",
+    DOCUMENT_REFERER: "document_referer",
+    PARENT_REFERER: "parent_referer",
+    PAGE_REFERER: "page_referer",
+    BROWSER_KEY_HANDOFF: "browser_key_handoff"
+  });
+  var MEDIA_ACCESS_STRATEGY_CATALOG = Object.freeze([
+    strategy2(MEDIA_ACCESS_STRATEGIES.BROWSER_KEY_HANDOFF, "key", 1.2),
+    strategy2(MEDIA_ACCESS_STRATEGIES.CAPTURED_REFERER_ORIGIN, "http", 0.92),
+    strategy2(MEDIA_ACCESS_STRATEGIES.CAPTURED_REFERER, "http", 0.9),
+    strategy2(MEDIA_ACCESS_STRATEGIES.DOCUMENT_REFERER, "http", 0.82),
+    strategy2(MEDIA_ACCESS_STRATEGIES.PARENT_REFERER, "http", 0.72),
+    strategy2(MEDIA_ACCESS_STRATEGIES.PAGE_REFERER, "http", 0.72)
+  ]);
+  var STRATEGY_BY_ID2 = new Map(
+    MEDIA_ACCESS_STRATEGY_CATALOG.map((definition) => [
+      definition.id,
+      definition
+    ])
+  );
+  function isRegisteredMediaAccessStrategy(strategyId) {
+    return STRATEGY_BY_ID2.has(strategyId);
+  }
+  function strategy2(id, resourceKind, baseScore) {
+    return Object.freeze({ id, resourceKind, baseScore });
+  }
+
   // src/media/helper-contract.js
-  var MEDIA_HELPER_PROTOCOL_VERSION = 2;
+  var MEDIA_HELPER_PROTOCOL_VERSION = 3;
   var MEDIA_HELPER_HOST_NAME = "com.adsfriendly.media_helper";
   var MEDIA_HELPER_REQUESTS = Object.freeze({
     HELLO: "helper.hello",
@@ -4764,6 +4817,7 @@ var AdsFriendlyBackground = (() => {
     CAPABILITIES: "helper.capabilities",
     DOWNLOAD_STARTED: "download.started",
     DOWNLOAD_PROGRESS: "download.progress",
+    ACCESS_STRATEGY_RESULT: "media.access_strategy_result",
     DOWNLOAD_COMPLETED: "download.completed",
     DOWNLOAD_CANCELLED: "download.cancelled",
     OUTPUT_OPENED: "output.opened",
@@ -4805,6 +4859,116 @@ var AdsFriendlyBackground = (() => {
       throw new Error("[MediaHelperProtocol] Invalid protocol version.");
     }
     return version;
+  }
+
+  // src/background/media-access-strategy-memory.js
+  var STORAGE_KEY = "mediaAccessStrategyMemory";
+  var MEMORY_VERSION = 1;
+  var MAX_HOSTS = 100;
+  var MAX_STRATEGIES_PER_HOST = 8;
+  var mutationQueue = Promise.resolve();
+  function recordMediaAccessStrategyResult(value = {}) {
+    const operation = mutationQueue.then(() => recordResult(value));
+    mutationQueue = operation.catch(() => {
+    });
+    return operation;
+  }
+  async function recordResult(value) {
+    const hostname = normalizeHostname2(value.resourceHost);
+    const strategyId = normalizeStrategyId(value.strategyId);
+    const outcome = ["success", "rejected", "error"].includes(value.outcome) ? value.outcome : null;
+    if (!hostname || !strategyId || !outcome) return { status: "ignored" };
+    const snapshot = await chrome.storage.local.get(STORAGE_KEY);
+    const memory = normalizeMemory(snapshot[STORAGE_KEY]);
+    const host = memory[hostname] || { updatedAt: 0, strategies: {} };
+    const current = host.strategies[strategyId] || {
+      score: 0,
+      successes: 0,
+      failures: 0,
+      lastOutcome: null
+    };
+    if (outcome === "success") {
+      current.successes += 1;
+      current.score = Math.min(10, current.score + 2);
+    } else {
+      current.failures += 1;
+      current.score = Math.max(
+        -5,
+        current.score - (outcome === "rejected" ? 0.5 : 1)
+      );
+    }
+    current.lastOutcome = outcome;
+    current.updatedAt = Date.now();
+    host.updatedAt = current.updatedAt;
+    host.strategies[strategyId] = current;
+    host.strategies = Object.fromEntries(
+      Object.entries(host.strategies).sort(([, left], [, right]) => right.updatedAt - left.updatedAt).slice(0, MAX_STRATEGIES_PER_HOST)
+    );
+    memory[hostname] = host;
+    const bounded = Object.fromEntries(
+      Object.entries(memory).sort(([, left], [, right]) => right.updatedAt - left.updatedAt).slice(0, MAX_HOSTS)
+    );
+    await chrome.storage.local.set({
+      [STORAGE_KEY]: { version: MEMORY_VERSION, hosts: bounded }
+    });
+    return { status: "recorded" };
+  }
+  async function getMediaAccessStrategyPreferences() {
+    const snapshot = await chrome.storage.local.get(STORAGE_KEY);
+    const memory = normalizeMemory(snapshot[STORAGE_KEY]);
+    return Object.fromEntries(
+      Object.entries(memory).map(([hostname, host]) => [
+        hostname,
+        Object.fromEntries(
+          Object.entries(host.strategies).map(([strategyId, facts]) => [
+            strategyId,
+            Number(facts.score) || 0
+          ])
+        )
+      ])
+    );
+  }
+  function normalizeMemory(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    const rawHosts = value.version === MEMORY_VERSION ? value.hosts : value;
+    if (!rawHosts || typeof rawHosts !== "object" || Array.isArray(rawHosts)) {
+      return {};
+    }
+    const memory = {};
+    for (const [hostname, rawHost] of Object.entries(rawHosts).slice(
+      0,
+      MAX_HOSTS
+    )) {
+      const normalizedHost = normalizeHostname2(hostname);
+      if (!normalizedHost || !rawHost || typeof rawHost !== "object") continue;
+      const strategies = {};
+      for (const [strategyId, rawFacts] of Object.entries(
+        rawHost.strategies || {}
+      ).slice(0, MAX_STRATEGIES_PER_HOST)) {
+        const normalizedId = normalizeStrategyId(strategyId);
+        if (!normalizedId || !rawFacts || typeof rawFacts !== "object") continue;
+        strategies[normalizedId] = {
+          score: Math.max(-5, Math.min(10, Number(rawFacts.score) || 0)),
+          successes: Math.max(0, Number(rawFacts.successes) || 0),
+          failures: Math.max(0, Number(rawFacts.failures) || 0),
+          lastOutcome: String(rawFacts.lastOutcome || "").slice(0, 20),
+          updatedAt: Math.max(0, Number(rawFacts.updatedAt) || 0)
+        };
+      }
+      memory[normalizedHost] = {
+        updatedAt: Math.max(0, Number(rawHost.updatedAt) || 0),
+        strategies
+      };
+    }
+    return memory;
+  }
+  function normalizeHostname2(value) {
+    const hostname = String(value || "").toLowerCase();
+    return /^[a-z0-9.-]{1,253}$/.test(hostname) ? hostname : null;
+  }
+  function normalizeStrategyId(value) {
+    const strategyId = String(value || "");
+    return /^[a-z0-9_]{1,64}$/.test(strategyId) && isRegisteredMediaAccessStrategy(strategyId) ? strategyId : null;
   }
 
   // src/background/media-helper-bridge.js
@@ -4906,6 +5070,7 @@ var AdsFriendlyBackground = (() => {
       previousConnection.port.disconnect();
     }
     const requestId = randomId4();
+    const accessStrategyPreferences = await getMediaAccessStrategyPreferences().catch(() => ({}));
     const port = chrome.runtime.connectNative(MEDIA_HELPER_HOST_NAME);
     const state = {
       id: job.id,
@@ -4914,7 +5079,7 @@ var AdsFriendlyBackground = (() => {
       title: job.candidate.title,
       output: job.output,
       sourceTabId: job.sourceTabId,
-      candidate: withoutManifestBody(job.candidate),
+      candidate: withoutSensitiveHandoffs(job.candidate),
       connections,
       attempt,
       createdAt: job.createdAt,
@@ -4959,15 +5124,18 @@ var AdsFriendlyBackground = (() => {
         jobId: job.id,
         connections,
         output: job.output,
+        browserUserAgent: globalThis.navigator?.userAgent || null,
+        accessStrategyPreferences,
         candidate: job.candidate
       }
     });
     return { status: "started", jobId: job.id };
   }
-  function withoutManifestBody(candidate) {
-    if (!candidate.manifestHandoff) return candidate;
-    const { body: _body, ...manifestHandoff } = candidate.manifestHandoff;
-    return { ...candidate, manifestHandoff };
+  function withoutSensitiveHandoffs(candidate) {
+    const { keyHandoff: _keyHandoff, ...publicCandidate } = candidate;
+    if (!publicCandidate.manifestHandoff) return publicCandidate;
+    const { body: _body, ...manifestHandoff } = publicCandidate.manifestHandoff;
+    return { ...publicCandidate, manifestHandoff };
   }
   async function cancelMediaHelperDownload(jobId, { terminalStatus = "cancelled" } = {}) {
     const connection = activePorts.get(jobId);
@@ -5063,6 +5231,10 @@ var AdsFriendlyBackground = (() => {
           status: event2.payload.phase || "downloading",
           progress: { ...event2.payload }
         });
+        return;
+      }
+      if (event2.type === MEDIA_HELPER_EVENTS.ACCESS_STRATEGY_RESULT) {
+        await recordMediaAccessStrategyResult(event2.payload);
         return;
       }
       if (event2.type === MEDIA_HELPER_EVENTS.DOWNLOAD_COMPLETED) {
@@ -6042,6 +6214,7 @@ ${body}`;
     const handoffResult = await attachManifestHandoff(tabId, candidate);
     if (handoffResult.status !== "ready") return handoffResult;
     candidate = handoffResult.candidate;
+    candidate = await attachAesKeyHandoff(tabId, candidate);
     const job = normalizeMediaDownloadJob({
       id: randomId5(),
       createdAt: Date.now(),
@@ -6140,6 +6313,7 @@ ${body}`;
     );
     if (handoffResult.status !== "ready") return handoffResult;
     candidate = handoffResult.candidate;
+    candidate = await attachAesKeyHandoff(state.sourceTabId, candidate);
     const helperFailure = await helperFailureFor(candidate, state.output);
     if (helperFailure) return helperFailure;
     const job = normalizeMediaDownloadJob({
@@ -6172,6 +6346,34 @@ ${body}`;
       status: "ready",
       candidate: { ...candidate, manifestHandoff: handoff }
     };
+  }
+  async function attachAesKeyHandoff(tabId, candidate) {
+    if (candidate.kind !== "hls" || !(candidate.encryptionMethods || []).some(
+      (method) => ["AES-128", "SAMPLE-AES"].includes(String(method).toUpperCase())
+    )) {
+      return candidate;
+    }
+    try {
+      const options = Number.isInteger(candidate.frameId) && candidate.frameId >= 0 ? { frameId: candidate.frameId } : void 0;
+      const message = {
+        type: "GET_MEDIA_AES_KEY_HANDOFF",
+        manifestUrl: candidate.manifestUrl
+      };
+      const response = options ? await chrome.tabs.sendMessage(tabId, message, options) : await chrome.tabs.sendMessage(tabId, message);
+      if (response?.status !== "ready" || response.manifestUrl !== candidate.manifestUrl || !response.keys?.length) {
+        return candidate;
+      }
+      return {
+        ...candidate,
+        keyHandoff: {
+          kind: "hls_aes_keys",
+          manifestUrl: candidate.manifestUrl,
+          keys: response.keys
+        }
+      };
+    } catch {
+      return candidate;
+    }
   }
   async function recoverCandidate(state) {
     if (!Number.isInteger(state.sourceTabId) || !state.mediaId) return null;
@@ -7062,7 +7264,7 @@ ${body}`;
     if (!Array.isArray(values)) return [];
     return [
       ...new Set(
-        values.map(normalizeHostname2).filter(Boolean).map((hostname) => blacklist ? `||${hostname}^` : hostname)
+        values.map(normalizeHostname3).filter(Boolean).map((hostname) => blacklist ? `||${hostname}^` : hostname)
       )
     ].slice(0, 2e3);
   }
@@ -7070,7 +7272,7 @@ ${body}`;
     if (!value || typeof value !== "object" || Array.isArray(value)) return {};
     const result = {};
     for (const [rawHostname, rawRules] of Object.entries(value)) {
-      const hostname = normalizeHostname2(rawHostname);
+      const hostname = normalizeHostname3(rawHostname);
       if (!hostname || !Array.isArray(rawRules)) continue;
       const rules = rawRules.slice(0, MAX_RULES_PER_SITE2).map(normalizeRule).filter(Boolean);
       if (rules.length) result[hostname] = dedupeRules(rules);
@@ -7100,8 +7302,8 @@ ${body}`;
       className: cleanText(fingerprint.className, 300) || null,
       alt: cleanText(fingerprint.alt, 300) || null,
       title: cleanText(fingerprint.title, 300) || null,
-      linkDomain: normalizeHostname2(fingerprint.linkDomain) || null,
-      srcHost: normalizeHostname2(fingerprint.srcHost) || null,
+      linkDomain: normalizeHostname3(fingerprint.linkDomain) || null,
+      srcHost: normalizeHostname3(fingerprint.srcHost) || null,
       idTokens: normalizeTokens(fingerprint.idTokens),
       classTokens: normalizeTokens(fingerprint.classTokens)
     };
@@ -7110,8 +7312,8 @@ ${body}`;
     if (!Array.isArray(paths)) return [];
     const byKey = /* @__PURE__ */ new Map();
     for (const raw of paths.slice(0, 2e3)) {
-      const source = normalizeHostname2(raw?.source);
-      const target = normalizeHostname2(raw?.target);
+      const source = normalizeHostname3(raw?.source);
+      const target = normalizeHostname3(raw?.target);
       if (!source || !target || source === target) continue;
       byKey.set(`${source}>${target}`, {
         source,
@@ -7123,7 +7325,7 @@ ${body}`;
     }
     return [...byKey.values()];
   }
-  function normalizeHostname2(value) {
+  function normalizeHostname3(value) {
     const raw = String(value || "").trim().replace(/^\|\|/, "").replace(/\^$/, "");
     if (!raw) return "";
     try {

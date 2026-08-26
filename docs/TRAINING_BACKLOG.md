@@ -71,3 +71,28 @@ The runtime safety boundary remains narrower than training: an adapter runs
 only on exact envelope markers, tries at most three same-origin URLs, removes
 one non-authentication query key per attempt, and accepts an attempt only when
 the existing HLS validator reports usable media.
+
+## TRAINING_BACKLOG: MEDIA_ACCESS_STRATEGY
+
+Status: locally scored runtime preference; dataset export and model training
+are intentionally deferred.
+
+The Media Helper can try a bounded set of access strategies when an HLS key is
+not available with the first request profile. Examples include captured
+Referer plus Origin, captured Referer alone, document/page Referer, and an
+ephemeral key response already received by the browser. The extension stores
+only the resource hostname, registered strategy ID, success/failure counters,
+score, outcome, and timestamps. A later download for that hostname tries the
+higher-scoring registered strategy first.
+
+This runtime memory is not a training label. It must never contain full URLs,
+Referer/Origin values, User-Agent values, cookies, authorization data, key
+URLs, key bytes, manifest bodies, or media bytes. Browser key responses remain
+in page memory for a bounded time, are removed from persisted download state,
+and temporary Helper key files are deleted on success, failure, or cancel.
+
+Before this signal becomes training data, add a separate versioned
+`media_access_strategy` schema, opt-in export, host hashing/generalization,
+minimum observation counts, negative examples, and user-visible deletion.
+Do not infer that a strategy is universally correct from one host or one
+successful request.

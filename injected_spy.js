@@ -805,6 +805,9 @@ var AdsFriendlyMainWorld = (() => {
       };
     }
   }
+  function parseHlsAttributeList(value = "") {
+    return parseAttributeList(value);
+  }
   function normalizeVariant(attributes, uri, manifestUrl, iframeOnly = false) {
     const bandwidth = optionalPositiveNumber2(attributes.BANDWIDTH);
     const averageBandwidth = optionalPositiveNumber2(
@@ -2022,6 +2025,102 @@ ${body}`;
     }
   }
 
+  // src/main-world/aes-key-handoff.js
+  var MAX_KEY_BYTES = 64 * 1024;
+  var MAX_MANIFESTS = 16;
+  var MAX_KEYS_PER_MANIFEST = 16;
+  var MAXIMUM_AGE_MS2 = 10 * 60 * 1e3;
+  var manifests = /* @__PURE__ */ new Map();
+  var capturedKeys = /* @__PURE__ */ new Map();
+  function rememberHlsKeyUris(manifestUrl, body, observedAt = Date.now()) {
+    const keyUrls = [];
+    for (const rawLine of String(body || "").split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line.startsWith("#EXT-X-KEY:")) continue;
+      const attributes = parseHlsAttributeList(line.slice(line.indexOf(":") + 1));
+      const method = String(attributes.METHOD || "").toUpperCase();
+      const keyFormat = String(attributes.KEYFORMAT || "identity").toLowerCase();
+      if (!attributes.URI || method === "NONE" || !["AES-128", "SAMPLE-AES"].includes(method) || !["", "identity"].includes(keyFormat)) {
+        continue;
+      }
+      try {
+        const url = new URL(attributes.URI, manifestUrl);
+        if (["http:", "https:"].includes(url.protocol)) keyUrls.push(url.href);
+      } catch {
+      }
+    }
+    if (!keyUrls.length) return [];
+    prune(observedAt);
+    manifests.set(manifestUrl, {
+      keyUrls: [...new Set(keyUrls)].slice(0, MAX_KEYS_PER_MANIFEST),
+      observedAt
+    });
+    while (manifests.size > MAX_MANIFESTS) {
+      manifests.delete(manifests.keys().next().value);
+    }
+    return [...manifests.get(manifestUrl).keyUrls];
+  }
+  function mayCaptureAesKey(url) {
+    prune(Date.now());
+    return [...manifests.values()].some((item) => item.keyUrls.includes(url));
+  }
+  async function captureFetchAesKey(url, response) {
+    if (!mayCaptureAesKey(url) || !response?.ok) return false;
+    const bytes = new Uint8Array(await response.clone().arrayBuffer());
+    return rememberKey(url, bytes);
+  }
+  async function captureXhrAesKey(url, xhr) {
+    if (!mayCaptureAesKey(url) || Number(xhr?.status) >= 400) return false;
+    const responseType = String(xhr?.responseType || "").toLowerCase();
+    let bytes = null;
+    if (responseType === "arraybuffer" && xhr.response instanceof ArrayBuffer) {
+      bytes = new Uint8Array(xhr.response);
+    } else if (responseType === "blob" && xhr.response instanceof Blob) {
+      bytes = new Uint8Array(await xhr.response.arrayBuffer());
+    } else if (!responseType || responseType === "text") {
+      bytes = new TextEncoder().encode(String(xhr.responseText || ""));
+    }
+    return bytes ? rememberKey(url, bytes) : false;
+  }
+  function getAesKeyHandoff(manifestUrl, observedAt = Date.now()) {
+    prune(observedAt);
+    const manifest = manifests.get(manifestUrl);
+    if (!manifest) return [];
+    return manifest.keyUrls.map((url) => capturedKeys.get(url)).filter(Boolean).map((item) => ({ ...item }));
+  }
+  function clearAesKeyHandoffs() {
+    manifests.clear();
+    capturedKeys.clear();
+  }
+  function rememberKey(url, bytes) {
+    if (!(bytes instanceof Uint8Array) || !bytes.byteLength || bytes.byteLength > MAX_KEY_BYTES) {
+      return false;
+    }
+    capturedKeys.set(url, {
+      url,
+      data: bytesToBase64(bytes),
+      bytes: bytes.byteLength,
+      capturedAt: Date.now()
+    });
+    return true;
+  }
+  function prune(now) {
+    const cutoff = now - MAXIMUM_AGE_MS2;
+    for (const [url, item] of manifests) {
+      if (item.observedAt < cutoff) manifests.delete(url);
+    }
+    for (const [url, item] of capturedKeys) {
+      if (item.capturedAt < cutoff) capturedKeys.delete(url);
+    }
+  }
+  function bytesToBase64(bytes) {
+    let binary = "";
+    for (let offset = 0; offset < bytes.length; offset += 32768) {
+      binary += String.fromCharCode(...bytes.subarray(offset, offset + 32768));
+    }
+    return btoa(binary);
+  }
+
   // src/main-world/decrypted-manifest-observer.js
   var MAX_MANIFEST_BYTES = 2 * 1024 * 1024;
   var MAX_ENVELOPES = 16;
@@ -2144,6 +2243,9 @@ ${body}`;
     const match = findRecentEncryptedEnvelope(kind, observedAt);
     if (!match) return false;
     const parsed = kind === MEDIA_KINDS.DASH ? parseDashManifest(match.envelope.manifestUrl, body) : parseHlsManifest(match.envelope.manifestUrl, body);
+    if (kind === MEDIA_KINDS.HLS) {
+      rememberHlsKeyUris(match.envelope.manifestUrl, body, observedAt);
+    }
     const probe = { kind, ...parsed };
     const bodyBytes = byteLength(body);
     const manifestEnvelope = {
@@ -2360,6 +2462,7 @@ ${body}`;
       requestContexts.clear();
       clearMediaObservations();
       clearEncryptedManifestEnvelopes();
+      clearAesKeyHandoffs();
     };
   }
   function installFetchCapture(policy, inspect, resolveAttempts, requestContexts) {
@@ -2372,6 +2475,8 @@ ${body}`;
       const response = await originalFetch.apply(this, args);
       if (!policy.can(CAPABILITIES.MEDIA_OBSERVE)) return response;
       const finalUrl = response.url || url;
+      captureFetchAesKey(finalUrl, response).catch(() => {
+      });
       const requestContext2 = createFetchRequestContext(args, url, finalUrl);
       requestContexts.remember(requestContext2);
       const mimeType = response.headers.get("content-type");
@@ -2423,6 +2528,8 @@ ${body}`;
       this.addEventListener("load", () => {
         if (!policy.can(CAPABILITIES.MEDIA_OBSERVE)) return;
         const url = this.responseURL || this.__adsfriendly_url || "";
+        captureXhrAesKey(url, this).catch(() => {
+        });
         const requestContext2 = createXhrRequestContext(this, url);
         requestContexts.remember(requestContext2);
         const mimeType = this.getResponseHeader("content-type");
@@ -2664,6 +2771,9 @@ ${body}`;
       requestContext: requestContext2
     });
     const parsedProbe = manifestCandidate.kind === MEDIA_KINDS.DASH ? parseDashManifest(manifestUrl, body) : parseHlsManifest(manifestUrl, body);
+    if (manifestCandidate.kind === MEDIA_KINDS.HLS) {
+      rememberHlsKeyUris(manifestUrl, body);
+    }
     const probe = { kind: manifestCandidate.kind, ...parsedProbe };
     const diagnosticCode = parsedProbeDiagnosticCode(probe);
     reportProbeDiagnostic(manifestCandidate, {
@@ -3790,6 +3900,14 @@ ${body}`;
     if (message.type === "SET_AD_MODE") setAdMode(message.value);
     if (message.type === "PROTECTION_SETTINGS_CHANGED")
       controller.updateSettings(message.settings);
+    if (message.type === "GET_MEDIA_AES_KEY_HANDOFF") {
+      notifyContentScript({
+        type: "MEDIA_AES_KEY_HANDOFF_RESPONSE",
+        requestId: message.requestId,
+        manifestUrl: message.manifestUrl,
+        keys: getAesKeyHandoff(message.manifestUrl)
+      });
+    }
   });
   console.log("[AdsFriendly Spy] Injected and controlled by MainController.");
   controller.start().catch(

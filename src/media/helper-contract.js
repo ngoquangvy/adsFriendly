@@ -1,6 +1,7 @@
 import { normalizeMediaDownloadOutput } from "./download-options.js";
+import { isRegisteredMediaAccessStrategy } from "./access-strategy-catalog.js";
 
-export const MEDIA_HELPER_PROTOCOL_VERSION = 2;
+export const MEDIA_HELPER_PROTOCOL_VERSION = 3;
 export const MEDIA_HELPER_HOST_NAME = "com.adsfriendly.media_helper";
 
 export const MEDIA_HELPER_REQUESTS = Object.freeze({
@@ -17,6 +18,7 @@ export const MEDIA_HELPER_EVENTS = Object.freeze({
   CAPABILITIES: "helper.capabilities",
   DOWNLOAD_STARTED: "download.started",
   DOWNLOAD_PROGRESS: "download.progress",
+  ACCESS_STRATEGY_RESULT: "media.access_strategy_result",
   DOWNLOAD_COMPLETED: "download.completed",
   DOWNLOAD_CANCELLED: "download.cancelled",
   OUTPUT_OPENED: "output.opened",
@@ -131,6 +133,10 @@ export function normalizeHelperDownloadPayload(value = {}) {
   return {
     jobId: requiredString(value.jobId, "jobId"),
     connections,
+    browserUserAgent: normalizeUserAgent(value.browserUserAgent),
+    accessStrategyPreferences: normalizeAccessStrategyPreferences(
+      value.accessStrategyPreferences,
+    ),
     outputDirectory: optionalString(value.outputDirectory),
     output: normalizeMediaDownloadOutput(value.output, candidate),
     candidate: {
@@ -155,8 +161,78 @@ export function normalizeHelperDownloadPayload(value = {}) {
         kind === "hls"
           ? normalizeHelperManifestHandoff(candidate.manifestHandoff, sourceUrl)
           : null,
+      keyHandoff:
+        kind === "hls"
+          ? normalizeHelperKeyHandoff(candidate.keyHandoff, sourceUrl)
+          : null,
     },
   };
+}
+
+function normalizeHelperKeyHandoff(value, manifestUrl) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  if (value.kind !== "hls_aes_keys" || value.manifestUrl !== manifestUrl) {
+    throw new Error(
+      "[MediaHelperProtocol] AES key handoff does not match the candidate.",
+    );
+  }
+  const keys = Array.isArray(value.keys)
+    ? value.keys
+        .slice(0, 16)
+        .map((item) => normalizeHelperKeyEntry(item))
+        .filter(Boolean)
+    : [];
+  return keys.length ? { kind: "hls_aes_keys", manifestUrl, keys } : null;
+}
+
+function normalizeHelperKeyEntry(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const url = requiredHttpUrl(value.url, "candidate.keyHandoff.keys.url");
+  const data = optionalString(value.data);
+  if (!data || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) return null;
+  let bytes = null;
+  try {
+    bytes = atob(data).length;
+  } catch {
+    return null;
+  }
+  return bytes > 0 && bytes <= 64 * 1024 ? { url, data, bytes } : null;
+}
+
+function normalizeUserAgent(value) {
+  if (typeof value !== "string") return null;
+  const userAgent = value.replace(/[\r\n]/g, "").trim();
+  return userAgent ? userAgent.slice(0, 512) : null;
+}
+
+function normalizeAccessStrategyPreferences(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const output = {};
+  for (const [hostname, rawStrategies] of Object.entries(value).slice(0, 100)) {
+    if (
+      !/^[a-z0-9.-]{1,253}$/i.test(hostname) ||
+      !rawStrategies ||
+      typeof rawStrategies !== "object" ||
+      Array.isArray(rawStrategies)
+    ) {
+      continue;
+    }
+    output[hostname.toLowerCase()] = Object.fromEntries(
+      Object.entries(rawStrategies)
+        .filter(
+          ([strategyId, score]) =>
+            /^[a-z0-9_]{1,64}$/i.test(strategyId) &&
+            isRegisteredMediaAccessStrategy(strategyId) &&
+            Number.isFinite(Number(score)),
+        )
+        .slice(0, 8)
+        .map(([strategyId, score]) => [
+          strategyId,
+          Math.max(-5, Math.min(10, Number(score))),
+        ]),
+    );
+  }
+  return output;
 }
 
 function normalizeHelperManifestHandoff(value, manifestUrl) {

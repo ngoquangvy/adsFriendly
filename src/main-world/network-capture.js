@@ -20,6 +20,12 @@ import {
   clearEncryptedManifestEnvelopes,
   rememberEncryptedManifestEnvelope,
 } from "./decrypted-manifest-observer.js";
+import {
+  captureFetchAesKey,
+  captureXhrAesKey,
+  clearAesKeyHandoffs,
+  rememberHlsKeyUris,
+} from "./aes-key-handoff.js";
 
 export function installNetworkCapture(policy) {
   const originalFetch = window.fetch;
@@ -86,6 +92,7 @@ export function installNetworkCapture(policy) {
     requestContexts.clear();
     clearMediaObservations();
     clearEncryptedManifestEnvelopes();
+    clearAesKeyHandoffs();
   };
 }
 
@@ -104,6 +111,7 @@ function installFetchCapture(
     const response = await originalFetch.apply(this, args);
     if (!policy.can(CAPABILITIES.MEDIA_OBSERVE)) return response;
     const finalUrl = response.url || url;
+    captureFetchAesKey(finalUrl, response).catch(() => {});
     const requestContext = createFetchRequestContext(args, url, finalUrl);
     requestContexts.remember(requestContext);
     const mimeType = response.headers.get("content-type");
@@ -168,6 +176,7 @@ function installXhrCapture(policy, inspect, resolveAttempts, requestContexts) {
     this.addEventListener("load", () => {
       if (!policy.can(CAPABILITIES.MEDIA_OBSERVE)) return;
       const url = this.responseURL || this.__adsfriendly_url || "";
+      captureXhrAesKey(url, this).catch(() => {});
       const requestContext = createXhrRequestContext(this, url);
       requestContexts.remember(requestContext);
       const mimeType = this.getResponseHeader("content-type");
@@ -478,6 +487,9 @@ function inspectManifest(
     manifestCandidate.kind === MEDIA_KINDS.DASH
       ? parseDashManifest(manifestUrl, body)
       : parseHlsManifest(manifestUrl, body);
+  if (manifestCandidate.kind === MEDIA_KINDS.HLS) {
+    rememberHlsKeyUris(manifestUrl, body);
+  }
   const probe = { kind: manifestCandidate.kind, ...parsedProbe };
   const diagnosticCode = parsedProbeDiagnosticCode(probe);
   reportProbeDiagnostic(manifestCandidate, {

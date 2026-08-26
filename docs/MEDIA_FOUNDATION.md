@@ -150,7 +150,7 @@ are transient diagnostics—not training labels or video-ad classifications.
 ## Optional helper boundary
 
 `src/media/helper-contract.js` is the versioned, language-neutral protocol
-contract shared by the extension and `packages/media-helper/`. Helper 0.6 has
+contract shared by the extension and `packages/media-helper/`. The helper has
 an adapter registry, a Direct HTTP MP4/WebM adapter with parallel byte-range
 requests, progress, cancellation, and resume metadata, plus FFmpeg-backed HLS
 and DASH VOD adapters. HLS AES-128 identity keys are supported when their HTTP(S)
@@ -160,6 +160,18 @@ manifest input, validates referenced network resources, and supports HLS
 discontinuities that FFmpeg can remux into MP4. The background bridge keeps transient job status in
 `chrome.storage.session`; these records remain separate from Settings packages
 and training data.
+
+For identity AES HLS, the Helper first uses bounded request-header profiles
+derived from captured routing facts and the browser's actual User-Agent. If the
+key server rejects every profile but the page player already received the
+declared key, the main-world observer can hand that exact key to the Helper in
+memory. No arbitrary response is captured: the URL must first appear in a
+parsed identity AES key tag. Per-host strategy outcomes are scored locally so a
+successful registered method is preferred on the next download. Sensitive
+headers and key material are excluded from this memory and from persisted job
+history; temporary key files are removed after any terminal outcome. See
+`TRAINING_BACKLOG: MEDIA_ACCESS_STRATEGY` before considering these outcomes for
+future AI training.
 
 The extension declares `nativeMessaging` as an optional permission and asks for
 it only after a user initiates Media Helper setup. The extension sends only

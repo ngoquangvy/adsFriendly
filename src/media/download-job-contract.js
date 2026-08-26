@@ -72,11 +72,43 @@ export function normalizeMediaDownloadJob(value = {}) {
               candidate.manifestHandoff,
               candidate,
             ),
+            keyHandoff: normalizeAesKeyHandoff(candidate.keyHandoff, candidate),
             requestContext: normalizeDownloadRequestContext(
               candidate.resolvedRequestContext || candidate.requestContext,
             ),
           },
   };
+}
+
+function normalizeAesKeyHandoff(value, candidate) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  if (value.manifestUrl !== candidate.manifestUrl) {
+    throw new Error("[MediaDownload] AES key handoff does not match manifest.");
+  }
+  const keys = Array.isArray(value.keys)
+    ? value.keys
+        .slice(0, 16)
+        .map((item) => normalizeAesKeyEntry(item))
+        .filter(Boolean)
+    : [];
+  return keys.length
+    ? { kind: "hls_aes_keys", manifestUrl: candidate.manifestUrl, keys }
+    : null;
+}
+
+function normalizeAesKeyEntry(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const url = requiredHttpUrl(value.url, "candidate.keyHandoff.keys.url");
+  const data = optionalString(value.data);
+  if (!data || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) return null;
+  let bytes = null;
+  try {
+    bytes = atob(data).length;
+  } catch {
+    return null;
+  }
+  if (!bytes || bytes > 64 * 1024) return null;
+  return { url, data, bytes };
 }
 
 function normalizeDownloadManifestHandoff(value, candidate) {

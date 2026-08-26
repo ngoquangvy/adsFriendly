@@ -5,6 +5,7 @@ import {
   createHlsAcquisitionPlan,
   hlsCacheDirectory,
   removeHlsCache,
+  removeHlsSensitiveCache,
   resolveHlsMediaPlaylist,
 } from "./hls-acquisition.js";
 import {
@@ -55,41 +56,54 @@ async function downloadHls(
     ),
   );
   const plan = createHlsAcquisitionPlan(resolved.manifestUrl, resolved.body);
-  const acquisition = await acquireHlsPlan(plan, job, context, cacheDirectory);
+  let completed = false;
+  try {
+    const acquisition = await acquireHlsPlan(
+      plan,
+      job,
+      context,
+      cacheDirectory,
+    );
 
-  context.progress(emptyAdaptiveProgress("probing", "output_prepare"));
-  const filename = chooseFilename(job);
-  const outputPath = await availableOutputPath(outputDirectory, filename);
-  const partialPath = join(
-    outputDirectory,
-    `.${basename(outputPath, extname(outputPath))}.${safeId(job.jobId)}.part${adaptiveOutputExtension(job)}`,
-  );
-  await unlink(partialPath).catch(() => {});
+    context.progress(emptyAdaptiveProgress("probing", "output_prepare"));
+    const filename = chooseFilename(job);
+    const outputPath = await availableOutputPath(outputDirectory, filename);
+    const partialPath = join(
+      outputDirectory,
+      `.${basename(outputPath, extname(outputPath))}.${safeId(job.jobId)}.part${adaptiveOutputExtension(job)}`,
+    );
+    await unlink(partialPath).catch(() => {});
 
-  const result = await runAdaptiveFfmpeg(
-    job,
-    acquisition.manifestPath,
-    partialPath,
-    context,
-    "local HLS",
-  );
-  context.progress({
-    phase: "finalizing",
-    downloadedBytes: result.totalBytes || 0,
-    totalBytes: result.totalBytes,
-    bytesPerSecond: 0,
-    resumable: false,
-    resumedBytes: acquisition.resumedBytes,
-    processedSeconds: job.candidate.duration,
-    duration: job.candidate.duration,
-  });
-  await rename(partialPath, outputPath);
-  await removeHlsCache(cacheDirectory);
-  return {
-    outputPath,
-    totalBytes: result.totalBytes,
-    resumedBytes: acquisition.resumedBytes,
-  };
+    const result = await runAdaptiveFfmpeg(
+      job,
+      acquisition.manifestPath,
+      partialPath,
+      context,
+      "local HLS",
+    );
+    context.progress({
+      phase: "finalizing",
+      downloadedBytes: result.totalBytes || 0,
+      totalBytes: result.totalBytes,
+      bytesPerSecond: 0,
+      resumable: false,
+      resumedBytes: acquisition.resumedBytes,
+      processedSeconds: job.candidate.duration,
+      duration: job.candidate.duration,
+    });
+    await rename(partialPath, outputPath);
+    await removeHlsCache(cacheDirectory);
+    completed = true;
+    return {
+      outputPath,
+      totalBytes: result.totalBytes,
+      resumedBytes: acquisition.resumedBytes,
+    };
+  } finally {
+    if (!completed) {
+      await removeHlsSensitiveCache(plan, cacheDirectory).catch(() => {});
+    }
+  }
 }
 
 export function absolutizeHlsManifest(body: string, baseUrl: string) {

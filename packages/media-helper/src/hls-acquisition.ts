@@ -7,8 +7,13 @@ import {
 } from "../../../src/media/hls-parser.js";
 import { downloadResourcesInParallel } from "../../../src/media/parallel-downloader.js";
 import { hasStrongDrmEvidence } from "../../../src/media/protection-policy.js";
+import {
+  MEDIA_ACCESS_STRATEGIES,
+  getMediaAccessStrategy,
+} from "../../../src/media/access-strategy-catalog.js";
 import { fetchRemote } from "./direct-http-adapter.js";
 import {
+  adaptiveRequestHeaderProfiles,
   adaptiveRequestHeaders,
   emptyAdaptiveProgress,
   verifyAdaptiveInput,
@@ -399,6 +404,20 @@ export async function removeHlsCache(cacheDirectory: string) {
   await rm(cacheDirectory, { recursive: true, force: true });
 }
 
+export async function removeHlsSensitiveCache(
+  plan: HlsAcquisitionPlan,
+  cacheDirectory: string,
+) {
+  await Promise.all(
+    plan.resources
+      .filter((resource) => resource.kind === "key")
+      .flatMap((resource) => [
+        rm(join(cacheDirectory, resource.localName), { force: true }),
+        rm(join(cacheDirectory, `${resource.localName}.part`), { force: true }),
+      ]),
+  );
+}
+
 export function hlsCacheDirectory(outputDirectory: string, job: DownloadJob) {
   return join(
     outputDirectory,
@@ -434,7 +453,7 @@ async function acquireResources(
     signal: context.signal,
     writeInOrder: false,
     fetchResource: (resource: HlsAcquisitionResource, signal: AbortSignal) =>
-      fetchResource(job, resource, signal),
+      fetchResource(job, resource, context, signal),
     writeResource: async (
       bytes: Uint8Array,
       resource: HlsAcquisitionResource,
@@ -472,16 +491,15 @@ async function acquireResources(
 async function fetchResource(
   job: DownloadJob,
   resource: HlsAcquisitionResource,
+  context: DownloadContext,
   signal: AbortSignal,
 ) {
-  const headers = {
-    ...adaptiveRequestHeaders(job),
-    ...(resource.byteRange
-      ? {
-          Range: `bytes=${resource.byteRange.offset}-${resource.byteRange.offset + resource.byteRange.length - 1}`,
-        }
-      : {}),
-  };
+  const keyResult =
+    resource.kind === "key"
+      ? await fetchKeyResource(job, resource, context, signal)
+      : null;
+  if (keyResult) return keyResult;
+  const headers = resourceHeaders(job, resource);
   const response = await fetchRemote(resource.url, { headers, signal });
   const expectedStatus = resource.byteRange ? 206 : 200;
   if (!response.ok || (resource.byteRange && response.status !== 206)) {
@@ -509,6 +527,160 @@ async function fetchResource(
     );
   }
   return bytes;
+}
+
+async function fetchKeyResource(
+  job: DownloadJob,
+  resource: HlsAcquisitionResource,
+  context: DownloadContext,
+  signal: AbortSignal,
+) {
+  const hostname = new URL(resource.url).hostname.toLowerCase();
+  const learned = job.accessStrategyPreferences[hostname] || {};
+  const handoff = browserKeyBytes(job, resource.url);
+  if (
+    handoff &&
+    Number(learned[MEDIA_ACCESS_STRATEGIES.BROWSER_KEY_HANDOFF]) >= 2
+  ) {
+    reportKeyStrategy(
+      context,
+      hostname,
+      MEDIA_ACCESS_STRATEGIES.BROWSER_KEY_HANDOFF,
+      "success",
+      null,
+      getMediaAccessStrategy(MEDIA_ACCESS_STRATEGIES.BROWSER_KEY_HANDOFF)
+        .baseScore,
+    );
+    return handoff;
+  }
+  let lastStatus = null;
+  let lastError = null;
+  for (const profile of adaptiveRequestHeaderProfiles(job, resource.url)) {
+    try {
+      const response = await fetchRemote(resource.url, {
+        headers: { ...profile.headers },
+        signal,
+      });
+      lastStatus = response.status;
+      if (response.status === 200) {
+        const bytes = await readKeyResponse(response);
+        reportKeyStrategy(
+          context,
+          hostname,
+          profile.id,
+          "success",
+          response.status,
+          profile.score,
+        );
+        return bytes;
+      }
+      await response.body?.cancel().catch(() => {});
+      reportKeyStrategy(
+        context,
+        hostname,
+        profile.id,
+        [401, 403].includes(response.status) ? "rejected" : "error",
+        response.status,
+        profile.score,
+      );
+      if (![401, 403].includes(response.status)) break;
+    } catch (error) {
+      lastError = error;
+      reportKeyStrategy(
+        context,
+        hostname,
+        profile.id,
+        "error",
+        null,
+        profile.score,
+      );
+    }
+  }
+  if (handoff) {
+    reportKeyStrategy(
+      context,
+      hostname,
+      MEDIA_ACCESS_STRATEGIES.BROWSER_KEY_HANDOFF,
+      "success",
+      lastStatus,
+      getMediaAccessStrategy(MEDIA_ACCESS_STRATEGIES.BROWSER_KEY_HANDOFF)
+        .baseScore,
+    );
+    return handoff;
+  }
+  const error = new Error(
+    lastStatus
+      ? `key request returned HTTP ${lastStatus} after bounded browser-header strategies; no captured browser key was available.`
+      : `key request failed after bounded browser-header strategies${lastError ? `: ${messageOf(lastError)}` : "."}`,
+  );
+  Object.assign(error, { retryable: false });
+  throw error;
+}
+
+async function readKeyResponse(response: Response) {
+  const declaredLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_KEY_BYTES) {
+    await response.body?.cancel().catch(() => {});
+    throw new Error("key resource is unexpectedly large.");
+  }
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (!bytes.byteLength || bytes.byteLength > MAX_KEY_BYTES) {
+    throw new Error("key resource has an invalid size.");
+  }
+  if (looksLikeHtml(bytes)) {
+    throw new Error("key request returned HTML instead of key data.");
+  }
+  return bytes;
+}
+
+function resourceHeaders(job: DownloadJob, resource: HlsAcquisitionResource) {
+  return {
+    ...adaptiveRequestHeaderProfiles(job, resource.url)[0].headers,
+    ...(resource.byteRange
+      ? {
+          Range: `bytes=${resource.byteRange.offset}-${resource.byteRange.offset + resource.byteRange.length - 1}`,
+        }
+      : {}),
+  };
+}
+
+function browserKeyBytes(job: DownloadJob, resourceUrl: string) {
+  const entry = job.candidate.keyHandoff?.keys.find(
+    (item) => item.url === resourceUrl,
+  );
+  if (!entry) return null;
+  try {
+    const bytes = new Uint8Array(Buffer.from(entry.data, "base64"));
+    return bytes.byteLength > 0 &&
+      bytes.byteLength <= MAX_KEY_BYTES &&
+      bytes.byteLength === entry.bytes
+      ? bytes
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function reportKeyStrategy(
+  context: DownloadContext,
+  resourceHost: string,
+  strategyId: string,
+  outcome: "success" | "rejected" | "error",
+  httpStatus: number | null,
+  score: number,
+) {
+  context.strategy({
+    resourceKind: "key",
+    resourceHost,
+    strategyId,
+    outcome,
+    httpStatus,
+    score,
+  });
+}
+
+function messageOf(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 async function fetchManifest(

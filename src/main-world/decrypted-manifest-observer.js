@@ -6,6 +6,7 @@ import { parseDashManifest } from "../media/dash-parser.js";
 import { isUsableMediaProbe } from "../media/probe-gate.js";
 import { EVENTS, createRegisteredEvent } from "../runtime/event-catalog.js";
 import { CAPABILITIES } from "../runtime/feature-catalog.js";
+import { rememberHlsKeyUris } from "./aes-key-handoff.js";
 
 const MAX_MANIFEST_BYTES = 2 * 1024 * 1024;
 const MAX_ENVELOPES = 16;
@@ -151,6 +152,9 @@ async function inspectBlob(blob, objectUrl, observedAt) {
     kind === MEDIA_KINDS.DASH
       ? parseDashManifest(match.envelope.manifestUrl, body)
       : parseHlsManifest(match.envelope.manifestUrl, body);
+  if (kind === MEDIA_KINDS.HLS) {
+    rememberHlsKeyUris(match.envelope.manifestUrl, body, observedAt);
+  }
   const probe = { kind, ...parsed };
   const bodyBytes = byteLength(body);
   const manifestEnvelope = {

@@ -12,6 +12,10 @@ import {
   downloadJobKey,
   normalizeMediaDownloadJob,
 } from "../media/download-job-contract.js";
+import {
+  getMediaAccessStrategyPreferences,
+  recordMediaAccessStrategyResult,
+} from "./media-access-strategy-memory.js";
 
 const DEFAULT_TIMEOUT_MS = 8000;
 const STATUS_CACHE_MS = 15_000;
@@ -131,6 +135,8 @@ export async function startMediaHelperDownload(
     previousConnection.port.disconnect();
   }
   const requestId = randomId();
+  const accessStrategyPreferences =
+    await getMediaAccessStrategyPreferences().catch(() => ({}));
   const port = chrome.runtime.connectNative(MEDIA_HELPER_HOST_NAME);
   const state = {
     id: job.id,
@@ -139,7 +145,7 @@ export async function startMediaHelperDownload(
     title: job.candidate.title,
     output: job.output,
     sourceTabId: job.sourceTabId,
-    candidate: withoutManifestBody(job.candidate),
+    candidate: withoutSensitiveHandoffs(job.candidate),
     connections,
     attempt,
     createdAt: job.createdAt,
@@ -187,16 +193,19 @@ export async function startMediaHelperDownload(
       jobId: job.id,
       connections,
       output: job.output,
+      browserUserAgent: globalThis.navigator?.userAgent || null,
+      accessStrategyPreferences,
       candidate: job.candidate,
     },
   });
   return { status: "started", jobId: job.id };
 }
 
-function withoutManifestBody(candidate) {
-  if (!candidate.manifestHandoff) return candidate;
-  const { body: _body, ...manifestHandoff } = candidate.manifestHandoff;
-  return { ...candidate, manifestHandoff };
+function withoutSensitiveHandoffs(candidate) {
+  const { keyHandoff: _keyHandoff, ...publicCandidate } = candidate;
+  if (!publicCandidate.manifestHandoff) return publicCandidate;
+  const { body: _body, ...manifestHandoff } = publicCandidate.manifestHandoff;
+  return { ...publicCandidate, manifestHandoff };
 }
 
 export async function cancelMediaHelperDownload(
@@ -322,6 +331,10 @@ async function handleJobEvent(jobId, requestId, rawEvent) {
         status: event.payload.phase || "downloading",
         progress: { ...event.payload },
       });
+      return;
+    }
+    if (event.type === MEDIA_HELPER_EVENTS.ACCESS_STRATEGY_RESULT) {
+      await recordMediaAccessStrategyResult(event.payload);
       return;
     }
     if (event.type === MEDIA_HELPER_EVENTS.DOWNLOAD_COMPLETED) {

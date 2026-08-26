@@ -82,6 +82,12 @@ import {
   diagnoseMediaResolution,
 } from "../src/media/resolution-diagnostics.js";
 import { chooseMediaTitle } from "../src/media/media-title.js";
+import {
+  captureFetchAesKey,
+  clearAesKeyHandoffs,
+  getAesKeyHandoff,
+  rememberHlsKeyUris,
+} from "../src/main-world/aes-key-handoff.js";
 
 test("offers a helper setup action independently from downloadable media", () => {
   assert.deepEqual(helperSetupPresentation({ status: "permission_required" }), {
@@ -115,6 +121,55 @@ test("offers a helper setup action independently from downloadable media", () =>
     ),
     "Media found · Media Helper took too long to start.",
   );
+});
+
+test("browser AES handoff captures only keys declared by an identity HLS manifest", async () => {
+  const manifestUrl = "https://cdn.example/video/index.m3u8";
+  const keyUrl = "https://cdn.example/video/key.bin";
+  clearAesKeyHandoffs();
+  try {
+    assert.deepEqual(
+      rememberHlsKeyUris(
+        manifestUrl,
+        '#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI="key.bin"\n#EXTINF:4,\nsegment.ts',
+      ),
+      [keyUrl],
+    );
+    assert.equal(
+      await captureFetchAesKey(
+        keyUrl,
+        new Response(Buffer.from("0123456789abcdef")),
+      ),
+      true,
+    );
+    const handoff = getAesKeyHandoff(manifestUrl);
+    assert.equal(handoff.length, 1);
+    assert.deepEqual(
+      {
+        url: handoff[0].url,
+        data: handoff[0].data,
+        bytes: handoff[0].bytes,
+      },
+      {
+        url: keyUrl,
+        data: Buffer.from("0123456789abcdef").toString("base64"),
+        bytes: 16,
+      },
+    );
+    assert.equal(typeof handoff[0].capturedAt, "number");
+
+    const drmManifest = "https://cdn.example/drm/index.m3u8";
+    assert.deepEqual(
+      rememberHlsKeyUris(
+        drmManifest,
+        '#EXTM3U\n#EXT-X-KEY:METHOD=SAMPLE-AES,KEYFORMAT="com.widevine",URI="license"',
+      ),
+      [],
+    );
+    assert.deepEqual(getAesKeyHandoff(drmManifest), []);
+  } finally {
+    clearAesKeyHandoffs();
+  }
 });
 
 test("download job view exposes speed, connections, and resumable actions", () => {

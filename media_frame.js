@@ -737,6 +737,7 @@ var AdsFriendlyMediaFrame = (() => {
     const requestedProbes = /* @__PURE__ */ new Set();
     const contextualProbeRetries = /* @__PURE__ */ new Set();
     const videoListeners = /* @__PURE__ */ new Map();
+    const aesKeyHandoffRequests = /* @__PURE__ */ new Map();
     const mutationObserver = new MutationObserver((mutations) => {
       for (const mutation of mutations) {
         if (mutation.type === "attributes") scanElement(mutation.target);
@@ -752,6 +753,20 @@ var AdsFriendlyMediaFrame = (() => {
       subtree: true
     });
     const onMainWorldMessage = (messageEvent) => {
+      if (messageEvent.source === window && messageEvent.data?.source === "adsfriendly-spy" && messageEvent.data?.type === "MEDIA_AES_KEY_HANDOFF_RESPONSE") {
+        const pendingRequest = aesKeyHandoffRequests.get(
+          messageEvent.data.requestId
+        );
+        if (!pendingRequest) return;
+        aesKeyHandoffRequests.delete(messageEvent.data.requestId);
+        clearTimeout(pendingRequest.timeoutId);
+        pendingRequest.resolve({
+          status: "ready",
+          manifestUrl: messageEvent.data.manifestUrl,
+          keys: Array.isArray(messageEvent.data.keys) ? messageEvent.data.keys : []
+        });
+        return;
+      }
       if (messageEvent.source === window && messageEvent.data?.source === "adsfriendly-spy" && messageEvent.data?.type === "MEDIA_PROBE_CONTEXT_REQUIRED") {
         retryProbeWithParentContext(messageEvent.data);
         return;
@@ -782,13 +797,18 @@ var AdsFriendlyMediaFrame = (() => {
       }
     };
     window.addEventListener("message", onMainWorldMessage);
-    const onBackgroundMessage = (message) => {
-      if (message?.type !== "PROBE_OBSERVED_MEDIA") return;
+    const onBackgroundMessage = (message, _sender, sendResponse) => {
+      if (message?.type === "GET_MEDIA_AES_KEY_HANDOFF") {
+        requestAesKeyHandoff(message.manifestUrl).then(sendResponse);
+        return true;
+      }
+      if (message?.type !== "PROBE_OBSERVED_MEDIA") return void 0;
       try {
         scheduleManifestProbe(normalizeMediaCandidate(message.candidate));
       } catch (error) {
         console.debug("[AdsFriendly Media] Invalid observed media", error);
       }
+      return void 0;
     };
     chrome.runtime.onMessage.addListener(onBackgroundMessage);
     const performanceObserver = startPerformanceObserver((entry) => {
@@ -817,7 +837,34 @@ var AdsFriendlyMediaFrame = (() => {
       probeTimers.clear();
       requestedProbes.clear();
       contextualProbeRetries.clear();
+      for (const pendingRequest of aesKeyHandoffRequests.values()) {
+        clearTimeout(pendingRequest.timeoutId);
+        pendingRequest.resolve({ status: "stopped", keys: [] });
+      }
+      aesKeyHandoffRequests.clear();
     };
+    function requestAesKeyHandoff(manifestUrl) {
+      if (typeof manifestUrl !== "string" || !/^https?:/i.test(manifestUrl)) {
+        return Promise.resolve({ status: "invalid_manifest", keys: [] });
+      }
+      const requestId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      return new Promise((resolve) => {
+        const timeoutId = setTimeout(() => {
+          aesKeyHandoffRequests.delete(requestId);
+          resolve({ status: "timeout", keys: [] });
+        }, 1500);
+        aesKeyHandoffRequests.set(requestId, { resolve, timeoutId });
+        window.postMessage(
+          {
+            source: "adsfriendly-content",
+            type: "GET_MEDIA_AES_KEY_HANDOFF",
+            requestId,
+            manifestUrl
+          },
+          "*"
+        );
+      });
+    }
     function scanElement(element) {
       if (stopped || !element) return;
       if (element.matches?.("video")) observeVideo(element);

@@ -15,6 +15,11 @@ export interface DownloadCandidate {
     bodyBytes: number;
     revisionId: string | null;
   } | null;
+  keyHandoff: {
+    kind: "hls_aes_keys";
+    manifestUrl: string;
+    keys: Array<{ url: string; data: string; bytes: number }>;
+  } | null;
   requestContext: {
     requestUrl: string | null;
     finalUrl: string | null;
@@ -30,6 +35,8 @@ export interface DownloadCandidate {
 export interface DownloadJob {
   jobId: string;
   connections: number;
+  browserUserAgent: string | null;
+  accessStrategyPreferences: Record<string, Record<string, number>>;
   outputDirectory: string | null;
   output: {
     profileId: "source" | "video-mp4" | "video-mkv";
@@ -68,6 +75,14 @@ export interface DownloadResult {
 export interface DownloadContext {
   signal: AbortSignal;
   progress(value: DownloadProgress): void;
+  strategy(value: {
+    resourceKind: "key";
+    resourceHost: string;
+    strategyId: string;
+    outcome: "success" | "rejected" | "error";
+    httpStatus: number | null;
+    score: number;
+  }): void;
 }
 
 export interface DownloadAdapter {

@@ -1,4 +1,4 @@
-import { onContentMessage } from "./bridge.js";
+import { notifyContentScript, onContentMessage } from "./bridge.js";
 import { installNetworkCapture } from "./network-capture.js";
 import { installPlayerSourceObserver } from "./player-source-observer.js";
 import { installBlobSourceTracer } from "./blob-source-tracer.js";
@@ -6,6 +6,7 @@ import { installDecryptedManifestObserver } from "./decrypted-manifest-observer.
 import { installEmeObserver } from "./eme-observer.js";
 import { installTimerControl, setAdMode } from "./timer-control.js";
 import { createMainController } from "../runtime/main-controller.js";
+import { getAesKeyHandoff } from "./aes-key-handoff.js";
 
 const script = document.currentScript;
 const initialSettings = {
@@ -34,6 +35,14 @@ onContentMessage((message) => {
   if (message.type === "SET_AD_MODE") setAdMode(message.value);
   if (message.type === "PROTECTION_SETTINGS_CHANGED")
     controller.updateSettings(message.settings);
+  if (message.type === "GET_MEDIA_AES_KEY_HANDOFF") {
+    notifyContentScript({
+      type: "MEDIA_AES_KEY_HANDOFF_RESPONSE",
+      requestId: message.requestId,
+      manifestUrl: message.manifestUrl,
+      keys: getAesKeyHandoff(message.manifestUrl),
+    });
+  }
 });
 
 console.log("[AdsFriendly Spy] Injected and controlled by MainController.");

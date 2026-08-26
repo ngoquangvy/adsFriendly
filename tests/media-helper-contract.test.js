@@ -27,6 +27,11 @@ import {
   classifyNativeMessagingError,
   getMediaHelperStatus,
 } from "../src/background/media-helper-bridge.js";
+import {
+  getMediaAccessStrategyPreferences,
+  recordMediaAccessStrategyResult,
+} from "../src/background/media-access-strategy-memory.js";
+import { getMediaAccessStrategy } from "../src/media/access-strategy-catalog.js";
 
 test("Windows reveal keeps the Explorer select switch and path together", () => {
   const outputPath =
@@ -187,6 +192,99 @@ test("helper HLS context carries routing facts without arbitrary headers", () =>
   assert.equal(payload.candidate.segmentCount, 1726);
   assert.equal(payload.output.profileId, "video-mp4");
   assert.equal("headers" in payload.candidate.requestContext, false);
+});
+
+test("helper accepts a bounded browser user agent, key handoff, and learned scores", () => {
+  const manifestUrl = "https://cdn.example/master.m3u8";
+  const keyUrl = "https://cdn.example/key.bin";
+  const payload = normalizeHelperDownloadPayload({
+    jobId: "hls-browser-access",
+    browserUserAgent: "Browser/123\r\nInjected: no",
+    accessStrategyPreferences: {
+      "cdn.example": { captured_referer_origin: 4.5 },
+    },
+    candidate: {
+      id: "media-hls",
+      kind: "hls",
+      pageUrl: "https://video.example/watch",
+      manifestUrl,
+      keyHandoff: {
+        kind: "hls_aes_keys",
+        manifestUrl,
+        keys: [
+          {
+            url: keyUrl,
+            data: Buffer.from("0123456789abcdef").toString("base64"),
+          },
+        ],
+      },
+    },
+  });
+  assert.equal(payload.browserUserAgent, "Browser/123Injected: no");
+  assert.equal(
+    payload.accessStrategyPreferences["cdn.example"].captured_referer_origin,
+    4.5,
+  );
+  assert.equal(payload.candidate.keyHandoff.keys[0].bytes, 16);
+  assert.throws(
+    () =>
+      normalizeHelperDownloadPayload({
+        ...payload,
+        candidate: {
+          ...payload.candidate,
+          keyHandoff: {
+            ...payload.candidate.keyHandoff,
+            manifestUrl: "https://cdn.example/other.m3u8",
+          },
+        },
+      }),
+    /does not match the candidate/i,
+  );
+});
+
+test("media access strategy memory learns per host without retaining secrets", async () => {
+  const previousChrome = globalThis.chrome;
+  const local = {};
+  globalThis.chrome = {
+    storage: {
+      local: {
+        get: async (key) => ({ [key]: local[key] }),
+        set: async (value) => Object.assign(local, value),
+      },
+    },
+  };
+  try {
+    await recordMediaAccessStrategyResult({
+      resourceHost: "cdn.example",
+      strategyId: "captured_referer_origin",
+      outcome: "success",
+      headers: { Cookie: "secret" },
+      keyUrl: "https://cdn.example/key.bin",
+    });
+    await recordMediaAccessStrategyResult({
+      resourceHost: "cdn.example",
+      strategyId: "captured_referer",
+      outcome: "rejected",
+      httpStatus: 403,
+    });
+    const preferences = await getMediaAccessStrategyPreferences();
+    assert.equal(preferences["cdn.example"].captured_referer_origin, 2);
+    assert.equal(preferences["cdn.example"].captured_referer, -0.5);
+    assert.doesNotMatch(JSON.stringify(local), /secret|key\.bin|Cookie/);
+  } finally {
+    globalThis.chrome = previousChrome;
+  }
+});
+
+test("media access strategies must be registered before scoring", () => {
+  assert.equal(
+    getMediaAccessStrategy("browser_key_handoff").resourceKind,
+    "key",
+  );
+  assert.throws(
+    () => getMediaAccessStrategy("site_specific_magic"),
+    /Register it in access-strategy-catalog\.js/,
+  );
 });
 
 test("helper accepts MKV only for adaptive media", () => {
