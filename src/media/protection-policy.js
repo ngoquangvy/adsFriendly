@@ -25,6 +25,7 @@ export function isWeakSampleAesSignal(candidate = {}) {
 
 export function isFfmpegCompatibleSampleAes(candidate = {}) {
   if (!isWeakSampleAesSignal(candidate)) return false;
+  if (hasUnsupportedHlsKeyFormat(candidate)) return false;
   const methods = candidate.encryptionMethods || [];
   return (
     methods.length === 0 ||
@@ -33,6 +34,13 @@ export function isFfmpegCompatibleSampleAes(candidate = {}) {
       return normalized === "AES-128" || normalized.startsWith("SAMPLE-AES");
     })
   );
+}
+
+export function hasUnsupportedHlsKeyFormat(candidate = {}) {
+  return (candidate.encryptionKeyFormats || [])
+    .map(normalizeHlsKeyFormat)
+    .filter(Boolean)
+    .some((format) => format !== "identity");
 }
 
 export function normalizeHlsKeyFormat(value) {

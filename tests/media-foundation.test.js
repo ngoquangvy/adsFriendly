@@ -756,7 +756,7 @@ test("resolution diagnostics wait for an unsupported mixed SAMPLE-AES method", (
     drm: "suspected",
     encryptionScheme: "sample-aes",
     encryptionMethods: ["SAMPLE-AES", "VENDOR-CIPHER"],
-    encryptionKeyFormats: ["com.example.keyformat"],
+    encryptionKeyFormats: ["identity"],
     drmEvidence: ["hls-sample-aes"],
   });
   assert.equal(result.stage, MEDIA_RESOLUTION_STAGES.PLAYER_SEGMENT_RESOLUTION);
@@ -772,7 +772,7 @@ test("resolution diagnostics wait for an unsupported mixed SAMPLE-AES method", (
   );
 });
 
-test("custom non-DRM SAMPLE-AES key formats are handed to FFmpeg", () => {
+test("custom SAMPLE-AES key formats are playback only without an adapter", () => {
   const availability = getMediaDownloadAvailability({
     kind: "hls",
     probeStatus: "ready",
@@ -781,11 +781,29 @@ test("custom non-DRM SAMPLE-AES key formats are handed to FFmpeg", () => {
     segmentCount: 20,
     drm: "suspected",
     encryptionScheme: "sample-aes",
-    encryptionMethods: ["SAMPLE-AES"],
-    encryptionKeyFormats: ["com.example.raw-key"],
+    encryptionMethods: ["SAMPLE-AES-CTR"],
+    encryptionKeyFormats: ["urn:avs:shield:v3"],
     drmEvidence: ["hls-sample-aes"],
   });
-  assert.deepEqual(availability, { supported: true, reason: null });
+  assert.equal(availability.supported, false);
+  assert.match(
+    availability.reason,
+    /Custom protected HLS · urn:avs:shield:v3 · Playback only/i,
+  );
+  const diagnostic = diagnoseMediaResolution({
+    id: "avs-shield",
+    kind: "hls",
+    probeStatus: "ready",
+    playlistType: "media",
+    streamType: "vod",
+    segmentCount: 310,
+    drm: "suspected",
+    encryptionScheme: "sample-aes",
+    encryptionMethods: ["SAMPLE-AES-CTR"],
+    encryptionKeyFormats: ["urn:avs:shield:v3"],
+  });
+  assert.equal(diagnostic.stage, MEDIA_RESOLUTION_STAGES.PLAYBACK_ONLY);
+  assert.equal(diagnostic.code, "custom_hls_protection_playback_only");
 });
 
 test("HLS key formats are canonicalized before protection classification", () => {

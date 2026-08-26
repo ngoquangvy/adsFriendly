@@ -625,11 +625,18 @@ var AdsFriendlyPopup = (() => {
   }
   function isFfmpegCompatibleSampleAes(candidate = {}) {
     if (!isWeakSampleAesSignal(candidate)) return false;
+    if (hasUnsupportedHlsKeyFormat(candidate)) return false;
     const methods = candidate.encryptionMethods || [];
     return methods.length === 0 || methods.every((method) => {
       const normalized = String(method).trim().toUpperCase();
       return normalized === "AES-128" || normalized.startsWith("SAMPLE-AES");
     });
+  }
+  function hasUnsupportedHlsKeyFormat(candidate = {}) {
+    return (candidate.encryptionKeyFormats || []).map(normalizeHlsKeyFormat).filter(Boolean).some((format) => format !== "identity");
+  }
+  function normalizeHlsKeyFormat(value) {
+    return String(value || "").trim().replace(/^["']|["']$/g, "").trim().toLowerCase().slice(0, 100);
   }
 
   // src/media/download-job-contract.js
@@ -673,6 +680,11 @@ var AdsFriendlyPopup = (() => {
       };
     if (hasStrongDrmEvidence(candidate))
       return { supported: false, reason: drmPlaybackOnlyReason(candidate) };
+    if (hasUnsupportedHlsKeyFormat(candidate))
+      return {
+        supported: false,
+        reason: customHlsPlaybackOnlyReason(candidate)
+      };
     if (isWeakSampleAesSignal(candidate) && !isFfmpegCompatibleSampleAes(candidate))
       return {
         supported: false,
@@ -713,6 +725,10 @@ var AdsFriendlyPopup = (() => {
     const state = candidate.drm === "confirmed" ? "confirmed" : "suspected";
     const system = candidate.drmSystem ? ` \xB7 ${formatDrmSystem(candidate.drmSystem)}` : "";
     return `DRM ${state}${system} \xB7 Playback only.`;
+  }
+  function customHlsPlaybackOnlyReason(candidate) {
+    const format = (candidate.encryptionKeyFormats || []).map((value) => String(value || "").trim()).find((value) => value && value.toLowerCase() !== "identity");
+    return `Custom protected HLS${format ? ` \xB7 ${format}` : ""} \xB7 Playback only.`;
   }
   function formatDrmSystem(value) {
     return value === "widevine" ? "Widevine" : value === "playready" ? "PlayReady" : value === "fairplay" ? "FairPlay" : value === "clearkey" ? "Clear Key" : "Unknown system";
@@ -989,6 +1005,13 @@ var AdsFriendlyPopup = (() => {
       return diagnostic(S.PLAYBACK_ONLY, D.BLOCKED, "drm_playback_only", {
         message: "Playback only \xB7 DRM protected"
       });
+    if (hasUnsupportedHlsKeyFormat(target))
+      return diagnostic(
+        S.PLAYBACK_ONLY,
+        D.BLOCKED,
+        "custom_hls_protection_playback_only",
+        { message: "Playback only \xB7 custom HLS protection" }
+      );
     if (target.probeStatus === "ready" && isWeakSampleAesSignal(target) && !isFfmpegCompatibleSampleAes(target))
       return diagnostic(
         S.PLAYER_SEGMENT_RESOLUTION,
@@ -1518,6 +1541,14 @@ var AdsFriendlyPopup = (() => {
     if (hasStrongDrmEvidence(item)) {
       facts.push(
         `DRM suspected${item.drmSystem ? ` \xB7 ${formatDrmSystem2(item.drmSystem)}` : ""}`,
+        "Playback only"
+      );
+      return;
+    }
+    if (hasUnsupportedHlsKeyFormat(item)) {
+      const format = item.encryptionKeyFormats.map((value) => String(value || "").trim()).find((value) => value && value.toLowerCase() !== "identity");
+      facts.push(
+        `Custom protected HLS${format ? ` \xB7 ${format}` : ""}`,
         "Playback only"
       );
       return;
@@ -2422,7 +2453,8 @@ ${blobTitleKey(item.title)}`;
     }
   }
   function downloadUnavailableLabel(reason = "") {
-    if (reason.includes("DRM")) return "Playback only";
+    if (reason.includes("DRM") || reason.includes("Playback only"))
+      return "Playback only";
     if (reason.includes("Live")) return "Live";
     if (reason.includes("Encrypted")) return "Encrypted";
     if (reason.includes("waiting") || reason.includes("not exposed") || reason.includes("player-resolved"))

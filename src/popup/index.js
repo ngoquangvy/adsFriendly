@@ -904,7 +904,8 @@ async function runMediaJobAction(button) {
 }
 
 function downloadUnavailableLabel(reason = "") {
-  if (reason.includes("DRM")) return "Playback only";
+  if (reason.includes("DRM") || reason.includes("Playback only"))
+    return "Playback only";
   if (reason.includes("Live")) return "Live";
   if (reason.includes("Encrypted")) return "Encrypted";
   if (

@@ -4505,11 +4505,15 @@ var AdsFriendlyBackground = (() => {
   }
   function isFfmpegCompatibleSampleAes(candidate = {}) {
     if (!isWeakSampleAesSignal(candidate)) return false;
+    if (hasUnsupportedHlsKeyFormat(candidate)) return false;
     const methods = candidate.encryptionMethods || [];
     return methods.length === 0 || methods.every((method) => {
       const normalized = String(method).trim().toUpperCase();
       return normalized === "AES-128" || normalized.startsWith("SAMPLE-AES");
     });
+  }
+  function hasUnsupportedHlsKeyFormat(candidate = {}) {
+    return (candidate.encryptionKeyFormats || []).map(normalizeHlsKeyFormat).filter(Boolean).some((format) => format !== "identity");
   }
   function normalizeHlsKeyFormat(value) {
     return String(value || "").trim().replace(/^["']|["']$/g, "").trim().toLowerCase().slice(0, 100);
@@ -4730,6 +4734,11 @@ var AdsFriendlyBackground = (() => {
       };
     if (hasStrongDrmEvidence(candidate))
       return { supported: false, reason: drmPlaybackOnlyReason(candidate) };
+    if (hasUnsupportedHlsKeyFormat(candidate))
+      return {
+        supported: false,
+        reason: customHlsPlaybackOnlyReason(candidate)
+      };
     if (isWeakSampleAesSignal(candidate) && !isFfmpegCompatibleSampleAes(candidate))
       return {
         supported: false,
@@ -4770,6 +4779,10 @@ var AdsFriendlyBackground = (() => {
     const state = candidate.drm === "confirmed" ? "confirmed" : "suspected";
     const system = candidate.drmSystem ? ` \xB7 ${formatDrmSystem(candidate.drmSystem)}` : "";
     return `DRM ${state}${system} \xB7 Playback only.`;
+  }
+  function customHlsPlaybackOnlyReason(candidate) {
+    const format = (candidate.encryptionKeyFormats || []).map((value) => String(value || "").trim()).find((value) => value && value.toLowerCase() !== "identity");
+    return `Custom protected HLS${format ? ` \xB7 ${format}` : ""} \xB7 Playback only.`;
   }
   function formatDrmSystem(value) {
     return value === "widevine" ? "Widevine" : value === "playready" ? "PlayReady" : value === "fairplay" ? "FairPlay" : value === "clearkey" ? "Clear Key" : "Unknown system";

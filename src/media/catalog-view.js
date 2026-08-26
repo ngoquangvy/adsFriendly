@@ -1,6 +1,7 @@
 import { getMediaDownloadAvailability } from "./download-job-contract.js";
 import {
   hasStrongDrmEvidence,
+  hasUnsupportedHlsKeyFormat,
   isFfmpegCompatibleSampleAes,
   isWeakSampleAesSignal,
 } from "./protection-policy.js";
@@ -372,6 +373,16 @@ function appendProtectionFacts(facts, item) {
   if (hasStrongDrmEvidence(item)) {
     facts.push(
       `DRM suspected${item.drmSystem ? ` · ${formatDrmSystem(item.drmSystem)}` : ""}`,
+      "Playback only",
+    );
+    return;
+  }
+  if (hasUnsupportedHlsKeyFormat(item)) {
+    const format = item.encryptionKeyFormats
+      .map((value) => String(value || "").trim())
+      .find((value) => value && value.toLowerCase() !== "identity");
+    facts.push(
+      `Custom protected HLS${format ? ` · ${format}` : ""}`,
       "Playback only",
     );
     return;

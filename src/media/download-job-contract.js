@@ -1,6 +1,7 @@
 import { normalizeMediaDownloadOutput } from "./download-options.js";
 import {
   hasStrongDrmEvidence,
+  hasUnsupportedHlsKeyFormat,
   isFfmpegCompatibleSampleAes,
   isWeakSampleAesSignal,
 } from "./protection-policy.js";
@@ -188,6 +189,11 @@ export function getMediaDownloadAvailability(candidate = {}) {
     };
   if (hasStrongDrmEvidence(candidate))
     return { supported: false, reason: drmPlaybackOnlyReason(candidate) };
+  if (hasUnsupportedHlsKeyFormat(candidate))
+    return {
+      supported: false,
+      reason: customHlsPlaybackOnlyReason(candidate),
+    };
   if (
     isWeakSampleAesSignal(candidate) &&
     !isFfmpegCompatibleSampleAes(candidate)
@@ -252,6 +258,13 @@ function drmPlaybackOnlyReason(candidate) {
     ? ` · ${formatDrmSystem(candidate.drmSystem)}`
     : "";
   return `DRM ${state}${system} · Playback only.`;
+}
+
+function customHlsPlaybackOnlyReason(candidate) {
+  const format = (candidate.encryptionKeyFormats || [])
+    .map((value) => String(value || "").trim())
+    .find((value) => value && value.toLowerCase() !== "identity");
+  return `Custom protected HLS${format ? ` · ${format}` : ""} · Playback only.`;
 }
 
 function formatDrmSystem(value) {

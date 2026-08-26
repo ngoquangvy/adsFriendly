@@ -1,5 +1,6 @@
 import {
   hasStrongDrmEvidence,
+  hasUnsupportedHlsKeyFormat,
   isFfmpegCompatibleSampleAes,
   isWeakSampleAesSignal,
 } from "./protection-policy.js";
@@ -73,6 +74,13 @@ export function diagnoseMediaResolution(item, items = []) {
     return diagnostic(S.PLAYBACK_ONLY, D.BLOCKED, "drm_playback_only", {
       message: "Playback only · DRM protected",
     });
+  if (hasUnsupportedHlsKeyFormat(target))
+    return diagnostic(
+      S.PLAYBACK_ONLY,
+      D.BLOCKED,
+      "custom_hls_protection_playback_only",
+      { message: "Playback only · custom HLS protection" },
+    );
   if (
     target.probeStatus === "ready" &&
     isWeakSampleAesSignal(target) &&

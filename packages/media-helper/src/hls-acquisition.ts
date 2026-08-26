@@ -6,7 +6,10 @@ import {
   parseHlsManifest,
 } from "../../../src/media/hls-parser.js";
 import { downloadResourcesInParallel } from "../../../src/media/parallel-downloader.js";
-import { hasStrongDrmEvidence } from "../../../src/media/protection-policy.js";
+import {
+  hasStrongDrmEvidence,
+  hasUnsupportedHlsKeyFormat,
+} from "../../../src/media/protection-policy.js";
 import {
   MEDIA_ACCESS_STRATEGIES,
   getMediaAccessStrategy,
@@ -106,6 +109,9 @@ export async function resolveHlsMediaPlaylist(
     }
     if (hasStrongDrmEvidence(summary)) {
       throw new Error("DRM-protected HLS is playback only.");
+    }
+    if (hasUnsupportedHlsKeyFormat(summary)) {
+      throw new Error("Custom protected HLS is playback only.");
     }
     if (!supportsEncryption(summary)) {
       throw new Error(
