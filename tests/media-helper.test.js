@@ -149,7 +149,7 @@ test("built helper downloads direct media with ranges, cancellation, and resume"
   assert.deepEqual(await readFile(completed.payload.outputPath), bytes);
 });
 
-test("built helper remuxes an inline decrypted HLS VOD when its manifest URL is unavailable", async (t) => {
+test("built helper remuxes inline HLS with disguised segment extensions", async (t) => {
   if (
     !(await executableAvailable("ffmpeg")) ||
     !(await executableAvailable("ffprobe"))
@@ -209,10 +209,10 @@ test("built helper remuxes an inline decrypted HLS VOD when its manifest URL is 
     { windowsHide: true, cwd: fixtureDirectory },
   );
   const playlist = await readFile(manifestPath, "utf8");
-  await writeFile(
-    manifestPath,
-    playlist.replace(/(segment000\.ts\r?\n)/, "$1#EXT-X-DISCONTINUITY\n"),
-  );
+  const disguisedPlaylist = playlist
+    .replace(/segment(\d+)\.ts/g, "segment$1.png")
+    .replace(/(segment000\.png\r?\n)/, "$1#EXT-X-DISCONTINUITY\n");
+  await writeFile(manifestPath, disguisedPlaylist);
 
   const server = createServer(async (request, response) => {
     try {
@@ -223,12 +223,17 @@ test("built helper remuxes an inline decrypted HLS VOD when its manifest URL is 
         response.writeHead(403).end();
         return;
       }
-      const bytes = await readFile(join(fixtureDirectory, filename));
+      const sourceFilename = filename.endsWith(".png")
+        ? filename.replace(/\.png$/i, ".ts")
+        : filename;
+      const bytes = await readFile(join(fixtureDirectory, sourceFilename));
       response.setHeader(
         "content-type",
         filename.endsWith(".m3u8")
           ? "application/vnd.apple.mpegurl"
-          : "video/mp2t",
+          : filename.endsWith(".png")
+            ? "image/png"
+            : "video/mp2t",
       );
       response.end(bytes);
     } catch {
@@ -248,7 +253,7 @@ test("built helper remuxes an inline decrypted HLS VOD when its manifest URL is 
         "hls-download-1",
         manifestUrl,
         outputDirectory,
-        playlist.replace(/(segment000\.ts\r?\n)/, "$1#EXT-X-DISCONTINUITY\n"),
+        disguisedPlaylist,
         "video-mkv",
       ),
     ),

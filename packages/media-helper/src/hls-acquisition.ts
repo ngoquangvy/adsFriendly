@@ -25,6 +25,18 @@ const MAX_KEY_BYTES = 64 * 1024;
 const MAX_RESOURCES = 10_000;
 const MAX_MASTER_DEPTH = 4;
 const MAX_CANARIES = 32;
+const CANONICAL_SEGMENT_EXTENSIONS = new Map([
+  [".ts", ".ts"],
+  [".m2ts", ".ts"],
+  [".mts", ".ts"],
+  [".aac", ".aac"],
+  [".mp3", ".mp3"],
+  [".ac3", ".ac3"],
+  [".eac3", ".eac3"],
+  [".ec3", ".ec3"],
+  [".vtt", ".vtt"],
+  [".webvtt", ".vtt"],
+]);
 
 export interface HlsAcquisitionResource {
   id: string;
@@ -149,6 +161,7 @@ export function createHlsAcquisitionPlan(
     kind: HlsAcquisitionResource["kind"],
     url: string,
     byteRange: HlsAcquisitionResource["byteRange"] = null,
+    localExtension: string | null = null,
   ) => {
     const key = `${kind}:${url}:${byteRange?.offset ?? ""}:${byteRange?.length ?? ""}`;
     const existing = byKey.get(key);
@@ -160,7 +173,7 @@ export function createHlsAcquisitionPlan(
       id: stableId(key),
       kind,
       url,
-      localName: `${String(resources.length).padStart(5, "0")}-${kind}-${stableId(key)}${resourceExtension(url, kind)}`,
+      localName: `${String(resources.length).padStart(5, "0")}-${kind}-${stableId(key)}${localExtension || resourceExtension(url, kind)}`,
       byteRange,
     };
     resources.push(resource);
@@ -252,7 +265,12 @@ export function createHlsAcquisitionPlan(
         previousRangeUrl = null;
         previousRangeEnd = 0;
       }
-      const segment = register("segment", url, byteRange);
+      const segment = register(
+        "segment",
+        url,
+        byteRange,
+        segmentExtension(url, Boolean(currentMap)),
+      );
       outputLines.push(segment.localName);
       const epoch = [
         stableId(currentKeyLine || "no-key"),
@@ -572,9 +590,15 @@ function resolveHttpUrl(value: string, baseUrl: string) {
 }
 
 function resourceExtension(url: string, kind: HlsAcquisitionResource["kind"]) {
-  const extension = extname(new URL(url).pathname);
-  if (/^\.[a-z0-9]{1,8}$/i.test(extension)) return extension;
-  return kind === "key" ? ".key" : kind === "init" ? ".mp4" : ".bin";
+  if (kind === "key") return ".key";
+  if (kind === "init") return ".mp4";
+  return segmentExtension(url, false);
+}
+
+function segmentExtension(url: string, hasInitMap: boolean) {
+  if (hasInitMap) return ".m4s";
+  const extension = extname(new URL(url).pathname).toLowerCase();
+  return CANONICAL_SEGMENT_EXTENSIONS.get(extension) || ".ts";
 }
 
 function stableId(value: string) {
