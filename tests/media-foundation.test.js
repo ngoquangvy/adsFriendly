@@ -18,6 +18,7 @@ import {
 } from "../src/media/probe-gate.js";
 import { createMediaObserverReportKey } from "../src/content/media-observer.js";
 import { createMediaProbeRefererRule } from "../src/background/media-probe-context.js";
+import { createMediaRequestObservation } from "../src/background/media-request-observer.js";
 import {
   createContextualProbeInit,
   readXhrResponseBody,
@@ -61,6 +62,11 @@ import {
   MEDIA_RESOLUTION_STRATEGIES,
   MEDIA_RESOLUTION_STRATEGY_CATALOG,
 } from "../src/media/resolution-strategy-catalog.js";
+import {
+  MEDIA_RESOLUTION_STAGE_CATALOG,
+  MEDIA_RESOLUTION_STAGES,
+  diagnoseMediaResolution,
+} from "../src/media/resolution-diagnostics.js";
 
 test("offers a helper setup action independently from downloadable media", () => {
   assert.deepEqual(helperSetupPresentation({ status: "permission_required" }), {
@@ -216,6 +222,158 @@ test("classifies direct, HLS, DASH, and blob media without treating segments as 
   assert.equal(
     isLikelyMediaSegment("https://cdn.example/movie.mp4", "video/mp4"),
     false,
+  );
+});
+
+test("background request observation exposes a bounded catalog input", () => {
+  const observation = createMediaRequestObservation({
+    requestId: "42",
+    tabId: 7,
+    frameId: 3,
+    parentFrameId: 0,
+    initiator: "https://embed.streamc.xyz/player",
+    url: "https://cdn.streamc.example/token",
+    method: "GET",
+    statusCode: 200,
+    timeStamp: 1234,
+    responseHeaders: [
+      { name: "Content-Type", value: "application/vnd.apple.mpegurl" },
+    ],
+  });
+  assert.deepEqual(
+    {
+      tabId: observation.tabId,
+      frameId: observation.frameId,
+      kind: observation.kind,
+      initiator: observation.initiator,
+      input: observation.input,
+      output: observation.output,
+    },
+    {
+      tabId: 7,
+      frameId: 3,
+      kind: "hls",
+      initiator: "https://embed.streamc.xyz",
+      input: "chrome.webRequest.onHeadersReceived",
+      output: "media.catalog.candidate",
+    },
+  );
+  assert.equal(
+    createMediaRequestObservation({
+      tabId: 7,
+      frameId: 3,
+      url: "https://cdn.example/segment.ts",
+      statusCode: 200,
+      responseHeaders: [{ name: "content-type", value: "video/mp2t" }],
+    }),
+    null,
+  );
+});
+
+test("resolution diagnostics identify a failed master with no observed child", () => {
+  const master = {
+    id: "master",
+    kind: "hls",
+    frameId: 3,
+    probeStatus: "failed",
+    probeError: "manifest_http_403",
+  };
+  const result = diagnoseMediaResolution(master, [master]);
+  assert.equal(result.stage, MEDIA_RESOLUTION_STAGES.CHILD_DISCOVERY);
+  assert.equal(result.status, "failed");
+  assert.equal(result.code, "master_failed_child_not_observed");
+  assert.deepEqual(MEDIA_RESOLUTION_STAGE_CATALOG[result.stage], {
+    input: "Master or playback request",
+    output: "Observed child playlist",
+  });
+  assert.equal(result.input, "Master or playback request");
+  assert.equal(result.output, "Observed child playlist");
+  assert.equal(
+    result.message,
+    "Child discovery · 0 child playlists · master probe 403",
+  );
+});
+
+test("resolution diagnostics distinguish child probing from source matching", () => {
+  const master = {
+    id: "master",
+    kind: "hls",
+    frameId: 3,
+    probeStatus: "failed",
+    probeError: "manifest_http_403",
+    firstSeenAt: 1000,
+  };
+  const pendingChild = {
+    id: "child",
+    kind: "hls",
+    frameId: 3,
+    probeStatus: "discovered",
+    firstSeenAt: 1010,
+  };
+  assert.equal(
+    diagnoseMediaResolution(master, [master, pendingChild]).stage,
+    MEDIA_RESOLUTION_STAGES.CHILD_PROBE,
+  );
+  const readyChild = {
+    ...pendingChild,
+    probeStatus: "ready",
+    playlistType: "media",
+    streamType: "vod",
+    segmentCount: 20,
+  };
+  const result = diagnoseMediaResolution(master, [master, readyChild]);
+  assert.equal(result.stage, MEDIA_RESOLUTION_STAGES.SOURCE_MATCHING);
+  assert.equal(result.code, "child_ready_not_matched");
+});
+
+test("catalog merges webRequest routing context into an existing candidate", () => {
+  const catalog = createMediaCatalog();
+  const candidate = createMediaCandidateFromSource({
+    pageUrl: "https://video.example/watch",
+    sourceUrl: "https://cdn.example/master.m3u8",
+    detectedBy: "network",
+  });
+  catalog.add(1, createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, candidate));
+  const updated = catalog.add(
+    1,
+    createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, {
+      ...candidate,
+      requestContexts: [
+        {
+          requestUrl: candidate.manifestUrl,
+          documentUrl: "https://embed.example/player",
+          method: "GET",
+          credentials: "unknown",
+          transport: "web_request",
+          requiresBrowserSession: true,
+          observedAt: 2000,
+        },
+      ],
+    }),
+  );
+  assert.equal(updated.requestContexts.length, 1);
+  assert.equal(updated.requestContexts[0].transport, "web_request");
+});
+
+test("resolved Blob details expose the exact stalled resolution stage", () => {
+  const master = {
+    id: "master",
+    kind: "hls",
+    frameId: 3,
+    probeStatus: "failed",
+    probeError: "manifest_http_403",
+  };
+  const blob = {
+    id: "blob",
+    kind: "blob",
+    selectedMediaId: "master",
+    resolvedKind: "hls",
+    resolvedStream: master,
+  };
+  const [visible] = selectVisibleMediaItems([blob, master]);
+  assert.equal(
+    formatMediaDetails(visible),
+    "Blob resolved to HLS · Child discovery · 0 child playlists · master probe 403",
   );
 });
 

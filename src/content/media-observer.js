@@ -1,5 +1,8 @@
 import { createMediaCandidateFromSource } from "../media/detection.js";
-import { MEDIA_DETECTION_SOURCES } from "../media/contracts.js";
+import {
+  MEDIA_DETECTION_SOURCES,
+  normalizeMediaCandidate,
+} from "../media/contracts.js";
 import {
   EVENTS,
   createRegisteredEvent,
@@ -59,6 +62,16 @@ export function startMediaObserver() {
   };
   window.addEventListener("message", onMainWorldMessage);
 
+  const onBackgroundMessage = (message) => {
+    if (message?.type !== "PROBE_OBSERVED_MEDIA") return;
+    try {
+      scheduleManifestProbe(normalizeMediaCandidate(message.candidate));
+    } catch (error) {
+      console.debug("[AdsFriendly Media] Invalid observed media", error);
+    }
+  };
+  chrome.runtime.onMessage.addListener(onBackgroundMessage);
+
   const performanceObserver = startPerformanceObserver((entry) => {
     reportSource(entry.name, null, MEDIA_DETECTION_SOURCES.NETWORK);
   });
@@ -73,6 +86,7 @@ export function startMediaObserver() {
     mutationObserver.disconnect();
     performanceObserver?.disconnect();
     window.removeEventListener("message", onMainWorldMessage);
+    chrome.runtime.onMessage.removeListener(onBackgroundMessage);
     for (const [video, listener] of videoListeners) {
       video.removeEventListener("loadedmetadata", listener);
       video.removeEventListener("durationchange", listener);

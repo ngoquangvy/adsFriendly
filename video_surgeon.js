@@ -195,6 +195,7 @@ var AdsFriendlyVideo = (() => {
     LEARNING_APPLY: "learning.apply_patterns",
     TELEMETRY_QUEUE: "telemetry.queue",
     MEDIA_OBSERVE: "media.observe",
+    MEDIA_NETWORK_OBSERVE: "media.network_observe",
     MEDIA_CATALOG: "media.catalog",
     MEDIA_DOWNLOAD: "media.download",
     MEDIA_NATIVE_DOWNLOAD: "media.native_download",
@@ -266,6 +267,15 @@ var AdsFriendlyVideo = (() => {
     [C2.MEDIA_OBSERVE]: capability(C2.MEDIA_OBSERVE, "assist", T.PASSIVE, {
       productIds: [P2.AD_PROTECTION, P2.MEDIA_TOOLS]
     }),
+    [C2.MEDIA_NETWORK_OBSERVE]: capability(
+      C2.MEDIA_NETWORK_OBSERVE,
+      "assist",
+      T.PASSIVE,
+      {
+        browserPermissions: ["webRequest"],
+        productIds: [P2.AD_PROTECTION, P2.MEDIA_TOOLS]
+      }
+    ),
     [C2.MEDIA_CATALOG]: capability(C2.MEDIA_CATALOG, "assist", T.PASSIVE, {
       productIds: [P2.AD_PROTECTION, P2.MEDIA_TOOLS]
     }),
@@ -308,6 +318,12 @@ var AdsFriendlyVideo = (() => {
       C2.MEDIA_DOWNLOAD
     ]),
     feature("background.media-catalog", "background", C2.MEDIA_CATALOG),
+    feature(
+      "background.media-request-observer",
+      "background",
+      C2.MEDIA_NETWORK_OBSERVE,
+      [C2.MEDIA_CATALOG]
+    ),
     feature("background.media-download-jobs", "background", C2.MEDIA_DOWNLOAD, [
       C2.MEDIA_NATIVE_DOWNLOAD
     ]),

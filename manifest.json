@@ -5,6 +5,7 @@
   "description": "Friendly protection against pop-unders, intrusive ad tabs, and disruptive ad behavior.",
   "permissions": [
     "declarativeNetRequest",
+    "webRequest",
     "webNavigation",
     "tabs",
     "storage",

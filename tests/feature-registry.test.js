@@ -109,6 +109,19 @@ test("player source observer is centrally registered as passive media work", () 
   );
 });
 
+test("background media request observation is registered with one explicit permission", () => {
+  const capability = getCapabilityDefinition(
+    CAPABILITIES.MEDIA_NETWORK_OBSERVE,
+  );
+  assert.equal(capability.minMode, "assist");
+  assert.equal(capability.trigger, CAPABILITY_TRIGGERS.PASSIVE);
+  assert.deepEqual(capability.browserPermissions, ["webRequest"]);
+  assert.deepEqual(
+    getFeatureDefinition("background.media-request-observer").capabilities,
+    [CAPABILITIES.MEDIA_NETWORK_OBSERVE, CAPABILITIES.MEDIA_CATALOG],
+  );
+});
+
 test("legacy settings migrate deterministically", () => {
   assert.deepEqual(migrateLegacySettings({ friendlyMode: true }), {
     enabled: true,

@@ -1,4 +1,5 @@
 import { getMediaDownloadAvailability } from "./download-job-contract.js";
+import { diagnoseMediaResolution } from "./resolution-diagnostics.js";
 
 export function createMediaCatalogViewSignature({
   tabId = null,
@@ -24,8 +25,12 @@ export function createMediaCatalogViewSignature({
 }
 
 export function selectVisibleMediaItems(items = [], maximum = 8) {
+  const diagnosedItems = items.map((item) => ({
+    ...item,
+    resolutionDiagnostic: diagnoseMediaResolution(item, items),
+  }));
   const blobResolvedSourceIds = new Set(
-    items
+    diagnosedItems
       .filter((item) => item.kind === "blob" && item.selectedMediaId)
       .flatMap((item) => [
         item.selectedMediaId,
@@ -34,14 +39,14 @@ export function selectVisibleMediaItems(items = [], maximum = 8) {
       ])
       .filter(Boolean),
   );
-  const sorted = [...items].sort(
+  const sorted = [...diagnosedItems].sort(
     (left, right) =>
       (right.firstSeenAt || 0) - (left.firstSeenAt || 0) ||
       String(left.id || "").localeCompare(String(right.id || "")),
   );
   const visible = [];
   const blobGroups = new Map();
-  const resolvedBlobGroupKeys = resolvedBlobGroupKeysByPage(items);
+  const resolvedBlobGroupKeys = resolvedBlobGroupKeysByPage(diagnosedItems);
   for (const item of sorted) {
     if (item.kind !== "blob" && blobResolvedSourceIds.has(item.id)) continue;
     if (item.kind === "hls" && item.parentManifestIds?.length) continue;
@@ -149,11 +154,14 @@ export function formatMediaDetails(item) {
   if (item.kind === "blob" && item.selectedMediaId)
     return resolvedBlobDetails(item);
   if (item.kind === "blob")
-    return item.relatedCount > 1
-      ? `${item.relatedCount} Blob signals · tracing source buffers`
-      : item.blobTrace?.appendCount
-        ? `${item.blobTrace.appendCount} buffers observed · matching source`
-        : "Blob signal · tracing source buffers";
+    return (
+      item.resolutionDiagnostic?.message ||
+      (item.relatedCount > 1
+        ? `${item.relatedCount} Blob signals · tracing source buffers`
+        : item.blobTrace?.appendCount
+          ? `${item.blobTrace.appendCount} buffers observed · matching source`
+          : "Blob signal · tracing source buffers")
+    );
   if (item.kind === "direct") return "Direct video file";
   if (item.kind === "dash") return dashDetails(item);
   if (item.kind !== "hls") return "Media source found";
@@ -166,15 +174,17 @@ export function formatMediaDetails(item) {
     return resolvedHlsDetails(item);
 
   if (item.probeStatus === "failed")
-    return item.probeError === "manifest_http_403"
-      ? "HLS · probe rejected (403) · watching player requests"
-      : item.probeError === "fallback_fetch_blocked"
-        ? "HLS · page/CORS blocked probe · watching player requests"
-        : "HLS · manifest probe failed · watching player requests";
+    return (
+      item.resolutionDiagnostic?.message ||
+      "Manifest probe · HLS request failed"
+    );
   if (item.probeStatus === "unsupported")
     return "HLS · manifest format not supported";
   if (item.probeStatus !== "ready")
-    return "HLS source found · watching player requests";
+    return (
+      item.resolutionDiagnostic?.message ||
+      "Manifest probe · HLS response not parsed yet"
+    );
   if (item.playlistType === "unknown")
     return "HLS endpoint · watching for a playable stream";
 
@@ -266,6 +276,13 @@ function resolvedBlobDetails(item) {
     item.resolvedKind || stream.kind || "media",
   ).toUpperCase();
   const facts = [`Blob resolved to ${kind}`];
+  if (
+    item.resolutionDiagnostic?.message &&
+    !["ready", "blocked"].includes(item.resolutionDiagnostic.status)
+  ) {
+    facts.push(item.resolutionDiagnostic.message);
+    return facts.join(" · ");
+  }
   if (stream.resolution?.height) facts.push(`${stream.resolution.height}p`);
   if (Number.isFinite(stream.duration) && stream.duration > 0)
     facts.push(formatDuration(stream.duration));
@@ -469,5 +486,6 @@ function mediaRenderFacts(item) {
     iframeVariants: item.iframeVariants,
     audioTracks: item.audioTracks,
     subtitles: item.subtitles,
+    resolutionDiagnostic: item.resolutionDiagnostic,
   };
 }

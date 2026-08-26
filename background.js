@@ -853,6 +853,7 @@ var AdsFriendlyBackground = (() => {
     LEARNING_APPLY: "learning.apply_patterns",
     TELEMETRY_QUEUE: "telemetry.queue",
     MEDIA_OBSERVE: "media.observe",
+    MEDIA_NETWORK_OBSERVE: "media.network_observe",
     MEDIA_CATALOG: "media.catalog",
     MEDIA_DOWNLOAD: "media.download",
     MEDIA_NATIVE_DOWNLOAD: "media.native_download",
@@ -924,6 +925,15 @@ var AdsFriendlyBackground = (() => {
     [C2.MEDIA_OBSERVE]: capability(C2.MEDIA_OBSERVE, "assist", T.PASSIVE, {
       productIds: [P2.AD_PROTECTION, P2.MEDIA_TOOLS]
     }),
+    [C2.MEDIA_NETWORK_OBSERVE]: capability(
+      C2.MEDIA_NETWORK_OBSERVE,
+      "assist",
+      T.PASSIVE,
+      {
+        browserPermissions: ["webRequest"],
+        productIds: [P2.AD_PROTECTION, P2.MEDIA_TOOLS]
+      }
+    ),
     [C2.MEDIA_CATALOG]: capability(C2.MEDIA_CATALOG, "assist", T.PASSIVE, {
       productIds: [P2.AD_PROTECTION, P2.MEDIA_TOOLS]
     }),
@@ -966,6 +976,12 @@ var AdsFriendlyBackground = (() => {
       C2.MEDIA_DOWNLOAD
     ]),
     feature("background.media-catalog", "background", C2.MEDIA_CATALOG),
+    feature(
+      "background.media-request-observer",
+      "background",
+      C2.MEDIA_NETWORK_OBSERVE,
+      [C2.MEDIA_CATALOG]
+    ),
     feature("background.media-download-jobs", "background", C2.MEDIA_DOWNLOAD, [
       C2.MEDIA_NATIVE_DOWNLOAD
     ]),
@@ -2376,7 +2392,7 @@ var AdsFriendlyBackground = (() => {
     );
     const transport = optionalEnumValue(
       value.transport,
-      ["fetch", "xhr", "fallback"],
+      ["fetch", "xhr", "fallback", "web_request"],
       "requestContext.transport"
     );
     return {
@@ -2640,6 +2656,13 @@ var AdsFriendlyBackground = (() => {
   }
 
   // src/media/detection.js
+  var HLS_MIME_TYPES = /* @__PURE__ */ new Set([
+    "application/vnd.apple.mpegurl",
+    "application/x-mpegurl",
+    "audio/mpegurl",
+    "audio/x-mpegurl"
+  ]);
+  var DASH_MIME_TYPES = /* @__PURE__ */ new Set(["application/dash+xml"]);
   var SEGMENT_MIME_TYPES = /* @__PURE__ */ new Set([
     "video/mp2t",
     "video/iso.segment",
@@ -2647,11 +2670,67 @@ var AdsFriendlyBackground = (() => {
     "audio/aacp"
   ]);
   var SEGMENT_PATH_PATTERN = /\.(?:ts|m2ts|m4s|cmfv|cmfa|aac)$/i;
+  function classifyMediaSource(sourceUrl = "", mimeType = "") {
+    const normalizedUrl = String(sourceUrl).trim().toLowerCase();
+    const normalizedMime = String(mimeType).split(";")[0].trim().toLowerCase();
+    const path = normalizedUrl.split(/[?#]/)[0];
+    if (normalizedUrl.startsWith("blob:")) return MEDIA_KINDS.BLOB;
+    if (path.endsWith(".m3u8") || HLS_MIME_TYPES.has(normalizedMime))
+      return MEDIA_KINDS.HLS;
+    if (path.endsWith(".mpd") || DASH_MIME_TYPES.has(normalizedMime))
+      return MEDIA_KINDS.DASH;
+    if (isLikelyMediaSegment(normalizedUrl, normalizedMime)) return null;
+    if (/\.(mp4|webm|m4v|mov)$/.test(path) || normalizedMime.startsWith("video/"))
+      return MEDIA_KINDS.DIRECT;
+    return null;
+  }
   function isLikelyMediaSegment(sourceUrl = "", mimeType = "") {
     const normalizedUrl = String(sourceUrl).trim().toLowerCase();
     const normalizedMime = String(mimeType).split(";", 1)[0].trim().toLowerCase();
     const path = normalizedUrl.split(/[?#]/, 1)[0];
     return SEGMENT_PATH_PATTERN.test(path) || SEGMENT_MIME_TYPES.has(normalizedMime);
+  }
+  function createMediaCandidateFromSource({
+    pageUrl,
+    sourceUrl,
+    mimeType = null,
+    title = null,
+    duration = null,
+    detectedBy = MEDIA_DETECTION_SOURCES.DOM
+  }) {
+    const absoluteSourceUrl = resolveSourceUrl(sourceUrl, pageUrl);
+    const kind = classifyMediaSource(absoluteSourceUrl, mimeType);
+    if (!kind) return null;
+    const isManifest = [MEDIA_KINDS.HLS, MEDIA_KINDS.DASH].includes(kind);
+    return normalizeMediaCandidate({
+      id: stableMediaId(kind, absoluteSourceUrl),
+      pageUrl,
+      sourceUrl: isManifest ? null : absoluteSourceUrl,
+      manifestUrl: isManifest ? absoluteSourceUrl : null,
+      kind,
+      title,
+      mimeType,
+      duration,
+      detectedBy,
+      drm: "none"
+    });
+  }
+  function stableMediaId(kind, sourceUrl) {
+    const input = `${kind}:${sourceUrl}`;
+    let hash = 2166136261;
+    for (let index = 0; index < input.length; index++) {
+      hash ^= input.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return `media-${(hash >>> 0).toString(36)}`;
+  }
+  function resolveSourceUrl(sourceUrl, pageUrl) {
+    if (typeof sourceUrl !== "string" || !sourceUrl.trim()) return "";
+    try {
+      return new URL(sourceUrl, pageUrl).href;
+    } catch {
+      return sourceUrl;
+    }
   }
 
   // src/media/resolution-strategy-catalog.js
@@ -3119,7 +3198,11 @@ var AdsFriendlyBackground = (() => {
           ...candidate,
           ...preserveExistingProbe ? probeFields(existing) : {},
           duration: candidate.duration ?? existing?.duration ?? null,
-          requestContexts: existing?.requestContexts || candidate.requestContexts || [],
+          requestContexts: mergeRequestContexts(
+            existing?.requestContexts,
+            candidate.requestContexts,
+            now
+          ),
           probeCount: existing?.probeCount || 0,
           lastProbeAt: existing?.lastProbeAt || null,
           lastUsableProbeAt: existing?.lastUsableProbeAt || null,
@@ -3366,7 +3449,13 @@ var AdsFriendlyBackground = (() => {
   }
   function mergeRequestContexts(existing = [], incoming, observedAt) {
     const contexts = [...existing || []];
-    if (incoming) contexts.push({ ...incoming, observedAt });
+    const incomingContexts = Array.isArray(incoming) ? incoming : incoming ? [incoming] : [];
+    for (const context of incomingContexts) {
+      contexts.push({
+        ...context,
+        observedAt: context.observedAt || observedAt
+      });
+    }
     const unique = /* @__PURE__ */ new Map();
     for (const context of contexts) {
       const key = [
@@ -5838,6 +5927,130 @@ var AdsFriendlyBackground = (() => {
     }
   }
 
+  // src/background/media-request-observer.js
+  var OBSERVED_RESOURCE_TYPES = Object.freeze([
+    "xmlhttprequest",
+    "media",
+    "other"
+  ]);
+  function startBackgroundMediaRequestObserver() {
+    const onHeadersReceived = (details) => {
+      const observation = createMediaRequestObservation(details);
+      if (!observation) return;
+      recordObservation(observation).catch(
+        (error) => console.debug("[AdsFriendly Media] Request observation skipped", error)
+      );
+    };
+    chrome.webRequest.onHeadersReceived.addListener(
+      onHeadersReceived,
+      { urls: ["<all_urls>"], types: [...OBSERVED_RESOURCE_TYPES] },
+      ["responseHeaders"]
+    );
+    return () => chrome.webRequest.onHeadersReceived.removeListener(onHeadersReceived);
+  }
+  function createMediaRequestObservation(details = {}) {
+    if (!Number.isInteger(details.tabId) || details.tabId < 0 || typeof details.url !== "string" || !/^https?:/i.test(details.url) || Number(details.statusCode) < 200 || Number(details.statusCode) >= 400)
+      return null;
+    const mimeType = responseMimeType(details.responseHeaders);
+    const kind = classifyMediaSource(details.url, mimeType);
+    if (!kind) return null;
+    return Object.freeze({
+      requestId: String(details.requestId || ""),
+      tabId: details.tabId,
+      frameId: Number.isInteger(details.frameId) ? details.frameId : -1,
+      parentFrameId: Number.isInteger(details.parentFrameId) ? details.parentFrameId : -1,
+      initiator: safeHttpOrigin(details.initiator),
+      url: details.url,
+      mimeType,
+      kind,
+      method: String(details.method || "GET").toUpperCase(),
+      statusCode: Number(details.statusCode),
+      fromCache: details.fromCache === true,
+      observedAt: Number(details.timeStamp) || Date.now(),
+      input: "chrome.webRequest.onHeadersReceived",
+      output: "media.catalog.candidate"
+    });
+  }
+  async function recordObservation(observation) {
+    const tab = await chrome.tabs.get(observation.tabId);
+    if (!tab?.url?.startsWith("http")) return;
+    const frameContext = await resolveFrameContext(observation);
+    const candidate = createMediaCandidateFromSource({
+      pageUrl: tab.url,
+      sourceUrl: observation.url,
+      mimeType: observation.mimeType,
+      title: tab.title || null,
+      detectedBy: "network"
+    });
+    if (!candidate) return;
+    candidate.requestContexts = [
+      {
+        requestUrl: observation.url,
+        finalUrl: observation.url,
+        documentUrl: frameContext.frameUrl,
+        parentDocumentUrl: tab.url,
+        referrer: frameContext.frameUrl,
+        method: observation.method,
+        credentials: "unknown",
+        transport: "web_request",
+        requiresBrowserSession: true,
+        observedAt: observation.observedAt
+      }
+    ];
+    const result = await recordDiscoveredMedia(
+      observation.tabId,
+      createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, candidate, {
+        frameId: frameContext.frameId,
+        frameUrl: frameContext.frameUrl,
+        observationInput: observation.input,
+        observationOutput: observation.output
+      })
+    );
+    if (result?.status !== "recorded" || !["hls", "dash"].includes(candidate.kind) || frameContext.frameId < 0)
+      return;
+    await chrome.tabs.sendMessage(
+      observation.tabId,
+      { type: "PROBE_OBSERVED_MEDIA", candidate },
+      { frameId: frameContext.frameId }
+    ).catch(() => {
+    });
+  }
+  async function resolveFrameContext(observation) {
+    if (observation.frameId >= 0) {
+      return {
+        frameId: observation.frameId,
+        frameUrl: observation.initiator
+      };
+    }
+    const snapshot = await listDiscoveredMedia(observation.tabId);
+    const matches = snapshot.items.filter(
+      (item) => Number.isInteger(item.frameId) && sameOrigin3(item.frameUrl, observation.initiator)
+    );
+    const frameIds = [...new Set(matches.map((item) => item.frameId))];
+    return frameIds.length === 1 ? { frameId: frameIds[0], frameUrl: matches[0].frameUrl } : { frameId: -1, frameUrl: observation.initiator };
+  }
+  function responseMimeType(headers = []) {
+    const header = headers.find(
+      (item) => String(item?.name || "").toLowerCase() === "content-type"
+    );
+    return typeof header?.value === "string" ? header.value : null;
+  }
+  function safeHttpOrigin(value) {
+    try {
+      const url = new URL(value);
+      return ["http:", "https:"].includes(url.protocol) ? url.origin : null;
+    } catch {
+      return null;
+    }
+  }
+  function sameOrigin3(left, right) {
+    try {
+      return new URL(left).origin === new URL(right).origin;
+    } catch {
+      return false;
+    }
+  }
+
   // src/background/index.js
   var controller = createMainController({
     context: "background",
@@ -5845,6 +6058,7 @@ var AdsFriendlyBackground = (() => {
     implementations: {
       "background.message-router": ({ policy }) => registerMessageRouter(policy),
       "background.media-catalog": () => startBackgroundMediaCatalog(),
+      "background.media-request-observer": () => startBackgroundMediaRequestObserver(),
       "background.media-download-jobs": ({ policy }) => startMediaDownloadJobStore(policy),
       "background.navigation-guard": ({ policy }) => registerNavigationGuard(policy),
       "background.telemetry-flush": () => startTelemetryFlush(),

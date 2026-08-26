@@ -46,8 +46,11 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
         ...candidate,
         ...(preserveExistingProbe ? probeFields(existing) : {}),
         duration: candidate.duration ?? existing?.duration ?? null,
-        requestContexts:
-          existing?.requestContexts || candidate.requestContexts || [],
+        requestContexts: mergeRequestContexts(
+          existing?.requestContexts,
+          candidate.requestContexts,
+          now,
+        ),
         probeCount: existing?.probeCount || 0,
         lastProbeAt: existing?.lastProbeAt || null,
         lastUsableProbeAt: existing?.lastUsableProbeAt || null,
@@ -321,7 +324,17 @@ function probeQuality(value) {
 
 function mergeRequestContexts(existing = [], incoming, observedAt) {
   const contexts = [...(existing || [])];
-  if (incoming) contexts.push({ ...incoming, observedAt });
+  const incomingContexts = Array.isArray(incoming)
+    ? incoming
+    : incoming
+      ? [incoming]
+      : [];
+  for (const context of incomingContexts) {
+    contexts.push({
+      ...context,
+      observedAt: context.observedAt || observedAt,
+    });
+  }
   const unique = new Map();
   for (const context of contexts) {
     const key = [

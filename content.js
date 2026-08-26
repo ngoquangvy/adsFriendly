@@ -1044,6 +1044,7 @@ var AdsFriendlyContent = (() => {
     LEARNING_APPLY: "learning.apply_patterns",
     TELEMETRY_QUEUE: "telemetry.queue",
     MEDIA_OBSERVE: "media.observe",
+    MEDIA_NETWORK_OBSERVE: "media.network_observe",
     MEDIA_CATALOG: "media.catalog",
     MEDIA_DOWNLOAD: "media.download",
     MEDIA_NATIVE_DOWNLOAD: "media.native_download",
@@ -1115,6 +1116,15 @@ var AdsFriendlyContent = (() => {
     [C2.MEDIA_OBSERVE]: capability(C2.MEDIA_OBSERVE, "assist", T.PASSIVE, {
       productIds: [P2.AD_PROTECTION, P2.MEDIA_TOOLS]
     }),
+    [C2.MEDIA_NETWORK_OBSERVE]: capability(
+      C2.MEDIA_NETWORK_OBSERVE,
+      "assist",
+      T.PASSIVE,
+      {
+        browserPermissions: ["webRequest"],
+        productIds: [P2.AD_PROTECTION, P2.MEDIA_TOOLS]
+      }
+    ),
     [C2.MEDIA_CATALOG]: capability(C2.MEDIA_CATALOG, "assist", T.PASSIVE, {
       productIds: [P2.AD_PROTECTION, P2.MEDIA_TOOLS]
     }),
@@ -1157,6 +1167,12 @@ var AdsFriendlyContent = (() => {
       C2.MEDIA_DOWNLOAD
     ]),
     feature("background.media-catalog", "background", C2.MEDIA_CATALOG),
+    feature(
+      "background.media-request-observer",
+      "background",
+      C2.MEDIA_NETWORK_OBSERVE,
+      [C2.MEDIA_CATALOG]
+    ),
     feature("background.media-download-jobs", "background", C2.MEDIA_DOWNLOAD, [
       C2.MEDIA_NATIVE_DOWNLOAD
     ]),
@@ -2677,7 +2693,7 @@ var AdsFriendlyContent = (() => {
     );
     const transport = optionalEnumValue(
       value.transport,
-      ["fetch", "xhr", "fallback"],
+      ["fetch", "xhr", "fallback", "web_request"],
       "requestContext.transport"
     );
     return {
@@ -3061,6 +3077,15 @@ var AdsFriendlyContent = (() => {
       }
     };
     window.addEventListener("message", onMainWorldMessage);
+    const onBackgroundMessage = (message) => {
+      if (message?.type !== "PROBE_OBSERVED_MEDIA") return;
+      try {
+        scheduleManifestProbe(normalizeMediaCandidate(message.candidate));
+      } catch (error) {
+        console.debug("[AdsFriendly Media] Invalid observed media", error);
+      }
+    };
+    chrome.runtime.onMessage.addListener(onBackgroundMessage);
     const performanceObserver = startPerformanceObserver((entry) => {
       reportSource(entry.name, null, MEDIA_DETECTION_SOURCES.NETWORK);
     });
@@ -3071,6 +3096,7 @@ var AdsFriendlyContent = (() => {
       mutationObserver.disconnect();
       performanceObserver?.disconnect();
       window.removeEventListener("message", onMainWorldMessage);
+      chrome.runtime.onMessage.removeListener(onBackgroundMessage);
       for (const [video, listener] of videoListeners) {
         video.removeEventListener("loadedmetadata", listener);
         video.removeEventListener("durationchange", listener);

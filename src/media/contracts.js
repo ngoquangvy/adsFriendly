@@ -278,7 +278,7 @@ export function normalizeMediaRequestContext(value) {
   );
   const transport = optionalEnumValue(
     value.transport,
-    ["fetch", "xhr", "fallback"],
+    ["fetch", "xhr", "fallback", "web_request"],
     "requestContext.transport",
   );
   return {

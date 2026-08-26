@@ -37,6 +37,7 @@ export const CAPABILITIES = Object.freeze({
   LEARNING_APPLY: "learning.apply_patterns",
   TELEMETRY_QUEUE: "telemetry.queue",
   MEDIA_OBSERVE: "media.observe",
+  MEDIA_NETWORK_OBSERVE: "media.network_observe",
   MEDIA_CATALOG: "media.catalog",
   MEDIA_DOWNLOAD: "media.download",
   MEDIA_NATIVE_DOWNLOAD: "media.native_download",
@@ -111,6 +112,15 @@ export const CAPABILITY_CATALOG = Object.freeze({
   [C.MEDIA_OBSERVE]: capability(C.MEDIA_OBSERVE, "assist", T.PASSIVE, {
     productIds: [P.AD_PROTECTION, P.MEDIA_TOOLS],
   }),
+  [C.MEDIA_NETWORK_OBSERVE]: capability(
+    C.MEDIA_NETWORK_OBSERVE,
+    "assist",
+    T.PASSIVE,
+    {
+      browserPermissions: ["webRequest"],
+      productIds: [P.AD_PROTECTION, P.MEDIA_TOOLS],
+    },
+  ),
   [C.MEDIA_CATALOG]: capability(C.MEDIA_CATALOG, "assist", T.PASSIVE, {
     productIds: [P.AD_PROTECTION, P.MEDIA_TOOLS],
   }),
@@ -154,6 +164,12 @@ export const FEATURE_CATALOG = Object.freeze([
     C.MEDIA_DOWNLOAD,
   ]),
   feature("background.media-catalog", "background", C.MEDIA_CATALOG),
+  feature(
+    "background.media-request-observer",
+    "background",
+    C.MEDIA_NETWORK_OBSERVE,
+    [C.MEDIA_CATALOG],
+  ),
   feature("background.media-download-jobs", "background", C.MEDIA_DOWNLOAD, [
     C.MEDIA_NATIVE_DOWNLOAD,
   ]),
