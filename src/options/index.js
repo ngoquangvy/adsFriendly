@@ -197,10 +197,13 @@ function createDownloadHistoryItem() {
   details.className = "download-history-details";
   const output = document.createElement("div");
   output.className = "download-output-path";
+  const errorDetails = document.createElement("pre");
+  errorDetails.className = "download-error-details";
+  errorDetails.hidden = true;
 
   const controls = document.createElement("div");
   controls.className = "download-history-controls";
-  row.append(header, progressTrack, details, output, controls);
+  row.append(header, progressTrack, details, output, errorDetails, controls);
   return row;
 }
 
@@ -233,6 +236,11 @@ function updateDownloadHistoryItem(row, job, helper) {
     job.error ||
     (active ? formatMediaJobStage(job) : "No output file");
   output.title = output.textContent;
+  const errorDetails = row.querySelector(".download-error-details");
+  const hasError = job.status === "failed" && Boolean(job.error);
+  const errorExpanded = hasError && row.dataset.errorExpanded === "true";
+  errorDetails.textContent = hasError ? job.error : "";
+  errorDetails.hidden = !errorExpanded;
   const controls = row.querySelector(".download-history-controls");
   controls.replaceChildren();
   const primary = getMediaJobPrimaryAction(job);
@@ -277,6 +285,28 @@ function updateDownloadHistoryItem(row, job, helper) {
     }
     controls.append(open, reveal);
   }
+  if (hasError) {
+    const toggle = localDownloadButton(
+      errorExpanded ? "Hide details" : "Show details",
+      () => {
+        const expanded = row.dataset.errorExpanded !== "true";
+        row.dataset.errorExpanded = String(expanded);
+        errorDetails.hidden = !expanded;
+        toggle.textContent = expanded ? "Hide details" : "Show details";
+        toggle.setAttribute("aria-expanded", String(expanded));
+      },
+    );
+    toggle.setAttribute("aria-expanded", String(errorExpanded));
+    const copy = localDownloadButton("Copy error", async () => {
+      await copyText(job.error);
+      const original = copy.textContent;
+      copy.textContent = "Copied";
+      setTimeout(() => {
+        copy.textContent = original;
+      }, 1200);
+    });
+    controls.append(toggle, copy);
+  }
   if (
     ![
       "starting",
@@ -294,6 +324,41 @@ function updateDownloadHistoryItem(row, job, helper) {
       }),
     );
   }
+}
+
+function localDownloadButton(label, action) {
+  const button = document.createElement("button");
+  button.className = "btn-secondary download-compact-action";
+  button.type = "button";
+  button.textContent = label;
+  button.onclick = async () => {
+    try {
+      await action();
+    } catch (error) {
+      $("download-manager-status").textContent =
+        `Action failed · ${error.message}`;
+      $("download-manager-status").style.color = "#f87171";
+    }
+  };
+  return button;
+}
+
+async function copyText(value) {
+  const text = String(value || "");
+  if (!text) throw new Error("No error details to copy.");
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.append(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (!copied) throw new Error("Could not copy the error details.");
 }
 
 function downloadActionButton(

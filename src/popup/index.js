@@ -696,8 +696,11 @@ function createMediaJobItem() {
   detail.className = "media-details media-job-detail";
   const actions = document.createElement("div");
   actions.className = "media-job-actions";
+  const errorDetails = document.createElement("pre");
+  errorDetails.className = "media-job-error";
+  errorDetails.hidden = true;
   copy.append(label, detail);
-  row.append(copy, actions);
+  row.append(copy, actions, errorDetails);
   return row;
 }
 
@@ -722,6 +725,11 @@ function updateMediaJobItem(row, job) {
   const pauseAvailability = getMediaJobPauseAvailability(job);
   const actions = row.querySelector(".media-job-actions");
   actions.replaceChildren();
+  const errorDetails = row.querySelector(".media-job-error");
+  const hasError = job.status === "failed" && Boolean(job.error);
+  const errorExpanded = hasError && row.dataset.errorExpanded === "true";
+  errorDetails.textContent = hasError ? job.error : "";
+  errorDetails.hidden = !errorExpanded;
   if (action) {
     actions.append(
       createMediaJobAction(job, {
@@ -760,6 +768,62 @@ function updateMediaJobItem(row, job) {
     }
     actions.append(open, folder);
   }
+  if (hasError) {
+    const toggle = createLocalMediaJobAction(
+      errorExpanded ? "Hide" : "Details",
+      () => {
+        const expanded = row.dataset.errorExpanded !== "true";
+        row.dataset.errorExpanded = String(expanded);
+        errorDetails.hidden = !expanded;
+        toggle.textContent = expanded ? "Hide" : "Details";
+        toggle.setAttribute("aria-expanded", String(expanded));
+      },
+    );
+    toggle.setAttribute("aria-expanded", String(errorExpanded));
+    const copy = createLocalMediaJobAction("Copy", async () => {
+      await copyText(job.error);
+      const original = copy.textContent;
+      copy.textContent = "Copied";
+      setTimeout(() => {
+        copy.textContent = original;
+      }, 1200);
+    });
+    actions.append(toggle, copy);
+  }
+}
+
+function createLocalMediaJobAction(label, action) {
+  const button = document.createElement("button");
+  button.className = "media-download media-job-action";
+  button.type = "button";
+  button.textContent = label;
+  button.addEventListener("click", async () => {
+    try {
+      await action();
+    } catch (error) {
+      button.title = error?.message || String(error);
+      button.textContent = "Failed";
+    }
+  });
+  return button;
+}
+
+async function copyText(value) {
+  const text = String(value || "");
+  if (!text) throw new Error("No error details to copy.");
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.append(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (!copied) throw new Error("Could not copy the error details.");
 }
 
 function createMediaJobAction(
