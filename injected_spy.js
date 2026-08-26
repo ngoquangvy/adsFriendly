@@ -329,6 +329,12 @@ var AdsFriendlyMainWorld = (() => {
       mimeTypes: normalizeStrings(value.mimeTypes).slice(0, 8),
       appendCount: optionalNonNegativeInteger(value.appendCount) || 0,
       totalAppendedBytes: optionalNonNegativeInteger(value.totalAppendedBytes) || 0,
+      observerStartedAt: optionalFiniteNumber(value.observerStartedAt) || null,
+      observerDocumentState: optionalEnumValue(
+        value.observerDocumentState,
+        ["loading", "interactive", "complete", "unknown"],
+        "observerDocumentState"
+      ) || "unknown",
       observedAt: optionalFiniteNumber(value.observedAt) || Date.now()
     };
   }
@@ -3509,7 +3515,10 @@ ${body}`;
   var MAX_SOURCE_URLS = 32;
   var MAX_MIME_TYPES = 8;
   var REPORT_DELAY_MS = 200;
-  function installBlobSourceTracer(policy) {
+  function installBlobSourceTracer(policy, {
+    observerStartedAt = Date.now(),
+    observerDocumentState = currentDocumentState()
+  } = {}) {
     const bufferSources = /* @__PURE__ */ new WeakMap();
     const blobSources = /* @__PURE__ */ new WeakMap();
     const mediaSourceStates = /* @__PURE__ */ new WeakMap();
@@ -3736,6 +3745,8 @@ ${body}`;
           mimeTypes: state.mimeTypes,
           appendCount: state.appendCount,
           totalAppendedBytes: state.totalAppendedBytes,
+          observerStartedAt,
+          observerDocumentState,
           observedAt: Date.now()
         })
       });
@@ -3744,6 +3755,10 @@ ${body}`;
       if (buffer instanceof ArrayBuffer && source?.url)
         bufferSources.set(buffer, source);
     }
+  }
+  function currentDocumentState() {
+    const state = globalThis.document?.readyState;
+    return ["loading", "interactive", "complete"].includes(state) ? state : "unknown";
   }
   function createTraceState(blobUrl, traceKind) {
     return {

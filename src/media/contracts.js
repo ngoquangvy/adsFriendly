@@ -334,6 +334,13 @@ export function normalizeBlobSourceTrace(value = {}) {
     appendCount: optionalNonNegativeInteger(value.appendCount) || 0,
     totalAppendedBytes:
       optionalNonNegativeInteger(value.totalAppendedBytes) || 0,
+    observerStartedAt: optionalFiniteNumber(value.observerStartedAt) || null,
+    observerDocumentState:
+      optionalEnumValue(
+        value.observerDocumentState,
+        ["loading", "interactive", "complete", "unknown"],
+        "observerDocumentState",
+      ) || "unknown",
     observedAt: optionalFiniteNumber(value.observedAt) || Date.now(),
   };
 }

@@ -1702,6 +1702,171 @@ ${blobTitleKey(item.title)}`;
     return `${MEDIA_CATALOG_SESSION_PREFIX}${tabId}`;
   }
 
+  // src/media/deep-inspection.js
+  var MEDIA_DEEP_INSPECTION_STRATEGIES = Object.freeze({
+    EARLY_MSE_LINEAGE: "early_mse_lineage"
+  });
+  var MIN_APPEND_COUNT = 3;
+  var MIN_APPENDED_BYTES = 256 * 1024;
+  var RETRYABLE_REASONS = /* @__PURE__ */ new Set([
+    "Manifest is not ready.",
+    "HLS endpoint has not exposed a media playlist yet.",
+    "HLS media playlist is waiting for segments."
+  ]);
+  function evaluateMediaDeepInspection(item, items = []) {
+    if (item?.kind !== "blob") return closed("not_blob");
+    const trace = item.blobTrace;
+    if (!trace) return closed("no_mse_trace");
+    const related = relatedCandidates(item, items);
+    const protectedCandidate = [item, ...related].find(isProtectedMedia);
+    if (protectedCandidate) return blocked("protected_media");
+    if (!["interactive", "complete"].includes(trace.observerDocumentState)) {
+      return closed(
+        trace.observerDocumentState === "loading" ? "observer_already_early" : "observer_start_unknown"
+      );
+    }
+    if (trace.appendCount < MIN_APPEND_COUNT || trace.totalAppendedBytes < MIN_APPENDED_BYTES) {
+      return closed("playback_not_proven");
+    }
+    if (!trace.sourceUrls?.length || !trace.candidateIds?.length) {
+      return closed("source_lineage_not_proven");
+    }
+    const retryable = related.find((candidate) => {
+      if (candidate.kind !== "hls") return false;
+      const availability = getMediaDownloadAvailability(candidate);
+      return !availability.supported && RETRYABLE_REASONS.has(availability.reason);
+    });
+    if (!retryable) return closed("no_known_early_hook_gap");
+    return Object.freeze({
+      eligible: true,
+      blocked: false,
+      code: "observer_started_late",
+      confidence: 0.95,
+      strategy: MEDIA_DEEP_INSPECTION_STRATEGIES.EARLY_MSE_LINEAGE,
+      mediaId: retryable.id,
+      evidence: Object.freeze({
+        appendCount: trace.appendCount,
+        totalAppendedBytes: trace.totalAppendedBytes,
+        sourceCount: trace.sourceUrls.length,
+        observerDocumentState: trace.observerDocumentState
+      })
+    });
+  }
+  function relatedCandidates(item, items) {
+    const ids = /* @__PURE__ */ new Set([
+      item.selectedMediaId,
+      ...item.resolvedMediaIds || [],
+      ...item.blobTrace?.candidateIds || []
+    ]);
+    ids.delete(null);
+    ids.delete(void 0);
+    ids.delete(item.id);
+    return items.filter((candidate) => ids.has(candidate.id));
+  }
+  function isProtectedMedia(candidate) {
+    if (hasStrongDrmEvidence(candidate)) return true;
+    if (hasUnsupportedHlsKeyFormat(candidate)) return true;
+    if (candidate?.drm && candidate.drm !== "none") return true;
+    if (candidate?.encryptionMethods?.length) return true;
+    if (candidate?.encryptionScheme && !["none", "unknown"].includes(candidate.encryptionScheme)) {
+      return true;
+    }
+    const eme = candidate?.eme;
+    return Boolean(
+      eme?.keySystems?.length || eme?.keyStatuses?.length || eme?.licenseStatus
+    );
+  }
+  function closed(code) {
+    return Object.freeze({ eligible: false, blocked: false, code });
+  }
+  function blocked(code) {
+    return Object.freeze({ eligible: false, blocked: true, code });
+  }
+
+  // src/media/deep-inspection-profiles.js
+  var MEDIA_DEEP_INSPECTION_PROFILES_KEY = "mediaDeepInspectionProfiles";
+  var PENDING_TTL_MS = 15 * 60 * 1e3;
+  var MAX_PROFILES = 64;
+  async function stageMediaDeepInspectionProfile(storage, { pageUrl, frameUrl, suggestion, now = Date.now() }) {
+    if (!suggestion?.eligible || suggestion.confidence < 0.9 || !Object.values(MEDIA_DEEP_INSPECTION_STRATEGIES).includes(
+      suggestion.strategy
+    ) || typeof suggestion.mediaId !== "string" || !suggestion.mediaId) {
+      throw new Error("Deep media inspection needs verified technical evidence.");
+    }
+    const topOrigin = httpOrigin(pageUrl);
+    const frameOrigin = httpOrigin(frameUrl || pageUrl);
+    if (!topOrigin || !frameOrigin) {
+      throw new Error("Deep media inspection needs HTTP page and frame origins.");
+    }
+    const profiles = await readProfiles(storage, now);
+    const id = `${topOrigin}|${frameOrigin}|${suggestion.strategy}`;
+    const existing = profiles.find((profile) => profile.id === id);
+    const next = {
+      id,
+      topOrigin,
+      frameOrigin,
+      strategy: suggestion.strategy,
+      mediaId: suggestion.mediaId,
+      state: "pending",
+      evidenceCode: suggestion.code,
+      confidence: suggestion.confidence,
+      createdAt: existing?.createdAt || now,
+      updatedAt: now,
+      expiresAt: now + PENDING_TTL_MS,
+      lastVerifiedAt: existing?.lastVerifiedAt || null
+    };
+    const merged = [
+      next,
+      ...profiles.filter((profile) => profile.id !== id)
+    ].slice(0, MAX_PROFILES);
+    await storage.set({ [MEDIA_DEEP_INSPECTION_PROFILES_KEY]: merged });
+    return next;
+  }
+  async function verifyMediaDeepInspectionProfiles(storage, { pageUrl, frameUrls = [], successfulMediaIds = [], now = Date.now() }) {
+    const topOrigin = httpOrigin(pageUrl);
+    if (!topOrigin) return [];
+    const allowedFrames = new Set(
+      [pageUrl, ...frameUrls].map(httpOrigin).filter(Boolean)
+    );
+    const successful = new Set(successfulMediaIds.filter(Boolean));
+    const profiles = await readProfiles(storage, now);
+    let changed = false;
+    const next = profiles.map((profile) => {
+      if (profile.state !== "pending" || profile.topOrigin !== topOrigin || !allowedFrames.has(profile.frameOrigin) || !successful.has(profile.mediaId)) {
+        return profile;
+      }
+      changed = true;
+      return {
+        ...profile,
+        state: "verified",
+        updatedAt: now,
+        expiresAt: null,
+        lastVerifiedAt: now
+      };
+    });
+    if (changed)
+      await storage.set({ [MEDIA_DEEP_INSPECTION_PROFILES_KEY]: next });
+    return next;
+  }
+  async function readProfiles(storage, now) {
+    const snapshot = await storage.get(MEDIA_DEEP_INSPECTION_PROFILES_KEY);
+    const raw = Array.isArray(snapshot[MEDIA_DEEP_INSPECTION_PROFILES_KEY]) ? snapshot[MEDIA_DEEP_INSPECTION_PROFILES_KEY] : [];
+    const profiles = raw.filter(
+      (profile) => profile && typeof profile.id === "string" && ["pending", "verified"].includes(profile.state) && (profile.state === "verified" || Number(profile.expiresAt) > now)
+    );
+    if (profiles.length !== raw.length)
+      await storage.set({ [MEDIA_DEEP_INSPECTION_PROFILES_KEY]: profiles });
+    return profiles.slice(0, MAX_PROFILES);
+  }
+  function httpOrigin(value) {
+    try {
+      const url = new URL(value);
+      return ["http:", "https:"].includes(url.protocol) ? url.origin : null;
+    } catch {
+      return null;
+    }
+  }
+
   // src/popup/index.js
   var blockedCountElement = document.getElementById("blocked-count");
   var statusToggle = document.getElementById("status-toggle");
@@ -1920,6 +2085,14 @@ ${blobTitleKey(item.title)}`;
       }
       mediaHelperStatus = await readMediaHelperStatus();
       const downloadState = getMediaCatalogDownloadState(items);
+      if (downloadState.downloadableCount > 0) {
+        await verifyMediaDeepInspectionProfiles(chrome.storage.local, {
+          pageUrl: tab.url,
+          frameUrls: items.map((item) => item.frameUrl).filter(Boolean),
+          successfulMediaIds: items.filter((item) => getMediaDownloadAvailability(item).supported).map((item) => item.id)
+        }).catch(() => {
+        });
+      }
       commitMediaCatalog({
         tab,
         status: formatMediaHelperSummary(mediaHelperStatus, downloadState),
@@ -2010,8 +2183,36 @@ ${blobTitleKey(item.title)}`;
     const debugMediaId = debugCaptureMediaId(item);
     if (tab && debugMediaId)
       actions.append(createManifestSaveButton(item, tab, debugMediaId));
+    const inspection = evaluateMediaDeepInspection(item, [...itemsById.values()]);
+    if (tab && inspection.eligible) {
+      actions.append(createMediaInspectionReloadButton(item, tab, inspection));
+    }
     if (actions.childElementCount) row.append(actions);
     return row;
+  }
+  function createMediaInspectionReloadButton(item, tab, inspection) {
+    const button = document.createElement("button");
+    button.className = "media-download media-inspection-reload";
+    button.textContent = "Reload & analyze";
+    button.title = "Playback succeeded, but the observer started after the player. Reload to capture the standard source from document start.";
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      button.textContent = "Reloading\u2026";
+      try {
+        await stageMediaDeepInspectionProfile(chrome.storage.local, {
+          pageUrl: tab.url,
+          frameUrl: item.frameUrl || tab.url,
+          suggestion: inspection
+        });
+        await chrome.tabs.reload(tab.id);
+        window.close();
+      } catch (error) {
+        button.disabled = false;
+        button.textContent = "Retry reload";
+        button.title = error?.message || String(error);
+      }
+    });
+    return button;
   }
   function debugCaptureMediaId(item) {
     const handoff = item.resolvedStream?.manifestHandoff || item.manifestHandoff;

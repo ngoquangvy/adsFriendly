@@ -60,6 +60,12 @@ import {
 } from "../src/media/download-job-view.js";
 import { EVENTS, createRegisteredEvent } from "../src/runtime/event-catalog.js";
 import { normalizeMediaRequestContext } from "../src/media/contracts.js";
+import { evaluateMediaDeepInspection } from "../src/media/deep-inspection.js";
+import {
+  MEDIA_DEEP_INSPECTION_PROFILES_KEY,
+  stageMediaDeepInspectionProfile,
+  verifyMediaDeepInspectionProfiles,
+} from "../src/media/deep-inspection-profiles.js";
 import { installBlobSourceTracer } from "../src/main-world/blob-source-tracer.js";
 import {
   classifyEncryptedManifestEnvelope,
@@ -1074,7 +1080,13 @@ test("blob source tracing links an appended network buffer to an adaptive manife
     kind: "hls",
     manifestUrl: "https://cdn.example/master.m3u8",
   });
-  const stop = installBlobSourceTracer({ can: () => true });
+  const stop = installBlobSourceTracer(
+    { can: () => true },
+    {
+      observerStartedAt: 1234,
+      observerDocumentState: "interactive",
+    },
+  );
   try {
     const mediaSource = new FakeMediaSource();
     URL.createObjectURL(mediaSource);
@@ -1093,6 +1105,10 @@ test("blob source tracing links an appended network buffer to an adaptive manife
     assert.deepEqual(trace.sourceUrls, ["https://cdn.example/chunk-1.m4s"]);
     assert.equal(trace.appendCount, 1);
     assert.equal(trace.totalAppendedBytes, 128);
+    assert.equal(trace.observerStartedAt, 1234);
+    assert.equal(trace.observerDocumentState, "interactive");
+    assert.equal("chunk" in trace, false);
+    assert.equal("buffer" in trace, false);
   } finally {
     stop();
     clearMediaObservations();
@@ -2713,6 +2729,142 @@ test("download profiles classify direct sources and expose real adaptive contain
     ).map((profile) => profile.id),
     ["video-mp4"],
   );
+});
+
+test("deep inspection opens only for a proven late-observer MSE lineage gap", () => {
+  const pageUrl = "https://video.example/watch";
+  const hls = {
+    id: "hls-late",
+    pageUrl,
+    kind: "hls",
+    detectedBy: "network",
+    manifestUrl: "https://cdn.example/movie.m3u8",
+    probeStatus: "discovered",
+    drm: "none",
+  };
+  const blob = {
+    id: "blob-late",
+    pageUrl,
+    frameUrl: "https://player.example/embed",
+    kind: "blob",
+    detectedBy: "player",
+    sourceUrl: "blob:https://player.example/media",
+    blobTrace: {
+      sourceUrls: ["https://cdn.example/segment-12.m4s"],
+      candidateIds: [hls.id],
+      mimeTypes: ['video/mp4; codecs="avc1"'],
+      appendCount: 4,
+      totalAppendedBytes: 512 * 1024,
+      observerDocumentState: "interactive",
+    },
+  };
+
+  const suggestion = evaluateMediaDeepInspection(blob, [blob, hls]);
+  assert.equal(suggestion.eligible, true);
+  assert.equal(suggestion.confidence, 0.95);
+  assert.equal(suggestion.code, "observer_started_late");
+
+  const early = evaluateMediaDeepInspection(
+    {
+      ...blob,
+      blobTrace: { ...blob.blobTrace, observerDocumentState: "loading" },
+    },
+    [blob, hls],
+  );
+  assert.equal(early.eligible, false);
+  assert.equal(early.code, "observer_already_early");
+});
+
+test("deep inspection never opens for custom protected or EME media", () => {
+  const pageUrl = "https://video.example/watch";
+  const blob = {
+    id: "blob-protected",
+    pageUrl,
+    kind: "blob",
+    detectedBy: "player",
+    sourceUrl: "blob:https://video.example/media",
+    blobTrace: {
+      sourceUrls: ["https://cdn.example/segment.m4s"],
+      candidateIds: ["hls-protected"],
+      appendCount: 5,
+      totalAppendedBytes: 1024 * 1024,
+      observerDocumentState: "complete",
+    },
+  };
+  const custom = {
+    id: "hls-protected",
+    pageUrl,
+    kind: "hls",
+    detectedBy: "network",
+    manifestUrl: "https://cdn.example/protected.m3u8",
+    probeStatus: "discovered",
+    drm: "suspected",
+    encryptionKeyFormats: ["urn:avs:shield:v3"],
+  };
+  const result = evaluateMediaDeepInspection(blob, [blob, custom]);
+  assert.equal(result.eligible, false);
+  assert.equal(result.blocked, true);
+  assert.equal(result.code, "protected_media");
+
+  const eme = {
+    ...custom,
+    id: "hls-eme",
+    drm: "none",
+    encryptionKeyFormats: [],
+    eme: { keySystems: ["com.widevine.alpha"] },
+  };
+  const emeBlob = {
+    ...blob,
+    blobTrace: { ...blob.blobTrace, candidateIds: [eme.id] },
+  };
+  const emeResult = evaluateMediaDeepInspection(emeBlob, [emeBlob, eme]);
+  assert.equal(emeResult.eligible, false);
+  assert.equal(emeResult.blocked, true);
+});
+
+test("deep inspection profiles cannot be added manually and verify after success", async () => {
+  const values = {};
+  const storage = {
+    async get(key) {
+      return { [key]: values[key] };
+    },
+    async set(update) {
+      Object.assign(values, update);
+    },
+  };
+  await assert.rejects(
+    stageMediaDeepInspectionProfile(storage, {
+      pageUrl: "https://video.example/watch",
+      frameUrl: "https://player.example/embed",
+      suggestion: { eligible: false },
+      now: 1000,
+    }),
+    /verified technical evidence/i,
+  );
+
+  const pending = await stageMediaDeepInspectionProfile(storage, {
+    pageUrl: "https://video.example/watch",
+    frameUrl: "https://player.example/embed",
+    suggestion: {
+      eligible: true,
+      confidence: 0.95,
+      code: "observer_started_late",
+      strategy: "early_mse_lineage",
+      mediaId: "hls-late",
+    },
+    now: 1000,
+  });
+  assert.equal(pending.state, "pending");
+  assert.equal(values[MEDIA_DEEP_INSPECTION_PROFILES_KEY].length, 1);
+
+  const verified = await verifyMediaDeepInspectionProfiles(storage, {
+    pageUrl: "https://video.example/another",
+    frameUrls: ["https://player.example/another"],
+    successfulMediaIds: ["hls-late"],
+    now: 2000,
+  });
+  assert.equal(verified[0].state, "verified");
+  assert.equal(verified[0].lastVerifiedAt, 2000);
 });
 
 test("download estimate reports selected quality and zero-network manifest size", () => {

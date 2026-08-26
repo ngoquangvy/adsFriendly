@@ -482,6 +482,13 @@ function mergeBlobTrace(existing, incoming) {
       existing?.totalAppendedBytes || 0,
       incoming.totalAppendedBytes || 0,
     ),
+    observerStartedAt:
+      existing?.observerStartedAt || incoming.observerStartedAt || null,
+    observerDocumentState:
+      existing?.observerDocumentState &&
+      existing.observerDocumentState !== "unknown"
+        ? existing.observerDocumentState
+        : incoming.observerDocumentState || "unknown",
     observedAt: Math.max(existing?.observedAt || 0, incoming.observedAt || 0),
   };
 }

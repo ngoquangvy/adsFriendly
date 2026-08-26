@@ -30,6 +30,11 @@ import {
   selectVisibleMediaItems,
 } from "../media/catalog-view.js";
 import { mediaCatalogSessionKey } from "../media/storage-keys.js";
+import { evaluateMediaDeepInspection } from "../media/deep-inspection.js";
+import {
+  stageMediaDeepInspectionProfile,
+  verifyMediaDeepInspectionProfiles,
+} from "../media/deep-inspection-profiles.js";
 
 const blockedCountElement = document.getElementById("blocked-count");
 const statusToggle = document.getElementById("status-toggle");
@@ -285,6 +290,15 @@ async function renderMediaCatalog(tab) {
     }
     mediaHelperStatus = await readMediaHelperStatus();
     const downloadState = getMediaCatalogDownloadState(items);
+    if (downloadState.downloadableCount > 0) {
+      await verifyMediaDeepInspectionProfiles(chrome.storage.local, {
+        pageUrl: tab.url,
+        frameUrls: items.map((item) => item.frameUrl).filter(Boolean),
+        successfulMediaIds: items
+          .filter((item) => getMediaDownloadAvailability(item).supported)
+          .map((item) => item.id),
+      }).catch(() => {});
+    }
     commitMediaCatalog({
       tab,
       status: formatMediaHelperSummary(mediaHelperStatus, downloadState),
@@ -394,8 +408,38 @@ function createMediaItem(item, tab, helper, itemsById) {
   const debugMediaId = debugCaptureMediaId(item);
   if (tab && debugMediaId)
     actions.append(createManifestSaveButton(item, tab, debugMediaId));
+  const inspection = evaluateMediaDeepInspection(item, [...itemsById.values()]);
+  if (tab && inspection.eligible) {
+    actions.append(createMediaInspectionReloadButton(item, tab, inspection));
+  }
   if (actions.childElementCount) row.append(actions);
   return row;
+}
+
+function createMediaInspectionReloadButton(item, tab, inspection) {
+  const button = document.createElement("button");
+  button.className = "media-download media-inspection-reload";
+  button.textContent = "Reload & analyze";
+  button.title =
+    "Playback succeeded, but the observer started after the player. Reload to capture the standard source from document start.";
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    button.textContent = "Reloading…";
+    try {
+      await stageMediaDeepInspectionProfile(chrome.storage.local, {
+        pageUrl: tab.url,
+        frameUrl: item.frameUrl || tab.url,
+        suggestion: inspection,
+      });
+      await chrome.tabs.reload(tab.id);
+      window.close();
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = "Retry reload";
+      button.title = error?.message || String(error);
+    }
+  });
+  return button;
 }
 
 function debugCaptureMediaId(item) {

@@ -442,6 +442,7 @@ export function createMediaObserverReportKey(event) {
       payload.sourceUrls?.length || 0,
       payload.candidateIds?.join(",") || "none",
       Math.floor((payload.appendCount || 0) / 10),
+      payload.observerDocumentState || "unknown",
     ].join(":");
   }
   if (event?.type === EVENTS.MEDIA_EME_OBSERVED) {

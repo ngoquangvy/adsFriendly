@@ -9,7 +9,13 @@ const MAX_SOURCE_URLS = 32;
 const MAX_MIME_TYPES = 8;
 const REPORT_DELAY_MS = 200;
 
-export function installBlobSourceTracer(policy) {
+export function installBlobSourceTracer(
+  policy,
+  {
+    observerStartedAt = Date.now(),
+    observerDocumentState = currentDocumentState(),
+  } = {},
+) {
   const bufferSources = new WeakMap();
   const blobSources = new WeakMap();
   const mediaSourceStates = new WeakMap();
@@ -254,6 +260,8 @@ export function installBlobSourceTracer(policy) {
         mimeTypes: state.mimeTypes,
         appendCount: state.appendCount,
         totalAppendedBytes: state.totalAppendedBytes,
+        observerStartedAt,
+        observerDocumentState,
         observedAt: Date.now(),
       }),
     });
@@ -263,6 +271,13 @@ export function installBlobSourceTracer(policy) {
     if (buffer instanceof ArrayBuffer && source?.url)
       bufferSources.set(buffer, source);
   }
+}
+
+function currentDocumentState() {
+  const state = globalThis.document?.readyState;
+  return ["loading", "interactive", "complete"].includes(state)
+    ? state
+    : "unknown";
 }
 
 function createTraceState(blobUrl, traceKind) {

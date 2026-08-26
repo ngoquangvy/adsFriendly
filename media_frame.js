@@ -303,6 +303,12 @@ var AdsFriendlyMediaFrame = (() => {
       mimeTypes: normalizeStrings(value.mimeTypes).slice(0, 8),
       appendCount: optionalNonNegativeInteger(value.appendCount) || 0,
       totalAppendedBytes: optionalNonNegativeInteger(value.totalAppendedBytes) || 0,
+      observerStartedAt: optionalFiniteNumber(value.observerStartedAt) || null,
+      observerDocumentState: optionalEnumValue(
+        value.observerDocumentState,
+        ["loading", "interactive", "complete", "unknown"],
+        "observerDocumentState"
+      ) || "unknown",
       observedAt: optionalFiniteNumber(value.observedAt) || Date.now()
     };
   }
@@ -1063,7 +1069,8 @@ var AdsFriendlyMediaFrame = (() => {
         mediaId,
         payload.sourceUrls?.length || 0,
         payload.candidateIds?.join(",") || "none",
-        Math.floor((payload.appendCount || 0) / 10)
+        Math.floor((payload.appendCount || 0) / 10),
+        payload.observerDocumentState || "unknown"
       ].join(":");
     }
     if (event2?.type === EVENTS.MEDIA_EME_OBSERVED) {

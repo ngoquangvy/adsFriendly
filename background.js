@@ -2455,6 +2455,12 @@ var AdsFriendlyBackground = (() => {
       mimeTypes: normalizeStrings(value.mimeTypes).slice(0, 8),
       appendCount: optionalNonNegativeInteger(value.appendCount) || 0,
       totalAppendedBytes: optionalNonNegativeInteger(value.totalAppendedBytes) || 0,
+      observerStartedAt: optionalFiniteNumber(value.observerStartedAt) || null,
+      observerDocumentState: optionalEnumValue(
+        value.observerDocumentState,
+        ["loading", "interactive", "complete", "unknown"],
+        "observerDocumentState"
+      ) || "unknown",
       observedAt: optionalFiniteNumber(value.observedAt) || Date.now()
     };
   }
@@ -3743,6 +3749,8 @@ var AdsFriendlyBackground = (() => {
         existing?.totalAppendedBytes || 0,
         incoming.totalAppendedBytes || 0
       ),
+      observerStartedAt: existing?.observerStartedAt || incoming.observerStartedAt || null,
+      observerDocumentState: existing?.observerDocumentState && existing.observerDocumentState !== "unknown" ? existing.observerDocumentState : incoming.observerDocumentState || "unknown",
       observedAt: Math.max(existing?.observedAt || 0, incoming.observedAt || 0)
     };
   }
