@@ -15,6 +15,7 @@ export function startMediaObserver() {
   const retryTimers = new Set();
   const probeTimers = new Set();
   const requestedProbes = new Set();
+  const contextualProbeRetries = new Set();
   const videoListeners = new Map();
   const mutationObserver = new MutationObserver((mutations) => {
     for (const mutation of mutations) {
@@ -32,6 +33,14 @@ export function startMediaObserver() {
   });
 
   const onMainWorldMessage = (messageEvent) => {
+    if (
+      messageEvent.source === window &&
+      messageEvent.data?.source === "adsfriendly-spy" &&
+      messageEvent.data?.type === "MEDIA_PROBE_CONTEXT_REQUIRED"
+    ) {
+      retryProbeWithParentContext(messageEvent.data);
+      return;
+    }
     if (
       messageEvent.source !== window ||
       messageEvent.data?.source !== "adsfriendly-spy" ||
@@ -78,6 +87,7 @@ export function startMediaObserver() {
     probeTimers.forEach(clearTimeout);
     probeTimers.clear();
     requestedProbes.clear();
+    contextualProbeRetries.clear();
   };
 
   function scanElement(element) {
@@ -108,15 +118,20 @@ export function startMediaObserver() {
       element.currentSrc || element.src || element.getAttribute?.("src");
     const mimeType =
       element.currentType || element.type || element.getAttribute?.("type");
-    reportSource(sourceUrl, mimeType, MEDIA_DETECTION_SOURCES.DOM);
+    const duration =
+      element.matches?.("video") && Number.isFinite(element.duration)
+        ? element.duration
+        : null;
+    reportSource(sourceUrl, mimeType, MEDIA_DETECTION_SOURCES.DOM, duration);
   }
 
-  function reportSource(sourceUrl, mimeType, detectedBy) {
+  function reportSource(sourceUrl, mimeType, detectedBy, duration = null) {
     const candidate = createMediaCandidateFromSource({
       pageUrl: location.href,
       sourceUrl,
       mimeType,
       title: document.title || null,
+      duration,
       detectedBy,
     });
     if (!candidate) return;
@@ -198,13 +213,51 @@ export function startMediaObserver() {
       probeTimers.add(timerId);
     }
   }
+
+  function retryProbeWithParentContext({ mediaId, kind, manifestUrl }) {
+    if (
+      stopped ||
+      !mediaId ||
+      !manifestUrl ||
+      contextualProbeRetries.has(mediaId) ||
+      !document.referrer
+    )
+      return;
+    contextualProbeRetries.add(mediaId);
+    chrome.runtime
+      .sendMessage({
+        type: "PREPARE_MEDIA_CONTEXTUAL_PROBE",
+        mediaId,
+        manifestUrl,
+        parentDocumentUrl: document.referrer,
+      })
+      .then((response) => {
+        if (stopped || response?.status !== "prepared") return;
+        window.postMessage(
+          {
+            source: "adsfriendly-content",
+            type: "PROBE_MEDIA_MANIFEST",
+            mediaId,
+            kind,
+            manifestUrl,
+            contextualRetry: true,
+          },
+          "*",
+        );
+      })
+      .catch(() => {});
+  }
 }
 
 export function createMediaObserverReportKey(event) {
   const payload = event?.payload || {};
   const mediaId = payload.id || payload.mediaId || "unknown";
   if (event?.type === EVENTS.MEDIA_DISCOVERED) {
-    return `${event.type}:${mediaId}:${payload.detectedBy || "unknown"}`;
+    const playbackDuration =
+      payload.kind === "blob" && Number.isFinite(payload.duration)
+        ? Math.round(payload.duration)
+        : "unknown";
+    return `${event.type}:${mediaId}:${payload.detectedBy || "unknown"}:${playbackDuration}`;
   }
   if (event?.type === EVENTS.MEDIA_BLOB_TRACED) {
     return [

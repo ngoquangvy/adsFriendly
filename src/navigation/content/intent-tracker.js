@@ -5,15 +5,20 @@ export function startIntentTracker() {
     if (!event.isTrusted) return;
     try {
       const link = event.target?.closest?.("a[href]");
+      const sourceUrl =
+        window.top === window
+          ? location.href
+          : document.referrer || location.href;
       const intent = classifyNavigationIntent({
         intentUrl: link?.href,
-        sourceUrl: location.href,
+        sourceUrl,
         evidence: buildClickEvidence(link, event.target),
       });
       chrome.runtime.sendMessage({
         type: "TRUSTED_CLICK",
         intentUrl: link?.href || null,
-        sourceUrl: location.href,
+        sourceUrl,
+        frameUrl: location.href,
         intentKind: intent.likelyAd ? "promotional" : "navigation",
         intentReasons: intent.reasons,
       });

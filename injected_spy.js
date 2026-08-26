@@ -447,6 +447,7 @@ var AdsFriendlyMainWorld = (() => {
     sourceUrl,
     mimeType = null,
     title = null,
+    duration = null,
     detectedBy = MEDIA_DETECTION_SOURCES.DOM
   }) {
     const absoluteSourceUrl = resolveSourceUrl(sourceUrl, pageUrl);
@@ -461,6 +462,7 @@ var AdsFriendlyMainWorld = (() => {
       kind,
       title,
       mimeType,
+      duration,
       detectedBy,
       drm: "none"
     });
@@ -1594,6 +1596,7 @@ ${body}`;
     feature("media-frame.observer", "media-frame", C2.MEDIA_OBSERVE, [
       C2.MEDIA_CATALOG
     ]),
+    feature("media-frame.navigation-intent", "media-frame", C2.NAVIGATION_INTENT),
     feature("video.surgeon", "video", C2.VIDEO_OBSERVE, [
       C2.VIDEO_RESTORE_STATE,
       C2.VIDEO_USER_ACTION,
@@ -1605,12 +1608,9 @@ ${body}`;
     feature("main-world.network-capture", "main-world", C2.CORE_MESSAGING, [
       C2.MEDIA_OBSERVE
     ]),
-    feature(
-      "main-world.player-source-observer",
-      "main-world",
-      C2.CORE_MESSAGING,
-      [C2.MEDIA_OBSERVE]
-    ),
+    feature("main-world.player-source-observer", "main-world", C2.CORE_MESSAGING, [
+      C2.MEDIA_OBSERVE
+    ]),
     feature("main-world.blob-source-tracer", "main-world", C2.CORE_MESSAGING, [
       C2.MEDIA_OBSERVE
     ]),
@@ -2080,7 +2080,16 @@ ${body}`;
       }).catch((error) => {
         if (probeGate.state(manifestUrl) !== "pending") return;
         probeGate.release(manifestUrl);
-        reportProbeFailure(manifestUrl, candidate, probeErrorCode(error));
+        const errorCode = probeErrorCode(error);
+        reportProbeFailure(manifestUrl, candidate, errorCode);
+        if (errorCode === "manifest_http_403" && messageEvent.data.contextualRetry !== true) {
+          notifyContentScript({
+            type: "MEDIA_PROBE_CONTEXT_REQUIRED",
+            mediaId: candidate.id,
+            kind: candidate.kind,
+            manifestUrl
+          });
+        }
       });
     };
     window.addEventListener("message", onProbeRequest);

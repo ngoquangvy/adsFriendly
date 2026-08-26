@@ -17,6 +17,7 @@ import {
   normalizeHttpMediaUrl,
 } from "../src/media/probe-gate.js";
 import { createMediaObserverReportKey } from "../src/content/media-observer.js";
+import { createMediaProbeRefererRule } from "../src/background/media-probe-context.js";
 import {
   createContextualProbeInit,
   readXhrResponseBody,
@@ -1015,6 +1016,116 @@ test("passive resolver promotes a playable child after a master probe is rejecte
   assert.match(formatMediaDetails(resolved), /^Resolved · 720p · VOD/);
 });
 
+test("passive resolver accepts a cross-CDN child when playback duration corroborates it", () => {
+  const catalog = createMediaCatalog();
+  const pageUrl = "https://video.example/watch";
+  const frameMetadata = {
+    frameId: 7,
+    frameUrl: "https://embed.streamc.xyz/player/42",
+  };
+  const master = createMediaCandidateFromSource({
+    pageUrl,
+    sourceUrl: "https://embed.streamc.xyz/hls/token/master.m3u8",
+    detectedBy: "network",
+  });
+  const child = createMediaCandidateFromSource({
+    pageUrl,
+    sourceUrl: "https://streamc-cdn.net/session/720p/index.m3u8",
+    detectedBy: "network",
+  });
+  const blob = createMediaCandidateFromSource({
+    pageUrl,
+    sourceUrl: "blob:https://embed.streamc.xyz/player",
+    duration: 5_163.21,
+    detectedBy: "dom",
+  });
+  catalog.add(
+    122,
+    createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, master, frameMetadata),
+  );
+  catalog.add(
+    122,
+    createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, child, frameMetadata),
+  );
+  catalog.add(
+    122,
+    createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, blob, frameMetadata),
+  );
+  catalog.applyProbe(
+    122,
+    createRegisteredEvent(
+      EVENTS.MEDIA_PROBED,
+      {
+        mediaId: child.id,
+        pageUrl,
+        manifestUrl: child.manifestUrl,
+        kind: "hls",
+        status: "ready",
+        playlistType: "media",
+        streamType: "vod",
+        duration: 5_163.2,
+        segmentCount: 1_726,
+      },
+      frameMetadata,
+    ),
+  );
+
+  const resolved = catalog.list(122).find((item) => item.id === master.id);
+  assert.equal(resolved.resolutionStatus, "resolved");
+  assert.equal(resolved.selectedMediaId, child.id);
+  assert(resolved.resolutionEvidence.includes("cross-cdn"));
+  assert(resolved.resolutionEvidence.includes("playback-duration-match"));
+});
+
+test("passive resolver rejects an uncorroborated cross-CDN child in the same frame", () => {
+  const catalog = createMediaCatalog();
+  const pageUrl = "https://video.example/watch";
+  const frameMetadata = {
+    frameId: 7,
+    frameUrl: "https://embed.streamc.xyz/player/42",
+  };
+  const master = createMediaCandidateFromSource({
+    pageUrl,
+    sourceUrl: "https://embed.streamc.xyz/hls/token/master.m3u8",
+    detectedBy: "network",
+  });
+  const unrelated = createMediaCandidateFromSource({
+    pageUrl,
+    sourceUrl: "https://ads-cdn.example/spot/index.m3u8",
+    detectedBy: "network",
+  });
+  catalog.add(
+    123,
+    createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, master, frameMetadata),
+  );
+  catalog.add(
+    123,
+    createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, unrelated, frameMetadata),
+  );
+  catalog.applyProbe(
+    123,
+    createRegisteredEvent(
+      EVENTS.MEDIA_PROBED,
+      {
+        mediaId: unrelated.id,
+        pageUrl,
+        manifestUrl: unrelated.manifestUrl,
+        kind: "hls",
+        status: "ready",
+        playlistType: "media",
+        streamType: "vod",
+        duration: 30,
+        segmentCount: 6,
+      },
+      frameMetadata,
+    ),
+  );
+
+  const unresolved = catalog.list(123).find((item) => item.id === master.id);
+  assert.equal(unresolved.resolutionStatus, "waiting");
+  assert.equal(unresolved.selectedMediaId, null);
+});
+
 test("passive resolver refuses an otherwise similar child from another frame", () => {
   const catalog = createMediaCatalog();
   const pageUrl = "https://video.example/watch";
@@ -1078,7 +1189,10 @@ test("media resolution strategies keep passive methods ahead of active probes", 
     ],
   );
   assert.equal(MEDIA_RESOLUTION_STRATEGY_CATALOG[1].maximumExtraRequests, 0);
-  assert.equal(MEDIA_RESOLUTION_STRATEGY_CATALOG.at(-1).maximumExtraRequests, 3);
+  assert.equal(
+    MEDIA_RESOLUTION_STRATEGY_CATALOG.at(-1).maximumExtraRequests,
+    3,
+  );
 });
 
 test("request context registry reuses only recent routing facts", () => {
@@ -1340,6 +1454,27 @@ test("request context keeps routing facts but discards headers and cookies", () 
   assert.equal(context.requiresBrowserSession, true);
   assert.equal("headers" in context, false);
   assert.equal("cookie" in context, false);
+});
+
+test("403 retry scopes its temporary Referer rule to one manifest and tab", () => {
+  const manifestUrl =
+    "https://embed.streamc.xyz/hls/token/master.m3u8?d=1&sig=a.b";
+  const rule = createMediaProbeRefererRule({
+    ruleId: 1_700_001,
+    tabId: 42,
+    manifestUrl,
+    parentDocumentUrl: "https://phimvietsub.click/watch/1",
+  });
+  assert.deepEqual(rule.condition.tabIds, [42]);
+  assert.deepEqual(rule.condition.resourceTypes, ["xmlhttprequest"]);
+  assert.equal(new RegExp(rule.condition.regexFilter).test(manifestUrl), true);
+  assert.deepEqual(rule.action.requestHeaders, [
+    {
+      header: "Referer",
+      operation: "set",
+      value: "https://phimvietsub.click/watch/1",
+    },
+  ]);
 });
 
 test("fallback probe gate accepts HTTP manifests once and stays bounded", () => {

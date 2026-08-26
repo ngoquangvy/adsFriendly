@@ -16,6 +16,10 @@ const PROMOTIONAL_TOKEN_RE =
   /(^|[^a-z0-9])(?:ad|ads|advert|banner|casino|hitclub|promo|sponsor|bet)([^a-z0-9]|$)/i;
 const PROMOTIONAL_SEARCH_DESTINATION_RE =
   /(?:^|\s)(?:https?:\/\/)?(?:www\.)?[a-z0-9-]{4,}\.(?:bet|casino|click|live|top|vip|win|xyz)(?:\b|\/)/i;
+const STRONG_CAMPAIGN_VALUE_RE =
+  /(^|[^a-z0-9])(?:popunder|popup|interstitial)([^a-z0-9]|$)/i;
+const AD_NETWORK_VALUE_RE =
+  /(^|[^a-z0-9])(?:clickadu|popads|propellerads|adsterra)([^a-z0-9]|$)/i;
 
 export function classifyNavigationIntent({
   intentUrl,
@@ -43,7 +47,17 @@ export function classifyNavigationIntent({
   if (!external) return { likelyAd: false, reasons: [] };
 
   const keys = [...intent.searchParams.keys()].map((key) => key.toLowerCase());
-  const strongTracking = keys.some((key) => STRONG_TRACKING_KEYS.has(key));
+  const campaignValues = [...intent.searchParams.entries()]
+    .filter(([key]) => key.toLowerCase().startsWith("utm_"))
+    .map(([, value]) => value);
+  const strongCampaignValue = campaignValues.some((value) =>
+    STRONG_CAMPAIGN_VALUE_RE.test(value),
+  );
+  const adNetworkValue = campaignValues.some((value) =>
+    AD_NETWORK_VALUE_RE.test(value),
+  );
+  const strongTracking =
+    keys.some((key) => STRONG_TRACKING_KEYS.has(key)) || strongCampaignValue;
   const marketingCount = keys.filter((key) => key.startsWith("utm_")).length;
   const tokenEvidence = `${intent.hostname} ${intent.pathname} ${evidence}`;
   const promotionalToken = PROMOTIONAL_TOKEN_RE.test(tokenEvidence);
@@ -56,7 +70,8 @@ export function classifyNavigationIntent({
   const reasons = [];
   if (strongTracking) reasons.push("strong_tracking_parameter");
   if (marketingCount >= 2) reasons.push("multiple_campaign_parameters");
-  if (promotionalToken) reasons.push("promotional_element_or_destination");
+  if (promotionalToken || adNetworkValue)
+    reasons.push("promotional_element_or_destination");
   if (prefilledSearchNavigation) reasons.push("prefilled_search_navigation");
   if (promotionalSearchDestination)
     reasons.push("promotional_search_destination");

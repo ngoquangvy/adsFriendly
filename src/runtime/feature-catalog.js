@@ -194,6 +194,7 @@ export const FEATURE_CATALOG = Object.freeze([
   feature("media-frame.observer", "media-frame", C.MEDIA_OBSERVE, [
     C.MEDIA_CATALOG,
   ]),
+  feature("media-frame.navigation-intent", "media-frame", C.NAVIGATION_INTENT),
 
   feature("video.surgeon", "video", C.VIDEO_OBSERVE, [
     C.VIDEO_RESTORE_STATE,
@@ -207,12 +208,9 @@ export const FEATURE_CATALOG = Object.freeze([
   feature("main-world.network-capture", "main-world", C.CORE_MESSAGING, [
     C.MEDIA_OBSERVE,
   ]),
-  feature(
-    "main-world.player-source-observer",
-    "main-world",
-    C.CORE_MESSAGING,
-    [C.MEDIA_OBSERVE],
-  ),
+  feature("main-world.player-source-observer", "main-world", C.CORE_MESSAGING, [
+    C.MEDIA_OBSERVE,
+  ]),
   feature("main-world.blob-source-tracer", "main-world", C.CORE_MESSAGING, [
     C.MEDIA_OBSERVE,
   ]),

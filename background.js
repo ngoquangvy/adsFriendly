@@ -1004,6 +1004,7 @@ var AdsFriendlyBackground = (() => {
     feature("media-frame.observer", "media-frame", C2.MEDIA_OBSERVE, [
       C2.MEDIA_CATALOG
     ]),
+    feature("media-frame.navigation-intent", "media-frame", C2.NAVIGATION_INTENT),
     feature("video.surgeon", "video", C2.VIDEO_OBSERVE, [
       C2.VIDEO_RESTORE_STATE,
       C2.VIDEO_USER_ACTION,
@@ -1015,12 +1016,9 @@ var AdsFriendlyBackground = (() => {
     feature("main-world.network-capture", "main-world", C2.CORE_MESSAGING, [
       C2.MEDIA_OBSERVE
     ]),
-    feature(
-      "main-world.player-source-observer",
-      "main-world",
-      C2.CORE_MESSAGING,
-      [C2.MEDIA_OBSERVE]
-    ),
+    feature("main-world.player-source-observer", "main-world", C2.CORE_MESSAGING, [
+      C2.MEDIA_OBSERVE
+    ]),
     feature("main-world.blob-source-tracer", "main-world", C2.CORE_MESSAGING, [
       C2.MEDIA_OBSERVE
     ]),
@@ -1310,6 +1308,8 @@ var AdsFriendlyBackground = (() => {
   ]);
   var PROMOTIONAL_TOKEN_RE = /(^|[^a-z0-9])(?:ad|ads|advert|banner|casino|hitclub|promo|sponsor|bet)([^a-z0-9]|$)/i;
   var PROMOTIONAL_SEARCH_DESTINATION_RE = /(?:^|\s)(?:https?:\/\/)?(?:www\.)?[a-z0-9-]{4,}\.(?:bet|casino|click|live|top|vip|win|xyz)(?:\b|\/)/i;
+  var STRONG_CAMPAIGN_VALUE_RE = /(^|[^a-z0-9])(?:popunder|popup|interstitial)([^a-z0-9]|$)/i;
+  var AD_NETWORK_VALUE_RE = /(^|[^a-z0-9])(?:clickadu|popads|propellerads|adsterra)([^a-z0-9]|$)/i;
   function classifyNavigationIntent({
     intentUrl,
     sourceUrl,
@@ -1327,7 +1327,14 @@ var AdsFriendlyBackground = (() => {
     const external = !source || !(sameHostnameOrSubdomain(intent.hostname, source.hostname) || sameHostnameOrSubdomain(source.hostname, intent.hostname));
     if (!external) return { likelyAd: false, reasons: [] };
     const keys = [...intent.searchParams.keys()].map((key) => key.toLowerCase());
-    const strongTracking = keys.some((key) => STRONG_TRACKING_KEYS.has(key));
+    const campaignValues = [...intent.searchParams.entries()].filter(([key]) => key.toLowerCase().startsWith("utm_")).map(([, value]) => value);
+    const strongCampaignValue = campaignValues.some(
+      (value) => STRONG_CAMPAIGN_VALUE_RE.test(value)
+    );
+    const adNetworkValue = campaignValues.some(
+      (value) => AD_NETWORK_VALUE_RE.test(value)
+    );
+    const strongTracking = keys.some((key) => STRONG_TRACKING_KEYS.has(key)) || strongCampaignValue;
     const marketingCount = keys.filter((key) => key.startsWith("utm_")).length;
     const tokenEvidence = `${intent.hostname} ${intent.pathname} ${evidence}`;
     const promotionalToken = PROMOTIONAL_TOKEN_RE.test(tokenEvidence);
@@ -1339,7 +1346,8 @@ var AdsFriendlyBackground = (() => {
     const reasons = [];
     if (strongTracking) reasons.push("strong_tracking_parameter");
     if (marketingCount >= 2) reasons.push("multiple_campaign_parameters");
-    if (promotionalToken) reasons.push("promotional_element_or_destination");
+    if (promotionalToken || adNetworkValue)
+      reasons.push("promotional_element_or_destination");
     if (prefilledSearchNavigation) reasons.push("prefilled_search_navigation");
     if (promotionalSearchDestination)
       reasons.push("promotional_search_destination");
@@ -1465,14 +1473,13 @@ var AdsFriendlyBackground = (() => {
         url: details.url
       });
     };
-    const onCreated = (tab) => {
+    const registerPendingTab = (tab, sourceTabId, hasRealOpener) => {
+      if (!Number.isInteger(tab?.id) || !Number.isInteger(sourceTabId)) return;
       rememberCommittedUrl(tab.id, tab.pendingUrl || tab.url);
-      const sourceTabId = tab.openerTabId || getRecentUserGestureSourceTabId(2500);
-      if (!sourceTabId || !tab.id) return;
       pendingTabs.set(tab.id, {
         sourceTabId,
         createdAt: Date.now(),
-        hasRealOpener: !!tab.openerTabId
+        hasRealOpener
       });
       trackReverseCandidate({
         sourceTabId,
@@ -1481,12 +1488,32 @@ var AdsFriendlyBackground = (() => {
       }).catch(logReversePopunderError);
       setTimeout(
         () => pendingTabs.delete(tab.id),
-        tab.openerTabId ? 1e4 : REVERSE_POPUNDER_WINDOW_MS + 500
+        hasRealOpener ? 1e4 : REVERSE_POPUNDER_WINDOW_MS + 500
       );
       const initialUrl = tab.pendingUrl || tab.url;
       if (initialUrl && !isBlankUrl(initialUrl)) {
         evaluateNewTab({ sourceTabId, tabId: tab.id, url: initialUrl });
       }
+    };
+    const onCreated = (tab) => {
+      rememberCommittedUrl(tab.id, tab.pendingUrl || tab.url);
+      const sourceTabId = tab.openerTabId || getRecentUserGestureSourceTabId(2500);
+      if (sourceTabId) {
+        registerPendingTab(tab, sourceTabId, !!tab.openerTabId);
+        return;
+      }
+      if (!Number.isInteger(tab.id)) return;
+      setTimeout(async () => {
+        if (!navigationPolicy || pendingTabs.has(tab.id) || handledTabs.has(tab.id))
+          return;
+        const delayedSourceTabId = getRecentUserGestureSourceTabId(2500);
+        if (!delayedSourceTabId) return;
+        try {
+          const currentTab = await chrome.tabs.get(tab.id);
+          registerPendingTab(currentTab, delayedSourceTabId, false);
+        } catch {
+        }
+      }, 300);
     };
     const onUpdated = (tabId, changeInfo) => {
       if (!changeInfo.url || isBlankUrl(changeInfo.url)) return;
@@ -2651,21 +2678,30 @@ var AdsFriendlyBackground = (() => {
   );
   validateCatalog2();
   function findPassiveHlsChildMatches(items = [], { maximumAgeMs = 6e4 } = {}) {
-    const playerCandidateIds = new Set(
-      items.filter((item) => item.kind === "blob").flatMap((item) => item.blobTrace?.candidateIds || [])
+    const playerLinks = items.filter(
+      (item) => item.kind === "blob" && item.blobTrace?.candidateIds?.length
     );
     const children = items.filter(isUsableMediaPlaylist);
+    const playbackDurations = items.filter(
+      (item) => item.kind === "blob" && Number.isFinite(item.duration) && item.duration >= 60
+    ).map((item) => ({ item, duration: item.duration }));
     const matches = [];
     for (const parent of items.filter(needsPassiveChild)) {
       const ranked = children.filter((child) => child.id !== parent.id).map(
-        (child) => passiveMatch(parent, child, playerCandidateIds, maximumAgeMs)
+        (child) => passiveMatch(
+          parent,
+          child,
+          playerLinks,
+          playbackDurations,
+          maximumAgeMs
+        )
       ).filter(Boolean).sort(
         (left, right) => right.confidence - left.confidence || (right.child.duration || 0) - (left.child.duration || 0) || (right.child.lastSeenAt || 0) - (left.child.lastSeenAt || 0)
       );
       const selected = ranked[0];
       if (!selected || selected.confidence < 0.8) continue;
       const alternative = ranked[1];
-      if (alternative && selected.confidence - alternative.confidence < 0.08 && !selected.evidence.includes("player-linked")) {
+      if (alternative && selected.confidence - alternative.confidence < 0.08 && !selected.evidence.includes("player-linked") && !selected.evidence.includes("playback-duration-match")) {
         continue;
       }
       matches.push({
@@ -2678,12 +2714,26 @@ var AdsFriendlyBackground = (() => {
     }
     return matches;
   }
-  function passiveMatch(parent, child, playerCandidateIds, maximumAgeMs) {
-    if (!sameFrame(parent, child) || !sameOrigin(parent, child)) return null;
+  function passiveMatch(parent, child, playerLinks, playbackDurations, maximumAgeMs) {
+    if (!sameFrame(parent, child)) return null;
     const age = observationDistance(parent, child);
     if (!Number.isFinite(age) || age > maximumAgeMs) return null;
-    const evidence = ["same-frame", "same-origin"];
-    let confidence = 0.65;
+    const originMatched = sameOrigin(parent, child);
+    const playerLinked = playerLinks.some(
+      (blob) => sameFrame(parent, blob) && blob.blobTrace.candidateIds.includes(child.id)
+    ) || child.detectionSources?.includes("player");
+    const durationMatched = playbackDurations.some(
+      ({ item, duration }) => sameFrame(parent, item) && durationsMatch(duration, child.duration)
+    );
+    if (!originMatched && !playerLinked && !durationMatched) return null;
+    const evidence = ["same-frame"];
+    let confidence = 0.45;
+    if (originMatched) {
+      confidence += 0.2;
+      evidence.push("same-origin");
+    } else {
+      evidence.push("cross-cdn");
+    }
     if (age <= 15e3) {
       confidence += 0.1;
       evidence.push("nearby-observation");
@@ -2692,9 +2742,13 @@ var AdsFriendlyBackground = (() => {
       confidence += 0.1;
       evidence.push("shared-path");
     }
-    if (playerCandidateIds.has(child.id) || child.detectionSources?.includes("player")) {
-      confidence += 0.15;
+    if (playerLinked) {
+      confidence += 0.25;
       evidence.push("player-linked");
+    }
+    if (durationMatched) {
+      confidence += 0.25;
+      evidence.push("playback-duration-match");
     }
     if (Number.isFinite(child.duration) && child.duration >= 60) {
       confidence += 0.05;
@@ -2705,6 +2759,12 @@ var AdsFriendlyBackground = (() => {
       confidence: Math.min(1, Number(confidence.toFixed(2))),
       evidence
     };
+  }
+  function durationsMatch(playbackDuration, playlistDuration) {
+    if (!Number.isFinite(playbackDuration) || !Number.isFinite(playlistDuration) || playbackDuration < 60 || playlistDuration < 60)
+      return false;
+    const tolerance = Math.max(5, playbackDuration * 0.02);
+    return Math.abs(playbackDuration - playlistDuration) <= tolerance;
   }
   function needsPassiveChild(item) {
     if (item.kind !== "hls") return false;
@@ -3058,6 +3118,7 @@ var AdsFriendlyBackground = (() => {
           ...existing || {},
           ...candidate,
           ...preserveExistingProbe ? probeFields(existing) : {},
+          duration: candidate.duration ?? existing?.duration ?? null,
           requestContexts: existing?.requestContexts || candidate.requestContexts || [],
           probeCount: existing?.probeCount || 0,
           lastProbeAt: existing?.lastProbeAt || null,
@@ -4815,6 +4876,88 @@ var AdsFriendlyBackground = (() => {
     return globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   }
 
+  // src/background/media-probe-context.js
+  var PROBE_RULE_ID_BASE = 17e5;
+  var PROBE_RULE_LIFETIME_MS = 6e3;
+  var nextRuleId = PROBE_RULE_ID_BASE;
+  async function prepareMediaProbeReferer({
+    tabId,
+    manifestUrl,
+    parentDocumentUrl
+  }) {
+    const ruleId = nextProbeRuleId();
+    const rule = createMediaProbeRefererRule({
+      ruleId,
+      tabId,
+      manifestUrl,
+      parentDocumentUrl
+    });
+    const support = await chrome.declarativeNetRequest.isRegexSupported({
+      regex: rule.condition.regexFilter
+    });
+    if (!support?.isSupported) {
+      return { status: "unsupported", reason: support?.reason || "regex" };
+    }
+    await chrome.declarativeNetRequest.updateSessionRules({
+      removeRuleIds: [ruleId],
+      addRules: [rule]
+    });
+    setTimeout(() => {
+      chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [ruleId] }).catch(() => {
+      });
+    }, PROBE_RULE_LIFETIME_MS);
+    return { status: "prepared", ruleId };
+  }
+  function createMediaProbeRefererRule({
+    ruleId,
+    tabId,
+    manifestUrl,
+    parentDocumentUrl
+  }) {
+    if (!Number.isInteger(ruleId) || ruleId <= 0)
+      throw new TypeError("Media probe rule needs a positive integer ID.");
+    if (!Number.isInteger(tabId) || tabId < 0)
+      throw new TypeError("Media probe rule needs a valid tab ID.");
+    const manifest = requiredHttpUrl2(manifestUrl, "manifestUrl");
+    const parent = requiredHttpUrl2(parentDocumentUrl, "parentDocumentUrl");
+    return {
+      id: ruleId,
+      priority: 1,
+      action: {
+        type: "modifyHeaders",
+        requestHeaders: [
+          { header: "Referer", operation: "set", value: parent.href }
+        ]
+      },
+      condition: {
+        regexFilter: `^${escapeRegex(manifest.href)}$`,
+        resourceTypes: ["xmlhttprequest"],
+        tabIds: [tabId]
+      }
+    };
+  }
+  function nextProbeRuleId() {
+    const ruleId = nextRuleId;
+    nextRuleId += 1;
+    if (nextRuleId > PROBE_RULE_ID_BASE + 1e5)
+      nextRuleId = PROBE_RULE_ID_BASE;
+    return ruleId;
+  }
+  function requiredHttpUrl2(value, field) {
+    let url;
+    try {
+      url = new URL(value);
+    } catch {
+      throw new TypeError(`${field} must be an HTTP URL.`);
+    }
+    if (!["http:", "https:"].includes(url.protocol))
+      throw new TypeError(`${field} must be an HTTP URL.`);
+    return url;
+  }
+  function escapeRegex(value) {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
   // src/background/message-router.js
   var MESSAGE_CAPABILITIES = Object.freeze({
     TRUSTED_CLICK: CAPABILITIES.NAVIGATION_INTENT,
@@ -4847,6 +4990,7 @@ var AdsFriendlyBackground = (() => {
     MEDIA_PROBED: CAPABILITIES.MEDIA_CATALOG,
     MEDIA_BLOB_TRACED: CAPABILITIES.MEDIA_CATALOG,
     MEDIA_EME_OBSERVED: CAPABILITIES.MEDIA_CATALOG,
+    PREPARE_MEDIA_CONTEXTUAL_PROBE: CAPABILITIES.MEDIA_CATALOG,
     GET_MEDIA_CATALOG: CAPABILITIES.MEDIA_CATALOG,
     GET_MEDIA_HELPER_STATUS: CAPABILITIES.MEDIA_DOWNLOAD,
     CREATE_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
@@ -4990,6 +5134,24 @@ var AdsFriendlyBackground = (() => {
           frameId: sender.frameId ?? null,
           frameUrl: message.event?.payload?.pageUrl || null
         }
+      });
+    }
+    if (message.type === "PREPARE_MEDIA_CONTEXTUAL_PROBE") {
+      const tabId = sender?.tab?.id;
+      const frameId = sender?.frameId;
+      if (!Number.isInteger(tabId) || !Number.isInteger(frameId))
+        return { status: "ignored" };
+      if (!sameOrigin2(message.parentDocumentUrl, sender.tab.url))
+        return { status: "invalid_parent" };
+      const snapshot = await listDiscoveredMedia(tabId);
+      const candidate = snapshot.items.find(
+        (item) => item.id === message.mediaId && item.manifestUrl === message.manifestUrl && item.frameId === frameId
+      );
+      if (!candidate) return { status: "unknown_media" };
+      return prepareMediaProbeReferer({
+        tabId,
+        manifestUrl: candidate.manifestUrl,
+        parentDocumentUrl: message.parentDocumentUrl
       });
     }
     if (message.type === "GET_MEDIA_CATALOG") {
@@ -5196,6 +5358,13 @@ var AdsFriendlyBackground = (() => {
     if (message.type === "TOGGLE_STATUS")
       console.log("Protection status:", message.isEnabled);
     return { status: "ignored" };
+  }
+  function sameOrigin2(left, right) {
+    try {
+      return new URL(left).origin === new URL(right).origin;
+    } catch {
+      return false;
+    }
   }
   function senderSourceHostname(sender) {
     try {

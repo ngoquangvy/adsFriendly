@@ -87,15 +87,13 @@ export function registerNavigationGuard(policy) {
     });
   };
 
-  const onCreated = (tab) => {
+  const registerPendingTab = (tab, sourceTabId, hasRealOpener) => {
+    if (!Number.isInteger(tab?.id) || !Number.isInteger(sourceTabId)) return;
     rememberCommittedUrl(tab.id, tab.pendingUrl || tab.url);
-    const sourceTabId =
-      tab.openerTabId || getRecentUserGestureSourceTabId(2500);
-    if (!sourceTabId || !tab.id) return;
     pendingTabs.set(tab.id, {
       sourceTabId,
       createdAt: Date.now(),
-      hasRealOpener: !!tab.openerTabId,
+      hasRealOpener,
     });
     trackReverseCandidate({
       sourceTabId,
@@ -104,12 +102,39 @@ export function registerNavigationGuard(policy) {
     }).catch(logReversePopunderError);
     setTimeout(
       () => pendingTabs.delete(tab.id),
-      tab.openerTabId ? 10000 : REVERSE_POPUNDER_WINDOW_MS + 500,
+      hasRealOpener ? 10000 : REVERSE_POPUNDER_WINDOW_MS + 500,
     );
     const initialUrl = tab.pendingUrl || tab.url;
     if (initialUrl && !isBlankUrl(initialUrl)) {
       evaluateNewTab({ sourceTabId, tabId: tab.id, url: initialUrl });
     }
+  };
+
+  const onCreated = (tab) => {
+    rememberCommittedUrl(tab.id, tab.pendingUrl || tab.url);
+    const sourceTabId =
+      tab.openerTabId || getRecentUserGestureSourceTabId(2500);
+    if (sourceTabId) {
+      registerPendingTab(tab, sourceTabId, !!tab.openerTabId);
+      return;
+    }
+    if (!Number.isInteger(tab.id)) return;
+    // Some popunder scripts suppress opener metadata and create the tab before
+    // the frame's TRUSTED_CLICK message reaches the service worker.
+    setTimeout(async () => {
+      if (
+        !navigationPolicy ||
+        pendingTabs.has(tab.id) ||
+        handledTabs.has(tab.id)
+      )
+        return;
+      const delayedSourceTabId = getRecentUserGestureSourceTabId(2500);
+      if (!delayedSourceTabId) return;
+      try {
+        const currentTab = await chrome.tabs.get(tab.id);
+        registerPendingTab(currentTab, delayedSourceTabId, false);
+      } catch {}
+    }, 300);
   };
 
   const onUpdated = (tabId, changeInfo) => {

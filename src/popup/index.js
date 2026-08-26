@@ -700,7 +700,7 @@ function downloadUnavailableLabel(reason = "") {
   if (reason.includes("Live")) return "Live";
   if (reason.includes("Encrypted")) return "Encrypted";
   if (reason.includes("waiting") || reason.includes("not exposed"))
-    return "Waiting";
+    return "Watching";
   if (reason.includes("no media")) return "No media";
   return "Unavailable";
 }

@@ -421,6 +421,7 @@ var AdsFriendlyMediaFrame = (() => {
     sourceUrl,
     mimeType = null,
     title = null,
+    duration = null,
     detectedBy = MEDIA_DETECTION_SOURCES.DOM
   }) {
     const absoluteSourceUrl = resolveSourceUrl(sourceUrl, pageUrl);
@@ -435,6 +436,7 @@ var AdsFriendlyMediaFrame = (() => {
       kind,
       title,
       mimeType,
+      duration,
       detectedBy,
       drm: "none"
     });
@@ -601,6 +603,7 @@ var AdsFriendlyMediaFrame = (() => {
     const retryTimers = /* @__PURE__ */ new Set();
     const probeTimers = /* @__PURE__ */ new Set();
     const requestedProbes = /* @__PURE__ */ new Set();
+    const contextualProbeRetries = /* @__PURE__ */ new Set();
     const videoListeners = /* @__PURE__ */ new Map();
     const mutationObserver = new MutationObserver((mutations) => {
       for (const mutation of mutations) {
@@ -617,6 +620,10 @@ var AdsFriendlyMediaFrame = (() => {
       subtree: true
     });
     const onMainWorldMessage = (messageEvent) => {
+      if (messageEvent.source === window && messageEvent.data?.source === "adsfriendly-spy" && messageEvent.data?.type === "MEDIA_PROBE_CONTEXT_REQUIRED") {
+        retryProbeWithParentContext(messageEvent.data);
+        return;
+      }
       if (messageEvent.source !== window || messageEvent.data?.source !== "adsfriendly-spy" || messageEvent.data?.type !== "REGISTERED_EVENT" || ![
         EVENTS.MEDIA_DISCOVERED,
         EVENTS.MEDIA_PROBED,
@@ -654,6 +661,7 @@ var AdsFriendlyMediaFrame = (() => {
       probeTimers.forEach(clearTimeout);
       probeTimers.clear();
       requestedProbes.clear();
+      contextualProbeRetries.clear();
     };
     function scanElement(element) {
       if (stopped || !element) return;
@@ -677,14 +685,16 @@ var AdsFriendlyMediaFrame = (() => {
     function reportElementSource(element) {
       const sourceUrl = element.currentSrc || element.src || element.getAttribute?.("src");
       const mimeType = element.currentType || element.type || element.getAttribute?.("type");
-      reportSource(sourceUrl, mimeType, MEDIA_DETECTION_SOURCES.DOM);
+      const duration = element.matches?.("video") && Number.isFinite(element.duration) ? element.duration : null;
+      reportSource(sourceUrl, mimeType, MEDIA_DETECTION_SOURCES.DOM, duration);
     }
-    function reportSource(sourceUrl, mimeType, detectedBy) {
+    function reportSource(sourceUrl, mimeType, detectedBy, duration = null) {
       const candidate = createMediaCandidateFromSource({
         pageUrl: location.href,
         sourceUrl,
         mimeType,
         title: document.title || null,
+        duration,
         detectedBy
       });
       if (!candidate) return;
@@ -745,12 +755,38 @@ var AdsFriendlyMediaFrame = (() => {
         probeTimers.add(timerId);
       }
     }
+    function retryProbeWithParentContext({ mediaId, kind, manifestUrl }) {
+      if (stopped || !mediaId || !manifestUrl || contextualProbeRetries.has(mediaId) || !document.referrer)
+        return;
+      contextualProbeRetries.add(mediaId);
+      chrome.runtime.sendMessage({
+        type: "PREPARE_MEDIA_CONTEXTUAL_PROBE",
+        mediaId,
+        manifestUrl,
+        parentDocumentUrl: document.referrer
+      }).then((response) => {
+        if (stopped || response?.status !== "prepared") return;
+        window.postMessage(
+          {
+            source: "adsfriendly-content",
+            type: "PROBE_MEDIA_MANIFEST",
+            mediaId,
+            kind,
+            manifestUrl,
+            contextualRetry: true
+          },
+          "*"
+        );
+      }).catch(() => {
+      });
+    }
   }
   function createMediaObserverReportKey(event2) {
     const payload = event2?.payload || {};
     const mediaId = payload.id || payload.mediaId || "unknown";
     if (event2?.type === EVENTS.MEDIA_DISCOVERED) {
-      return `${event2.type}:${mediaId}:${payload.detectedBy || "unknown"}`;
+      const playbackDuration = payload.kind === "blob" && Number.isFinite(payload.duration) ? Math.round(payload.duration) : "unknown";
+      return `${event2.type}:${mediaId}:${payload.detectedBy || "unknown"}:${playbackDuration}`;
     }
     if (event2?.type === EVENTS.MEDIA_BLOB_TRACED) {
       return [
@@ -800,6 +836,151 @@ var AdsFriendlyMediaFrame = (() => {
     } catch {
       return null;
     }
+  }
+
+  // src/shared/url.js
+  function parseUrl(value, base) {
+    try {
+      return new URL(value, base);
+    } catch {
+      return null;
+    }
+  }
+  function sameHostnameOrSubdomain(hostname, parent) {
+    if (!hostname || !parent) return false;
+    const h = hostname.toLowerCase();
+    const p = parent.toLowerCase();
+    return h === p || h.endsWith(`.${p}`);
+  }
+
+  // src/navigation/shared/search-navigation.js
+  var GOOGLE_HOST_RE = /^(.+\.)?google\.(com|[a-z]{2}|com\.[a-z]{2}|co\.[a-z]{2})$/i;
+  var EMBEDDED_HOST_RE = /(?:^|\s)(?:https?:\/\/)?(?:www\.)?([a-z0-9-]{1,63}(?:\.[a-z0-9-]{1,63})+)(?:\b|\/)/i;
+  function getPrefilledSearchNavigation(value) {
+    let url;
+    try {
+      url = value instanceof URL ? value : new URL(value);
+    } catch {
+      return null;
+    }
+    const query = url.searchParams.get("q")?.trim() || "";
+    if (!GOOGLE_HOST_RE.test(url.hostname) || url.pathname !== "/search" || !query)
+      return null;
+    const embeddedHost = EMBEDDED_HOST_RE.exec(query)?.[1]?.toLowerCase() || null;
+    return {
+      searchHost: url.hostname.toLowerCase(),
+      embeddedHost
+    };
+  }
+
+  // src/navigation/shared/intent-classifier.js
+  var STRONG_TRACKING_KEYS = /* @__PURE__ */ new Set([
+    "adid",
+    "aff_id",
+    "affiliate",
+    "bannerid",
+    "clickid",
+    "gclid",
+    "pop_id",
+    "popunder",
+    "zoneid"
+  ]);
+  var PROMOTIONAL_TOKEN_RE = /(^|[^a-z0-9])(?:ad|ads|advert|banner|casino|hitclub|promo|sponsor|bet)([^a-z0-9]|$)/i;
+  var PROMOTIONAL_SEARCH_DESTINATION_RE = /(?:^|\s)(?:https?:\/\/)?(?:www\.)?[a-z0-9-]{4,}\.(?:bet|casino|click|live|top|vip|win|xyz)(?:\b|\/)/i;
+  var STRONG_CAMPAIGN_VALUE_RE = /(^|[^a-z0-9])(?:popunder|popup|interstitial)([^a-z0-9]|$)/i;
+  var AD_NETWORK_VALUE_RE = /(^|[^a-z0-9])(?:clickadu|popads|propellerads|adsterra)([^a-z0-9]|$)/i;
+  function classifyNavigationIntent({
+    intentUrl,
+    sourceUrl,
+    evidence = ""
+  } = {}) {
+    const intent = parseUrl(intentUrl);
+    const source = parseUrl(sourceUrl);
+    const promotionalEvidence = PROMOTIONAL_TOKEN_RE.test(evidence);
+    if (!intent || !/^https?:$/.test(intent.protocol)) {
+      return {
+        likelyAd: promotionalEvidence,
+        reasons: promotionalEvidence ? ["promotional_element_or_destination"] : []
+      };
+    }
+    const external = !source || !(sameHostnameOrSubdomain(intent.hostname, source.hostname) || sameHostnameOrSubdomain(source.hostname, intent.hostname));
+    if (!external) return { likelyAd: false, reasons: [] };
+    const keys = [...intent.searchParams.keys()].map((key) => key.toLowerCase());
+    const campaignValues = [...intent.searchParams.entries()].filter(([key]) => key.toLowerCase().startsWith("utm_")).map(([, value]) => value);
+    const strongCampaignValue = campaignValues.some(
+      (value) => STRONG_CAMPAIGN_VALUE_RE.test(value)
+    );
+    const adNetworkValue = campaignValues.some(
+      (value) => AD_NETWORK_VALUE_RE.test(value)
+    );
+    const strongTracking = keys.some((key) => STRONG_TRACKING_KEYS.has(key)) || strongCampaignValue;
+    const marketingCount = keys.filter((key) => key.startsWith("utm_")).length;
+    const tokenEvidence = `${intent.hostname} ${intent.pathname} ${evidence}`;
+    const promotionalToken = PROMOTIONAL_TOKEN_RE.test(tokenEvidence);
+    const searchNavigation = getPrefilledSearchNavigation(intent);
+    const prefilledSearchNavigation = Boolean(searchNavigation);
+    const promotionalSearchDestination = Boolean(
+      searchNavigation?.embeddedHost && PROMOTIONAL_SEARCH_DESTINATION_RE.test(searchNavigation.embeddedHost)
+    );
+    const reasons = [];
+    if (strongTracking) reasons.push("strong_tracking_parameter");
+    if (marketingCount >= 2) reasons.push("multiple_campaign_parameters");
+    if (promotionalToken || adNetworkValue)
+      reasons.push("promotional_element_or_destination");
+    if (prefilledSearchNavigation) reasons.push("prefilled_search_navigation");
+    if (promotionalSearchDestination)
+      reasons.push("promotional_search_destination");
+    return {
+      likelyAd: reasons.length > 0,
+      reasons
+    };
+  }
+
+  // src/navigation/content/intent-tracker.js
+  function startIntentTracker() {
+    const recordIntent = (event2) => {
+      if (!event2.isTrusted) return;
+      try {
+        const link = event2.target?.closest?.("a[href]");
+        const sourceUrl = window.top === window ? location.href : document.referrer || location.href;
+        const intent = classifyNavigationIntent({
+          intentUrl: link?.href,
+          sourceUrl,
+          evidence: buildClickEvidence(link, event2.target)
+        });
+        chrome.runtime.sendMessage({
+          type: "TRUSTED_CLICK",
+          intentUrl: link?.href || null,
+          sourceUrl,
+          frameUrl: location.href,
+          intentKind: intent.likelyAd ? "promotional" : "navigation",
+          intentReasons: intent.reasons
+        });
+      } catch {
+      }
+    };
+    const onKeydown = (event2) => {
+      if (event2.key === "Enter") recordIntent(event2);
+    };
+    document.addEventListener("pointerdown", recordIntent, true);
+    document.addEventListener("contextmenu", recordIntent, true);
+    document.addEventListener("keydown", onKeydown, true);
+    return () => {
+      document.removeEventListener("pointerdown", recordIntent, true);
+      document.removeEventListener("contextmenu", recordIntent, true);
+      document.removeEventListener("keydown", onKeydown, true);
+    };
+  }
+  function buildClickEvidence(link, target) {
+    return [
+      link?.id,
+      typeof link?.className === "string" ? link.className : "",
+      link?.title,
+      target?.id,
+      typeof target?.className === "string" ? target.className : "",
+      target?.getAttribute?.("alt"),
+      target?.getAttribute?.("title")
+    ].filter(Boolean).join(" ");
   }
 
   // src/runtime/ecosystem-catalog.js
@@ -1064,6 +1245,7 @@ var AdsFriendlyMediaFrame = (() => {
     feature("media-frame.observer", "media-frame", C2.MEDIA_OBSERVE, [
       C2.MEDIA_CATALOG
     ]),
+    feature("media-frame.navigation-intent", "media-frame", C2.NAVIGATION_INTENT),
     feature("video.surgeon", "video", C2.VIDEO_OBSERVE, [
       C2.VIDEO_RESTORE_STATE,
       C2.VIDEO_USER_ACTION,
@@ -1075,12 +1257,9 @@ var AdsFriendlyMediaFrame = (() => {
     feature("main-world.network-capture", "main-world", C2.CORE_MESSAGING, [
       C2.MEDIA_OBSERVE
     ]),
-    feature(
-      "main-world.player-source-observer",
-      "main-world",
-      C2.CORE_MESSAGING,
-      [C2.MEDIA_OBSERVE]
-    ),
+    feature("main-world.player-source-observer", "main-world", C2.CORE_MESSAGING, [
+      C2.MEDIA_OBSERVE
+    ]),
     feature("main-world.blob-source-tracer", "main-world", C2.CORE_MESSAGING, [
       C2.MEDIA_OBSERVE
     ]),
@@ -1456,7 +1635,8 @@ var AdsFriendlyMediaFrame = (() => {
     const controller = createMainController({
       context: "media-frame",
       implementations: {
-        "media-frame.observer": () => startMediaObserver()
+        "media-frame.observer": () => startMediaObserver(),
+        "media-frame.navigation-intent": () => startIntentTracker()
       }
     });
     controller.onChange(({ settings }) => {

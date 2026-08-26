@@ -39,19 +39,31 @@ export function findPassiveHlsChildMatches(
   items = [],
   { maximumAgeMs = 60_000 } = {},
 ) {
-  const playerCandidateIds = new Set(
-    items
-      .filter((item) => item.kind === "blob")
-      .flatMap((item) => item.blobTrace?.candidateIds || []),
+  const playerLinks = items.filter(
+    (item) => item.kind === "blob" && item.blobTrace?.candidateIds?.length,
   );
   const children = items.filter(isUsableMediaPlaylist);
+  const playbackDurations = items
+    .filter(
+      (item) =>
+        item.kind === "blob" &&
+        Number.isFinite(item.duration) &&
+        item.duration >= 60,
+    )
+    .map((item) => ({ item, duration: item.duration }));
   const matches = [];
 
   for (const parent of items.filter(needsPassiveChild)) {
     const ranked = children
       .filter((child) => child.id !== parent.id)
       .map((child) =>
-        passiveMatch(parent, child, playerCandidateIds, maximumAgeMs),
+        passiveMatch(
+          parent,
+          child,
+          playerLinks,
+          playbackDurations,
+          maximumAgeMs,
+        ),
       )
       .filter(Boolean)
       .sort(
@@ -66,7 +78,8 @@ export function findPassiveHlsChildMatches(
     if (
       alternative &&
       selected.confidence - alternative.confidence < 0.08 &&
-      !selected.evidence.includes("player-linked")
+      !selected.evidence.includes("player-linked") &&
+      !selected.evidence.includes("playback-duration-match")
     ) {
       continue;
     }
@@ -81,13 +94,40 @@ export function findPassiveHlsChildMatches(
   return matches;
 }
 
-function passiveMatch(parent, child, playerCandidateIds, maximumAgeMs) {
-  if (!sameFrame(parent, child) || !sameOrigin(parent, child)) return null;
+function passiveMatch(
+  parent,
+  child,
+  playerLinks,
+  playbackDurations,
+  maximumAgeMs,
+) {
+  if (!sameFrame(parent, child)) return null;
   const age = observationDistance(parent, child);
   if (!Number.isFinite(age) || age > maximumAgeMs) return null;
 
-  const evidence = ["same-frame", "same-origin"];
-  let confidence = 0.65;
+  const originMatched = sameOrigin(parent, child);
+  const playerLinked =
+    playerLinks.some(
+      (blob) =>
+        sameFrame(parent, blob) &&
+        blob.blobTrace.candidateIds.includes(child.id),
+    ) || child.detectionSources?.includes("player");
+  const durationMatched = playbackDurations.some(
+    ({ item, duration }) =>
+      sameFrame(parent, item) && durationsMatch(duration, child.duration),
+  );
+  // A frame can load both content and advertisement HLS. Cross-CDN matching is
+  // allowed only when the player or the active video duration corroborates it.
+  if (!originMatched && !playerLinked && !durationMatched) return null;
+
+  const evidence = ["same-frame"];
+  let confidence = 0.45;
+  if (originMatched) {
+    confidence += 0.2;
+    evidence.push("same-origin");
+  } else {
+    evidence.push("cross-cdn");
+  }
   if (age <= 15_000) {
     confidence += 0.1;
     evidence.push("nearby-observation");
@@ -96,12 +136,13 @@ function passiveMatch(parent, child, playerCandidateIds, maximumAgeMs) {
     confidence += 0.1;
     evidence.push("shared-path");
   }
-  if (
-    playerCandidateIds.has(child.id) ||
-    child.detectionSources?.includes("player")
-  ) {
-    confidence += 0.15;
+  if (playerLinked) {
+    confidence += 0.25;
     evidence.push("player-linked");
+  }
+  if (durationMatched) {
+    confidence += 0.25;
+    evidence.push("playback-duration-match");
   }
   if (Number.isFinite(child.duration) && child.duration >= 60) {
     confidence += 0.05;
@@ -112,6 +153,18 @@ function passiveMatch(parent, child, playerCandidateIds, maximumAgeMs) {
     confidence: Math.min(1, Number(confidence.toFixed(2))),
     evidence,
   };
+}
+
+function durationsMatch(playbackDuration, playlistDuration) {
+  if (
+    !Number.isFinite(playbackDuration) ||
+    !Number.isFinite(playlistDuration) ||
+    playbackDuration < 60 ||
+    playlistDuration < 60
+  )
+    return false;
+  const tolerance = Math.max(5, playbackDuration * 0.02);
+  return Math.abs(playbackDuration - playlistDuration) <= tolerance;
 }
 
 function needsPassiveChild(item) {
@@ -146,7 +199,9 @@ function sameFrame(left, right) {
 
 function sameOrigin(left, right) {
   try {
-    return new URL(left.manifestUrl).origin === new URL(right.manifestUrl).origin;
+    return (
+      new URL(left.manifestUrl).origin === new URL(right.manifestUrl).origin
+    );
   } catch {
     return false;
   }

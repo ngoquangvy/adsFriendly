@@ -99,6 +99,25 @@ test("classifies the reported HitClub banner click as promotional", () => {
   assert(result.reasons.includes("promotional_element_or_destination"));
 });
 
+test("closes a Clickadu popunder campaign and reports it on the source tab", () => {
+  const result = classifyNavigationIntent({
+    sourceUrl: "https://phimvietsub.click/",
+    intentUrl:
+      "https://choikclub.vip/?a=exo_8779713cbb69a825dba13fcd8c3bb324&utm_campaign=anw&utm_source=clickadu&utm_medium=popunder&utm_term=2141011",
+  });
+  assert.equal(result.likelyAd, true);
+  assert(result.reasons.includes("strong_tracking_parameter"));
+  assert(result.reasons.includes("multiple_campaign_parameters"));
+  assert(result.reasons.includes("promotional_element_or_destination"));
+  assert.equal(
+    chooseNewTabReviewSurface({
+      targetLikelyAd: result.likelyAd,
+      targetReasons: result.reasons,
+    }),
+    NEW_TAB_REVIEW_SURFACES.CLOSE,
+  );
+});
+
 test("does not downgrade an ordinary explicitly clicked external link", () => {
   assert.equal(
     classifyNavigationIntent({

@@ -346,6 +346,7 @@ var AdsFriendlyVideo = (() => {
     feature("media-frame.observer", "media-frame", C2.MEDIA_OBSERVE, [
       C2.MEDIA_CATALOG
     ]),
+    feature("media-frame.navigation-intent", "media-frame", C2.NAVIGATION_INTENT),
     feature("video.surgeon", "video", C2.VIDEO_OBSERVE, [
       C2.VIDEO_RESTORE_STATE,
       C2.VIDEO_USER_ACTION,
@@ -357,12 +358,9 @@ var AdsFriendlyVideo = (() => {
     feature("main-world.network-capture", "main-world", C2.CORE_MESSAGING, [
       C2.MEDIA_OBSERVE
     ]),
-    feature(
-      "main-world.player-source-observer",
-      "main-world",
-      C2.CORE_MESSAGING,
-      [C2.MEDIA_OBSERVE]
-    ),
+    feature("main-world.player-source-observer", "main-world", C2.CORE_MESSAGING, [
+      C2.MEDIA_OBSERVE
+    ]),
     feature("main-world.blob-source-tracer", "main-world", C2.CORE_MESSAGING, [
       C2.MEDIA_OBSERVE
     ]),

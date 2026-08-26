@@ -261,6 +261,7 @@ var AdsFriendlyPopup = (() => {
     feature("media-frame.observer", "media-frame", C2.MEDIA_OBSERVE, [
       C2.MEDIA_CATALOG
     ]),
+    feature("media-frame.navigation-intent", "media-frame", C2.NAVIGATION_INTENT),
     feature("video.surgeon", "video", C2.VIDEO_OBSERVE, [
       C2.VIDEO_RESTORE_STATE,
       C2.VIDEO_USER_ACTION,
@@ -272,12 +273,9 @@ var AdsFriendlyPopup = (() => {
     feature("main-world.network-capture", "main-world", C2.CORE_MESSAGING, [
       C2.MEDIA_OBSERVE
     ]),
-    feature(
-      "main-world.player-source-observer",
-      "main-world",
-      C2.CORE_MESSAGING,
-      [C2.MEDIA_OBSERVE]
-    ),
+    feature("main-world.player-source-observer", "main-world", C2.CORE_MESSAGING, [
+      C2.MEDIA_OBSERVE
+    ]),
     feature("main-world.blob-source-tracer", "main-world", C2.CORE_MESSAGING, [
       C2.MEDIA_OBSERVE
     ]),
@@ -1671,7 +1669,7 @@ ${blobTitleKey(item.title)}`;
     if (reason.includes("Live")) return "Live";
     if (reason.includes("Encrypted")) return "Encrypted";
     if (reason.includes("waiting") || reason.includes("not exposed"))
-      return "Waiting";
+      return "Watching";
     if (reason.includes("no media")) return "No media";
     return "Unavailable";
   }

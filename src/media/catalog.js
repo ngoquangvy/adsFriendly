@@ -45,6 +45,7 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
         ...(existing || {}),
         ...candidate,
         ...(preserveExistingProbe ? probeFields(existing) : {}),
+        duration: candidate.duration ?? existing?.duration ?? null,
         requestContexts:
           existing?.requestContexts || candidate.requestContexts || [],
         probeCount: existing?.probeCount || 0,
@@ -115,9 +116,10 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
         ),
         probeCount: (existing?.probeCount || 0) + 1,
         lastProbeAt: event.timestamp,
-        lastUsableProbeAt: acceptProbe && probeQuality(probe) > 0
-          ? event.timestamp
-          : existing?.lastUsableProbeAt || existing?.lastProbeAt || null,
+        lastUsableProbeAt:
+          acceptProbe && probeQuality(probe) > 0
+            ? event.timestamp
+            : existing?.lastUsableProbeAt || existing?.lastProbeAt || null,
         frameId: normalizedFrameId(event.metadata?.frameId, existing?.frameId),
         frameUrl:
           normalizedFrameUrl(event.metadata?.frameUrl) ||
@@ -593,7 +595,7 @@ function samePageUrl(left, right) {
 }
 
 function normalizedFrameId(value, fallback = null) {
-  return Number.isInteger(value) && value >= 0 ? value : fallback ?? null;
+  return Number.isInteger(value) && value >= 0 ? value : (fallback ?? null);
 }
 
 function normalizedFrameUrl(value) {

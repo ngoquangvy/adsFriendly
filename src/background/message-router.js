@@ -46,6 +46,7 @@ import {
   requestMediaDownloadReveal,
 } from "./media-download-jobs.js";
 import { getMediaHelperStatus } from "./media-helper-bridge.js";
+import { prepareMediaProbeReferer } from "./media-probe-context.js";
 
 const MESSAGE_CAPABILITIES = Object.freeze({
   TRUSTED_CLICK: CAPABILITIES.NAVIGATION_INTENT,
@@ -78,6 +79,7 @@ const MESSAGE_CAPABILITIES = Object.freeze({
   MEDIA_PROBED: CAPABILITIES.MEDIA_CATALOG,
   MEDIA_BLOB_TRACED: CAPABILITIES.MEDIA_CATALOG,
   MEDIA_EME_OBSERVED: CAPABILITIES.MEDIA_CATALOG,
+  PREPARE_MEDIA_CONTEXTUAL_PROBE: CAPABILITIES.MEDIA_CATALOG,
   GET_MEDIA_CATALOG: CAPABILITIES.MEDIA_CATALOG,
   GET_MEDIA_HELPER_STATUS: CAPABILITIES.MEDIA_DOWNLOAD,
   CREATE_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
@@ -226,6 +228,27 @@ async function route(message, sender) {
         frameId: sender.frameId ?? null,
         frameUrl: message.event?.payload?.pageUrl || null,
       },
+    });
+  }
+  if (message.type === "PREPARE_MEDIA_CONTEXTUAL_PROBE") {
+    const tabId = sender?.tab?.id;
+    const frameId = sender?.frameId;
+    if (!Number.isInteger(tabId) || !Number.isInteger(frameId))
+      return { status: "ignored" };
+    if (!sameOrigin(message.parentDocumentUrl, sender.tab.url))
+      return { status: "invalid_parent" };
+    const snapshot = await listDiscoveredMedia(tabId);
+    const candidate = snapshot.items.find(
+      (item) =>
+        item.id === message.mediaId &&
+        item.manifestUrl === message.manifestUrl &&
+        item.frameId === frameId,
+    );
+    if (!candidate) return { status: "unknown_media" };
+    return prepareMediaProbeReferer({
+      tabId,
+      manifestUrl: candidate.manifestUrl,
+      parentDocumentUrl: message.parentDocumentUrl,
     });
   }
   if (message.type === "GET_MEDIA_CATALOG") {
@@ -431,6 +454,14 @@ async function route(message, sender) {
   if (message.type === "TOGGLE_STATUS")
     console.log("Protection status:", message.isEnabled);
   return { status: "ignored" };
+}
+
+function sameOrigin(left, right) {
+  try {
+    return new URL(left).origin === new URL(right).origin;
+  } catch {
+    return false;
+  }
 }
 
 function senderSourceHostname(sender) {

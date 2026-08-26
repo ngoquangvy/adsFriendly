@@ -306,7 +306,19 @@ function installFallbackProbe({
       .catch((error) => {
         if (probeGate.state(manifestUrl) !== "pending") return;
         probeGate.release(manifestUrl);
-        reportProbeFailure(manifestUrl, candidate, probeErrorCode(error));
+        const errorCode = probeErrorCode(error);
+        reportProbeFailure(manifestUrl, candidate, errorCode);
+        if (
+          errorCode === "manifest_http_403" &&
+          messageEvent.data.contextualRetry !== true
+        ) {
+          notifyContentScript({
+            type: "MEDIA_PROBE_CONTEXT_REQUIRED",
+            mediaId: candidate.id,
+            kind: candidate.kind,
+            manifestUrl,
+          });
+        }
       });
   };
   window.addEventListener("message", onProbeRequest);
@@ -512,7 +524,9 @@ function createFallbackRequestContext(
     method: "GET",
     credentials: observedContext?.credentials || "same-origin",
     referrer:
-      observedContext?.referrer || observedContext?.documentUrl || location.href,
+      observedContext?.referrer ||
+      observedContext?.documentUrl ||
+      location.href,
     transport: "fallback",
   });
 }
