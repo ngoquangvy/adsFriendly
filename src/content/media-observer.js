@@ -51,6 +51,7 @@ export function startMediaObserver() {
       ![
         EVENTS.MEDIA_DISCOVERED,
         EVENTS.MEDIA_PROBED,
+        EVENTS.MEDIA_PROBE_DIAGNOSTIC,
         EVENTS.MEDIA_BLOB_TRACED,
         EVENTS.MEDIA_EME_OBSERVED,
       ].includes(messageEvent.data.event?.type)
@@ -162,11 +163,13 @@ export function startMediaObserver() {
         type:
           event.type === EVENTS.MEDIA_PROBED
             ? "MEDIA_PROBED"
-            : event.type === EVENTS.MEDIA_BLOB_TRACED
-              ? "MEDIA_BLOB_TRACED"
-              : event.type === EVENTS.MEDIA_EME_OBSERVED
-                ? "MEDIA_EME_OBSERVED"
-                : "MEDIA_DISCOVERED",
+            : event.type === EVENTS.MEDIA_PROBE_DIAGNOSTIC
+              ? "MEDIA_PROBE_DIAGNOSTIC"
+              : event.type === EVENTS.MEDIA_BLOB_TRACED
+                ? "MEDIA_BLOB_TRACED"
+                : event.type === EVENTS.MEDIA_EME_OBSERVED
+                  ? "MEDIA_EME_OBSERVED"
+                  : "MEDIA_DISCOVERED",
         event,
       })
       .then((response) => {
@@ -199,13 +202,14 @@ export function startMediaObserver() {
   }
 
   function scheduleManifestProbe(candidate) {
-    if (
-      !["hls", "dash"].includes(candidate.kind) ||
-      !candidate.manifestUrl ||
-      requestedProbes.has(candidate.id)
-    )
-      return;
+    if (!["hls", "dash"].includes(candidate.kind) || !candidate.manifestUrl)
+      return "invalid";
+    if (requestedProbes.has(candidate.id)) {
+      reportProbeDiagnostic(candidate, "skipped", "content_duplicate");
+      return "duplicate";
+    }
     requestedProbes.add(candidate.id);
+    reportProbeDiagnostic(candidate, "scheduled", "iframe_probe_scheduled");
     // The browser/player gets the first chance to expose a successful response
     // or child playlist. Re-fetching signed manifests repeatedly can consume a
     // single-use token, so the active fallback is intentionally attempted once.
@@ -226,6 +230,21 @@ export function startMediaObserver() {
       }, delay);
       probeTimers.add(timerId);
     }
+    return "scheduled";
+  }
+
+  function reportProbeDiagnostic(candidate, phase, code) {
+    reportEvent(
+      createRegisteredEvent(EVENTS.MEDIA_PROBE_DIAGNOSTIC, {
+        mediaId: candidate.id,
+        pageUrl: location.href,
+        manifestUrl: candidate.manifestUrl,
+        kind: candidate.kind,
+        phase,
+        code,
+        observedAt: Date.now(),
+      }),
+    );
   }
 
   function retryProbeWithParentContext({ mediaId, kind, manifestUrl }) {
@@ -289,6 +308,18 @@ export function createMediaObserverReportKey(event) {
       payload.initDataType || "none",
       payload.licenseStatus || "none",
       ...(payload.keyStatuses || []),
+    ].join(":");
+  }
+  if (event?.type === EVENTS.MEDIA_PROBE_DIAGNOSTIC) {
+    return [
+      event.type,
+      mediaId,
+      payload.phase || "unknown",
+      payload.code || "unknown",
+      payload.httpStatus ?? "none",
+      payload.bodyBytes ?? "none",
+      payload.playlistType || "none",
+      payload.segmentCount ?? "none",
     ].join(":");
   }
   if (event?.type !== EVENTS.MEDIA_PROBED) {

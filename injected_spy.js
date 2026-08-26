@@ -63,6 +63,14 @@ var AdsFriendlyMainWorld = (() => {
     UNSUPPORTED: "unsupported",
     FAILED: "failed"
   });
+  var MEDIA_PROBE_DIAGNOSTIC_PHASES = Object.freeze({
+    SCHEDULED: "scheduled",
+    DISPATCHED: "dispatched",
+    RESPONSE_RECEIVED: "response_received",
+    PARSED: "parsed",
+    SKIPPED: "skipped",
+    FAILED: "failed"
+  });
   function normalizeMediaCandidate(value = {}) {
     const candidate = {
       id: requiredString(value.id, "id"),
@@ -195,6 +203,34 @@ var AdsFriendlyMainWorld = (() => {
         Object.values(DRM_STATES),
         "drm"
       )
+    };
+  }
+  function normalizeMediaProbeDiagnostic(value = {}) {
+    return {
+      mediaId: requiredString(value.mediaId, "mediaId"),
+      pageUrl: requiredString(value.pageUrl, "pageUrl"),
+      manifestUrl: requiredString(value.manifestUrl, "manifestUrl"),
+      kind: enumValue(value.kind, [MEDIA_KINDS.HLS, MEDIA_KINDS.DASH], "kind"),
+      phase: enumValue(
+        value.phase,
+        Object.values(MEDIA_PROBE_DIAGNOSTIC_PHASES),
+        "phase"
+      ),
+      code: requiredString(value.code, "code").slice(0, 100),
+      httpStatus: optionalNonNegativeInteger(value.httpStatus),
+      bodyBytes: optionalNonNegativeInteger(value.bodyBytes),
+      bodyFormat: optionalEnumValue(
+        value.bodyFormat,
+        ["hls", "dash", "unknown"],
+        "bodyFormat"
+      ),
+      playlistType: optionalEnumValue(
+        value.playlistType,
+        ["master", "media", "unknown"],
+        "playlistType"
+      ),
+      segmentCount: optionalNonNegativeInteger(value.segmentCount),
+      observedAt: optionalFiniteNumber(value.observedAt) || Date.now()
     };
   }
   function normalizeEmeObservation(value = {}) {
@@ -1219,6 +1255,7 @@ ${body}`;
   var EVENTS = Object.freeze({
     MEDIA_DISCOVERED: "media.discovered",
     MEDIA_PROBED: "media.probed",
+    MEDIA_PROBE_DIAGNOSTIC: "media.probe_diagnostic",
     MEDIA_BLOB_TRACED: "media.blob_traced",
     MEDIA_EME_OBSERVED: "media.eme_observed",
     MEDIA_CATALOG_UPDATED: "media.catalog.updated",
@@ -1238,6 +1275,12 @@ ${body}`;
       "media.probe",
       ["media.catalog"],
       normalizeMediaProbe
+    ),
+    [E.MEDIA_PROBE_DIAGNOSTIC]: event(
+      E.MEDIA_PROBE_DIAGNOSTIC,
+      "media.probe",
+      ["media.catalog"],
+      normalizeMediaProbeDiagnostic
     ),
     [E.MEDIA_BLOB_TRACED]: event(
       E.MEDIA_BLOB_TRACED,
@@ -2051,19 +2094,30 @@ ${body}`;
         messageEvent.data?.type
       ) || !policy.can(CAPABILITIES.MEDIA_OBSERVE))
         return;
-      const manifestUrl = probeGate.claim(messageEvent.data.manifestUrl);
-      if (!manifestUrl) return;
       const requestedKind = messageEvent.data.kind === MEDIA_KINDS.DASH ? MEDIA_KINDS.DASH : MEDIA_KINDS.HLS;
+      const requestedUrl = messageEvent.data.manifestUrl;
       const candidate = createMediaCandidateFromSource({
         pageUrl: location.href,
-        sourceUrl: manifestUrl,
+        sourceUrl: requestedUrl,
         mimeType: requestedKind === MEDIA_KINDS.DASH ? "application/dash+xml" : "application/vnd.apple.mpegurl",
         title: document.title || null,
         detectedBy: MEDIA_DETECTION_SOURCES.NETWORK
       });
+      const manifestUrl = probeGate.claim(requestedUrl);
+      if (!manifestUrl) {
+        reportProbeDiagnostic(candidate, {
+          phase: "skipped",
+          code: "probe_gate_duplicate"
+        });
+        return;
+      }
       const observedRequestContext = requestContexts.find(manifestUrl);
-      originalFetch.call(
-        window,
+      reportProbeDiagnostic(candidate, {
+        phase: "dispatched",
+        code: "manifest_fetch_dispatched"
+      });
+      fetchManifestWithTimeout(
+        originalFetch,
         manifestUrl,
         createContextualProbeInit(observedRequestContext)
       ).then(async (response) => {
@@ -2071,6 +2125,13 @@ ${body}`;
           throw new Error(`manifest_http_${response.status || "error"}`);
         const finalUrl = response.url || manifestUrl;
         const body = await response.text();
+        reportProbeDiagnostic(candidate, {
+          phase: "response_received",
+          code: "manifest_body_received",
+          httpStatus: response.status,
+          bodyBytes: byteLength(body),
+          bodyFormat: detectManifestBodyFormat(body)
+        });
         const finalCandidate = finalUrl === manifestUrl ? candidate : reportMediaSource(
           finalUrl,
           response.headers.get("content-type")
@@ -2097,6 +2158,11 @@ ${body}`;
         if (probeGate.state(manifestUrl) !== "pending") return;
         probeGate.release(manifestUrl);
         const errorCode = probeErrorCode(error);
+        reportProbeDiagnostic(candidate, {
+          phase: "failed",
+          code: errorCode,
+          httpStatus: httpStatusFromProbeError(errorCode)
+        });
         reportProbeFailure(manifestUrl, candidate, errorCode);
         if (errorCode === "manifest_http_403" && messageEvent.data.contextualRetry !== true) {
           notifyContentScript({
@@ -2191,6 +2257,14 @@ ${body}`;
       return null;
     const parsedProbe = manifestCandidate.kind === MEDIA_KINDS.DASH ? parseDashManifest(manifestUrl, body) : parseHlsManifest(manifestUrl, body);
     const probe = { kind: manifestCandidate.kind, ...parsedProbe };
+    reportProbeDiagnostic(manifestCandidate, {
+      phase: "parsed",
+      code: parsedProbeDiagnosticCode(probe),
+      bodyBytes: byteLength(body),
+      bodyFormat: detectManifestBodyFormat(body),
+      playlistType: probe.playlistType,
+      segmentCount: probe.segmentCount
+    });
     notifyContentScript({
       type: "REGISTERED_EVENT",
       event: createRegisteredEvent(EVENTS.MEDIA_PROBED, {
@@ -2222,7 +2296,61 @@ ${body}`;
   function probeErrorCode(error) {
     const message = error?.message || "";
     const httpMatch = /manifest_http_\d+/.exec(message);
-    return httpMatch?.[0] || "fallback_fetch_blocked";
+    if (httpMatch) return httpMatch[0];
+    if (/manifest_probe_timeout|abort/i.test(message))
+      return "manifest_probe_timeout";
+    return "fallback_fetch_blocked";
+  }
+  function reportProbeDiagnostic(candidate, facts) {
+    if (![MEDIA_KINDS.HLS, MEDIA_KINDS.DASH].includes(candidate?.kind)) return;
+    notifyContentScript({
+      type: "REGISTERED_EVENT",
+      event: createRegisteredEvent(EVENTS.MEDIA_PROBE_DIAGNOSTIC, {
+        mediaId: candidate.id,
+        pageUrl: location.href,
+        manifestUrl: candidate.manifestUrl,
+        kind: candidate.kind,
+        observedAt: Date.now(),
+        ...facts
+      })
+    });
+  }
+  async function fetchManifestWithTimeout(originalFetch, manifestUrl, init, timeoutMs = 1e4) {
+    const controller2 = new AbortController();
+    const timerId = setTimeout(() => controller2.abort(), timeoutMs);
+    try {
+      return await originalFetch.call(window, manifestUrl, {
+        ...init,
+        signal: controller2.signal
+      });
+    } catch (error) {
+      if (controller2.signal.aborted)
+        throw new Error("manifest_probe_timeout", { cause: error });
+      throw error;
+    } finally {
+      clearTimeout(timerId);
+    }
+  }
+  function parsedProbeDiagnosticCode(probe) {
+    if (probe.status === "unsupported") return "manifest_unsupported";
+    if (probe.status === "failed") return probe.error || "manifest_parse_failed";
+    if (probe.playlistType === "unknown") return "manifest_parsed_no_stream";
+    if (probe.playlistType === "media" && !probe.segmentCount && !probe.partialSegmentCount)
+      return "manifest_parsed_zero_segments";
+    return "manifest_parsed";
+  }
+  function detectManifestBodyFormat(body) {
+    const normalized = String(body || "").replace(/^\uFEFF/, "").trimStart();
+    if (normalized.startsWith("#EXTM3U")) return "hls";
+    if (/^(?:<\?xml[^>]*>\s*)?<MPD\b/i.test(normalized)) return "dash";
+    return "unknown";
+  }
+  function byteLength(value) {
+    return new TextEncoder().encode(String(value || "")).byteLength;
+  }
+  function httpStatusFromProbeError(code) {
+    const match = /manifest_http_(\d+)/.exec(code || "");
+    return match ? Number(match[1]) : null;
   }
   function requestUrl(input) {
     if (!input) return "";

@@ -326,6 +326,88 @@ test("resolution diagnostics distinguish child probing from source matching", ()
   assert.equal(result.code, "child_ready_not_matched");
 });
 
+test("resolution diagnostics expose the exact child probe outcome", () => {
+  const master = {
+    id: "master",
+    kind: "hls",
+    frameId: 3,
+    probeStatus: "failed",
+    firstSeenAt: 1000,
+  };
+  const child = {
+    id: "child",
+    kind: "hls",
+    frameId: 3,
+    probeStatus: "discovered",
+    firstSeenAt: 1010,
+    probeDiagnostics: [
+      {
+        phase: "failed",
+        code: "manifest_http_403",
+        httpStatus: 403,
+        observedAt: 2000,
+      },
+    ],
+  };
+  assert.equal(
+    diagnoseMediaResolution(master, [master, child]).message,
+    "Child probe · HTTP 403",
+  );
+  child.probeDiagnostics = [
+    {
+      phase: "parsed",
+      code: "manifest_parsed_zero_segments",
+      bodyBytes: 2048,
+      bodyFormat: "hls",
+      observedAt: 3000,
+    },
+  ];
+  assert.equal(
+    diagnoseMediaResolution(master, [master, child]).message,
+    "Child probe · 2.0 KB hls parsed · 0 segments",
+  );
+});
+
+test("catalog retains bounded probe metadata without storing manifest bodies", () => {
+  const catalog = createMediaCatalog();
+  const candidate = createMediaCandidateFromSource({
+    pageUrl: "https://video.example/watch",
+    sourceUrl: "https://cdn.example/child.m3u8",
+    detectedBy: "network",
+  });
+  catalog.add(1, createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, candidate));
+  const updated = catalog.applyProbeDiagnostic(
+    1,
+    createRegisteredEvent(EVENTS.MEDIA_PROBE_DIAGNOSTIC, {
+      mediaId: candidate.id,
+      pageUrl: candidate.pageUrl,
+      manifestUrl: candidate.manifestUrl,
+      kind: candidate.kind,
+      phase: "response_received",
+      code: "manifest_body_received",
+      httpStatus: 200,
+      bodyBytes: 4096,
+      bodyFormat: "hls",
+      observedAt: 2000,
+    }),
+  );
+  assert.deepEqual(updated.probeDiagnostic, {
+    mediaId: candidate.id,
+    pageUrl: candidate.pageUrl,
+    manifestUrl: candidate.manifestUrl,
+    kind: candidate.kind,
+    phase: "response_received",
+    code: "manifest_body_received",
+    httpStatus: 200,
+    bodyBytes: 4096,
+    bodyFormat: "hls",
+    playlistType: null,
+    segmentCount: null,
+    observedAt: 2000,
+  });
+  assert.equal("body" in updated.probeDiagnostic, false);
+});
+
 test("catalog merges webRequest routing context into an existing candidate", () => {
   const catalog = createMediaCatalog();
   const candidate = createMediaCandidateFromSource({

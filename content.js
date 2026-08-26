@@ -2482,6 +2482,14 @@ var AdsFriendlyContent = (() => {
     UNSUPPORTED: "unsupported",
     FAILED: "failed"
   });
+  var MEDIA_PROBE_DIAGNOSTIC_PHASES = Object.freeze({
+    SCHEDULED: "scheduled",
+    DISPATCHED: "dispatched",
+    RESPONSE_RECEIVED: "response_received",
+    PARSED: "parsed",
+    SKIPPED: "skipped",
+    FAILED: "failed"
+  });
   function normalizeMediaCandidate(value = {}) {
     const candidate = {
       id: requiredString(value.id, "id"),
@@ -2614,6 +2622,34 @@ var AdsFriendlyContent = (() => {
         Object.values(DRM_STATES),
         "drm"
       )
+    };
+  }
+  function normalizeMediaProbeDiagnostic(value = {}) {
+    return {
+      mediaId: requiredString(value.mediaId, "mediaId"),
+      pageUrl: requiredString(value.pageUrl, "pageUrl"),
+      manifestUrl: requiredString(value.manifestUrl, "manifestUrl"),
+      kind: enumValue(value.kind, [MEDIA_KINDS.HLS, MEDIA_KINDS.DASH], "kind"),
+      phase: enumValue(
+        value.phase,
+        Object.values(MEDIA_PROBE_DIAGNOSTIC_PHASES),
+        "phase"
+      ),
+      code: requiredString(value.code, "code").slice(0, 100),
+      httpStatus: optionalNonNegativeInteger(value.httpStatus),
+      bodyBytes: optionalNonNegativeInteger(value.bodyBytes),
+      bodyFormat: optionalEnumValue(
+        value.bodyFormat,
+        ["hls", "dash", "unknown"],
+        "bodyFormat"
+      ),
+      playlistType: optionalEnumValue(
+        value.playlistType,
+        ["master", "media", "unknown"],
+        "playlistType"
+      ),
+      segmentCount: optionalNonNegativeInteger(value.segmentCount),
+      observedAt: optionalFiniteNumber(value.observedAt) || Date.now()
     };
   }
   function normalizeEmeObservation(value = {}) {
@@ -2908,6 +2944,7 @@ var AdsFriendlyContent = (() => {
   var EVENTS = Object.freeze({
     MEDIA_DISCOVERED: "media.discovered",
     MEDIA_PROBED: "media.probed",
+    MEDIA_PROBE_DIAGNOSTIC: "media.probe_diagnostic",
     MEDIA_BLOB_TRACED: "media.blob_traced",
     MEDIA_EME_OBSERVED: "media.eme_observed",
     MEDIA_CATALOG_UPDATED: "media.catalog.updated",
@@ -2927,6 +2964,12 @@ var AdsFriendlyContent = (() => {
       "media.probe",
       ["media.catalog"],
       normalizeMediaProbe
+    ),
+    [E.MEDIA_PROBE_DIAGNOSTIC]: event(
+      E.MEDIA_PROBE_DIAGNOSTIC,
+      "media.probe",
+      ["media.catalog"],
+      normalizeMediaProbeDiagnostic
     ),
     [E.MEDIA_BLOB_TRACED]: event(
       E.MEDIA_BLOB_TRACED,
@@ -3067,6 +3110,7 @@ var AdsFriendlyContent = (() => {
       if (messageEvent.source !== window || messageEvent.data?.source !== "adsfriendly-spy" || messageEvent.data?.type !== "REGISTERED_EVENT" || ![
         EVENTS.MEDIA_DISCOVERED,
         EVENTS.MEDIA_PROBED,
+        EVENTS.MEDIA_PROBE_DIAGNOSTIC,
         EVENTS.MEDIA_BLOB_TRACED,
         EVENTS.MEDIA_EME_OBSERVED
       ].includes(messageEvent.data.event?.type))
@@ -3156,7 +3200,7 @@ var AdsFriendlyContent = (() => {
       if (reported.has(reportKey) || pending.has(reportKey)) return;
       pending.add(reportKey);
       chrome.runtime.sendMessage({
-        type: event2.type === EVENTS.MEDIA_PROBED ? "MEDIA_PROBED" : event2.type === EVENTS.MEDIA_BLOB_TRACED ? "MEDIA_BLOB_TRACED" : event2.type === EVENTS.MEDIA_EME_OBSERVED ? "MEDIA_EME_OBSERVED" : "MEDIA_DISCOVERED",
+        type: event2.type === EVENTS.MEDIA_PROBED ? "MEDIA_PROBED" : event2.type === EVENTS.MEDIA_PROBE_DIAGNOSTIC ? "MEDIA_PROBE_DIAGNOSTIC" : event2.type === EVENTS.MEDIA_BLOB_TRACED ? "MEDIA_BLOB_TRACED" : event2.type === EVENTS.MEDIA_EME_OBSERVED ? "MEDIA_EME_OBSERVED" : "MEDIA_DISCOVERED",
         event: event2
       }).then((response) => {
         pending.delete(reportKey);
@@ -3184,9 +3228,14 @@ var AdsFriendlyContent = (() => {
       });
     }
     function scheduleManifestProbe(candidate) {
-      if (!["hls", "dash"].includes(candidate.kind) || !candidate.manifestUrl || requestedProbes.has(candidate.id))
-        return;
+      if (!["hls", "dash"].includes(candidate.kind) || !candidate.manifestUrl)
+        return "invalid";
+      if (requestedProbes.has(candidate.id)) {
+        reportProbeDiagnostic(candidate, "skipped", "content_duplicate");
+        return "duplicate";
+      }
       requestedProbes.add(candidate.id);
+      reportProbeDiagnostic(candidate, "scheduled", "iframe_probe_scheduled");
       for (const delay of [750]) {
         const timerId = setTimeout(() => {
           probeTimers.delete(timerId);
@@ -3204,6 +3253,20 @@ var AdsFriendlyContent = (() => {
         }, delay);
         probeTimers.add(timerId);
       }
+      return "scheduled";
+    }
+    function reportProbeDiagnostic(candidate, phase, code) {
+      reportEvent(
+        createRegisteredEvent(EVENTS.MEDIA_PROBE_DIAGNOSTIC, {
+          mediaId: candidate.id,
+          pageUrl: location.href,
+          manifestUrl: candidate.manifestUrl,
+          kind: candidate.kind,
+          phase,
+          code,
+          observedAt: Date.now()
+        })
+      );
     }
     function retryProbeWithParentContext({ mediaId, kind, manifestUrl }) {
       if (stopped || !mediaId || !manifestUrl || contextualProbeRetries.has(mediaId) || !document.referrer)
@@ -3254,6 +3317,18 @@ var AdsFriendlyContent = (() => {
         payload.initDataType || "none",
         payload.licenseStatus || "none",
         ...payload.keyStatuses || []
+      ].join(":");
+    }
+    if (event2?.type === EVENTS.MEDIA_PROBE_DIAGNOSTIC) {
+      return [
+        event2.type,
+        mediaId,
+        payload.phase || "unknown",
+        payload.code || "unknown",
+        payload.httpStatus ?? "none",
+        payload.bodyBytes ?? "none",
+        payload.playlistType || "none",
+        payload.segmentCount ?? "none"
       ].join(":");
     }
     if (event2?.type !== EVENTS.MEDIA_PROBED) {

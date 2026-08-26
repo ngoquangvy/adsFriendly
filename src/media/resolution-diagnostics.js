@@ -116,6 +116,15 @@ export function diagnoseMediaResolution(item, items = []) {
       message: `Source matching · ${readyChildren.length} child ready · not linked to player`,
     });
   }
+  const latestChildProbe = latestProbeDiagnostic(children);
+  if (latestChildProbe) {
+    const described = describeProbeDiagnostic(latestChildProbe);
+    return diagnostic(S.CHILD_PROBE, described.status, described.code, {
+      ...facts,
+      probeDiagnostic: latestChildProbe,
+      message: `Child probe · ${described.message}`,
+    });
+  }
   if (failedChildren.length === children.length) {
     return diagnostic(S.CHILD_PROBE, D.FAILED, "child_probe_failed", {
       ...facts,
@@ -185,6 +194,76 @@ function formatProbeFailure(item) {
     return "probe blocked by page/CORS";
   if (item.probeStatus === "failed") return "manifest probe failed";
   return null;
+}
+
+function latestProbeDiagnostic(items) {
+  return items
+    .flatMap((item) => item.probeDiagnostics || [item.probeDiagnostic])
+    .filter(Boolean)
+    .sort((left, right) => (right.observedAt || 0) - (left.observedAt || 0))[0];
+}
+
+function describeProbeDiagnostic(diagnostic) {
+  const code = diagnostic.code || "probe_status_unknown";
+  if (code === "iframe_probe_scheduled")
+    return described(D.WAITING, code, "scheduled in player frame");
+  if (code === "manifest_fetch_dispatched")
+    return described(D.WAITING, code, "request sent · waiting for response");
+  if (code === "content_duplicate")
+    return described(D.WAITING, code, "duplicate schedule skipped");
+  if (code === "probe_gate_duplicate")
+    return described(D.WAITING, code, "probe already in progress or completed");
+  if (code === "manifest_probe_timeout")
+    return described(D.FAILED, code, "timed out after 10s");
+  if (/^manifest_http_\d+$/.test(code))
+    return described(
+      D.FAILED,
+      code,
+      `HTTP ${diagnostic.httpStatus || code.split("_").at(-1)}`,
+    );
+  if (code === "fallback_fetch_blocked")
+    return described(D.FAILED, code, "request blocked by page/CORS");
+  if (code === "manifest_body_received")
+    return described(
+      D.WAITING,
+      code,
+      `${formatBodySize(diagnostic.bodyBytes)} body received · ${diagnostic.bodyFormat || "unknown"} format · parser pending`,
+    );
+  if (code === "manifest_parsed_zero_segments")
+    return described(
+      D.UNHANDLED,
+      code,
+      `${formatBodySize(diagnostic.bodyBytes)} ${diagnostic.bodyFormat || "unknown"} parsed · 0 segments`,
+    );
+  if (code === "manifest_parsed_no_stream")
+    return described(
+      D.UNHANDLED,
+      code,
+      `${formatBodySize(diagnostic.bodyBytes)} body parsed · no playable stream`,
+    );
+  if (code === "manifest_unsupported")
+    return described(D.UNHANDLED, code, "body received · format unsupported");
+  if (code === "manifest_parsed")
+    return described(
+      D.WAITING,
+      code,
+      `${diagnostic.playlistType || "manifest"} parsed · ${diagnostic.segmentCount || 0} segments · matching pending`,
+    );
+  return described(
+    diagnostic.phase === "failed" ? D.FAILED : D.WAITING,
+    code,
+    code.replaceAll("_", " "),
+  );
+}
+
+function described(status, code, message) {
+  return { status, code, message };
+}
+
+function formatBodySize(bytes) {
+  if (!Number.isFinite(bytes)) return "Unknown-size";
+  if (bytes < 1024) return `${bytes} B`;
+  return `${(bytes / 1024).toFixed(1)} KB`;
 }
 
 function diagnostic(stage, status, code, facts = {}) {

@@ -48,6 +48,13 @@ export async function recordMediaProbe(tabId, event) {
   return { status: "recorded", item };
 }
 
+export async function recordMediaProbeDiagnostic(tabId, event) {
+  if (!active) return { status: "catalog_disabled" };
+  const item = catalog.applyProbeDiagnostic(tabId, event);
+  await persistTab(tabId).catch(() => {});
+  return { status: "recorded", item };
+}
+
 export async function recordBlobSourceTrace(tabId, event) {
   if (!active) return { status: "catalog_disabled" };
   const item = catalog.applyBlobTrace(tabId, event);
@@ -97,6 +104,18 @@ async function hydrateCatalog() {
               frameId: item.frameId ?? null,
               frameUrl: item.frameUrl || null,
               playerAdapter: item.playerAdapters?.[0] || null,
+            },
+          });
+        } catch {}
+      }
+      for (const diagnostic of item.probeDiagnostics || []) {
+        try {
+          catalog.applyProbeDiagnostic(tabId, {
+            ...createRegisteredEvent(EVENTS.MEDIA_PROBE_DIAGNOSTIC, diagnostic),
+            timestamp: diagnostic.observedAt || item.lastSeenAt || Date.now(),
+            metadata: {
+              frameId: item.frameId ?? null,
+              frameUrl: item.frameUrl || null,
             },
           });
         } catch {}

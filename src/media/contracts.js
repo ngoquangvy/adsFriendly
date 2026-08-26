@@ -41,6 +41,15 @@ export const MEDIA_PROBE_STATES = Object.freeze({
   FAILED: "failed",
 });
 
+export const MEDIA_PROBE_DIAGNOSTIC_PHASES = Object.freeze({
+  SCHEDULED: "scheduled",
+  DISPATCHED: "dispatched",
+  RESPONSE_RECEIVED: "response_received",
+  PARSED: "parsed",
+  SKIPPED: "skipped",
+  FAILED: "failed",
+});
+
 export function normalizeMediaCandidate(value = {}) {
   const candidate = {
     id: requiredString(value.id, "id"),
@@ -174,6 +183,35 @@ export function normalizeMediaProbe(value = {}) {
       Object.values(DRM_STATES),
       "drm",
     ),
+  };
+}
+
+export function normalizeMediaProbeDiagnostic(value = {}) {
+  return {
+    mediaId: requiredString(value.mediaId, "mediaId"),
+    pageUrl: requiredString(value.pageUrl, "pageUrl"),
+    manifestUrl: requiredString(value.manifestUrl, "manifestUrl"),
+    kind: enumValue(value.kind, [MEDIA_KINDS.HLS, MEDIA_KINDS.DASH], "kind"),
+    phase: enumValue(
+      value.phase,
+      Object.values(MEDIA_PROBE_DIAGNOSTIC_PHASES),
+      "phase",
+    ),
+    code: requiredString(value.code, "code").slice(0, 100),
+    httpStatus: optionalNonNegativeInteger(value.httpStatus),
+    bodyBytes: optionalNonNegativeInteger(value.bodyBytes),
+    bodyFormat: optionalEnumValue(
+      value.bodyFormat,
+      ["hls", "dash", "unknown"],
+      "bodyFormat",
+    ),
+    playlistType: optionalEnumValue(
+      value.playlistType,
+      ["master", "media", "unknown"],
+      "playlistType",
+    ),
+    segmentCount: optionalNonNegativeInteger(value.segmentCount),
+    observedAt: optionalFiniteNumber(value.observedAt) || Date.now(),
   };
 }
 

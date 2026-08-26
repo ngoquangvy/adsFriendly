@@ -833,6 +833,15 @@ var AdsFriendlyPopup = (() => {
         message: `Source matching \xB7 ${readyChildren.length} child ready \xB7 not linked to player`
       });
     }
+    const latestChildProbe = latestProbeDiagnostic(children);
+    if (latestChildProbe) {
+      const described2 = describeProbeDiagnostic(latestChildProbe);
+      return diagnostic(S.CHILD_PROBE, described2.status, described2.code, {
+        ...facts,
+        probeDiagnostic: latestChildProbe,
+        message: `Child probe \xB7 ${described2.message}`
+      });
+    }
     if (failedChildren.length === children.length) {
       return diagnostic(S.CHILD_PROBE, D.FAILED, "child_probe_failed", {
         ...facts,
@@ -881,6 +890,69 @@ var AdsFriendlyPopup = (() => {
       return "probe blocked by page/CORS";
     if (item.probeStatus === "failed") return "manifest probe failed";
     return null;
+  }
+  function latestProbeDiagnostic(items) {
+    return items.flatMap((item) => item.probeDiagnostics || [item.probeDiagnostic]).filter(Boolean).sort((left, right) => (right.observedAt || 0) - (left.observedAt || 0))[0];
+  }
+  function describeProbeDiagnostic(diagnostic2) {
+    const code = diagnostic2.code || "probe_status_unknown";
+    if (code === "iframe_probe_scheduled")
+      return described(D.WAITING, code, "scheduled in player frame");
+    if (code === "manifest_fetch_dispatched")
+      return described(D.WAITING, code, "request sent \xB7 waiting for response");
+    if (code === "content_duplicate")
+      return described(D.WAITING, code, "duplicate schedule skipped");
+    if (code === "probe_gate_duplicate")
+      return described(D.WAITING, code, "probe already in progress or completed");
+    if (code === "manifest_probe_timeout")
+      return described(D.FAILED, code, "timed out after 10s");
+    if (/^manifest_http_\d+$/.test(code))
+      return described(
+        D.FAILED,
+        code,
+        `HTTP ${diagnostic2.httpStatus || code.split("_").at(-1)}`
+      );
+    if (code === "fallback_fetch_blocked")
+      return described(D.FAILED, code, "request blocked by page/CORS");
+    if (code === "manifest_body_received")
+      return described(
+        D.WAITING,
+        code,
+        `${formatBodySize(diagnostic2.bodyBytes)} body received \xB7 ${diagnostic2.bodyFormat || "unknown"} format \xB7 parser pending`
+      );
+    if (code === "manifest_parsed_zero_segments")
+      return described(
+        D.UNHANDLED,
+        code,
+        `${formatBodySize(diagnostic2.bodyBytes)} ${diagnostic2.bodyFormat || "unknown"} parsed \xB7 0 segments`
+      );
+    if (code === "manifest_parsed_no_stream")
+      return described(
+        D.UNHANDLED,
+        code,
+        `${formatBodySize(diagnostic2.bodyBytes)} body parsed \xB7 no playable stream`
+      );
+    if (code === "manifest_unsupported")
+      return described(D.UNHANDLED, code, "body received \xB7 format unsupported");
+    if (code === "manifest_parsed")
+      return described(
+        D.WAITING,
+        code,
+        `${diagnostic2.playlistType || "manifest"} parsed \xB7 ${diagnostic2.segmentCount || 0} segments \xB7 matching pending`
+      );
+    return described(
+      diagnostic2.phase === "failed" ? D.FAILED : D.WAITING,
+      code,
+      code.replaceAll("_", " ")
+    );
+  }
+  function described(status, code, message) {
+    return { status, code, message };
+  }
+  function formatBodySize(bytes) {
+    if (!Number.isFinite(bytes)) return "Unknown-size";
+    if (bytes < 1024) return `${bytes} B`;
+    return `${(bytes / 1024).toFixed(1)} KB`;
   }
   function diagnostic(stage2, status, code, facts = {}) {
     const contract = MEDIA_RESOLUTION_STAGE_CATALOG[stage2];
@@ -1041,7 +1113,7 @@ var AdsFriendlyPopup = (() => {
     if (item.probeStatus !== "ready")
       return item.resolutionDiagnostic?.message || "Manifest probe \xB7 HLS response not parsed yet";
     if (item.playlistType === "unknown")
-      return "HLS endpoint \xB7 watching for a playable stream";
+      return item.resolutionDiagnostic?.message || "HLS endpoint \xB7 watching for a playable stream";
     const facts = [];
     if (item.playlistType === "master") {
       const qualityLabels = [...item.variants || []].sort(compareVariantQuality).map(variantLabel).filter(
@@ -1235,6 +1307,7 @@ ${blobTitleKey(item.title)}`;
       title: item.title,
       probeStatus: item.probeStatus,
       probeError: item.probeError,
+      probeDiagnostic: item.probeDiagnostic,
       playlistType: item.playlistType,
       streamType: item.streamType,
       duration: item.duration,

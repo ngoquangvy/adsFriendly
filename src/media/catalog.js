@@ -141,6 +141,63 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
       trimOldest(tabCatalog.items, maximumPerTab);
       return cloneItem(item);
     },
+    applyProbeDiagnostic(tabId, rawEvent) {
+      assertTabId(tabId);
+      const event = normalizeRegisteredEvent(rawEvent);
+      if (event.type !== EVENTS.MEDIA_PROBE_DIAGNOSTIC) {
+        throw new Error(
+          `[MediaCatalog] Cannot apply probe diagnostic event "${event.type}".`,
+        );
+      }
+      const diagnostic = event.payload;
+      let tabCatalog = tabs.get(tabId);
+      if (tabCatalog && !samePageUrl(tabCatalog.pageUrl, diagnostic.pageUrl)) {
+        tabs.delete(tabId);
+        tabCatalog = null;
+      }
+      if (!tabCatalog) {
+        tabCatalog = { pageUrl: diagnostic.pageUrl, items: new Map() };
+        tabs.set(tabId, tabCatalog);
+      }
+      const existing = tabCatalog.items.get(diagnostic.mediaId);
+      const base =
+        existing ||
+        normalizeMediaCandidate({
+          id: diagnostic.mediaId,
+          pageUrl: diagnostic.pageUrl,
+          manifestUrl: diagnostic.manifestUrl,
+          kind: diagnostic.kind,
+          detectedBy: MEDIA_DETECTION_SOURCES.NETWORK,
+        });
+      const probeDiagnostics = mergeProbeDiagnostics(
+        existing?.probeDiagnostics,
+        diagnostic,
+      );
+      const item = {
+        ...base,
+        probeDiagnostic: probeDiagnostics[0] || null,
+        probeDiagnostics,
+        frameId: normalizedFrameId(event.metadata?.frameId, existing?.frameId),
+        frameUrl:
+          normalizedFrameUrl(event.metadata?.frameUrl) ||
+          existing?.frameUrl ||
+          null,
+        playerAdapters: [...(existing?.playerAdapters || [])],
+        detectionSources: uniqueStrings([
+          ...(existing?.detectionSources || []),
+          MEDIA_DETECTION_SOURCES.NETWORK,
+        ]),
+        probeCount: existing?.probeCount || 0,
+        lastProbeAt: existing?.lastProbeAt || null,
+        lastUsableProbeAt: existing?.lastUsableProbeAt || null,
+        firstSeenAt: existing?.firstSeenAt || event.timestamp,
+        lastSeenAt: event.timestamp,
+      };
+      applyEmeToItem(item, tabCatalog.eme);
+      tabCatalog.items.set(diagnostic.mediaId, item);
+      trimOldest(tabCatalog.items, maximumPerTab);
+      return cloneItem(item);
+    },
     applyBlobTrace(tabId, rawEvent) {
       assertTabId(tabId);
       const event = normalizeRegisteredEvent(rawEvent);
@@ -351,6 +408,25 @@ function mergeRequestContexts(existing = [], incoming, observedAt) {
     .slice(0, 8);
 }
 
+function mergeProbeDiagnostics(existing = [], incoming) {
+  const unique = new Map();
+  for (const diagnostic of [incoming, ...(existing || [])]) {
+    if (!diagnostic) continue;
+    const key = [
+      diagnostic.phase,
+      diagnostic.code,
+      diagnostic.httpStatus,
+      diagnostic.bodyBytes,
+      diagnostic.playlistType,
+      diagnostic.segmentCount,
+    ].join("\n");
+    if (!unique.has(key)) unique.set(key, { ...diagnostic });
+  }
+  return [...unique.values()]
+    .sort((left, right) => (right.observedAt || 0) - (left.observedAt || 0))
+    .slice(0, 8);
+}
+
 function mergeBlobTrace(existing, incoming) {
   return {
     blobUrl: incoming.blobUrl,
@@ -541,6 +617,10 @@ function cloneItem(item, resolution = null) {
       : null,
     requestContexts: (item.requestContexts || []).map((context) => ({
       ...context,
+    })),
+    probeDiagnostic: item.probeDiagnostic ? { ...item.probeDiagnostic } : null,
+    probeDiagnostics: (item.probeDiagnostics || []).map((diagnostic) => ({
+      ...diagnostic,
     })),
     resolutionAttempt: item.resolutionAttempt
       ? {

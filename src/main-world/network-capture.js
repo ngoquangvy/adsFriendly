@@ -243,15 +243,14 @@ function installFallbackProbe({
       !policy.can(CAPABILITIES.MEDIA_OBSERVE)
     )
       return;
-    const manifestUrl = probeGate.claim(messageEvent.data.manifestUrl);
-    if (!manifestUrl) return;
     const requestedKind =
       messageEvent.data.kind === MEDIA_KINDS.DASH
         ? MEDIA_KINDS.DASH
         : MEDIA_KINDS.HLS;
+    const requestedUrl = messageEvent.data.manifestUrl;
     const candidate = createMediaCandidateFromSource({
       pageUrl: location.href,
-      sourceUrl: manifestUrl,
+      sourceUrl: requestedUrl,
       mimeType:
         requestedKind === MEDIA_KINDS.DASH
           ? "application/dash+xml"
@@ -259,18 +258,36 @@ function installFallbackProbe({
       title: document.title || null,
       detectedBy: MEDIA_DETECTION_SOURCES.NETWORK,
     });
+    const manifestUrl = probeGate.claim(requestedUrl);
+    if (!manifestUrl) {
+      reportProbeDiagnostic(candidate, {
+        phase: "skipped",
+        code: "probe_gate_duplicate",
+      });
+      return;
+    }
     const observedRequestContext = requestContexts.find(manifestUrl);
-    originalFetch
-      .call(
-        window,
-        manifestUrl,
-        createContextualProbeInit(observedRequestContext),
-      )
+    reportProbeDiagnostic(candidate, {
+      phase: "dispatched",
+      code: "manifest_fetch_dispatched",
+    });
+    fetchManifestWithTimeout(
+      originalFetch,
+      manifestUrl,
+      createContextualProbeInit(observedRequestContext),
+    )
       .then(async (response) => {
         if (!response.ok)
           throw new Error(`manifest_http_${response.status || "error"}`);
         const finalUrl = response.url || manifestUrl;
         const body = await response.text();
+        reportProbeDiagnostic(candidate, {
+          phase: "response_received",
+          code: "manifest_body_received",
+          httpStatus: response.status,
+          bodyBytes: byteLength(body),
+          bodyFormat: detectManifestBodyFormat(body),
+        });
         const finalCandidate =
           finalUrl === manifestUrl
             ? candidate
@@ -307,6 +324,11 @@ function installFallbackProbe({
         if (probeGate.state(manifestUrl) !== "pending") return;
         probeGate.release(manifestUrl);
         const errorCode = probeErrorCode(error);
+        reportProbeDiagnostic(candidate, {
+          phase: "failed",
+          code: errorCode,
+          httpStatus: httpStatusFromProbeError(errorCode),
+        });
         reportProbeFailure(manifestUrl, candidate, errorCode);
         if (
           errorCode === "manifest_http_403" &&
@@ -429,6 +451,14 @@ function inspectManifest(
       ? parseDashManifest(manifestUrl, body)
       : parseHlsManifest(manifestUrl, body);
   const probe = { kind: manifestCandidate.kind, ...parsedProbe };
+  reportProbeDiagnostic(manifestCandidate, {
+    phase: "parsed",
+    code: parsedProbeDiagnosticCode(probe),
+    bodyBytes: byteLength(body),
+    bodyFormat: detectManifestBodyFormat(body),
+    playlistType: probe.playlistType,
+    segmentCount: probe.segmentCount,
+  });
   notifyContentScript({
     type: "REGISTERED_EVENT",
     event: createRegisteredEvent(EVENTS.MEDIA_PROBED, {
@@ -462,7 +492,78 @@ function reportProbeFailure(manifestUrl, candidate, error) {
 function probeErrorCode(error) {
   const message = error?.message || "";
   const httpMatch = /manifest_http_\d+/.exec(message);
-  return httpMatch?.[0] || "fallback_fetch_blocked";
+  if (httpMatch) return httpMatch[0];
+  if (/manifest_probe_timeout|abort/i.test(message))
+    return "manifest_probe_timeout";
+  return "fallback_fetch_blocked";
+}
+
+function reportProbeDiagnostic(candidate, facts) {
+  if (![MEDIA_KINDS.HLS, MEDIA_KINDS.DASH].includes(candidate?.kind)) return;
+  notifyContentScript({
+    type: "REGISTERED_EVENT",
+    event: createRegisteredEvent(EVENTS.MEDIA_PROBE_DIAGNOSTIC, {
+      mediaId: candidate.id,
+      pageUrl: location.href,
+      manifestUrl: candidate.manifestUrl,
+      kind: candidate.kind,
+      observedAt: Date.now(),
+      ...facts,
+    }),
+  });
+}
+
+async function fetchManifestWithTimeout(
+  originalFetch,
+  manifestUrl,
+  init,
+  timeoutMs = 10_000,
+) {
+  const controller = new AbortController();
+  const timerId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await originalFetch.call(window, manifestUrl, {
+      ...init,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (controller.signal.aborted)
+      throw new Error("manifest_probe_timeout", { cause: error });
+    throw error;
+  } finally {
+    clearTimeout(timerId);
+  }
+}
+
+function parsedProbeDiagnosticCode(probe) {
+  if (probe.status === "unsupported") return "manifest_unsupported";
+  if (probe.status === "failed") return probe.error || "manifest_parse_failed";
+  if (probe.playlistType === "unknown") return "manifest_parsed_no_stream";
+  if (
+    probe.playlistType === "media" &&
+    !probe.segmentCount &&
+    !probe.partialSegmentCount
+  )
+    return "manifest_parsed_zero_segments";
+  return "manifest_parsed";
+}
+
+function detectManifestBodyFormat(body) {
+  const normalized = String(body || "")
+    .replace(/^\uFEFF/, "")
+    .trimStart();
+  if (normalized.startsWith("#EXTM3U")) return "hls";
+  if (/^(?:<\?xml[^>]*>\s*)?<MPD\b/i.test(normalized)) return "dash";
+  return "unknown";
+}
+
+function byteLength(value) {
+  return new TextEncoder().encode(String(value || "")).byteLength;
+}
+
+function httpStatusFromProbeError(code) {
+  const match = /manifest_http_(\d+)/.exec(code || "");
+  return match ? Number(match[1]) : null;
 }
 
 function requestUrl(input) {

@@ -2181,6 +2181,14 @@ var AdsFriendlyBackground = (() => {
     UNSUPPORTED: "unsupported",
     FAILED: "failed"
   });
+  var MEDIA_PROBE_DIAGNOSTIC_PHASES = Object.freeze({
+    SCHEDULED: "scheduled",
+    DISPATCHED: "dispatched",
+    RESPONSE_RECEIVED: "response_received",
+    PARSED: "parsed",
+    SKIPPED: "skipped",
+    FAILED: "failed"
+  });
   function normalizeMediaCandidate(value = {}) {
     const candidate = {
       id: requiredString(value.id, "id"),
@@ -2313,6 +2321,34 @@ var AdsFriendlyBackground = (() => {
         Object.values(DRM_STATES),
         "drm"
       )
+    };
+  }
+  function normalizeMediaProbeDiagnostic(value = {}) {
+    return {
+      mediaId: requiredString(value.mediaId, "mediaId"),
+      pageUrl: requiredString(value.pageUrl, "pageUrl"),
+      manifestUrl: requiredString(value.manifestUrl, "manifestUrl"),
+      kind: enumValue(value.kind, [MEDIA_KINDS.HLS, MEDIA_KINDS.DASH], "kind"),
+      phase: enumValue(
+        value.phase,
+        Object.values(MEDIA_PROBE_DIAGNOSTIC_PHASES),
+        "phase"
+      ),
+      code: requiredString(value.code, "code").slice(0, 100),
+      httpStatus: optionalNonNegativeInteger(value.httpStatus),
+      bodyBytes: optionalNonNegativeInteger(value.bodyBytes),
+      bodyFormat: optionalEnumValue(
+        value.bodyFormat,
+        ["hls", "dash", "unknown"],
+        "bodyFormat"
+      ),
+      playlistType: optionalEnumValue(
+        value.playlistType,
+        ["master", "media", "unknown"],
+        "playlistType"
+      ),
+      segmentCount: optionalNonNegativeInteger(value.segmentCount),
+      observedAt: optionalFiniteNumber(value.observedAt) || Date.now()
     };
   }
   function normalizeEmeObservation(value = {}) {
@@ -2529,6 +2565,7 @@ var AdsFriendlyBackground = (() => {
   var EVENTS = Object.freeze({
     MEDIA_DISCOVERED: "media.discovered",
     MEDIA_PROBED: "media.probed",
+    MEDIA_PROBE_DIAGNOSTIC: "media.probe_diagnostic",
     MEDIA_BLOB_TRACED: "media.blob_traced",
     MEDIA_EME_OBSERVED: "media.eme_observed",
     MEDIA_CATALOG_UPDATED: "media.catalog.updated",
@@ -2548,6 +2585,12 @@ var AdsFriendlyBackground = (() => {
       "media.probe",
       ["media.catalog"],
       normalizeMediaProbe
+    ),
+    [E.MEDIA_PROBE_DIAGNOSTIC]: event(
+      E.MEDIA_PROBE_DIAGNOSTIC,
+      "media.probe",
+      ["media.catalog"],
+      normalizeMediaProbeDiagnostic
     ),
     [E.MEDIA_BLOB_TRACED]: event(
       E.MEDIA_BLOB_TRACED,
@@ -3278,6 +3321,58 @@ var AdsFriendlyBackground = (() => {
         trimOldest(tabCatalog.items, maximumPerTab);
         return cloneItem(item);
       },
+      applyProbeDiagnostic(tabId, rawEvent) {
+        assertTabId(tabId);
+        const event2 = normalizeRegisteredEvent(rawEvent);
+        if (event2.type !== EVENTS.MEDIA_PROBE_DIAGNOSTIC) {
+          throw new Error(
+            `[MediaCatalog] Cannot apply probe diagnostic event "${event2.type}".`
+          );
+        }
+        const diagnostic = event2.payload;
+        let tabCatalog = tabs.get(tabId);
+        if (tabCatalog && !samePageUrl(tabCatalog.pageUrl, diagnostic.pageUrl)) {
+          tabs.delete(tabId);
+          tabCatalog = null;
+        }
+        if (!tabCatalog) {
+          tabCatalog = { pageUrl: diagnostic.pageUrl, items: /* @__PURE__ */ new Map() };
+          tabs.set(tabId, tabCatalog);
+        }
+        const existing = tabCatalog.items.get(diagnostic.mediaId);
+        const base = existing || normalizeMediaCandidate({
+          id: diagnostic.mediaId,
+          pageUrl: diagnostic.pageUrl,
+          manifestUrl: diagnostic.manifestUrl,
+          kind: diagnostic.kind,
+          detectedBy: MEDIA_DETECTION_SOURCES.NETWORK
+        });
+        const probeDiagnostics = mergeProbeDiagnostics(
+          existing?.probeDiagnostics,
+          diagnostic
+        );
+        const item = {
+          ...base,
+          probeDiagnostic: probeDiagnostics[0] || null,
+          probeDiagnostics,
+          frameId: normalizedFrameId(event2.metadata?.frameId, existing?.frameId),
+          frameUrl: normalizedFrameUrl(event2.metadata?.frameUrl) || existing?.frameUrl || null,
+          playerAdapters: [...existing?.playerAdapters || []],
+          detectionSources: uniqueStrings([
+            ...existing?.detectionSources || [],
+            MEDIA_DETECTION_SOURCES.NETWORK
+          ]),
+          probeCount: existing?.probeCount || 0,
+          lastProbeAt: existing?.lastProbeAt || null,
+          lastUsableProbeAt: existing?.lastUsableProbeAt || null,
+          firstSeenAt: existing?.firstSeenAt || event2.timestamp,
+          lastSeenAt: event2.timestamp
+        };
+        applyEmeToItem(item, tabCatalog.eme);
+        tabCatalog.items.set(diagnostic.mediaId, item);
+        trimOldest(tabCatalog.items, maximumPerTab);
+        return cloneItem(item);
+      },
       applyBlobTrace(tabId, rawEvent) {
         assertTabId(tabId);
         const event2 = normalizeRegisteredEvent(rawEvent);
@@ -3469,6 +3564,22 @@ var AdsFriendlyBackground = (() => {
     }
     return [...unique.values()].sort((left, right) => (right.observedAt || 0) - (left.observedAt || 0)).slice(0, 8);
   }
+  function mergeProbeDiagnostics(existing = [], incoming) {
+    const unique = /* @__PURE__ */ new Map();
+    for (const diagnostic of [incoming, ...existing || []]) {
+      if (!diagnostic) continue;
+      const key = [
+        diagnostic.phase,
+        diagnostic.code,
+        diagnostic.httpStatus,
+        diagnostic.bodyBytes,
+        diagnostic.playlistType,
+        diagnostic.segmentCount
+      ].join("\n");
+      if (!unique.has(key)) unique.set(key, { ...diagnostic });
+    }
+    return [...unique.values()].sort((left, right) => (right.observedAt || 0) - (left.observedAt || 0)).slice(0, 8);
+  }
   function mergeBlobTrace(existing, incoming) {
     return {
       blobUrl: incoming.blobUrl,
@@ -3644,6 +3755,10 @@ var AdsFriendlyBackground = (() => {
       requestContexts: (item.requestContexts || []).map((context) => ({
         ...context
       })),
+      probeDiagnostic: item.probeDiagnostic ? { ...item.probeDiagnostic } : null,
+      probeDiagnostics: (item.probeDiagnostics || []).map((diagnostic) => ({
+        ...diagnostic
+      })),
       resolutionAttempt: item.resolutionAttempt ? {
         ...item.resolutionAttempt,
         evidence: [...item.resolutionAttempt.evidence || []]
@@ -3759,6 +3874,13 @@ var AdsFriendlyBackground = (() => {
     });
     return { status: "recorded", item };
   }
+  async function recordMediaProbeDiagnostic(tabId, event2) {
+    if (!active) return { status: "catalog_disabled" };
+    const item = catalog.applyProbeDiagnostic(tabId, event2);
+    await persistTab(tabId).catch(() => {
+    });
+    return { status: "recorded", item };
+  }
   async function recordBlobSourceTrace(tabId, event2) {
     if (!active) return { status: "catalog_disabled" };
     const item = catalog.applyBlobTrace(tabId, event2);
@@ -3802,6 +3924,19 @@ var AdsFriendlyBackground = (() => {
                 frameId: item.frameId ?? null,
                 frameUrl: item.frameUrl || null,
                 playerAdapter: item.playerAdapters?.[0] || null
+              }
+            });
+          } catch {
+          }
+        }
+        for (const diagnostic of item.probeDiagnostics || []) {
+          try {
+            catalog.applyProbeDiagnostic(tabId, {
+              ...createRegisteredEvent(EVENTS.MEDIA_PROBE_DIAGNOSTIC, diagnostic),
+              timestamp: diagnostic.observedAt || item.lastSeenAt || Date.now(),
+              metadata: {
+                frameId: item.frameId ?? null,
+                frameUrl: item.frameUrl || null
               }
             });
           } catch {
@@ -5077,6 +5212,7 @@ var AdsFriendlyBackground = (() => {
     RECORD_DOM_SAMPLE: CAPABILITIES.LEARNING_FEEDBACK,
     MEDIA_DISCOVERED: CAPABILITIES.MEDIA_CATALOG,
     MEDIA_PROBED: CAPABILITIES.MEDIA_CATALOG,
+    MEDIA_PROBE_DIAGNOSTIC: CAPABILITIES.MEDIA_CATALOG,
     MEDIA_BLOB_TRACED: CAPABILITIES.MEDIA_CATALOG,
     MEDIA_EME_OBSERVED: CAPABILITIES.MEDIA_CATALOG,
     PREPARE_MEDIA_CONTEXTUAL_PROBE: CAPABILITIES.MEDIA_CATALOG,
@@ -5181,6 +5317,22 @@ var AdsFriendlyBackground = (() => {
       const tabId = sender?.tab?.id;
       if (!Number.isInteger(tabId)) return { status: "ignored" };
       return recordMediaProbe(tabId, {
+        ...message.event,
+        payload: {
+          ...message.event?.payload,
+          pageUrl: sender.tab.url || message.event?.payload?.pageUrl
+        },
+        metadata: {
+          ...message.event?.metadata,
+          frameId: sender.frameId ?? null,
+          frameUrl: message.event?.payload?.pageUrl || null
+        }
+      });
+    }
+    if (message.type === "MEDIA_PROBE_DIAGNOSTIC") {
+      const tabId = sender?.tab?.id;
+      if (!Number.isInteger(tabId)) return { status: "ignored" };
+      return recordMediaProbeDiagnostic(tabId, {
         ...message.event,
         payload: {
           ...message.event?.payload,

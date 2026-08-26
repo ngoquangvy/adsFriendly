@@ -186,7 +186,10 @@ export function formatMediaDetails(item) {
       "Manifest probe · HLS response not parsed yet"
     );
   if (item.playlistType === "unknown")
-    return "HLS endpoint · watching for a playable stream";
+    return (
+      item.resolutionDiagnostic?.message ||
+      "HLS endpoint · watching for a playable stream"
+    );
 
   const facts = [];
   if (item.playlistType === "master") {
@@ -452,6 +455,7 @@ function mediaRenderFacts(item) {
     title: item.title,
     probeStatus: item.probeStatus,
     probeError: item.probeError,
+    probeDiagnostic: item.probeDiagnostic,
     playlistType: item.playlistType,
     streamType: item.streamType,
     duration: item.duration,
