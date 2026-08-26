@@ -389,7 +389,9 @@ async function appendStoredKeyCaptureDiagnostic(jobId, message) {
   const detail = formatAesKeyHandoffDiagnostic(
     state?.candidate?.keyHandoffDiagnostic,
   );
-  return detail ? `${message}${detail}` : message;
+  return detail
+    ? `${message}${detail}`
+    : `${message} Browser capture diagnostics were unavailable before the Helper started.`;
 }
 
 function markTerminal(jobId) {

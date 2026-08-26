@@ -273,14 +273,7 @@ async function attachManifestHandoff(tabId, candidate) {
 }
 
 async function attachAesKeyHandoff(tabId, candidate) {
-  if (
-    candidate.kind !== "hls" ||
-    !(candidate.encryptionMethods || []).some((method) =>
-      ["AES-128", "SAMPLE-AES"].includes(String(method).toUpperCase()),
-    )
-  ) {
-    return candidate;
-  }
+  if (!shouldRequestAesKeyHandoff(candidate)) return candidate;
   try {
     const catalog = await listDiscoveredMedia(tabId);
     const targets = collectAesKeyHandoffTargets(candidate, catalog.items || []);
@@ -332,6 +325,14 @@ async function attachAesKeyHandoff(tabId, candidate) {
   } catch {
     return candidate;
   }
+}
+
+export function shouldRequestAesKeyHandoff(candidate = {}) {
+  // Encryption often appears only in a child media playlist. A selected master
+  // can therefore have no encryptionMethods even though the Helper will later
+  // descend into an AES-protected child. Querying the bounded browser handoff
+  // for every user-requested HLS job avoids losing that key evidence.
+  return candidate.kind === "hls";
 }
 
 function aggregateAesKeyHandoffDiagnostics(targets, responses, diagnostics) {

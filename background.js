@@ -5314,7 +5314,7 @@ var AdsFriendlyBackground = (() => {
     const detail = formatAesKeyHandoffDiagnostic(
       state?.candidate?.keyHandoffDiagnostic
     );
-    return detail ? `${message}${detail}` : message;
+    return detail ? `${message}${detail}` : `${message} Browser capture diagnostics were unavailable before the Helper started.`;
   }
   function markTerminal(jobId) {
     const connection = activePorts.get(jobId);
@@ -6396,11 +6396,7 @@ ${body}`;
     };
   }
   async function attachAesKeyHandoff(tabId, candidate) {
-    if (candidate.kind !== "hls" || !(candidate.encryptionMethods || []).some(
-      (method) => ["AES-128", "SAMPLE-AES"].includes(String(method).toUpperCase())
-    )) {
-      return candidate;
-    }
+    if (!shouldRequestAesKeyHandoff(candidate)) return candidate;
     try {
       const catalog2 = await listDiscoveredMedia(tabId);
       const targets = collectAesKeyHandoffTargets(candidate, catalog2.items || []);
@@ -6447,6 +6443,9 @@ ${body}`;
     } catch {
       return candidate;
     }
+  }
+  function shouldRequestAesKeyHandoff(candidate = {}) {
+    return candidate.kind === "hls";
   }
   function aggregateAesKeyHandoffDiagnostics(targets, responses, diagnostics) {
     const sums = (field) => diagnostics.reduce((total, item) => total + (Number(item[field]) || 0), 0);

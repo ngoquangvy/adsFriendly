@@ -90,7 +90,10 @@ import {
   recoverAesKeyHandoffs,
   rememberHlsKeyUris,
 } from "../src/main-world/aes-key-handoff.js";
-import { collectAesKeyHandoffTargets } from "../src/background/media-download-jobs.js";
+import {
+  collectAesKeyHandoffTargets,
+  shouldRequestAesKeyHandoff,
+} from "../src/background/media-download-jobs.js";
 import {
   formatAesKeyHandoffDiagnostic,
   normalizeAesKeyHandoffDiagnostic,
@@ -335,6 +338,24 @@ test("AES handoff targets retain validated master-child URLs and iframe IDs", ()
     ],
     frameIds: [7],
   });
+});
+
+test("AES handoff inspects an HLS master even before child encryption metadata arrives", () => {
+  assert.equal(
+    shouldRequestAesKeyHandoff({
+      kind: "hls",
+      playlistType: "master",
+      encryptionMethods: [],
+    }),
+    true,
+  );
+  assert.equal(
+    shouldRequestAesKeyHandoff({
+      kind: "blob",
+      selectedMediaId: "resolved-hls-child",
+    }),
+    false,
+  );
 });
 
 test("download job view exposes speed, connections, and resumable actions", () => {
