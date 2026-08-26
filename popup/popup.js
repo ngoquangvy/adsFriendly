@@ -1447,13 +1447,18 @@ var AdsFriendlyPopup = (() => {
       candidate,
       ...getMediaDownloadAvailability(candidate)
     }));
+    const diagnostic2 = mediaDownloadDiagnostic(items, availability);
     return {
       candidateCount: availability.length,
       downloadableCount: availability.filter((item) => item.supported).length,
       drmBlockedCount: availability.filter(
         (item) => String(item.reason || "").includes("DRM")
       ).length,
-      unavailableCount: availability.filter((item) => !item.supported).length
+      unavailableCount: availability.filter((item) => !item.supported).length,
+      ...diagnostic2 ? {
+        diagnosticCode: diagnostic2.code,
+        diagnosticMessage: diagnostic2.message
+      } : {}
     };
   }
   function helperSetupPresentation(helper, { hasDownloadableMedia = true } = {}) {
@@ -1478,6 +1483,7 @@ var AdsFriendlyPopup = (() => {
   }
   function formatMediaHelperSummary(helper, downloadState) {
     if (!downloadState.downloadableCount) {
+      if (downloadState.diagnosticMessage) return downloadState.diagnosticMessage;
       if (downloadState.drmBlockedCount)
         return "Media found \xB7 DRM stream is playback only.";
       return "Media found \xB7 no downloadable source is ready yet.";
@@ -1498,11 +1504,52 @@ var AdsFriendlyPopup = (() => {
       return "Media found \xB7 Media Helper exited during startup.";
     return "Media found \xB7 Media Helper connection failed.";
   }
+  function mediaDownloadDiagnostic(items, availability) {
+    const adaptive = items.find(
+      (item) => item.kind === "adaptive" && item.provider === "youtube"
+    );
+    if (adaptive) {
+      const videoCount = adaptive.variants?.length || 0;
+      const audioCount = adaptive.audioTracks?.length || 0;
+      if (!videoCount && !audioCount)
+        return {
+          code: "youtube_tracks_empty",
+          message: "YouTube player found \xB7 no resolved video or audio track was captured."
+        };
+      if (!videoCount)
+        return {
+          code: "youtube_video_pending",
+          message: `YouTube audio captured (${audioCount}) \xB7 waiting for a video track.`
+        };
+      if (!audioCount)
+        return {
+          code: "youtube_audio_pending",
+          message: `YouTube video captured (${videoCount}) \xB7 waiting for an audio track.`
+        };
+      const entry = availability.find(
+        (item) => item.candidate.id === adaptive.id
+      );
+      if (entry && !entry.supported)
+        return {
+          code: "youtube_tracks_unavailable",
+          message: `YouTube tracks captured \xB7 ${entry.reason}`
+        };
+    }
+    const youtubeBlob = items.find(
+      (item) => item.kind === "blob" && isYouTubeUrl(item.pageUrl)
+    );
+    if (youtubeBlob)
+      return {
+        code: "youtube_network_track_missing",
+        message: "YouTube Blob player found \xB7 no googlevideo playback request was captured yet."
+      };
+    return null;
+  }
   function formatMediaDetails(item) {
     if (item.kind === "blob" && item.selectedMediaId)
       return resolvedBlobDetails(item);
     if (item.kind === "blob")
-      return item.resolutionDiagnostic?.message || (item.relatedCount > 1 ? `${item.relatedCount} Blob signals \xB7 tracing source buffers` : item.blobTrace?.appendCount ? `${item.blobTrace.appendCount} buffers observed \xB7 matching source` : "Blob signal \xB7 tracing source buffers");
+      return item.resolutionDiagnostic?.message || (isYouTubeUrl(item.pageUrl) ? "YouTube Blob player \xB7 waiting for a googlevideo playback request" : null) || (item.relatedCount > 1 ? `${item.relatedCount} Blob signals \xB7 tracing source buffers` : item.blobTrace?.appendCount ? `${item.blobTrace.appendCount} buffers observed \xB7 matching source` : "Blob signal \xB7 tracing source buffers");
     if (item.kind === "direct") return "Direct video file";
     if (item.kind === "adaptive") return adaptiveDetails(item);
     if (item.kind === "dash") return dashDetails(item);
@@ -1550,6 +1597,14 @@ var AdsFriendlyPopup = (() => {
     if (item.subtitles?.length) facts.push(`${item.subtitles.length} subtitles`);
     appendProtectionFacts(facts, item);
     return facts.filter(Boolean).join(" \xB7 ") || "HLS manifest ready";
+  }
+  function isYouTubeUrl(value) {
+    try {
+      const hostname = new URL(value).hostname.toLowerCase();
+      return hostname === "youtube.com" || hostname.endsWith(".youtube.com");
+    } catch {
+      return false;
+    }
   }
   function formatMediaName(item) {
     const sourceUrl = item.resolvedStream?.manifestUrl || item.resolvedStream?.sourceUrl || item.manifestUrl || item.sourceUrl || "";

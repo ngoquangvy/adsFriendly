@@ -174,6 +174,35 @@ test("groups resolved YouTube video and audio observations into one ready adapti
   assert.equal(job.candidate.audioTracks.length, 1);
 });
 
+test("YouTube popup diagnostics expose the exact unresolved acquisition stage", () => {
+  const blob = createMediaCandidateFromSource({
+    pageUrl: "https://www.youtube.com/watch?v=video-1",
+    sourceUrl: "blob:https://www.youtube.com/player-1",
+    title: "Example - YouTube",
+    detectedBy: "player",
+  });
+  const blobState = getMediaCatalogDownloadState([blob]);
+  assert.equal(blobState.diagnosticCode, "youtube_network_track_missing");
+  assert.match(
+    formatMediaHelperSummary({ status: "ready" }, blobState),
+    /no googlevideo playback request was captured/i,
+  );
+  assert.match(formatMediaDetails(blob), /waiting for a googlevideo/i);
+
+  const videoTrack = parseYouTubePlaybackTrack(
+    "https://r1.googlevideo.com/videoplayback?id=asset-1&itag=137&mime=video%2Fmp4&dur=20&clen=1000&sig=ok",
+    { mimeType: "video/mp4" },
+  );
+  const adaptive = createYouTubeAdaptiveCandidate({
+    pageUrl: "https://www.youtube.com/watch?v=video-1",
+    title: "Example - YouTube",
+    track: videoTrack,
+  });
+  const trackState = getMediaCatalogDownloadState([adaptive]);
+  assert.equal(trackState.diagnosticCode, "youtube_audio_pending");
+  assert.match(trackState.diagnosticMessage, /waiting for an audio track/i);
+});
+
 test("offers a helper setup action independently from downloadable media", () => {
   assert.deepEqual(helperSetupPresentation({ status: "permission_required" }), {
     label: "Allow helper connection",
