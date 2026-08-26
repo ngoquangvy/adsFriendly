@@ -537,6 +537,70 @@ var AdsFriendlyPopup = (() => {
       return null;
     }
   }
+  function getMediaDownloadEstimate(candidate = {}, displayItem = null) {
+    const presentation = displayItem || candidate;
+    const resolved = presentation.resolvedStream || candidate.resolvedStream;
+    const variants = uniqueObjects([
+      ...candidate.variants || [],
+      ...presentation.variants || []
+    ]).sort(compareBandwidth);
+    const selectedVariant = variants[0] || null;
+    const resolution = resolved?.resolution || candidate.resolution || presentation.resolution || selectedVariant?.resolution || null;
+    const duration = firstPositiveNumber(
+      resolved?.duration,
+      candidate.duration,
+      presentation.duration
+    );
+    let bandwidth = firstPositiveNumber(
+      resolved?.bandwidth,
+      candidate.averageBandwidth,
+      candidate.bandwidth,
+      selectedVariant?.averageBandwidth,
+      selectedVariant?.bandwidth
+    );
+    if (candidate.kind === "dash" && bandwidth) {
+      const audioBandwidth = [...candidate.audioTracks || []].map(
+        (track) => firstPositiveNumber(track.averageBandwidth, track.bandwidth)
+      ).filter(Boolean).sort((left, right) => right - left)[0];
+      if (audioBandwidth) bandwidth += audioBandwidth;
+    }
+    const estimatedBytes = duration && bandwidth ? Math.round(duration * bandwidth / 8) : null;
+    return Object.freeze({
+      resolution: resolution ? {
+        width: positiveInteger(resolution.width),
+        height: positiveInteger(resolution.height)
+      } : null,
+      duration,
+      bandwidth,
+      estimatedBytes,
+      basis: estimatedBytes ? "manifest_bandwidth" : null
+    });
+  }
+  function compareBandwidth(left, right) {
+    return (firstPositiveNumber(right.averageBandwidth, right.bandwidth) || 0) - (firstPositiveNumber(left.averageBandwidth, left.bandwidth) || 0) || (right.resolution?.height || 0) - (left.resolution?.height || 0);
+  }
+  function uniqueObjects(items) {
+    const unique = /* @__PURE__ */ new Map();
+    for (const item of items) {
+      if (!item || typeof item !== "object") continue;
+      unique.set(
+        item.id || `${item.url || ""}:${item.bandwidth || ""}:${item.resolution?.height || ""}`,
+        item
+      );
+    }
+    return [...unique.values()];
+  }
+  function firstPositiveNumber(...values) {
+    for (const value of values) {
+      const number = Number(value);
+      if (Number.isFinite(number) && number > 0) return number;
+    }
+    return null;
+  }
+  function positiveInteger(value) {
+    const number = Number(value);
+    return Number.isSafeInteger(number) && number > 0 ? number : null;
+  }
 
   // src/media/protection-policy.js
   var STRONG_DRM_EVIDENCE = /* @__PURE__ */ new Set(["hls-keyformat", "eme-key-system-access"]);
@@ -1551,6 +1615,9 @@ ${blobTitleKey(item.title)}`;
       playlistType: item.playlistType,
       streamType: item.streamType,
       duration: item.duration,
+      resolution: item.resolution,
+      bandwidth: item.bandwidth,
+      averageBandwidth: item.averageBandwidth,
       segmentCount: item.segmentCount,
       partialSegmentCount: item.partialSegmentCount,
       skippedSegmentCount: item.skippedSegmentCount,
@@ -2001,6 +2068,11 @@ ${blobTitleKey(item.title)}`;
       profileSelect.append(option);
     }
     profileSelect.disabled = !availability.supported || profiles.length < 2;
+    const estimate = getMediaDownloadEstimate(downloadItem, item);
+    const estimateLabel = document.createElement("span");
+    estimateLabel.className = "media-download-estimate";
+    estimateLabel.textContent = formatDownloadEstimate(estimate);
+    estimateLabel.title = formatDownloadEstimateTitle(estimate);
     const button = document.createElement("button");
     button.className = "media-download";
     const presentation = downloadButtonPresentation(
@@ -2038,9 +2110,21 @@ ${blobTitleKey(item.title)}`;
         button.title = error?.message || String(error);
       }
     });
+    if (availability.supported) control.append(estimateLabel);
     if (availability.supported && profiles.length) control.append(profileSelect);
     control.append(button);
     return control;
+  }
+  function formatDownloadEstimate(estimate) {
+    const quality = estimate.resolution?.height ? `${estimate.resolution.height}p` : "Source quality";
+    const size = estimate.estimatedBytes ? `Est. ${formatBytes(estimate.estimatedBytes)}` : "Size unavailable";
+    return `${quality} \xB7 ${size}`;
+  }
+  function formatDownloadEstimateTitle(estimate) {
+    if (!estimate.estimatedBytes) {
+      return "The manifest does not expose enough bitrate data to estimate size before download.";
+    }
+    return "Estimated from manifest bitrate and duration. Final file size may differ.";
   }
   function downloadButtonPresentation(availability, helper, item) {
     if (!availability.supported) {

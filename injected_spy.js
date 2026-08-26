@@ -115,6 +115,9 @@ var AdsFriendlyMainWorld = (() => {
         "streamType"
       ),
       duration: optionalFiniteNumber(value.duration),
+      resolution: normalizeResolution(value.resolution),
+      bandwidth: optionalPositiveNumber(value.bandwidth),
+      averageBandwidth: optionalPositiveNumber(value.averageBandwidth),
       targetDuration: optionalFiniteNumber(value.targetDuration),
       segmentCount: optionalNonNegativeInteger(value.segmentCount),
       partialSegmentCount: optionalNonNegativeInteger(value.partialSegmentCount),
@@ -181,6 +184,8 @@ var AdsFriendlyMainWorld = (() => {
       audioTracks: normalizeArray(value.audioTracks),
       subtitles: normalizeArray(value.subtitles),
       duration: optionalFiniteNumber(value.duration),
+      bandwidth: optionalPositiveNumber(value.bandwidth),
+      averageBandwidth: optionalPositiveNumber(value.averageBandwidth),
       targetDuration: optionalFiniteNumber(value.targetDuration),
       segmentCount: optionalNonNegativeInteger(value.segmentCount),
       partialSegmentCount: optionalNonNegativeInteger(value.partialSegmentCount),
@@ -487,6 +492,12 @@ var AdsFriendlyMainWorld = (() => {
     if (!Array.isArray(value)) return [];
     return value.slice(0, 8).map(normalizeMediaRequestContext).filter(Boolean);
   }
+  function normalizeResolution(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const width = optionalNonNegativeInteger(value.width);
+    const height = optionalNonNegativeInteger(value.height);
+    return width || height ? { width, height } : null;
+  }
   function optionalFiniteNumber(value) {
     if (value === null || value === void 0) return null;
     const number = Number(value);
@@ -500,6 +511,14 @@ var AdsFriendlyMainWorld = (() => {
     const number = Number(value);
     if (!Number.isInteger(number) || number < 0) {
       throw new Error("[MediaContract] Expected a non-negative integer.");
+    }
+    return number;
+  }
+  function optionalPositiveNumber(value) {
+    if (value === null || value === void 0) return null;
+    const number = Number(value);
+    if (!Number.isFinite(number) || number <= 0) {
+      throw new Error("[MediaContract] Expected a positive number.");
     }
     return number;
   }
@@ -545,6 +564,7 @@ var AdsFriendlyMainWorld = (() => {
     mimeType = null,
     title = null,
     duration = null,
+    resolution = null,
     detectedBy = MEDIA_DETECTION_SOURCES.DOM
   }) {
     const absoluteSourceUrl = resolveSourceUrl(sourceUrl, pageUrl);
@@ -560,6 +580,7 @@ var AdsFriendlyMainWorld = (() => {
       title,
       mimeType,
       duration,
+      resolution,
       detectedBy,
       drm: "none"
     });
@@ -615,6 +636,7 @@ var AdsFriendlyMainWorld = (() => {
       let partialSegmentCount = 0;
       let skippedSegmentCount = 0;
       let duration = 0;
+      const segmentBitrates = [];
       let targetDuration = null;
       let mediaSequence = null;
       let discontinuitySequence = null;
@@ -675,6 +697,13 @@ var AdsFriendlyMainWorld = (() => {
           const value = Number(valueAfterColon(line).split(",", 1)[0]);
           pendingSegmentDuration = Number.isFinite(value) && value >= 0 ? value : 0;
           hasMediaEvidence = true;
+          continue;
+        }
+        if (line.startsWith("#EXT-X-BITRATE:")) {
+          const kilobitsPerSecond = Number(valueAfterColon(line));
+          if (Number.isFinite(kilobitsPerSecond) && kilobitsPerSecond > 0) {
+            segmentBitrates.push(kilobitsPerSecond * 1e3);
+          }
           continue;
         }
         if (line.startsWith("#EXT-X-PART:")) {
@@ -752,6 +781,10 @@ var AdsFriendlyMainWorld = (() => {
         audioTracks,
         subtitles,
         duration: playlistType === "media" ? round(duration, 3) : null,
+        bandwidth: playlistType === "media" && segmentBitrates.length ? Math.max(...segmentBitrates) : null,
+        averageBandwidth: playlistType === "media" && segmentBitrates.length ? Math.round(
+          segmentBitrates.reduce((total, value) => total + value, 0) / segmentBitrates.length
+        ) : null,
         targetDuration: playlistType === "media" ? targetDuration : null,
         segmentCount: playlistType === "media" ? segmentCount : null,
         partialSegmentCount: playlistType === "media" ? partialSegmentCount : null,
@@ -773,8 +806,8 @@ var AdsFriendlyMainWorld = (() => {
     }
   }
   function normalizeVariant(attributes, uri, manifestUrl, iframeOnly = false) {
-    const bandwidth = optionalPositiveNumber(attributes.BANDWIDTH);
-    const averageBandwidth = optionalPositiveNumber(
+    const bandwidth = optionalPositiveNumber2(attributes.BANDWIDTH);
+    const averageBandwidth = optionalPositiveNumber2(
       attributes["AVERAGE-BANDWIDTH"]
     );
     return {
@@ -784,7 +817,7 @@ var AdsFriendlyMainWorld = (() => {
       averageBandwidth,
       resolution: parseResolution(attributes.RESOLUTION),
       codecs: optionalText(attributes.CODECS),
-      frameRate: optionalPositiveNumber(attributes["FRAME-RATE"]),
+      frameRate: optionalPositiveNumber2(attributes["FRAME-RATE"]),
       audioGroup: optionalText(attributes.AUDIO),
       subtitlesGroup: optionalText(attributes.SUBTITLES),
       iframeOnly
@@ -921,7 +954,7 @@ var AdsFriendlyMainWorld = (() => {
       return value;
     }
   }
-  function optionalPositiveNumber(value) {
+  function optionalPositiveNumber2(value) {
     const number = Number(value);
     return Number.isFinite(number) && number >= 0 ? number : null;
   }

@@ -7,9 +7,13 @@ import {
   DOWNLOAD_JOB_PREFIX,
   getMediaDownloadAvailability,
 } from "../media/download-job-contract.js";
-import { getMediaDownloadProfiles } from "../media/download-options.js";
+import {
+  getMediaDownloadEstimate,
+  getMediaDownloadProfiles,
+} from "../media/download-options.js";
 import {
   formatCompactMediaJobDetails,
+  formatBytes,
   formatMediaJobDetails,
   getMediaJobPauseAvailability,
   getMediaJobPrimaryAction,
@@ -494,6 +498,11 @@ function createMediaDownloadControl(item, downloadItem, tab, helper) {
     profileSelect.append(option);
   }
   profileSelect.disabled = !availability.supported || profiles.length < 2;
+  const estimate = getMediaDownloadEstimate(downloadItem, item);
+  const estimateLabel = document.createElement("span");
+  estimateLabel.className = "media-download-estimate";
+  estimateLabel.textContent = formatDownloadEstimate(estimate);
+  estimateLabel.title = formatDownloadEstimateTitle(estimate);
   const button = document.createElement("button");
   button.className = "media-download";
   const presentation = downloadButtonPresentation(
@@ -533,9 +542,27 @@ function createMediaDownloadControl(item, downloadItem, tab, helper) {
       button.title = error?.message || String(error);
     }
   });
+  if (availability.supported) control.append(estimateLabel);
   if (availability.supported && profiles.length) control.append(profileSelect);
   control.append(button);
   return control;
+}
+
+function formatDownloadEstimate(estimate) {
+  const quality = estimate.resolution?.height
+    ? `${estimate.resolution.height}p`
+    : "Source quality";
+  const size = estimate.estimatedBytes
+    ? `Est. ${formatBytes(estimate.estimatedBytes)}`
+    : "Size unavailable";
+  return `${quality} · ${size}`;
+}
+
+function formatDownloadEstimateTitle(estimate) {
+  if (!estimate.estimatedBytes) {
+    return "The manifest does not expose enough bitrate data to estimate size before download.";
+  }
+  return "Estimated from manifest bitrate and duration. Final file size may differ.";
 }
 
 function downloadButtonPresentation(availability, helper, item) {

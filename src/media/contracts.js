@@ -95,6 +95,9 @@ export function normalizeMediaCandidate(value = {}) {
       "streamType",
     ),
     duration: optionalFiniteNumber(value.duration),
+    resolution: normalizeResolution(value.resolution),
+    bandwidth: optionalPositiveNumber(value.bandwidth),
+    averageBandwidth: optionalPositiveNumber(value.averageBandwidth),
     targetDuration: optionalFiniteNumber(value.targetDuration),
     segmentCount: optionalNonNegativeInteger(value.segmentCount),
     partialSegmentCount: optionalNonNegativeInteger(value.partialSegmentCount),
@@ -162,6 +165,8 @@ export function normalizeMediaProbe(value = {}) {
     audioTracks: normalizeArray(value.audioTracks),
     subtitles: normalizeArray(value.subtitles),
     duration: optionalFiniteNumber(value.duration),
+    bandwidth: optionalPositiveNumber(value.bandwidth),
+    averageBandwidth: optionalPositiveNumber(value.averageBandwidth),
     targetDuration: optionalFiniteNumber(value.targetDuration),
     segmentCount: optionalNonNegativeInteger(value.segmentCount),
     partialSegmentCount: optionalNonNegativeInteger(value.partialSegmentCount),
@@ -523,6 +528,13 @@ function normalizeRequestContexts(value) {
   return value.slice(0, 8).map(normalizeMediaRequestContext).filter(Boolean);
 }
 
+function normalizeResolution(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const width = optionalNonNegativeInteger(value.width);
+  const height = optionalNonNegativeInteger(value.height);
+  return width || height ? { width, height } : null;
+}
+
 function optionalFiniteNumber(value) {
   if (value === null || value === undefined) return null;
   const number = Number(value);
@@ -537,6 +549,15 @@ function optionalNonNegativeInteger(value) {
   const number = Number(value);
   if (!Number.isInteger(number) || number < 0) {
     throw new Error("[MediaContract] Expected a non-negative integer.");
+  }
+  return number;
+}
+
+function optionalPositiveNumber(value) {
+  if (value === null || value === undefined) return null;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) {
+    throw new Error("[MediaContract] Expected a positive number.");
   }
   return number;
 }

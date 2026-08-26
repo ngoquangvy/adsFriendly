@@ -2542,6 +2542,9 @@ var AdsFriendlyContent = (() => {
         "streamType"
       ),
       duration: optionalFiniteNumber(value.duration),
+      resolution: normalizeResolution(value.resolution),
+      bandwidth: optionalPositiveNumber(value.bandwidth),
+      averageBandwidth: optionalPositiveNumber(value.averageBandwidth),
       targetDuration: optionalFiniteNumber(value.targetDuration),
       segmentCount: optionalNonNegativeInteger(value.segmentCount),
       partialSegmentCount: optionalNonNegativeInteger(value.partialSegmentCount),
@@ -2608,6 +2611,8 @@ var AdsFriendlyContent = (() => {
       audioTracks: normalizeArray(value.audioTracks),
       subtitles: normalizeArray(value.subtitles),
       duration: optionalFiniteNumber(value.duration),
+      bandwidth: optionalPositiveNumber(value.bandwidth),
+      averageBandwidth: optionalPositiveNumber(value.averageBandwidth),
       targetDuration: optionalFiniteNumber(value.targetDuration),
       segmentCount: optionalNonNegativeInteger(value.segmentCount),
       partialSegmentCount: optionalNonNegativeInteger(value.partialSegmentCount),
@@ -2914,6 +2919,12 @@ var AdsFriendlyContent = (() => {
     if (!Array.isArray(value)) return [];
     return value.slice(0, 8).map(normalizeMediaRequestContext).filter(Boolean);
   }
+  function normalizeResolution(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const width = optionalNonNegativeInteger(value.width);
+    const height = optionalNonNegativeInteger(value.height);
+    return width || height ? { width, height } : null;
+  }
   function optionalFiniteNumber(value) {
     if (value === null || value === void 0) return null;
     const number = Number(value);
@@ -2927,6 +2938,14 @@ var AdsFriendlyContent = (() => {
     const number = Number(value);
     if (!Number.isInteger(number) || number < 0) {
       throw new Error("[MediaContract] Expected a non-negative integer.");
+    }
+    return number;
+  }
+  function optionalPositiveNumber(value) {
+    if (value === null || value === void 0) return null;
+    const number = Number(value);
+    if (!Number.isFinite(number) || number <= 0) {
+      throw new Error("[MediaContract] Expected a positive number.");
     }
     return number;
   }
@@ -2972,6 +2991,7 @@ var AdsFriendlyContent = (() => {
     mimeType = null,
     title = null,
     duration = null,
+    resolution = null,
     detectedBy = MEDIA_DETECTION_SOURCES.DOM
   }) {
     const absoluteSourceUrl = resolveSourceUrl(sourceUrl, pageUrl);
@@ -2987,6 +3007,7 @@ var AdsFriendlyContent = (() => {
       title,
       mimeType,
       duration,
+      resolution,
       detectedBy,
       drm: "none"
     });
@@ -3268,15 +3289,26 @@ var AdsFriendlyContent = (() => {
       const sourceUrl = element.currentSrc || element.src || element.getAttribute?.("src");
       const mimeType = element.currentType || element.type || element.getAttribute?.("type");
       const duration = element.matches?.("video") && Number.isFinite(element.duration) ? element.duration : null;
-      reportSource(sourceUrl, mimeType, MEDIA_DETECTION_SOURCES.DOM, duration);
+      const resolution = element.matches?.("video") ? {
+        width: Number(element.videoWidth) || null,
+        height: Number(element.videoHeight) || null
+      } : null;
+      reportSource(
+        sourceUrl,
+        mimeType,
+        MEDIA_DETECTION_SOURCES.DOM,
+        duration,
+        resolution
+      );
     }
-    function reportSource(sourceUrl, mimeType, detectedBy, duration = null) {
+    function reportSource(sourceUrl, mimeType, detectedBy, duration = null, resolution = null) {
       const candidate = createMediaCandidateFromSource({
         pageUrl: location.href,
         sourceUrl,
         mimeType,
         title: document.title || null,
         duration,
+        resolution,
         detectedBy
       });
       if (!candidate) return;
@@ -3419,7 +3451,7 @@ var AdsFriendlyContent = (() => {
     const mediaId = payload.id || payload.mediaId || "unknown";
     if (event2?.type === EVENTS.MEDIA_DISCOVERED) {
       const playbackDuration = payload.kind === "blob" && Number.isFinite(payload.duration) ? Math.round(payload.duration) : "unknown";
-      return `${event2.type}:${mediaId}:${payload.detectedBy || "unknown"}:${playbackDuration}`;
+      return `${event2.type}:${mediaId}:${payload.detectedBy || "unknown"}:${playbackDuration}:${payload.resolution?.width || 0}x${payload.resolution?.height || 0}`;
     }
     if (event2?.type === EVENTS.MEDIA_BLOB_TRACED) {
       return [

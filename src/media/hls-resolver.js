@@ -203,7 +203,8 @@ function summarizeStream(stream) {
       : null,
     manifestHandoff: item.manifestHandoff ? { ...item.manifestHandoff } : null,
     resolution: quality?.resolution || null,
-    bandwidth: quality?.bandwidth || null,
+    bandwidth:
+      quality?.bandwidth || item.averageBandwidth || item.bandwidth || null,
     resolutionStrategy: strategyId || null,
     resolutionConfidence: confidence ?? null,
     resolutionEvidence: [...(evidence || [])],

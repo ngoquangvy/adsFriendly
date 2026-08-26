@@ -30,6 +30,7 @@ export function parseHlsManifest(manifestUrl, body) {
     let partialSegmentCount = 0;
     let skippedSegmentCount = 0;
     let duration = 0;
+    const segmentBitrates = [];
     let targetDuration = null;
     let mediaSequence = null;
     let discontinuitySequence = null;
@@ -95,6 +96,13 @@ export function parseHlsManifest(manifestUrl, body) {
         pendingSegmentDuration =
           Number.isFinite(value) && value >= 0 ? value : 0;
         hasMediaEvidence = true;
+        continue;
+      }
+      if (line.startsWith("#EXT-X-BITRATE:")) {
+        const kilobitsPerSecond = Number(valueAfterColon(line));
+        if (Number.isFinite(kilobitsPerSecond) && kilobitsPerSecond > 0) {
+          segmentBitrates.push(kilobitsPerSecond * 1000);
+        }
         continue;
       }
       if (line.startsWith("#EXT-X-PART:")) {
@@ -195,6 +203,17 @@ export function parseHlsManifest(manifestUrl, body) {
       audioTracks,
       subtitles,
       duration: playlistType === "media" ? round(duration, 3) : null,
+      bandwidth:
+        playlistType === "media" && segmentBitrates.length
+          ? Math.max(...segmentBitrates)
+          : null,
+      averageBandwidth:
+        playlistType === "media" && segmentBitrates.length
+          ? Math.round(
+              segmentBitrates.reduce((total, value) => total + value, 0) /
+                segmentBitrates.length,
+            )
+          : null,
       targetDuration: playlistType === "media" ? targetDuration : null,
       segmentCount: playlistType === "media" ? segmentCount : null,
       partialSegmentCount:

@@ -38,6 +38,7 @@ import {
 } from "../src/media/download-job-contract.js";
 import {
   classifyDirectMediaContainer,
+  getMediaDownloadEstimate,
   getMediaDownloadProfiles,
 } from "../src/media/download-options.js";
 import {
@@ -1200,8 +1201,10 @@ test("parses VOD duration and distinguishes encryption from suspected DRM", () =
 #EXT-X-TARGETDURATION:10
 #EXT-X-PLAYLIST-TYPE:VOD
 #EXT-X-KEY:METHOD=AES-128,URI="key.bin"
+#EXT-X-BITRATE:1800
 #EXTINF:9.5,
 segment-1.ts
+#EXT-X-BITRATE:2200
 #EXTINF:10.25,
 segment-2.ts
 #EXT-X-ENDLIST`,
@@ -1212,6 +1215,8 @@ segment-2.ts
   assert.equal(result.duration, 19.75);
   assert.equal(result.targetDuration, 10);
   assert.equal(result.segmentCount, 2);
+  assert.equal(result.bandwidth, 2_200_000);
+  assert.equal(result.averageBandwidth, 2_000_000);
   assert.deepEqual(result.encryptionMethods, ["AES-128"]);
   assert.equal(result.encryptionScheme, "aes-128");
   assert.deepEqual(result.encryptionKeyFormats, []);
@@ -2381,6 +2386,45 @@ test("download profiles classify direct sources and expose real adaptive contain
     ).map((profile) => profile.id),
     ["video-mp4"],
   );
+});
+
+test("download estimate reports selected quality and zero-network manifest size", () => {
+  const estimate = getMediaDownloadEstimate(
+    {
+      kind: "hls",
+      duration: 600,
+      variants: [
+        {
+          id: "720p",
+          bandwidth: 2_000_000,
+          resolution: { width: 1280, height: 720 },
+        },
+        {
+          id: "1080p",
+          averageBandwidth: 4_000_000,
+          resolution: { width: 1920, height: 1080 },
+        },
+      ],
+    },
+    null,
+  );
+  assert.deepEqual(estimate.resolution, { width: 1920, height: 1080 });
+  assert.equal(estimate.bandwidth, 4_000_000);
+  assert.equal(estimate.estimatedBytes, 300_000_000);
+  assert.equal(estimate.basis, "manifest_bandwidth");
+});
+
+test("download estimate uses player resolution for a resolved Blob source", () => {
+  const estimate = getMediaDownloadEstimate(
+    { kind: "hls", duration: 120 },
+    {
+      kind: "blob",
+      resolution: { width: 1280, height: 720 },
+      resolvedStream: { duration: 120, bandwidth: 2_000_000 },
+    },
+  );
+  assert.deepEqual(estimate.resolution, { width: 1280, height: 720 });
+  assert.equal(estimate.estimatedBytes, 30_000_000);
 });
 
 test("media popup signature ignores heartbeat timestamps but detects visible changes", () => {

@@ -158,16 +158,35 @@ export function startMediaObserver() {
       element.matches?.("video") && Number.isFinite(element.duration)
         ? element.duration
         : null;
-    reportSource(sourceUrl, mimeType, MEDIA_DETECTION_SOURCES.DOM, duration);
+    const resolution = element.matches?.("video")
+      ? {
+          width: Number(element.videoWidth) || null,
+          height: Number(element.videoHeight) || null,
+        }
+      : null;
+    reportSource(
+      sourceUrl,
+      mimeType,
+      MEDIA_DETECTION_SOURCES.DOM,
+      duration,
+      resolution,
+    );
   }
 
-  function reportSource(sourceUrl, mimeType, detectedBy, duration = null) {
+  function reportSource(
+    sourceUrl,
+    mimeType,
+    detectedBy,
+    duration = null,
+    resolution = null,
+  ) {
     const candidate = createMediaCandidateFromSource({
       pageUrl: location.href,
       sourceUrl,
       mimeType,
       title: document.title || null,
       duration,
+      resolution,
       detectedBy,
     });
     if (!candidate) return;
@@ -346,7 +365,7 @@ export function createMediaObserverReportKey(event) {
       payload.kind === "blob" && Number.isFinite(payload.duration)
         ? Math.round(payload.duration)
         : "unknown";
-    return `${event.type}:${mediaId}:${payload.detectedBy || "unknown"}:${playbackDuration}`;
+    return `${event.type}:${mediaId}:${payload.detectedBy || "unknown"}:${playbackDuration}:${payload.resolution?.width || 0}x${payload.resolution?.height || 0}`;
   }
   if (event?.type === EVENTS.MEDIA_BLOB_TRACED) {
     return [

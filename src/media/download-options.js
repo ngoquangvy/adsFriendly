@@ -86,3 +86,88 @@ export function classifyDirectMediaContainer(candidate = {}) {
     return null;
   }
 }
+
+export function getMediaDownloadEstimate(candidate = {}, displayItem = null) {
+  const presentation = displayItem || candidate;
+  const resolved = presentation.resolvedStream || candidate.resolvedStream;
+  const variants = uniqueObjects([
+    ...(candidate.variants || []),
+    ...(presentation.variants || []),
+  ]).sort(compareBandwidth);
+  const selectedVariant = variants[0] || null;
+  const resolution =
+    resolved?.resolution ||
+    candidate.resolution ||
+    presentation.resolution ||
+    selectedVariant?.resolution ||
+    null;
+  const duration = firstPositiveNumber(
+    resolved?.duration,
+    candidate.duration,
+    presentation.duration,
+  );
+  let bandwidth = firstPositiveNumber(
+    resolved?.bandwidth,
+    candidate.averageBandwidth,
+    candidate.bandwidth,
+    selectedVariant?.averageBandwidth,
+    selectedVariant?.bandwidth,
+  );
+  if (candidate.kind === "dash" && bandwidth) {
+    const audioBandwidth = [...(candidate.audioTracks || [])]
+      .map((track) =>
+        firstPositiveNumber(track.averageBandwidth, track.bandwidth),
+      )
+      .filter(Boolean)
+      .sort((left, right) => right - left)[0];
+    if (audioBandwidth) bandwidth += audioBandwidth;
+  }
+  const estimatedBytes =
+    duration && bandwidth ? Math.round((duration * bandwidth) / 8) : null;
+  return Object.freeze({
+    resolution: resolution
+      ? {
+          width: positiveInteger(resolution.width),
+          height: positiveInteger(resolution.height),
+        }
+      : null,
+    duration,
+    bandwidth,
+    estimatedBytes,
+    basis: estimatedBytes ? "manifest_bandwidth" : null,
+  });
+}
+
+function compareBandwidth(left, right) {
+  return (
+    (firstPositiveNumber(right.averageBandwidth, right.bandwidth) || 0) -
+      (firstPositiveNumber(left.averageBandwidth, left.bandwidth) || 0) ||
+    (right.resolution?.height || 0) - (left.resolution?.height || 0)
+  );
+}
+
+function uniqueObjects(items) {
+  const unique = new Map();
+  for (const item of items) {
+    if (!item || typeof item !== "object") continue;
+    unique.set(
+      item.id ||
+        `${item.url || ""}:${item.bandwidth || ""}:${item.resolution?.height || ""}`,
+      item,
+    );
+  }
+  return [...unique.values()];
+}
+
+function firstPositiveNumber(...values) {
+  for (const value of values) {
+    const number = Number(value);
+    if (Number.isFinite(number) && number > 0) return number;
+  }
+  return null;
+}
+
+function positiveInteger(value) {
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number > 0 ? number : null;
+}
