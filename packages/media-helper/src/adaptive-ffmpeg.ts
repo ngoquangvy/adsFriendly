@@ -7,6 +7,10 @@ import type {
 } from "./download-types.js";
 
 const PROGRESS_INTERVAL_MS = 200;
+const FFMPEG_START_TIMEOUT_MS = configuredTimeout(
+  "ADSFRIENDLY_HELPER_FFMPEG_START_TIMEOUT_MS",
+  30_000,
+);
 
 export async function runAdaptiveFfmpeg(
   job: DownloadJob,
@@ -18,6 +22,7 @@ export async function runAdaptiveFfmpeg(
   if (context.signal.aborted) {
     throw context.signal.reason || new Error("Download cancelled.");
   }
+  context.progress(emptyAdaptiveProgress("probing", "ffmpeg_start"));
   const headers = adaptiveRequestHeaders(job);
   const outputSpec = adaptiveOutputSpec(job);
   const args = [
@@ -62,6 +67,13 @@ export async function runAdaptiveFfmpeg(
   let lastBytes = 0;
   let lastAt = Date.now();
   let lastProgressAt = 0;
+  let startupError: Error | null = null;
+  let startupTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+    startupError = new Error(
+      `FFmpeg did not begin receiving media within ${Math.round(FFMPEG_START_TIMEOUT_MS / 1000)} seconds. The browser session, key, or media URL may not be available to the Helper.`,
+    );
+    child.kill();
+  }, FFMPEG_START_TIMEOUT_MS);
   const duration = job.candidate.duration;
   const abort = () => child.kill();
   context.signal.addEventListener("abort", abort, { once: true });
@@ -70,6 +82,10 @@ export async function runAdaptiveFfmpeg(
     stderr = `${stderr}${chunk.toString("utf8")}`.slice(-32_000);
   });
   child.stdout.on("data", (chunk: Buffer) => {
+    if (startupTimer) {
+      clearTimeout(startupTimer);
+      startupTimer = null;
+    }
     stdout += chunk.toString("utf8");
     const blocks = stdout.split(/progress=(?:continue|end)\r?\n/);
     stdout = blocks.pop() || "";
@@ -112,11 +128,18 @@ export async function runAdaptiveFfmpeg(
   const exitCode = await new Promise<number>((resolve, reject) => {
     child.once("error", reject);
     child.once("close", (code) => resolve(code ?? -1));
-  }).finally(() => context.signal.removeEventListener("abort", abort));
+  }).finally(() => {
+    if (startupTimer) clearTimeout(startupTimer);
+    context.signal.removeEventListener("abort", abort);
+  });
 
   if (context.signal.aborted) {
     await unlink(partialPath).catch(() => {});
     throw context.signal.reason || new Error("Download cancelled.");
+  }
+  if (startupError) {
+    await unlink(partialPath).catch(() => {});
+    throw startupError;
   }
   if (exitCode !== 0) {
     await unlink(partialPath).catch(() => {});
@@ -164,9 +187,11 @@ export function adaptiveRequestHeaders(job: DownloadJob) {
 
 export function emptyAdaptiveProgress(
   phase: DownloadProgress["phase"],
+  stage?: DownloadProgress["stage"],
 ): DownloadProgress {
   return {
     phase,
+    stage,
     downloadedBytes: 0,
     totalBytes: null,
     bytesPerSecond: 0,
@@ -175,4 +200,11 @@ export function emptyAdaptiveProgress(
     processedSeconds: 0,
     duration: null,
   };
+}
+
+function configuredTimeout(name: string, fallback: number) {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value >= 100 && value <= 120_000
+    ? Math.round(value)
+    : fallback;
 }

@@ -904,6 +904,8 @@ var AdsFriendlyOptions = (() => {
   }
   function formatMediaJobDetails(job = {}) {
     const progress = getMediaJobProgress(job);
+    if (job.status === "starting") return "Starting Media Helper\u2026";
+    if (job.status === "probing") return formatMediaJobStage(job);
     const connectionFact = `${progress.connections} connections`;
     const speedFact = `Speed ${formatBytes(
       ACTIVE_STATUSES.has(job.status) ? progress.bytesPerSecond || 0 : 0
@@ -950,6 +952,15 @@ var AdsFriendlyOptions = (() => {
     facts.push(connectionFact);
     if (facts.length === 1) facts.unshift(capitalize(job.status || "starting"));
     return facts.join(" \xB7 ");
+  }
+  function formatMediaJobStage(job = {}) {
+    const stages = {
+      manifest_fetch: "Reading HLS manifest\u2026",
+      resource_check: "Checking HLS key and segment URLs\u2026",
+      output_prepare: "Preparing output file\u2026",
+      ffmpeg_start: "Starting FFmpeg\u2026"
+    };
+    return stages[job.progress?.stage] || "Checking media source\u2026";
   }
   function formatBytes(bytes) {
     const value = Math.max(0, Number(bytes) || 0);
@@ -1158,7 +1169,7 @@ var AdsFriendlyOptions = (() => {
     details.hidden = !active;
     details.textContent = formatMediaJobDetails(job);
     const output = row.querySelector(".download-output-path");
-    output.textContent = job.outputPath || job.error || (active ? "Preparing output file\u2026" : "No output file");
+    output.textContent = job.outputPath || job.error || (active ? formatMediaJobStage(job) : "No output file");
     output.title = output.textContent;
     const controls = row.querySelector(".download-history-controls");
     controls.replaceChildren();

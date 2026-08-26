@@ -86,6 +86,8 @@ export function getMediaJobPauseAvailability(job = {}) {
 
 export function formatMediaJobDetails(job = {}) {
   const progress = getMediaJobProgress(job);
+  if (job.status === "starting") return "Starting Media Helper…";
+  if (job.status === "probing") return formatMediaJobStage(job);
   const connectionFact = `${progress.connections} connections`;
   const speedFact = `Speed ${formatBytes(
     ACTIVE_STATUSES.has(job.status) ? progress.bytesPerSecond || 0 : 0,
@@ -143,6 +145,16 @@ export function formatMediaJobDetails(job = {}) {
   facts.push(connectionFact);
   if (facts.length === 1) facts.unshift(capitalize(job.status || "starting"));
   return facts.join(" · ");
+}
+
+export function formatMediaJobStage(job = {}) {
+  const stages = {
+    manifest_fetch: "Reading HLS manifest…",
+    resource_check: "Checking HLS key and segment URLs…",
+    output_prepare: "Preparing output file…",
+    ffmpeg_start: "Starting FFmpeg…",
+  };
+  return stages[job.progress?.stage] || "Checking media source…";
 }
 
 export function formatCompactMediaJobDetails(job = {}) {

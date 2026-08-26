@@ -182,6 +182,14 @@ test("download job view exposes speed, connections, and resumable actions", () =
     reason:
       "HLS downloads run through FFmpeg and cannot resume partial output yet.",
   });
+  assert.equal(
+    formatMediaJobDetails({
+      status: "probing",
+      connections: 12,
+      progress: { stage: "ffmpeg_start", bytesPerSecond: 0 },
+    }),
+    "Starting FFmpeg…",
+  );
 });
 
 test("popup download history stays compact and prioritizes active jobs", () => {

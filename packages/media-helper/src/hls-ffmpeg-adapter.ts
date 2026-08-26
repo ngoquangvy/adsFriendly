@@ -26,6 +26,10 @@ import {
 const MAX_MANIFESTS = 32;
 const MAX_MANIFEST_BYTES = 2 * 1024 * 1024;
 const MAX_RESOURCE_URLS = 10_000;
+const HLS_PREFLIGHT_TIMEOUT_MS = configuredTimeout(
+  "ADSFRIENDLY_HELPER_HLS_PREFLIGHT_TIMEOUT_MS",
+  30_000,
+);
 
 export const hlsFfmpegAdapter: DownloadAdapter = Object.freeze({
   id: "hls-ffmpeg",
@@ -39,14 +43,20 @@ async function downloadHls(
 ): Promise<DownloadResult> {
   const manifestUrl = job.candidate.manifestUrl;
   if (!manifestUrl) throw new Error("HLS manifest URL is missing.");
-  context.progress(emptyAdaptiveProgress("probing"));
-  const finalManifestUrl = await preflightManifestTree(
-    job,
-    manifestUrl,
+  context.progress(emptyAdaptiveProgress("probing", "manifest_fetch"));
+  const finalManifestUrl = await withPreflightTimeout(
     context.signal,
-    job.candidate.manifestHandoff?.body || null,
+    (signal) =>
+      preflightManifestTree(
+        job,
+        manifestUrl,
+        signal,
+        context,
+        job.candidate.manifestHandoff?.body || null,
+      ),
   );
 
+  context.progress(emptyAdaptiveProgress("probing", "output_prepare"));
   const outputDirectory = resolveOutputDirectory(job.outputDirectory);
   await mkdir(outputDirectory, { recursive: true });
   const filename = chooseFilename(job);
@@ -128,6 +138,7 @@ async function preflightManifestTree(
   job: DownloadJob,
   rootUrl: string,
   signal: AbortSignal,
+  context: DownloadContext,
   inlineRootBody: string | null = null,
 ) {
   const queue = [rootUrl];
@@ -144,16 +155,20 @@ async function preflightManifestTree(
     const requestedUrl = queue.shift()!;
     if (visited.has(requestedUrl)) continue;
     visited.add(requestedUrl);
+    context.progress(emptyAdaptiveProgress("probing", "manifest_fetch"));
     let body: string;
     let baseUrl = requestedUrl;
     if (requestedUrl === rootUrl && inlineRootBody !== null) {
       body = inlineRootBody;
     } else {
-      const response = await fetchRemote(requestedUrl, {
-        method: "GET",
-        headers: adaptiveRequestHeaders(job),
+      const response = await waitForAbort(
+        fetchRemote(requestedUrl, {
+          method: "GET",
+          headers: adaptiveRequestHeaders(job),
+          signal,
+        }),
         signal,
-      });
+      );
       if (!response.ok) {
         throw new Error(`HLS manifest returned HTTP ${response.status}.`);
       }
@@ -182,15 +197,26 @@ async function preflightManifestTree(
       );
     }
 
+    context.progress(emptyAdaptiveProgress("probing", "resource_check"));
     for (const keyResource of extractKeyResources(body, baseUrl)) {
-      await validateResource(keyResource, checkedResources, checkedHosts);
+      await validateResource(
+        keyResource,
+        checkedResources,
+        checkedHosts,
+        signal,
+      );
     }
     if (summary.playlistType === "master") {
       const references = extractMasterReferences(body, baseUrl);
       if (!references.length)
         throw new Error("HLS master has no media variants.");
       for (const reference of references) {
-        await validateResource(reference, checkedResources, checkedHosts);
+        await validateResource(
+          reference,
+          checkedResources,
+          checkedHosts,
+          signal,
+        );
         if (!visited.has(reference)) queue.push(reference);
       }
       continue;
@@ -201,7 +227,7 @@ async function preflightManifestTree(
     }
     mediaPlaylistCount += 1;
     for (const resource of extractMediaResources(body, baseUrl)) {
-      await validateResource(resource, checkedResources, checkedHosts);
+      await validateResource(resource, checkedResources, checkedHosts, signal);
     }
   }
 
@@ -229,6 +255,7 @@ async function validateResource(
   value: string,
   checked: Set<string>,
   checkedHosts: Set<string>,
+  signal: AbortSignal,
 ) {
   if (checked.has(value)) return;
   if (checked.size >= MAX_RESOURCE_URLS) {
@@ -243,7 +270,7 @@ async function validateResource(
     throw new Error("Only credential-free HTTP(S) HLS resources are allowed.");
   }
   if (!checkedHosts.has(url.hostname)) {
-    await assertSafeRemoteUrl(url.href);
+    await waitForAbort(assertSafeRemoteUrl(url.href), signal);
     checkedHosts.add(url.hostname);
   }
   checked.add(value);
@@ -350,4 +377,62 @@ function chooseFilename(job: DownloadJob) {
 
 function safeId(value: string) {
   return value.replace(/[^a-z0-9_-]/gi, "").slice(0, 48) || "download";
+}
+
+async function withPreflightTimeout<T>(
+  parentSignal: AbortSignal,
+  operation: (signal: AbortSignal) => Promise<T>,
+) {
+  const controller = new AbortController();
+  const forwardAbort = () =>
+    controller.abort(
+      parentSignal.reason || new Error("Download cancelled by user."),
+    );
+  if (parentSignal.aborted) forwardAbort();
+  else parentSignal.addEventListener("abort", forwardAbort, { once: true });
+  const timeoutError = new Error(
+    `HLS preflight timed out after ${formatTimeoutSeconds(HLS_PREFLIGHT_TIMEOUT_MS)} seconds while reading manifests or checking media resources.`,
+  );
+  const timer = setTimeout(
+    () => controller.abort(timeoutError),
+    HLS_PREFLIGHT_TIMEOUT_MS,
+  );
+  try {
+    return await operation(controller.signal);
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw controller.signal.reason || error;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    parentSignal.removeEventListener("abort", forwardAbort);
+  }
+}
+
+function waitForAbort<T>(operation: Promise<T>, signal: AbortSignal) {
+  if (signal.aborted) {
+    return Promise.reject(
+      signal.reason || new Error("Download operation was cancelled."),
+    );
+  }
+  return new Promise<T>((resolve, reject) => {
+    const abort = () =>
+      reject(signal.reason || new Error("Download operation was cancelled."));
+    signal.addEventListener("abort", abort, { once: true });
+    operation
+      .then(resolve, reject)
+      .finally(() => signal.removeEventListener("abort", abort));
+  });
+}
+
+function configuredTimeout(name: string, fallback: number) {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value >= 100 && value <= 120_000
+    ? Math.round(value)
+    : fallback;
+}
+
+function formatTimeoutSeconds(milliseconds: number) {
+  return Number((milliseconds / 1000).toFixed(1));
 }

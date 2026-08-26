@@ -50,6 +50,45 @@ test("built helper completes a framed Native Messaging handshake", async () => {
   );
 });
 
+test("built helper times out a stalled HLS preflight with a precise stage", async (t) => {
+  const server = createServer(() => {});
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => {
+    server.closeAllConnections?.();
+    server.close();
+  });
+  const outputDirectory = await mkdtemp(
+    join(tmpdir(), "adsfriendly-hls-timeout-"),
+  );
+  t.after(() => rm(outputDirectory, { recursive: true, force: true }));
+  const address = server.address();
+  const manifestUrl = `http://127.0.0.1:${address.port}/stalled.m3u8`;
+  const child = spawnHelper({
+    ADSFRIENDLY_HELPER_HLS_PREFLIGHT_TIMEOUT_MS: "200",
+  });
+  t.after(() => child.kill());
+  const frames = createFrameReader(child.stdout);
+
+  child.stdin.write(
+    frame(hlsDownloadRequest("hls-timeout-1", manifestUrl, outputDirectory)),
+  );
+  const probing = await frames.next(
+    (event) =>
+      event.type === MEDIA_HELPER_EVENTS.DOWNLOAD_PROGRESS &&
+      event.payload.stage === "manifest_fetch",
+  );
+  assert.equal(probing.payload.phase, "probing");
+  const failed = await frames.next(
+    (event) =>
+      event.type === MEDIA_HELPER_EVENTS.ERROR &&
+      event.requestId === "hls-timeout-1",
+  );
+  assert.match(
+    failed.payload.message,
+    /HLS preflight timed out after 0\.2 seconds/,
+  );
+});
+
 test("built helper downloads direct media with ranges, cancellation, and resume", async (t) => {
   const bytes = Buffer.alloc(12 * 1024 * 1024 + 37);
   for (let index = 0; index < bytes.length; index++) bytes[index] = index % 251;
@@ -501,12 +540,16 @@ test("built helper downloads and muxes a static DASH VOD with FFmpeg", async (t)
   );
 });
 
-function spawnHelper() {
+function spawnHelper(extraEnv = {}) {
   const hostPath = fileURLToPath(
     new URL("../packages/media-helper/dist/host.cjs", import.meta.url),
   );
   return spawn(process.execPath, [hostPath, "chrome-extension://test/"], {
-    env: { ...process.env, ADSFRIENDLY_HELPER_ALLOW_PRIVATE: "1" },
+    env: {
+      ...process.env,
+      ADSFRIENDLY_HELPER_ALLOW_PRIVATE: "1",
+      ...extraEnv,
+    },
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
   });

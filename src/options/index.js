@@ -18,6 +18,7 @@ import {
 } from "../media/download-job-contract.js";
 import {
   formatMediaJobDetails,
+  formatMediaJobStage,
   getMediaJobPauseAvailability,
   getMediaJobPrimaryAction,
   getMediaJobProgress,
@@ -230,7 +231,7 @@ function updateDownloadHistoryItem(row, job, helper) {
   output.textContent =
     job.outputPath ||
     job.error ||
-    (active ? "Preparing output file…" : "No output file");
+    (active ? formatMediaJobStage(job) : "No output file");
   output.title = output.textContent;
   const controls = row.querySelector(".download-history-controls");
   controls.replaceChildren();
