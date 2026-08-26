@@ -4518,13 +4518,22 @@ var AdsFriendlyBackground = (() => {
   // src/media/key-handoff-diagnostics.js
   function normalizeAesKeyHandoffDiagnostic(value) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-    const count = (field) => Math.max(0, Math.min(1e3, Math.trunc(Number(value[field]) || 0)));
+    const count = (field, maximum = 1e3) => Math.max(0, Math.min(maximum, Math.trunc(Number(value[field]) || 0)));
     return {
       framesQueried: count("framesQueried"),
       framesResponded: count("framesResponded"),
       requestedManifestCount: count("requestedManifestCount"),
       matchedManifestCount: count("matchedManifestCount"),
       relatedManifestCount: count("relatedManifestCount"),
+      relatedManifestBytes: count("relatedManifestBytes", 8 * 1024 * 1024),
+      childManifestCount: count("childManifestCount"),
+      keyDirectiveCount: count("keyDirectiveCount"),
+      unsupportedKeyDirectiveCount: count("unsupportedKeyDirectiveCount"),
+      segmentDirectiveCount: count("segmentDirectiveCount"),
+      encryptionMethods: normalizeDiagnosticStrings(value.encryptionMethods),
+      encryptionKeyFormats: normalizeDiagnosticStrings(
+        value.encryptionKeyFormats
+      ),
       declaredKeyCount: count("declaredKeyCount"),
       capturedKeyCount: count("capturedKeyCount"),
       pageFetchAttemptCount: count("pageFetchAttemptCount"),
@@ -4554,7 +4563,15 @@ var AdsFriendlyBackground = (() => {
     if (!diagnostic) return "";
     const statuses = diagnostic.pageFetchStatuses.length ? `; key fetch status ${diagnostic.pageFetchStatuses.join(", ")}` : "";
     const manifestStatuses = diagnostic.pageManifestFetchStatuses.length ? `; manifest fetch status ${diagnostic.pageManifestFetchStatuses.join(", ")}` : "";
-    return ` Browser capture: ${diagnostic.framesResponded}/${diagnostic.framesQueried} frames responded, ${diagnostic.matchedManifestCount}/${diagnostic.requestedManifestCount} requested manifests matched, ${diagnostic.relatedManifestCount} related manifests found, ${diagnostic.pageManifestFetchSuccessCount}/${diagnostic.pageManifestFetchAttemptCount} manifest fetches succeeded${manifestStatuses}, ${diagnostic.declaredKeyCount} keys declared, ${diagnostic.capturedKeyCount} captured, ${diagnostic.pageFetchSuccessCount}/${diagnostic.pageFetchAttemptCount} key fetches succeeded${statuses}.`;
+    const encryption = diagnostic.encryptionMethods.length ? `, encryption ${diagnostic.encryptionMethods.join("+")} (${diagnostic.encryptionKeyFormats.join("+") || "no key format"})` : "";
+    return ` Browser capture: ${diagnostic.framesResponded}/${diagnostic.framesQueried} frames responded, ${diagnostic.matchedManifestCount}/${diagnostic.requestedManifestCount} requested manifests matched, ${diagnostic.relatedManifestCount} related manifests (${diagnostic.relatedManifestBytes} bytes, ${diagnostic.childManifestCount} children, ${diagnostic.segmentDirectiveCount} segments), ${diagnostic.pageManifestFetchSuccessCount}/${diagnostic.pageManifestFetchAttemptCount} manifest fetches succeeded${manifestStatuses}, ${diagnostic.keyDirectiveCount} key directives (${diagnostic.unsupportedKeyDirectiveCount} unsupported)${encryption}, ${diagnostic.declaredKeyCount} identity keys declared, ${diagnostic.capturedKeyCount} captured, ${diagnostic.pageFetchSuccessCount}/${diagnostic.pageFetchAttemptCount} key fetches succeeded${statuses}.`;
+  }
+  function normalizeDiagnosticStrings(value) {
+    return Array.isArray(value) ? [
+      ...new Set(
+        value.filter((item) => typeof item === "string").map((item) => item.trim().slice(0, 100)).filter(Boolean)
+      )
+    ].slice(0, 8) : [];
   }
 
   // src/media/download-job-contract.js
@@ -6467,6 +6484,25 @@ ${body}`;
       requestedManifestCount: diagnostics.length ? sums("requestedManifestCount") : targets.manifestUrls.length,
       matchedManifestCount: sums("matchedManifestCount"),
       relatedManifestCount: sums("relatedManifestCount"),
+      relatedManifestBytes: sums("relatedManifestBytes"),
+      childManifestCount: sums("childManifestCount"),
+      keyDirectiveCount: sums("keyDirectiveCount"),
+      unsupportedKeyDirectiveCount: sums("unsupportedKeyDirectiveCount"),
+      segmentDirectiveCount: sums("segmentDirectiveCount"),
+      encryptionMethods: [
+        ...new Set(
+          diagnostics.flatMap(
+            (item) => Array.isArray(item.encryptionMethods) ? item.encryptionMethods : []
+          )
+        )
+      ].slice(0, 8),
+      encryptionKeyFormats: [
+        ...new Set(
+          diagnostics.flatMap(
+            (item) => Array.isArray(item.encryptionKeyFormats) ? item.encryptionKeyFormats : []
+          )
+        )
+      ].slice(0, 8),
       declaredKeyCount: sums("declaredKeyCount"),
       capturedKeyCount: sums("capturedKeyCount"),
       pageFetchAttemptCount: sums("pageFetchAttemptCount"),

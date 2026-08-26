@@ -2052,9 +2052,15 @@ ${body}`;
     const childManifestUrls = [];
     const text = String(body || "");
     if (!text.trimStart().startsWith("#EXTM3U")) return [];
+    let keyDirectiveCount = 0;
+    let unsupportedKeyDirectiveCount = 0;
+    let segmentDirectiveCount = 0;
+    const encryptionMethods = /* @__PURE__ */ new Set();
+    const encryptionKeyFormats = /* @__PURE__ */ new Set();
     let expectsVariantUri = false;
     for (const rawLine of text.split(/\r?\n/)) {
       const line = rawLine.trim();
+      if (line.startsWith("#EXTINF:")) segmentDirectiveCount += 1;
       if (expectsVariantUri && line && !line.startsWith("#")) {
         rememberHttpUrl(childManifestUrls, line, manifestUrl);
         expectsVariantUri = false;
@@ -2073,9 +2079,14 @@ ${body}`;
       }
       if (!line.startsWith("#EXT-X-KEY:")) continue;
       const attributes = parseHlsAttributeList(line.slice(line.indexOf(":") + 1));
-      const method = String(attributes.METHOD || "").toUpperCase();
-      const keyFormat = String(attributes.KEYFORMAT || "identity").toLowerCase();
-      if (!attributes.URI || method === "NONE" || !["AES-128", "SAMPLE-AES"].includes(method) || !["", "identity"].includes(keyFormat)) {
+      const method = String(attributes.METHOD || "").trim().toUpperCase();
+      const keyFormat = String(attributes.KEYFORMAT || "identity").trim().toLowerCase();
+      if (method === "NONE") continue;
+      keyDirectiveCount += 1;
+      if (method) encryptionMethods.add(method);
+      if (keyFormat) encryptionKeyFormats.add(keyFormat);
+      if (!attributes.URI || !["AES-128", "SAMPLE-AES"].includes(method) || !["", "identity"].includes(keyFormat)) {
+        unsupportedKeyDirectiveCount += 1;
         continue;
       }
       rememberHttpUrl(keyUrls, attributes.URI, manifestUrl);
@@ -2084,6 +2095,12 @@ ${body}`;
     manifests.set(manifestUrl, {
       keyUrls: [...new Set(keyUrls)].slice(0, MAX_KEYS_PER_MANIFEST),
       childManifestUrls: [...new Set(childManifestUrls)].slice(0, MAX_MANIFESTS),
+      bodyBytes: new TextEncoder().encode(text).byteLength,
+      keyDirectiveCount,
+      unsupportedKeyDirectiveCount,
+      segmentDirectiveCount,
+      encryptionMethods: [...encryptionMethods].slice(0, 8),
+      encryptionKeyFormats: [...encryptionKeyFormats].slice(0, 8),
       observedAt
     });
     while (manifests.size > MAX_MANIFESTS) {
@@ -2146,6 +2163,13 @@ ${body}`;
       requestedManifestCount: urls.length,
       matchedManifestCount: urls.filter((url) => manifests.has(url)).length,
       relatedManifestCount: 0,
+      relatedManifestBytes: 0,
+      childManifestCount: 0,
+      keyDirectiveCount: 0,
+      unsupportedKeyDirectiveCount: 0,
+      segmentDirectiveCount: 0,
+      encryptionMethods: [],
+      encryptionKeyFormats: [],
       declaredKeyCount: 0,
       capturedKeyCount: 0,
       pageManifestFetchAttemptCount: 0,
@@ -2166,6 +2190,36 @@ ${body}`;
       (url) => manifests.has(url)
     ).length;
     diagnostic.relatedManifestCount = relatedManifestUrls.length;
+    const relatedEntries = relatedManifestUrls.map((url) => manifests.get(url)).filter(Boolean);
+    diagnostic.relatedManifestBytes = relatedEntries.reduce(
+      (total, entry) => total + (Number(entry.bodyBytes) || 0),
+      0
+    );
+    diagnostic.childManifestCount = new Set(
+      relatedEntries.flatMap((entry) => entry.childManifestUrls || [])
+    ).size;
+    diagnostic.keyDirectiveCount = relatedEntries.reduce(
+      (total, entry) => total + (Number(entry.keyDirectiveCount) || 0),
+      0
+    );
+    diagnostic.unsupportedKeyDirectiveCount = relatedEntries.reduce(
+      (total, entry) => total + (Number(entry.unsupportedKeyDirectiveCount) || 0),
+      0
+    );
+    diagnostic.segmentDirectiveCount = relatedEntries.reduce(
+      (total, entry) => total + (Number(entry.segmentDirectiveCount) || 0),
+      0
+    );
+    diagnostic.encryptionMethods = [
+      ...new Set(
+        relatedEntries.flatMap((entry) => entry.encryptionMethods || [])
+      )
+    ].slice(0, 8);
+    diagnostic.encryptionKeyFormats = [
+      ...new Set(
+        relatedEntries.flatMap((entry) => entry.encryptionKeyFormats || [])
+      )
+    ].slice(0, 8);
     const declaredKeyUrls = [
       ...new Set(
         relatedManifestUrls.flatMap(

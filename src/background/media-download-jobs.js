@@ -346,6 +346,27 @@ function aggregateAesKeyHandoffDiagnostics(targets, responses, diagnostics) {
       : targets.manifestUrls.length,
     matchedManifestCount: sums("matchedManifestCount"),
     relatedManifestCount: sums("relatedManifestCount"),
+    relatedManifestBytes: sums("relatedManifestBytes"),
+    childManifestCount: sums("childManifestCount"),
+    keyDirectiveCount: sums("keyDirectiveCount"),
+    unsupportedKeyDirectiveCount: sums("unsupportedKeyDirectiveCount"),
+    segmentDirectiveCount: sums("segmentDirectiveCount"),
+    encryptionMethods: [
+      ...new Set(
+        diagnostics.flatMap((item) =>
+          Array.isArray(item.encryptionMethods) ? item.encryptionMethods : [],
+        ),
+      ),
+    ].slice(0, 8),
+    encryptionKeyFormats: [
+      ...new Set(
+        diagnostics.flatMap((item) =>
+          Array.isArray(item.encryptionKeyFormats)
+            ? item.encryptionKeyFormats
+            : [],
+        ),
+      ),
+    ].slice(0, 8),
     declaredKeyCount: sums("declaredKeyCount"),
     capturedKeyCount: sums("capturedKeyCount"),
     pageFetchAttemptCount: sums("pageFetchAttemptCount"),

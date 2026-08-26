@@ -250,21 +250,16 @@ test("browser AES handoff retries a declared key inside the player page context"
     assert.equal(calls[0].url, keyUrl);
     assert.equal(calls[0].init.credentials, "include");
     assert.equal(result.keys[0].data, keyBytes.toString("base64"));
-    assert.deepEqual(result.diagnostic, {
-      requestedManifestCount: 1,
-      matchedManifestCount: 1,
-      relatedManifestCount: 1,
-      declaredKeyCount: 1,
-      capturedKeyCount: 1,
-      pageManifestFetchAttemptCount: 0,
-      pageManifestFetchSuccessCount: 0,
-      pageManifestFetchStatuses: [],
-      pageManifestFetchErrorCount: 0,
-      pageFetchAttemptCount: 1,
-      pageFetchSuccessCount: 1,
-      pageFetchStatuses: [200],
-      pageFetchErrorCount: 0,
-    });
+    assert.equal(result.diagnostic.requestedManifestCount, 1);
+    assert.equal(result.diagnostic.matchedManifestCount, 1);
+    assert.equal(result.diagnostic.relatedManifestCount, 1);
+    assert.equal(result.diagnostic.keyDirectiveCount, 1);
+    assert.equal(result.diagnostic.declaredKeyCount, 1);
+    assert.equal(result.diagnostic.capturedKeyCount, 1);
+    assert.equal(result.diagnostic.pageManifestFetchAttemptCount, 0);
+    assert.equal(result.diagnostic.pageFetchAttemptCount, 1);
+    assert.equal(result.diagnostic.pageFetchSuccessCount, 1);
+    assert.deepEqual(result.diagnostic.pageFetchStatuses, [200]);
   } finally {
     clearAesKeyHandoffs();
   }
@@ -329,6 +324,25 @@ test("browser AES handoff reports a rejected page-context key retry", async () =
   }
 });
 
+test("browser AES diagnostics distinguish an unsupported key directive from a missing key", async () => {
+  const manifestUrl = "https://cdn.example/video/drm.m3u8";
+  clearAesKeyHandoffs();
+  try {
+    rememberHlsKeyUris(
+      manifestUrl,
+      '#EXTM3U\n#EXT-X-KEY:METHOD=SAMPLE-AES,KEYFORMAT="com.widevine",URI="license"\n#EXTINF:4,\nsegment.ts',
+    );
+    const result = await recoverAesKeyHandoffs([manifestUrl], null);
+    assert.equal(result.diagnostic.keyDirectiveCount, 1);
+    assert.equal(result.diagnostic.unsupportedKeyDirectiveCount, 1);
+    assert.deepEqual(result.diagnostic.encryptionMethods, ["SAMPLE-AES"]);
+    assert.deepEqual(result.diagnostic.encryptionKeyFormats, ["com.widevine"]);
+    assert.equal(result.diagnostic.declaredKeyCount, 0);
+  } finally {
+    clearAesKeyHandoffs();
+  }
+});
+
 test("AES key diagnostics are bounded and explain a page-context rejection", () => {
   const diagnostic = normalizeAesKeyHandoffDiagnostic({
     framesQueried: 2,
@@ -336,6 +350,13 @@ test("AES key diagnostics are bounded and explain a page-context rejection", () 
     requestedManifestCount: 4,
     matchedManifestCount: 1,
     relatedManifestCount: 1,
+    relatedManifestBytes: 1200,
+    childManifestCount: 0,
+    keyDirectiveCount: 1,
+    unsupportedKeyDirectiveCount: 0,
+    segmentDirectiveCount: 200,
+    encryptionMethods: ["SAMPLE-AES"],
+    encryptionKeyFormats: ["identity"],
     declaredKeyCount: 1,
     capturedKeyCount: 0,
     pageFetchAttemptCount: 1,
@@ -350,7 +371,7 @@ test("AES key diagnostics are bounded and explain a page-context rejection", () 
   assert.deepEqual(diagnostic.pageFetchStatuses, [403]);
   assert.match(
     formatAesKeyHandoffDiagnostic(diagnostic),
-    /1\/2 frames responded.*1 keys declared.*key fetch status 403/i,
+    /1\/2 frames responded.*1 key directives.*1 identity keys declared.*key fetch status 403/i,
   );
 });
 

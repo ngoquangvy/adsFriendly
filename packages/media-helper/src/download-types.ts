@@ -26,6 +26,13 @@ export interface DownloadCandidate {
     requestedManifestCount: number;
     matchedManifestCount: number;
     relatedManifestCount: number;
+    relatedManifestBytes: number;
+    childManifestCount: number;
+    keyDirectiveCount: number;
+    unsupportedKeyDirectiveCount: number;
+    segmentDirectiveCount: number;
+    encryptionMethods: string[];
+    encryptionKeyFormats: string[];
     declaredKeyCount: number;
     capturedKeyCount: number;
     pageFetchAttemptCount: number;

@@ -31,6 +31,7 @@ const MAX_KEY_BYTES = 64 * 1024;
 const MAX_RESOURCES = 10_000;
 const MAX_MASTER_DEPTH = 4;
 const MAX_CANARIES = 32;
+const resolutionTraces = new WeakMap<DownloadJob, HlsResolutionTraceEntry[]>();
 const CANONICAL_SEGMENT_EXTENSIONS = new Map([
   [".ts", ".ts"],
   [".m2ts", ".ts"],
@@ -65,6 +66,18 @@ export interface HlsAcquisitionPlan {
   segmentCount: number;
 }
 
+interface HlsResolutionTraceEntry {
+  source: "browser-handoff" | "helper-fetch";
+  urlLabel: string;
+  bodyBytes: number;
+  playlistType: string;
+  streamType: string;
+  variantCount: number;
+  segmentCount: number;
+  encryptionMethods: string[];
+  encryptionKeyFormats: string[];
+}
+
 export async function resolveHlsMediaPlaylist(
   job: DownloadJob,
   rootUrl: string,
@@ -74,14 +87,20 @@ export async function resolveHlsMediaPlaylist(
 ) {
   let manifestUrl = rootUrl;
   let inlineBody = inlineRootBody;
+  const trace: HlsResolutionTraceEntry[] = [];
   for (let depth = 0; depth <= MAX_MASTER_DEPTH; depth++) {
     onStage("manifest_fetch");
+    const source = inlineBody !== null ? "browser-handoff" : "helper-fetch";
     const body =
       inlineBody !== null
         ? inlineBody
         : await fetchManifest(job, manifestUrl, signal);
     inlineBody = null;
     const summary = parseHlsManifest(manifestUrl, body);
+    trace.push(
+      createHlsResolutionTraceEntry(manifestUrl, body, summary, source),
+    );
+    resolutionTraces.set(job, trace.slice());
     if (summary.status !== "ready" || summary.playlistType === "unknown") {
       throw new Error("HLS endpoint did not return a usable playlist.");
     }
@@ -611,8 +630,8 @@ async function fetchKeyResource(
   }
   const error = new Error(
     lastStatus
-      ? `key request returned HTTP ${lastStatus} after bounded browser-header strategies; no captured browser key was available.${formatBrowserKeyCaptureDiagnostic(job)}`
-      : `key request failed after bounded browser-header strategies${lastError ? `: ${messageOf(lastError)}` : "."}${formatBrowserKeyCaptureDiagnostic(job)}`,
+      ? `key request returned HTTP ${lastStatus} after bounded browser-header strategies; no captured browser key was available.${formatBrowserKeyCaptureDiagnostic(job)}${formatHelperHlsTrace(job, resource)}`
+      : `key request failed after bounded browser-header strategies${lastError ? `: ${messageOf(lastError)}` : "."}${formatBrowserKeyCaptureDiagnostic(job)}${formatHelperHlsTrace(job, resource)}`,
   );
   Object.assign(error, { retryable: false });
   throw error;
@@ -623,6 +642,52 @@ function formatBrowserKeyCaptureDiagnostic(job: DownloadJob) {
     formatAesKeyHandoffDiagnostic(job.candidate.keyHandoffDiagnostic) ||
     " Browser key capture diagnostics were unavailable."
   );
+}
+
+function createHlsResolutionTraceEntry(
+  manifestUrl: string,
+  body: string,
+  summary: ReturnType<typeof parseHlsManifest>,
+  source: HlsResolutionTraceEntry["source"],
+): HlsResolutionTraceEntry {
+  return {
+    source,
+    urlLabel: safeResourceLabel(manifestUrl),
+    bodyBytes: Buffer.byteLength(body, "utf8"),
+    playlistType: String(summary.playlistType || "unknown"),
+    streamType: String(summary.streamType || "unknown"),
+    variantCount: summary.variants?.length || 0,
+    segmentCount: summary.segmentCount || 0,
+    encryptionMethods: (summary.encryptionMethods || []).slice(0, 8),
+    encryptionKeyFormats: (summary.encryptionKeyFormats || []).slice(0, 8),
+  };
+}
+
+function formatHelperHlsTrace(
+  job: DownloadJob,
+  keyResource: HlsAcquisitionResource,
+) {
+  const trace = resolutionTraces.get(job) || [];
+  const manifests = trace
+    .slice(0, MAX_MASTER_DEPTH + 1)
+    .map((item, index) => {
+      const encryption = item.encryptionMethods.length
+        ? ` encryption=${item.encryptionMethods.join("+")}/${item.encryptionKeyFormats.join("+") || "no-keyformat"}`
+        : "";
+      return `${index}:${item.urlLabel} ${item.source} ${item.playlistType}/${item.streamType} ${item.bodyBytes}B variants=${item.variantCount} segments=${item.segmentCount}${encryption}`;
+    })
+    .join("; ");
+  return ` Helper HLS trace: ${trace.length} manifest(s) [${manifests || "none"}]; key=${safeResourceLabel(keyResource.url)}.`;
+}
+
+function safeResourceLabel(value: string) {
+  try {
+    const url = new URL(value);
+    const name = basename(url.pathname) || "resource";
+    return `${url.hostname}/${name.slice(0, 80)}#${stableId(url.href)}`;
+  } catch {
+    return `invalid#${stableId(value)}`;
+  }
 }
 
 async function readKeyResponse(response: Response) {
