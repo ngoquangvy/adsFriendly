@@ -2,7 +2,7 @@ import { normalizeMediaDownloadOutput } from "./download-options.js";
 import { isRegisteredMediaAccessStrategy } from "./access-strategy-catalog.js";
 import { normalizeAesKeyHandoffDiagnostic } from "./key-handoff-diagnostics.js";
 
-export const MEDIA_HELPER_PROTOCOL_VERSION = 3;
+export const MEDIA_HELPER_PROTOCOL_VERSION = 4;
 export const MEDIA_HELPER_HOST_NAME = "com.adsfriendly.media_helper";
 
 export const MEDIA_HELPER_REQUESTS = Object.freeze({
@@ -33,6 +33,7 @@ export const MEDIA_HELPER_CAPABILITIES = Object.freeze({
   HLS_DECRYPTED_MANIFEST: "download.hls_decrypted_manifest",
   OUTPUT_CONTAINER_SELECTION: "output.container_selection",
   DASH_VOD_DOWNLOAD: "download.dash_vod",
+  ADAPTIVE_HTTP_DOWNLOAD: "download.adaptive_http",
   FFMPEG_MUX: "mux.ffmpeg",
   OUTPUT_OPEN: "output.open",
   OUTPUT_REVEAL: "output.reveal",
@@ -115,17 +116,24 @@ export function normalizeHelperDownloadPayload(value = {}) {
   }
   const kind = candidate.kind;
   if (
-    !Object.values({ DIRECT: "direct", HLS: "hls", DASH: "dash" }).includes(
-      kind,
-    )
+    !Object.values({
+      DIRECT: "direct",
+      HLS: "hls",
+      DASH: "dash",
+      ADAPTIVE: "adaptive",
+    }).includes(kind)
   ) {
     throw new Error(
       `[MediaHelperProtocol] Unsupported media kind "${kind || ""}".`,
     );
   }
   const sourceUrl = requiredHttpUrl(
-    kind === "direct" ? candidate.sourceUrl : candidate.manifestUrl,
-    kind === "direct" ? "candidate.sourceUrl" : "candidate.manifestUrl",
+    ["direct", "adaptive"].includes(kind)
+      ? candidate.sourceUrl
+      : candidate.manifestUrl,
+    ["direct", "adaptive"].includes(kind)
+      ? "candidate.sourceUrl"
+      : "candidate.manifestUrl",
   );
   const connections = Number(value.connections ?? 8);
   if (!Number.isInteger(connections) || connections < 1 || connections > 16) {
@@ -144,18 +152,31 @@ export function normalizeHelperDownloadPayload(value = {}) {
       id: requiredString(candidate.id, "candidate.id"),
       kind,
       pageUrl: requiredHttpUrl(candidate.pageUrl, "candidate.pageUrl"),
-      sourceUrl: kind === "direct" ? sourceUrl : null,
+      sourceUrl: ["direct", "adaptive"].includes(kind) ? sourceUrl : null,
       manifestUrl: ["hls", "dash"].includes(kind) ? sourceUrl : null,
       title: optionalString(candidate.title),
       mimeType: optionalString(candidate.mimeType),
-      duration: ["hls", "dash"].includes(kind)
+      duration: ["hls", "dash", "adaptive"].includes(kind)
         ? optionalNonNegativeNumber(candidate.duration)
         : null,
+      provider: kind === "adaptive" ? optionalString(candidate.provider) : null,
+      acquisitionProfile:
+        kind === "adaptive"
+          ? optionalString(candidate.acquisitionProfile)
+          : null,
+      variants:
+        kind === "adaptive"
+          ? normalizeHelperAdaptiveTracks(candidate.variants, "video")
+          : [],
+      audioTracks:
+        kind === "adaptive"
+          ? normalizeHelperAdaptiveTracks(candidate.audioTracks, "audio")
+          : [],
       segmentCount:
         kind === "hls"
           ? optionalNonNegativeInteger(candidate.segmentCount)
           : null,
-      requestContext: ["hls", "dash"].includes(kind)
+      requestContext: ["hls", "dash", "adaptive"].includes(kind)
         ? normalizeHelperRequestContext(candidate.requestContext)
         : null,
       manifestHandoff:
@@ -172,6 +193,33 @@ export function normalizeHelperDownloadPayload(value = {}) {
           : null,
     },
   };
+}
+
+function normalizeHelperAdaptiveTracks(value, expectedType) {
+  if (!Array.isArray(value) || !value.length) {
+    throw new Error(
+      `[MediaHelperProtocol] Adaptive ${expectedType} track is required.`,
+    );
+  }
+  return value.slice(0, 24).map((track, index) => ({
+    id: optionalString(track?.id) || `${expectedType}-${index + 1}`,
+    type: expectedType,
+    sourceUrl: requiredHttpUrl(
+      track?.sourceUrl || track?.url,
+      `candidate.${expectedType}Tracks[${index}].sourceUrl`,
+    ),
+    mimeType: optionalString(track?.mimeType),
+    codecs: optionalString(track?.codecs),
+    itag: optionalString(track?.itag),
+    bandwidth: optionalNonNegativeNumber(track?.bandwidth),
+    averageBandwidth: optionalNonNegativeNumber(track?.averageBandwidth),
+    contentLength: optionalNonNegativeInteger(track?.contentLength),
+    width: optionalNonNegativeInteger(track?.width || track?.resolution?.width),
+    height: optionalNonNegativeInteger(
+      track?.height || track?.resolution?.height,
+    ),
+    qualityLabel: optionalString(track?.qualityLabel),
+  }));
 }
 
 function normalizeHelperKeyHandoff(value, manifestUrl) {

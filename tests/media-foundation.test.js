@@ -89,6 +89,10 @@ import {
 } from "../src/media/resolution-diagnostics.js";
 import { chooseMediaTitle } from "../src/media/media-title.js";
 import {
+  createYouTubeAdaptiveCandidate,
+  parseYouTubePlaybackTrack,
+} from "../src/media/youtube-track-profile.js";
+import {
   beginHlsManifestInspection,
   captureFetchAesKey,
   clearAesKeyHandoffs,
@@ -104,6 +108,71 @@ import {
   formatAesKeyHandoffDiagnostic,
   normalizeAesKeyHandoffDiagnostic,
 } from "../src/media/key-handoff-diagnostics.js";
+
+test("parses browser-resolved YouTube playback tracks without retaining the playback range", () => {
+  const track = parseYouTubePlaybackTrack(
+    "https://rr1---sn.example.googlevideo.com/videoplayback?id=asset-1&itag=137&mime=video%2Fmp4%3B+codecs%3D%5C%22avc1.640028%5C%22&dur=19.021&clen=123456&size=1920x1080&range=0-65535&sig=browser-resolved",
+    { mimeType: "video/mp4" },
+  );
+
+  assert.equal(track.type, "video");
+  assert.equal(track.itag, "137");
+  assert.equal(track.duration, 19.021);
+  assert.equal(track.contentLength, 123456);
+  assert.deepEqual(track.resolution, { width: 1920, height: 1080 });
+  assert.equal(new URL(track.sourceUrl).searchParams.has("range"), false);
+  assert.equal(
+    new URL(track.sourceUrl).searchParams.get("sig"),
+    "browser-resolved",
+  );
+});
+
+test("groups resolved YouTube video and audio observations into one ready adaptive asset", () => {
+  const catalog = createMediaCatalog();
+  const pageUrl = "https://www.youtube.com/watch?v=video-1";
+  const createTrack = (itag, mimeType, extra = "") =>
+    parseYouTubePlaybackTrack(
+      `https://r1.googlevideo.com/videoplayback?id=asset-1&itag=${itag}&mime=${encodeURIComponent(mimeType)}&dur=20&clen=1000&sig=ok${extra}`,
+      { mimeType },
+    );
+  const video = createYouTubeAdaptiveCandidate({
+    pageUrl,
+    title: "Example - YouTube",
+    track: createTrack("137", "video/mp4", "&size=1920x1080"),
+  });
+  const audio = createYouTubeAdaptiveCandidate({
+    pageUrl,
+    title: "Example - YouTube",
+    track: createTrack("140", "audio/mp4"),
+  });
+
+  catalog.add(7, createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, video));
+  catalog.add(7, createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, audio));
+  const [item] = catalog.list(7);
+
+  assert.equal(item.id, video.id);
+  assert.equal(item.kind, "adaptive");
+  assert.equal(item.provider, "youtube");
+  assert.equal(item.probeStatus, "ready");
+  assert.equal(item.variants.length, 1);
+  assert.equal(item.audioTracks.length, 1);
+  assert.equal(item.sourceUrl, item.variants[0].sourceUrl);
+  assert.deepEqual(getMediaDownloadAvailability(item), {
+    supported: true,
+    reason: null,
+  });
+  assert.match(formatMediaDetails(item), /YouTube · 1080p · 1 audio · 0:20/);
+  assert.equal(getMediaDownloadEstimate(item).estimatedBytes, 2000);
+  const job = normalizeMediaDownloadJob({
+    id: "youtube-job-1",
+    createdAt: Date.now(),
+    sourceTabId: 7,
+    candidate: item,
+  });
+  assert.equal(job.candidate.kind, "adaptive");
+  assert.equal(job.candidate.variants.length, 1);
+  assert.equal(job.candidate.audioTracks.length, 1);
+});
 
 test("offers a helper setup action independently from downloadable media", () => {
   assert.deepEqual(helperSetupPresentation({ status: "permission_required" }), {

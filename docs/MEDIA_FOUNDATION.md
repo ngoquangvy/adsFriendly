@@ -14,7 +14,8 @@ consistent large-file, retry, resume, and FFmpeg output path.
 
 The future `media.observer`, `media.catalog`, manifest parsers, and timeline
 builder produce registered `media.*` events containing normalized media
-candidates. A candidate can describe a direct file, HLS, DASH, or a blob-backed
+candidates. A candidate can describe a direct file, HLS, DASH, a resolved
+adaptive HTTP video/audio pair, or a blob-backed
 player and can later gain variants, audio tracks, subtitles, DRM state, and a
 timeline.
 
@@ -57,6 +58,16 @@ Empty HLS envelopes remain unknown until media evidence appears instead of being
 inferred as live merely because `EXT-X-ENDLIST` is absent. The catalog also links
 discovered child quality/audio/subtitle playlists back to their master. Full manifest bodies, signed URLs outside
 the per-tab session catalog, and segment lists are not persisted.
+
+YouTube is handled by a bounded acquisition profile rather than pretending its
+`blob:` player source is a DASH manifest. Successful `googlevideo/videoplayback`
+responses are classified as already browser-resolved tracks; playback byte
+windows are deduplicated by video/itag and grouped into one adaptive candidate.
+The profile waits for both video and audio, retains the signed track URLs only
+in the per-tab/session job state, and never evaluates YouTube player code or
+derives a signature. The Helper prefers an MP4/M4A pair for MP4 output, downloads
+the two files through the shared parallel Range engine, then invokes FFmpeg only
+for local muxing.
 
 The HLS resolver keeps multiple observations of a tokenized endpoint and does
 not let a later empty envelope replace an already usable media playlist. It
@@ -153,7 +164,8 @@ are transient diagnostics—not training labels or video-ad classifications.
 contract shared by the extension and `packages/media-helper/`. The helper has
 an adapter registry, a Direct HTTP MP4/WebM adapter with parallel byte-range
 requests, progress, cancellation, and resume metadata, plus FFmpeg-backed HLS
-and DASH VOD adapters. HLS AES-128 identity keys are supported when their HTTP(S)
+and DASH VOD adapters. A resolved-adaptive adapter reuses the Direct HTTP engine
+for separate video/audio tracks and performs a local FFmpeg mux. HLS AES-128 identity keys are supported when their HTTP(S)
 key URI is reachable; SAMPLE-AES and DRM key formats remain playback-only.
 Adaptive preflight rejects live/DRM streams, bounds
 manifest input, validates referenced network resources, and supports HLS

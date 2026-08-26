@@ -57,7 +57,7 @@ export const directHttpAdapter: DownloadAdapter = Object.freeze({
   execute: downloadDirectHttp,
 });
 
-async function downloadDirectHttp(
+export async function downloadDirectHttp(
   job: DownloadJob,
   context: DownloadContext,
 ): Promise<DownloadResult> {
@@ -476,7 +476,7 @@ async function writeAll(
 function requestHeaders(job: DownloadJob) {
   return {
     Referer: job.candidate.pageUrl,
-    "User-Agent": "AdsFriendlyMediaHelper/0.4",
+    "User-Agent": job.browserUserAgent || "AdsFriendlyMediaHelper/0.11",
   };
 }
 

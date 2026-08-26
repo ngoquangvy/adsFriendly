@@ -853,6 +853,126 @@ test("built helper downloads and muxes a static DASH VOD with FFmpeg", async (t)
   );
 });
 
+test("built helper downloads resolved adaptive tracks in parallel and muxes them", async (t) => {
+  if (
+    !(await executableAvailable("ffmpeg")) ||
+    !(await executableAvailable("ffprobe"))
+  ) {
+    t.skip("FFmpeg integration tools are not installed.");
+    return;
+  }
+  const fixtureDirectory = await mkdtemp(
+    join(tmpdir(), "adsfriendly-adaptive-fixture-"),
+  );
+  const outputDirectory = await mkdtemp(
+    join(tmpdir(), "adsfriendly-adaptive-output-"),
+  );
+  t.after(() => rm(fixtureDirectory, { recursive: true, force: true }));
+  t.after(() => rm(outputDirectory, { recursive: true, force: true }));
+  const videoPath = join(fixtureDirectory, "video.mp4");
+  const audioPath = join(fixtureDirectory, "audio.m4a");
+  await execFileAsync(
+    "ffmpeg",
+    [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-f",
+      "lavfi",
+      "-i",
+      "testsrc=size=160x90:rate=10",
+      "-t",
+      "1",
+      "-an",
+      "-c:v",
+      "libx264",
+      "-pix_fmt",
+      "yuv420p",
+      videoPath,
+    ],
+    { windowsHide: true },
+  );
+  await execFileAsync(
+    "ffmpeg",
+    [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-f",
+      "lavfi",
+      "-i",
+      "sine=frequency=660:sample_rate=44100",
+      "-t",
+      "1",
+      "-vn",
+      "-c:a",
+      "aac",
+      audioPath,
+    ],
+    { windowsHide: true },
+  );
+  const files = new Map([
+    ["/video.mp4", await readFile(videoPath)],
+    ["/audio.m4a", await readFile(audioPath)],
+  ]);
+  const server = createStaticRangeServer(files);
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const address = server.address();
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+  const child = spawnHelper();
+  t.after(() => child.kill());
+  const frames = createFrameReader(child.stdout);
+  child.stdin.write(
+    frame(
+      adaptiveDownloadRequest(
+        "adaptive-download-1",
+        `${baseUrl}/video.mp4`,
+        `${baseUrl}/audio.m4a`,
+        outputDirectory,
+      ),
+    ),
+  );
+  const started = await frames.next(
+    (event) => event.type === MEDIA_HELPER_EVENTS.DOWNLOAD_STARTED,
+  );
+  assert.equal(started.payload.adapterId, "adaptive-http");
+  const completed = await frames.next(
+    (event) =>
+      event.requestId === "adaptive-download-1" &&
+      [
+        MEDIA_HELPER_EVENTS.DOWNLOAD_COMPLETED,
+        MEDIA_HELPER_EVENTS.ERROR,
+      ].includes(event.type),
+  );
+  assert.equal(
+    completed.type,
+    MEDIA_HELPER_EVENTS.DOWNLOAD_COMPLETED,
+    completed.payload.message,
+  );
+  const probe = JSON.parse(
+    (
+      await execFileAsync(
+        "ffprobe",
+        [
+          "-v",
+          "error",
+          "-show_entries",
+          "stream=codec_type",
+          "-of",
+          "json",
+          completed.payload.outputPath,
+        ],
+        { windowsHide: true },
+      )
+    ).stdout,
+  );
+  assert.deepEqual(
+    [...new Set(probe.streams.map((stream) => stream.codec_type))].sort(),
+    ["audio", "video"],
+  );
+});
+
 function spawnHelper(extraEnv = {}) {
   const hostPath = fileURLToPath(
     new URL("../packages/media-helper/dist/host.cjs", import.meta.url),
@@ -967,6 +1087,54 @@ function dashDownloadRequest(jobId, manifestUrl, outputDirectory) {
   };
 }
 
+function adaptiveDownloadRequest(jobId, videoUrl, audioUrl, outputDirectory) {
+  return {
+    type: MEDIA_HELPER_REQUESTS.DOWNLOAD_START,
+    requestId: jobId,
+    protocolVersion: MEDIA_HELPER_PROTOCOL_VERSION,
+    payload: {
+      jobId,
+      connections: 4,
+      outputDirectory,
+      candidate: {
+        id: "adaptive-test",
+        kind: "adaptive",
+        pageUrl: videoUrl,
+        sourceUrl: videoUrl,
+        title: "fixture-adaptive",
+        duration: 1,
+        provider: "test",
+        acquisitionProfile: "resolved_tracks",
+        variants: [
+          {
+            id: "video-1",
+            type: "video",
+            sourceUrl: videoUrl,
+            mimeType: "video/mp4",
+            width: 160,
+            height: 90,
+          },
+        ],
+        audioTracks: [
+          {
+            id: "audio-1",
+            type: "audio",
+            sourceUrl: audioUrl,
+            mimeType: "audio/mp4",
+          },
+        ],
+        requestContext: {
+          referrer: videoUrl,
+          documentUrl: videoUrl,
+          method: "GET",
+          credentials: "omit",
+          requiresBrowserSession: false,
+        },
+      },
+    },
+  };
+}
+
 async function executableAvailable(command) {
   try {
     await execFileAsync(command, ["-version"], { windowsHide: true });
@@ -1013,6 +1181,42 @@ function createRangeServer(bytes, delayMs) {
       offset = next;
     };
     send();
+  });
+}
+
+function createStaticRangeServer(files) {
+  return createServer((request, response) => {
+    const pathname = new URL(request.url, "http://fixture").pathname;
+    const bytes = files.get(pathname);
+    if (!bytes) {
+      response.writeHead(404).end();
+      return;
+    }
+    response.setHeader("Accept-Ranges", "bytes");
+    response.setHeader(
+      "Content-Type",
+      pathname.endsWith(".m4a") ? "audio/mp4" : "video/mp4",
+    );
+    if (request.method === "HEAD") {
+      response.setHeader("Content-Length", bytes.length);
+      response.end();
+      return;
+    }
+    const match = request.headers.range?.match(/^bytes=(\d+)-(\d*)$/);
+    if (!match) {
+      response.writeHead(200, { "Content-Length": bytes.length });
+      response.end(bytes);
+      return;
+    }
+    const start = Number(match[1]);
+    const end = match[2]
+      ? Math.min(Number(match[2]), bytes.length - 1)
+      : bytes.length - 1;
+    response.writeHead(206, {
+      "Content-Length": end - start + 1,
+      "Content-Range": `bytes ${start}-${end}/${bytes.length}`,
+    });
+    response.end(bytes.subarray(start, end + 1));
   });
 }
 

@@ -494,7 +494,7 @@ var AdsFriendlyPopup = (() => {
         })
       ];
     }
-    if (!["hls", "dash"].includes(candidate.kind)) return [];
+    if (!["hls", "dash", "adaptive"].includes(candidate.kind)) return [];
     const profiles = [
       Object.freeze({
         id: "video-mp4",
@@ -558,13 +558,13 @@ var AdsFriendlyPopup = (() => {
       selectedVariant?.averageBandwidth,
       selectedVariant?.bandwidth
     );
-    if (candidate.kind === "dash" && bandwidth) {
+    if (["dash", "adaptive"].includes(candidate.kind) && bandwidth) {
       const audioBandwidth = [...candidate.audioTracks || []].map(
         (track) => firstPositiveNumber(track.averageBandwidth, track.bandwidth)
       ).filter(Boolean).sort((left, right) => right - left)[0];
       if (audioBandwidth) bandwidth += audioBandwidth;
     }
-    const estimatedBytes = duration && bandwidth ? Math.round(duration * bandwidth / 8) : null;
+    const estimatedBytes = candidate.kind === "adaptive" ? adaptiveContentLength(candidate) : duration && bandwidth ? Math.round(duration * bandwidth / 8) : null;
     return Object.freeze({
       resolution: resolution ? {
         width: positiveInteger(resolution.width),
@@ -573,8 +573,14 @@ var AdsFriendlyPopup = (() => {
       duration,
       bandwidth,
       estimatedBytes,
-      basis: estimatedBytes ? "manifest_bandwidth" : null
+      basis: estimatedBytes ? candidate.kind === "adaptive" ? "track_content_length" : "manifest_bandwidth" : null
     });
+  }
+  function adaptiveContentLength(candidate) {
+    const video = [...candidate.variants || []].sort(compareBandwidth)[0]?.contentLength;
+    const audio = [...candidate.audioTracks || []].sort(compareBandwidth)[0]?.contentLength;
+    const total = (Number(video) || 0) + (Number(audio) || 0);
+    return Number.isSafeInteger(total) && total > 0 ? total : null;
   }
   function compareBandwidth(left, right) {
     return (firstPositiveNumber(right.averageBandwidth, right.bandwidth) || 0) - (firstPositiveNumber(left.averageBandwidth, left.bandwidth) || 0) || (right.resolution?.height || 0) - (left.resolution?.height || 0);
@@ -666,6 +672,35 @@ var AdsFriendlyPopup = (() => {
         return { supported: false, reason: "DASH manifest has no media tracks." };
       return { supported: true, reason: null };
     }
+    if (candidate.kind === "adaptive") {
+      if (candidate.probeStatus !== "ready")
+        return {
+          supported: false,
+          reason: "Adaptive media is waiting for both video and audio tracks."
+        };
+      if (hasStrongDrmEvidence(candidate))
+        return { supported: false, reason: drmPlaybackOnlyReason(candidate) };
+      if (candidate.streamType !== "vod")
+        return {
+          supported: false,
+          reason: "Only completed adaptive media is supported."
+        };
+      if (!candidate.variants?.length || !candidate.audioTracks?.length)
+        return {
+          supported: false,
+          reason: "Adaptive media needs one resolved video and audio track."
+        };
+      try {
+        normalizeAdaptiveTracks(candidate.variants, "video");
+        normalizeAdaptiveTracks(candidate.audioTracks, "audio");
+      } catch {
+        return {
+          supported: false,
+          reason: "Adaptive track URLs are no longer available. Reload the page."
+        };
+      }
+      return { supported: true, reason: null };
+    }
     if (candidate.kind !== "hls")
       return {
         supported: false,
@@ -712,6 +747,32 @@ var AdsFriendlyPopup = (() => {
       return { supported: false, reason: "Unknown HLS playlist type." };
     return { supported: true, reason: null };
   }
+  function normalizeAdaptiveTracks(value, expectedType) {
+    if (!Array.isArray(value)) return [];
+    return value.filter((track) => track && typeof track === "object").slice(0, 24).map((track, index) => ({
+      id: optionalString(track.id) || `${expectedType}-${index + 1}`,
+      type: expectedType,
+      sourceUrl: requiredHttpUrl(
+        track.sourceUrl || track.url,
+        `candidate.${expectedType}Tracks[${index}].sourceUrl`
+      ),
+      mimeType: optionalString(track.mimeType),
+      codecs: optionalString(track.codecs),
+      itag: optionalString(track.itag),
+      bandwidth: optionalFiniteNumber(track.bandwidth),
+      averageBandwidth: optionalFiniteNumber(track.averageBandwidth),
+      contentLength: optionalNonNegativeInteger(track.contentLength),
+      width: optionalNonNegativeInteger(track.width || track.resolution?.width),
+      height: optionalNonNegativeInteger(
+        track.height || track.resolution?.height
+      ),
+      resolution: track.resolution && typeof track.resolution === "object" ? {
+        width: optionalNonNegativeInteger(track.resolution.width),
+        height: optionalNonNegativeInteger(track.resolution.height)
+      } : null,
+      qualityLabel: optionalString(track.qualityLabel)
+    }));
+  }
   function hasCurrentManifestHandoff(candidate) {
     return candidate.manifestHandoff?.mediaId === candidate.id && candidate.manifestHandoff?.manifestUrl === candidate.manifestUrl && Number(candidate.manifestHandoff?.expiresAt) > Date.now();
   }
@@ -746,6 +807,29 @@ var AdsFriendlyPopup = (() => {
       throw new Error(`[MediaDownload] ${field} must be an HTTP(S) URL.`);
     }
     return url;
+  }
+  function finiteNumber(value, field) {
+    const number = Number(value);
+    if (!Number.isFinite(number))
+      throw new Error(`[MediaDownload] ${field} must be finite.`);
+    return number;
+  }
+  function nonNegativeInteger(value, field) {
+    const number = Number(value);
+    if (!Number.isInteger(number) || number < 0)
+      throw new Error(`[MediaDownload] ${field} must be non-negative.`);
+    return number;
+  }
+  function optionalString(value) {
+    return typeof value === "string" && value ? value : null;
+  }
+  function optionalFiniteNumber(value) {
+    if (value === null || value === void 0) return null;
+    return finiteNumber(value, "optional number");
+  }
+  function optionalNonNegativeInteger(value) {
+    if (value === null || value === void 0) return null;
+    return nonNegativeInteger(value, "optional integer");
   }
 
   // src/media/download-job-view.js
@@ -1286,6 +1370,7 @@ var AdsFriendlyPopup = (() => {
         canDownloadDecryptedHls: helper.canDownloadDecryptedHls,
         canSelectContainer: helper.canSelectContainer,
         canDownloadDash: helper.canDownloadDash,
+        canDownloadAdaptive: helper.canDownloadAdaptive,
         error: helper.error
       } : null,
       items: items.map(mediaRenderFacts)
@@ -1318,9 +1403,13 @@ var AdsFriendlyPopup = (() => {
       (left, right) => (right.firstSeenAt || 0) - (left.firstSeenAt || 0) || String(left.id || "").localeCompare(String(right.id || ""))
     );
     const visible = [];
+    const adaptivePages = new Set(
+      diagnosedItems.filter((item) => item.kind === "adaptive").map((item) => item.pageUrl)
+    );
     const blobGroups = /* @__PURE__ */ new Map();
     const resolvedBlobGroupKeys = resolvedBlobGroupKeysByPage(diagnosedItems);
     for (const item of sorted) {
+      if (item.kind === "blob" && adaptivePages.has(item.pageUrl)) continue;
       if (item.kind !== "blob" && blobResolvedSourceIds.has(item.id)) continue;
       if (item.kind === "hls" && item.parentManifestIds?.length) continue;
       if (item.kind !== "blob") {
@@ -1350,7 +1439,8 @@ var AdsFriendlyPopup = (() => {
     const candidates = /* @__PURE__ */ new Map();
     for (const item of selectVisibleMediaItems(items, Number.MAX_SAFE_INTEGER)) {
       const candidate = item.selectedMediaId ? itemsById.get(item.selectedMediaId) || item.resolvedStream || item : item;
-      if (!["direct", "hls", "dash"].includes(candidate.kind)) continue;
+      if (!["direct", "hls", "dash", "adaptive"].includes(candidate.kind))
+        continue;
       candidates.set(candidate.id, candidate);
     }
     const availability = [...candidates.values()].map((candidate) => ({
@@ -1396,7 +1486,7 @@ var AdsFriendlyPopup = (() => {
       return "Media found \xB7 allow Media Helper connection to download.";
     if (helper.status === "not_installed")
       return "Media found \xB7 Media Helper is not installed.";
-    if (helper.status === "ready" && (helper.canDownloadDirect || helper.canDownloadHls || helper.canDownloadDash))
+    if (helper.status === "ready" && (helper.canDownloadDirect || helper.canDownloadHls || helper.canDownloadDash || helper.canDownloadAdaptive))
       return `Media Helper ${helper.helperVersion || ""} ready.`.trim();
     if (helper.status === "ready")
       return "Media Helper connected \xB7 downloader update required.";
@@ -1414,6 +1504,7 @@ var AdsFriendlyPopup = (() => {
     if (item.kind === "blob")
       return item.resolutionDiagnostic?.message || (item.relatedCount > 1 ? `${item.relatedCount} Blob signals \xB7 tracing source buffers` : item.blobTrace?.appendCount ? `${item.blobTrace.appendCount} buffers observed \xB7 matching source` : "Blob signal \xB7 tracing source buffers");
     if (item.kind === "direct") return "Direct video file";
+    if (item.kind === "adaptive") return adaptiveDetails(item);
     if (item.kind === "dash") return dashDetails(item);
     if (item.kind !== "hls") return "Media source found";
     if (item.resolvedStream && item.selectedMediaId && item.selectedMediaId !== item.id)
@@ -1464,6 +1555,8 @@ var AdsFriendlyPopup = (() => {
     const sourceUrl = item.resolvedStream?.manifestUrl || item.resolvedStream?.sourceUrl || item.manifestUrl || item.sourceUrl || "";
     try {
       const url = new URL(sourceUrl);
+      if (item.kind === "adaptive")
+        return readableMediaTitle(item.title) || (item.provider === "youtube" ? "YouTube video" : "Adaptive video");
       if (item.kind === "blob") {
         const title = readableMediaTitle(item.title);
         if (title) return title;
@@ -1509,6 +1602,25 @@ var AdsFriendlyPopup = (() => {
     if (item.audioTracks?.length) facts.push(`${item.audioTracks.length} audio`);
     if (item.subtitles?.length) facts.push(`${item.subtitles.length} subtitles`);
     appendProtectionFacts(facts, item);
+    return facts.join(" \xB7 ");
+  }
+  function adaptiveDetails(item) {
+    const facts = [item.provider === "youtube" ? "YouTube" : "Adaptive media"];
+    const videos = item.variants || [];
+    const audio = item.audioTracks || [];
+    if (videos.length) {
+      const best = [...videos].sort(compareVariantQuality)[0];
+      facts.push(
+        best.resolution?.height ? `${best.resolution.height}p` : `${videos.length} video track${videos.length === 1 ? "" : "s"}`
+      );
+    } else {
+      facts.push("waiting for video track");
+    }
+    facts.push(
+      audio.length ? `${audio.length} audio` : "waiting for audio track"
+    );
+    if (Number.isFinite(item.duration) && item.duration > 0)
+      facts.push(formatDuration2(item.duration));
     return facts.join(" \xB7 ");
   }
   function resolvedHlsDetails(item) {
@@ -1640,6 +1752,8 @@ ${blobTitleKey(item.title)}`;
       sourceUrl: item.sourceUrl,
       manifestUrl: item.manifestUrl,
       title: item.title,
+      provider: item.provider,
+      acquisitionProfile: item.acquisitionProfile,
       probeStatus: item.probeStatus,
       probeError: item.probeError,
       probeDiagnostic: item.probeDiagnostic,
@@ -1891,6 +2005,7 @@ ${blobTitleKey(item.title)}`;
     canDownloadHls: false,
     canDownloadDecryptedHls: false,
     canDownloadDash: false,
+    canDownloadAdaptive: false,
     canSelectContainer: false
   };
   var activeMediaTabId = null;
@@ -2176,7 +2291,7 @@ ${blobTitleKey(item.title)}`;
     row.append(kind, copy);
     const actions = document.createElement("div");
     actions.className = "media-actions";
-    if (["direct", "hls", "dash"].includes(item.kind) || item.kind === "blob" && item.selectedMediaId) {
+    if (["direct", "hls", "dash", "adaptive"].includes(item.kind) || item.kind === "blob" && item.selectedMediaId) {
       const downloadItem = itemsById.get(item.selectedMediaId) || item;
       actions.append(createMediaDownloadControl(item, downloadItem, tab, helper));
     }
@@ -2404,6 +2519,7 @@ ${blobTitleKey(item.title)}`;
     if (item.kind === "direct") return helper.canDownloadDirect === true;
     if (item.kind === "hls")
       return helper.canDownloadHls === true && (item.probeSource !== "decrypted_blob" || helper.canDownloadDecryptedHls === true);
+    if (item.kind === "adaptive") return helper.canDownloadAdaptive === true;
     return helper.canDownloadDash === true;
   }
   async function setupMediaHelper(button, helper) {
@@ -2448,6 +2564,7 @@ ${blobTitleKey(item.title)}`;
       canDownloadHls: false,
       canDownloadDecryptedHls: false,
       canDownloadDash: false,
+      canDownloadAdaptive: false,
       canSelectContainer: false,
       error: response?.error || "Could not read Media Helper status."
     };

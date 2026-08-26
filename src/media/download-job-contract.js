@@ -13,8 +13,13 @@ export const DOWNLOAD_JOB_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 export function normalizeMediaDownloadJob(value = {}) {
   const candidate = value.candidate;
-  if (!candidate || !["direct", "hls", "dash"].includes(candidate.kind)) {
-    throw new Error("[MediaDownload] Direct, HLS, or DASH candidate required.");
+  if (
+    !candidate ||
+    !["direct", "hls", "dash", "adaptive"].includes(candidate.kind)
+  ) {
+    throw new Error(
+      "[MediaDownload] Direct, HLS, DASH, or adaptive candidate required.",
+    );
   }
   const shared = {
     id: requiredString(candidate.id, "candidate.id"),
@@ -41,47 +46,71 @@ export function normalizeMediaDownloadJob(value = {}) {
               "candidate.sourceUrl",
             ),
           }
-        : {
-            ...shared,
-            manifestUrl: requiredHttpUrl(
-              candidate.manifestUrl,
-              "candidate.manifestUrl",
-            ),
-            probeStatus: candidate.probeStatus,
-            playlistType: candidate.playlistType,
-            streamType: candidate.streamType,
-            drm: candidate.drm || "none",
-            encryptionMethods: stringArray(candidate.encryptionMethods),
-            encryptionKeyFormats: stringArray(candidate.encryptionKeyFormats),
-            variants: objectArray(candidate.variants),
-            iframeVariants: objectArray(candidate.iframeVariants),
-            audioTracks: objectArray(candidate.audioTracks),
-            subtitles: objectArray(candidate.subtitles),
-            duration: optionalFiniteNumber(candidate.duration),
-            segmentCount: optionalNonNegativeInteger(candidate.segmentCount),
-            partialSegmentCount: optionalNonNegativeInteger(
-              candidate.partialSegmentCount,
-            ),
-            skippedSegmentCount: optionalNonNegativeInteger(
-              candidate.skippedSegmentCount,
-            ),
-            lowLatency: candidate.lowLatency === true,
-            probeSource:
-              candidate.probeSource === "decrypted_blob"
-                ? "decrypted_blob"
-                : candidate.probeSource || null,
-            manifestHandoff: normalizeDownloadManifestHandoff(
-              candidate.manifestHandoff,
-              candidate,
-            ),
-            keyHandoff: normalizeAesKeyHandoff(candidate.keyHandoff, candidate),
-            keyHandoffDiagnostic: normalizeAesKeyHandoffDiagnostic(
-              candidate.keyHandoffDiagnostic,
-            ),
-            requestContext: normalizeDownloadRequestContext(
-              candidate.resolvedRequestContext || candidate.requestContext,
-            ),
-          },
+        : candidate.kind === "adaptive"
+          ? {
+              ...shared,
+              sourceUrl: requiredHttpUrl(
+                candidate.sourceUrl,
+                "candidate.sourceUrl",
+              ),
+              provider: optionalString(candidate.provider),
+              acquisitionProfile: optionalString(candidate.acquisitionProfile),
+              probeStatus: candidate.probeStatus,
+              streamType: candidate.streamType,
+              variants: normalizeAdaptiveTracks(candidate.variants, "video"),
+              audioTracks: normalizeAdaptiveTracks(
+                candidate.audioTracks,
+                "audio",
+              ),
+              duration: optionalFiniteNumber(candidate.duration),
+              requestContext: normalizeDownloadRequestContext(
+                candidate.resolvedRequestContext || candidate.requestContext,
+              ),
+            }
+          : {
+              ...shared,
+              manifestUrl: requiredHttpUrl(
+                candidate.manifestUrl,
+                "candidate.manifestUrl",
+              ),
+              probeStatus: candidate.probeStatus,
+              playlistType: candidate.playlistType,
+              streamType: candidate.streamType,
+              drm: candidate.drm || "none",
+              encryptionMethods: stringArray(candidate.encryptionMethods),
+              encryptionKeyFormats: stringArray(candidate.encryptionKeyFormats),
+              variants: objectArray(candidate.variants),
+              iframeVariants: objectArray(candidate.iframeVariants),
+              audioTracks: objectArray(candidate.audioTracks),
+              subtitles: objectArray(candidate.subtitles),
+              duration: optionalFiniteNumber(candidate.duration),
+              segmentCount: optionalNonNegativeInteger(candidate.segmentCount),
+              partialSegmentCount: optionalNonNegativeInteger(
+                candidate.partialSegmentCount,
+              ),
+              skippedSegmentCount: optionalNonNegativeInteger(
+                candidate.skippedSegmentCount,
+              ),
+              lowLatency: candidate.lowLatency === true,
+              probeSource:
+                candidate.probeSource === "decrypted_blob"
+                  ? "decrypted_blob"
+                  : candidate.probeSource || null,
+              manifestHandoff: normalizeDownloadManifestHandoff(
+                candidate.manifestHandoff,
+                candidate,
+              ),
+              keyHandoff: normalizeAesKeyHandoff(
+                candidate.keyHandoff,
+                candidate,
+              ),
+              keyHandoffDiagnostic: normalizeAesKeyHandoffDiagnostic(
+                candidate.keyHandoffDiagnostic,
+              ),
+              requestContext: normalizeDownloadRequestContext(
+                candidate.resolvedRequestContext || candidate.requestContext,
+              ),
+            },
   };
 }
 
@@ -171,6 +200,35 @@ export function getMediaDownloadAvailability(candidate = {}) {
       return { supported: false, reason: "DASH manifest has no media tracks." };
     return { supported: true, reason: null };
   }
+  if (candidate.kind === "adaptive") {
+    if (candidate.probeStatus !== "ready")
+      return {
+        supported: false,
+        reason: "Adaptive media is waiting for both video and audio tracks.",
+      };
+    if (hasStrongDrmEvidence(candidate))
+      return { supported: false, reason: drmPlaybackOnlyReason(candidate) };
+    if (candidate.streamType !== "vod")
+      return {
+        supported: false,
+        reason: "Only completed adaptive media is supported.",
+      };
+    if (!candidate.variants?.length || !candidate.audioTracks?.length)
+      return {
+        supported: false,
+        reason: "Adaptive media needs one resolved video and audio track.",
+      };
+    try {
+      normalizeAdaptiveTracks(candidate.variants, "video");
+      normalizeAdaptiveTracks(candidate.audioTracks, "audio");
+    } catch {
+      return {
+        supported: false,
+        reason: "Adaptive track URLs are no longer available. Reload the page.",
+      };
+    }
+    return { supported: true, reason: null };
+  }
   if (candidate.kind !== "hls")
     return {
       supported: false,
@@ -231,6 +289,39 @@ export function getMediaDownloadAvailability(candidate = {}) {
   if (!["master", "media"].includes(candidate.playlistType))
     return { supported: false, reason: "Unknown HLS playlist type." };
   return { supported: true, reason: null };
+}
+
+function normalizeAdaptiveTracks(value, expectedType) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((track) => track && typeof track === "object")
+    .slice(0, 24)
+    .map((track, index) => ({
+      id: optionalString(track.id) || `${expectedType}-${index + 1}`,
+      type: expectedType,
+      sourceUrl: requiredHttpUrl(
+        track.sourceUrl || track.url,
+        `candidate.${expectedType}Tracks[${index}].sourceUrl`,
+      ),
+      mimeType: optionalString(track.mimeType),
+      codecs: optionalString(track.codecs),
+      itag: optionalString(track.itag),
+      bandwidth: optionalFiniteNumber(track.bandwidth),
+      averageBandwidth: optionalFiniteNumber(track.averageBandwidth),
+      contentLength: optionalNonNegativeInteger(track.contentLength),
+      width: optionalNonNegativeInteger(track.width || track.resolution?.width),
+      height: optionalNonNegativeInteger(
+        track.height || track.resolution?.height,
+      ),
+      resolution:
+        track.resolution && typeof track.resolution === "object"
+          ? {
+              width: optionalNonNegativeInteger(track.resolution.width),
+              height: optionalNonNegativeInteger(track.resolution.height),
+            }
+          : null,
+      qualityLabel: optionalString(track.qualityLabel),
+    }));
 }
 
 function hasCurrentManifestHandoff(candidate) {

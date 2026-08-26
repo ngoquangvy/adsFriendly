@@ -476,7 +476,9 @@ async function helperFailureFor(candidate, output) {
         ? candidate.probeSource === "decrypted_blob"
           ? helper.canDownloadHls && helper.canDownloadDecryptedHls
           : helper.canDownloadHls
-        : helper.canDownloadDash;
+        : candidate.kind === "dash"
+          ? helper.canDownloadDash
+          : helper.canDownloadAdaptive;
   if (capabilityReady) return null;
   return {
     status: "helper_not_ready",
@@ -488,7 +490,9 @@ async function helperFailureFor(candidate, output) {
           ? candidate.probeSource === "decrypted_blob"
             ? "This Media Helper build cannot accept a player-decrypted HLS manifest yet."
             : "This Media Helper build does not execute HLS downloads yet."
-          : "This Media Helper build does not execute DASH downloads yet.",
+          : candidate.kind === "dash"
+            ? "This Media Helper build does not execute DASH downloads yet."
+            : "This Media Helper build cannot mux resolved adaptive tracks yet.",
   };
 }
 

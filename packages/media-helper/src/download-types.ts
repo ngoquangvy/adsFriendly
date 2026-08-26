@@ -1,6 +1,6 @@
 export interface DownloadCandidate {
   id: string;
-  kind: "direct" | "hls" | "dash";
+  kind: "direct" | "hls" | "dash" | "adaptive";
   pageUrl: string;
   sourceUrl: string | null;
   manifestUrl: string | null;
@@ -8,6 +8,10 @@ export interface DownloadCandidate {
   mimeType: string | null;
   duration: number | null;
   segmentCount: number | null;
+  provider: string | null;
+  acquisitionProfile: string | null;
+  variants: AdaptiveHttpTrack[];
+  audioTracks: AdaptiveHttpTrack[];
   manifestHandoff: {
     kind: "hls";
     manifestUrl: string;
@@ -54,6 +58,21 @@ export interface DownloadCandidate {
     credentials: "omit" | "same-origin" | "include" | "unknown";
     requiresBrowserSession: boolean;
   } | null;
+}
+
+export interface AdaptiveHttpTrack {
+  id: string;
+  type: "video" | "audio";
+  sourceUrl: string;
+  mimeType: string | null;
+  codecs: string | null;
+  itag: string | null;
+  bandwidth: number | null;
+  averageBandwidth: number | null;
+  contentLength: number | null;
+  width: number | null;
+  height: number | null;
+  qualityLabel: string | null;
 }
 
 export interface DownloadJob {

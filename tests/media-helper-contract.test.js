@@ -407,6 +407,56 @@ test("helper accepts a normalized static DASH download", () => {
   assert.equal(payload.candidate.segmentCount, null);
 });
 
+test("helper accepts browser-resolved adaptive video and audio tracks", () => {
+  const payload = normalizeHelperDownloadPayload({
+    jobId: "adaptive-1",
+    connections: 8,
+    candidate: {
+      id: "youtube-video-1",
+      kind: "adaptive",
+      pageUrl: "https://www.youtube.com/watch?v=video-1",
+      sourceUrl: "https://r1.googlevideo.com/videoplayback?itag=137&sig=ok",
+      title: "Example video",
+      duration: 20,
+      provider: "youtube",
+      acquisitionProfile: "youtube_resolved_tracks",
+      variants: [
+        {
+          id: "youtube-video-137",
+          type: "video",
+          sourceUrl: "https://r1.googlevideo.com/videoplayback?itag=137&sig=ok",
+          mimeType: "video/mp4",
+          itag: "137",
+          width: 1920,
+          height: 1080,
+          contentLength: 1000,
+        },
+      ],
+      audioTracks: [
+        {
+          id: "youtube-audio-140",
+          type: "audio",
+          sourceUrl: "https://r1.googlevideo.com/videoplayback?itag=140&sig=ok",
+          mimeType: "audio/mp4",
+          itag: "140",
+          contentLength: 200,
+        },
+      ],
+      requestContext: {
+        documentUrl: "https://www.youtube.com/watch?v=video-1",
+        referrer: "https://www.youtube.com/",
+        credentials: "omit",
+      },
+    },
+  });
+
+  assert.equal(payload.candidate.kind, "adaptive");
+  assert.equal(payload.candidate.provider, "youtube");
+  assert.equal(payload.candidate.variants[0].height, 1080);
+  assert.equal(payload.candidate.audioTracks[0].itag, "140");
+  assert.equal(payload.output.container, "mp4");
+});
+
 test("native host errors distinguish a missing helper from a broken helper", () => {
   assert.equal(
     classifyNativeMessagingError("Specified native messaging host not found."),

@@ -61,6 +61,7 @@ let mediaHelperStatus = {
   canDownloadHls: false,
   canDownloadDecryptedHls: false,
   canDownloadDash: false,
+  canDownloadAdaptive: false,
   canSelectContainer: false,
 };
 let activeMediaTabId = null;
@@ -399,7 +400,7 @@ function createMediaItem(item, tab, helper, itemsById) {
   const actions = document.createElement("div");
   actions.className = "media-actions";
   if (
-    ["direct", "hls", "dash"].includes(item.kind) ||
+    ["direct", "hls", "dash", "adaptive"].includes(item.kind) ||
     (item.kind === "blob" && item.selectedMediaId)
   ) {
     const downloadItem = itemsById.get(item.selectedMediaId) || item;
@@ -660,6 +661,7 @@ function helperCanDownload(item, helper) {
       (item.probeSource !== "decrypted_blob" ||
         helper.canDownloadDecryptedHls === true)
     );
+  if (item.kind === "adaptive") return helper.canDownloadAdaptive === true;
   return helper.canDownloadDash === true;
 }
 
@@ -708,6 +710,7 @@ async function readMediaHelperStatus(force = false) {
         canDownloadHls: false,
         canDownloadDecryptedHls: false,
         canDownloadDash: false,
+        canDownloadAdaptive: false,
         canSelectContainer: false,
         error: response?.error || "Could not read Media Helper status.",
       };

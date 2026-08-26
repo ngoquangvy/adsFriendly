@@ -5,6 +5,10 @@ import {
 } from "../media/detection.js";
 import { EVENTS, createRegisteredEvent } from "../runtime/event-catalog.js";
 import { chooseMediaTitle } from "../media/media-title.js";
+import {
+  createYouTubeAdaptiveCandidate,
+  parseYouTubePlaybackTrack,
+} from "../media/youtube-track-profile.js";
 
 const OBSERVED_RESOURCE_TYPES = Object.freeze([
   "xmlhttprequest",
@@ -40,7 +44,13 @@ export function createMediaRequestObservation(details = {}) {
   )
     return null;
   const mimeType = responseMimeType(details.responseHeaders);
-  const kind = classifyMediaSource(details.url, mimeType);
+  const adaptiveTrack = parseYouTubePlaybackTrack(details.url, {
+    mimeType,
+    responseHeaders: details.responseHeaders,
+  });
+  const kind = adaptiveTrack?.type
+    ? "adaptive"
+    : classifyMediaSource(details.url, mimeType);
   if (!kind) return null;
   return Object.freeze({
     requestId: String(details.requestId || ""),
@@ -53,6 +63,7 @@ export function createMediaRequestObservation(details = {}) {
     url: details.url,
     mimeType,
     kind,
+    adaptiveTrack,
     method: String(details.method || "GET").toUpperCase(),
     statusCode: Number(details.statusCode),
     fromCache: details.fromCache === true,
@@ -66,13 +77,20 @@ async function recordObservation(observation) {
   const tab = await chrome.tabs.get(observation.tabId);
   if (!tab?.url?.startsWith("http")) return;
   const frameContext = await resolveFrameContext(observation);
-  const candidate = createMediaCandidateFromSource({
-    pageUrl: tab.url,
-    sourceUrl: observation.url,
-    mimeType: observation.mimeType,
-    title: chooseMediaTitle(null, tab.title, tab.url),
-    detectedBy: "network",
-  });
+  const title = chooseMediaTitle(null, tab.title, tab.url);
+  const candidate = observation.adaptiveTrack
+    ? createYouTubeAdaptiveCandidate({
+        pageUrl: tab.url,
+        title,
+        track: observation.adaptiveTrack,
+      })
+    : createMediaCandidateFromSource({
+        pageUrl: tab.url,
+        sourceUrl: observation.url,
+        mimeType: observation.mimeType,
+        title,
+        detectedBy: "network",
+      });
   if (!candidate) return;
   candidate.requestContexts = [
     {

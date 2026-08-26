@@ -4,6 +4,7 @@ var AdsFriendlyMediaFrame = (() => {
     DIRECT: "direct",
     HLS: "hls",
     DASH: "dash",
+    ADAPTIVE: "adaptive",
     BLOB: "blob"
   });
   var MEDIA_DETECTION_SOURCES = Object.freeze({
@@ -58,6 +59,8 @@ var AdsFriendlyMediaFrame = (() => {
       kind: enumValue(value.kind, Object.values(MEDIA_KINDS), "kind"),
       title: optionalString(value.title),
       mimeType: optionalString(value.mimeType),
+      provider: optionalString(value.provider),
+      acquisitionProfile: optionalString(value.acquisitionProfile),
       variants: normalizeArray(value.variants),
       iframeVariants: normalizeArray(value.iframeVariants),
       audioTracks: normalizeArray(value.audioTracks),

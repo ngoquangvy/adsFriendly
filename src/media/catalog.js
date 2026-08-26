@@ -41,10 +41,15 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
         existing &&
         existing.probeStatus !== MEDIA_PROBE_STATES.DISCOVERED &&
         candidate.probeStatus === MEDIA_PROBE_STATES.DISCOVERED;
+      const adaptiveTracks =
+        candidate.kind === MEDIA_KINDS.ADAPTIVE
+          ? mergeAdaptiveTracks(existing, candidate)
+          : null;
       const item = {
         ...(existing || {}),
         ...candidate,
         ...(preserveExistingProbe ? probeFields(existing) : {}),
+        ...(adaptiveTracks || {}),
         duration: candidate.duration ?? existing?.duration ?? null,
         resolution: candidate.resolution ?? existing?.resolution ?? null,
         requestContexts: mergeRequestContexts(
@@ -629,6 +634,62 @@ function trimOldest(items, maximum) {
 
 function uniqueStrings(values) {
   return [...new Set(values.filter((value) => typeof value === "string"))];
+}
+
+function mergeAdaptiveTracks(existing, candidate) {
+  const variants = mergeTrackList(existing?.variants, candidate.variants);
+  const audioTracks = mergeTrackList(
+    existing?.audioTracks,
+    candidate.audioTracks,
+  );
+  const bestVideo = [...variants].sort(compareAdaptiveTrackQuality)[0] || null;
+  const bestAudio =
+    [...audioTracks].sort(compareAdaptiveTrackQuality)[0] || null;
+  return {
+    variants,
+    audioTracks,
+    sourceUrl:
+      bestVideo?.sourceUrl ||
+      existing?.sourceUrl ||
+      candidate.sourceUrl ||
+      bestAudio?.sourceUrl ||
+      null,
+    mimeType: bestVideo?.mimeType || candidate.mimeType || existing?.mimeType,
+    resolution:
+      bestVideo?.resolution || candidate.resolution || existing?.resolution,
+    bandwidth:
+      bestVideo?.bandwidth || candidate.bandwidth || existing?.bandwidth,
+    averageBandwidth:
+      bestVideo?.averageBandwidth ||
+      candidate.averageBandwidth ||
+      existing?.averageBandwidth,
+    probeStatus:
+      variants.length && audioTracks.length
+        ? MEDIA_PROBE_STATES.READY
+        : MEDIA_PROBE_STATES.DISCOVERED,
+    streamType: "vod",
+  };
+}
+
+function mergeTrackList(existing = [], incoming = []) {
+  const tracks = new Map();
+  for (const track of [...(existing || []), ...(incoming || [])]) {
+    if (!track || typeof track !== "object") continue;
+    const key =
+      track.id || `${track.type || "track"}:${track.itag || track.sourceUrl}`;
+    tracks.set(key, { ...(tracks.get(key) || {}), ...track });
+  }
+  return [...tracks.values()];
+}
+
+function compareAdaptiveTrackQuality(left, right) {
+  return (
+    (right.resolution?.height || right.height || 0) -
+      (left.resolution?.height || left.height || 0) ||
+    (right.averageBandwidth || right.bandwidth || 0) -
+      (left.averageBandwidth || left.bandwidth || 0) ||
+    (right.contentLength || 0) - (left.contentLength || 0)
+  );
 }
 
 function cloneItem(item, resolution = null) {

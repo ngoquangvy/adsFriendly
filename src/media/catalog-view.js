@@ -25,6 +25,7 @@ export function createMediaCatalogViewSignature({
           canDownloadDecryptedHls: helper.canDownloadDecryptedHls,
           canSelectContainer: helper.canSelectContainer,
           canDownloadDash: helper.canDownloadDash,
+          canDownloadAdaptive: helper.canDownloadAdaptive,
           error: helper.error,
         }
       : null,
@@ -70,9 +71,15 @@ export function selectVisibleMediaItems(items = [], maximum = 8) {
       String(left.id || "").localeCompare(String(right.id || "")),
   );
   const visible = [];
+  const adaptivePages = new Set(
+    diagnosedItems
+      .filter((item) => item.kind === "adaptive")
+      .map((item) => item.pageUrl),
+  );
   const blobGroups = new Map();
   const resolvedBlobGroupKeys = resolvedBlobGroupKeysByPage(diagnosedItems);
   for (const item of sorted) {
+    if (item.kind === "blob" && adaptivePages.has(item.pageUrl)) continue;
     if (item.kind !== "blob" && blobResolvedSourceIds.has(item.id)) continue;
     if (item.kind === "hls" && item.parentManifestIds?.length) continue;
     if (item.kind !== "blob") {
@@ -105,7 +112,8 @@ export function getMediaCatalogDownloadState(items = []) {
     const candidate = item.selectedMediaId
       ? itemsById.get(item.selectedMediaId) || item.resolvedStream || item
       : item;
-    if (!["direct", "hls", "dash"].includes(candidate.kind)) continue;
+    if (!["direct", "hls", "dash", "adaptive"].includes(candidate.kind))
+      continue;
     candidates.set(candidate.id, candidate);
   }
   const availability = [...candidates.values()].map((candidate) => ({
@@ -161,7 +169,8 @@ export function formatMediaHelperSummary(helper, downloadState) {
     helper.status === "ready" &&
     (helper.canDownloadDirect ||
       helper.canDownloadHls ||
-      helper.canDownloadDash)
+      helper.canDownloadDash ||
+      helper.canDownloadAdaptive)
   )
     return `Media Helper ${helper.helperVersion || ""} ready.`.trim();
   if (helper.status === "ready")
@@ -188,6 +197,7 @@ export function formatMediaDetails(item) {
           : "Blob signal · tracing source buffers")
     );
   if (item.kind === "direct") return "Direct video file";
+  if (item.kind === "adaptive") return adaptiveDetails(item);
   if (item.kind === "dash") return dashDetails(item);
   if (item.kind !== "hls") return "Media source found";
 
@@ -283,6 +293,11 @@ export function formatMediaName(item) {
     "";
   try {
     const url = new URL(sourceUrl);
+    if (item.kind === "adaptive")
+      return (
+        readableMediaTitle(item.title) ||
+        (item.provider === "youtube" ? "YouTube video" : "Adaptive video")
+      );
     if (item.kind === "blob") {
       const title = readableMediaTitle(item.title);
       if (title) return title;
@@ -337,6 +352,28 @@ function dashDetails(item) {
   if (item.audioTracks?.length) facts.push(`${item.audioTracks.length} audio`);
   if (item.subtitles?.length) facts.push(`${item.subtitles.length} subtitles`);
   appendProtectionFacts(facts, item);
+  return facts.join(" · ");
+}
+
+function adaptiveDetails(item) {
+  const facts = [item.provider === "youtube" ? "YouTube" : "Adaptive media"];
+  const videos = item.variants || [];
+  const audio = item.audioTracks || [];
+  if (videos.length) {
+    const best = [...videos].sort(compareVariantQuality)[0];
+    facts.push(
+      best.resolution?.height
+        ? `${best.resolution.height}p`
+        : `${videos.length} video track${videos.length === 1 ? "" : "s"}`,
+    );
+  } else {
+    facts.push("waiting for video track");
+  }
+  facts.push(
+    audio.length ? `${audio.length} audio` : "waiting for audio track",
+  );
+  if (Number.isFinite(item.duration) && item.duration > 0)
+    facts.push(formatDuration(item.duration));
   return facts.join(" · ");
 }
 
@@ -505,6 +542,8 @@ function mediaRenderFacts(item) {
     sourceUrl: item.sourceUrl,
     manifestUrl: item.manifestUrl,
     title: item.title,
+    provider: item.provider,
+    acquisitionProfile: item.acquisitionProfile,
     probeStatus: item.probeStatus,
     probeError: item.probeError,
     probeDiagnostic: item.probeDiagnostic,
