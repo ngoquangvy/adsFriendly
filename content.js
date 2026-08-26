@@ -3364,9 +3364,23 @@ var AdsFriendlyContent = (() => {
         type: "PREPARE_MEDIA_CONTEXTUAL_PROBE",
         mediaId,
         manifestUrl,
-        parentDocumentUrl: document.referrer
+        parentDocumentUrl: document.referrer,
+        frameDocumentUrl: location.href
       }).then((response) => {
-        if (stopped || response?.status !== "prepared") return;
+        if (stopped) return;
+        if (response?.status !== "prepared") {
+          reportProbeDiagnostic(
+            { id: mediaId, kind, manifestUrl },
+            "failed",
+            `contextual_probe_${response?.status || "failed"}`
+          );
+          return;
+        }
+        reportProbeDiagnostic(
+          { id: mediaId, kind, manifestUrl },
+          "dispatched",
+          "contextual_probe_prepared"
+        );
         window.postMessage(
           {
             source: "adsfriendly-content",

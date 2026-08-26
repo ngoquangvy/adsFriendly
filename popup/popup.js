@@ -912,7 +912,7 @@ var AdsFriendlyPopup = (() => {
       return diagnostic(S.PLAYBACK_ONLY, D.BLOCKED, "drm_playback_only", {
         message: "Playback only \xB7 DRM protected"
       });
-    if (isWeakSampleAesSignal(target) && !isFfmpegCompatibleSampleAes(target))
+    if (target.probeStatus === "ready" && isWeakSampleAesSignal(target) && !isFfmpegCompatibleSampleAes(target))
       return diagnostic(
         S.PLAYER_SEGMENT_RESOLUTION,
         D.WAITING,
@@ -942,6 +942,14 @@ var AdsFriendlyPopup = (() => {
         "hls_manifest_unsupported",
         { message: "Manifest probe \xB7 HLS format not handled" }
       );
+    const latestTargetProbe = latestProbeDiagnostic([target]);
+    if (latestTargetProbe?.code?.startsWith("contextual_probe_")) {
+      const described2 = describeProbeDiagnostic(latestTargetProbe);
+      return diagnostic(S.MANIFEST_PROBE, described2.status, described2.code, {
+        probeDiagnostic: latestTargetProbe,
+        message: `Manifest probe \xB7 ${described2.message}`
+      });
+    }
     const children = findObservedChildren(target, items);
     const readyChildren = children.filter(isUsableChild);
     const failedChildren = children.filter(
@@ -1045,6 +1053,24 @@ var AdsFriendlyPopup = (() => {
       return described(D.WAITING, code, "scheduled in player frame");
     if (code === "manifest_fetch_dispatched")
       return described(D.WAITING, code, "request sent \xB7 waiting for response");
+    if (code === "contextual_probe_prepared")
+      return described(
+        D.WAITING,
+        code,
+        "Referer/Origin prepared \xB7 retry starting"
+      );
+    if (code === "contextual_manifest_fetch_dispatched")
+      return described(
+        D.WAITING,
+        code,
+        "contextual request sent \xB7 waiting for response"
+      );
+    if (code.startsWith("contextual_probe_"))
+      return described(
+        D.FAILED,
+        code,
+        `context setup failed \xB7 ${code.slice("contextual_probe_".length)}`
+      );
     if (code === "content_duplicate")
       return described(D.WAITING, code, "duplicate schedule skipped");
     if (code === "probe_gate_duplicate")

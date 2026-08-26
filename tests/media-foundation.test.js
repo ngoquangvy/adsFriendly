@@ -24,6 +24,7 @@ import { normalizeMediaManifestHandoff as normalizeStoredManifestHandoff } from 
 import {
   createContextualProbeInit,
   readXhrResponseBody,
+  shouldRequestContextualProbeRetry,
   tryHlsProbeAttempts,
 } from "../src/main-world/network-capture.js";
 import { createRequestContextRegistry } from "../src/main-world/request-context-registry.js";
@@ -449,6 +450,46 @@ test("resolution diagnostics wait for a non-identity SAMPLE-AES key format", () 
   assert.equal(
     result.message,
     "Player URL resolution · waiting for resolved media segments",
+  );
+});
+
+test("resolution diagnostics report probe state before SAMPLE-AES resolution", () => {
+  const result = diagnoseMediaResolution({
+    id: "sample-aes-discovered",
+    kind: "hls",
+    probeStatus: "discovered",
+    playlistType: "unknown",
+    streamType: "unknown",
+    drm: "suspected",
+    encryptionScheme: "sample-aes",
+    drmEvidence: ["hls-sample-aes"],
+  });
+  assert.equal(result.stage, MEDIA_RESOLUTION_STAGES.MANIFEST_PROBE);
+  assert.equal(result.status, "waiting");
+  assert.equal(result.code, "hls_probe_pending");
+  assert.equal(result.message, "Manifest probe · HLS response not parsed yet");
+});
+
+test("resolution diagnostics expose contextual probe preparation", () => {
+  const result = diagnoseMediaResolution({
+    id: "contextual-hls",
+    kind: "hls",
+    probeStatus: "discovered",
+    playlistType: "unknown",
+    probeDiagnostics: [
+      {
+        phase: "dispatched",
+        code: "contextual_probe_prepared",
+        observedAt: 2000,
+      },
+    ],
+  });
+  assert.equal(result.stage, MEDIA_RESOLUTION_STAGES.MANIFEST_PROBE);
+  assert.equal(result.status, "waiting");
+  assert.equal(result.code, "contextual_probe_prepared");
+  assert.equal(
+    result.message,
+    "Manifest probe · Referer/Origin prepared · retry starting",
   );
 });
 
@@ -1973,7 +2014,7 @@ test("request context keeps routing facts but discards headers and cookies", () 
   assert.equal("cookie" in context, false);
 });
 
-test("403 retry scopes its temporary Referer rule to one manifest and tab", () => {
+test("contextual retry scopes Referer and frame Origin to one manifest and tab", () => {
   const manifestUrl =
     "https://embed.streamc.xyz/hls/token/master.m3u8?d=1&sig=a.b";
   const rule = createMediaProbeRefererRule({
@@ -1981,6 +2022,7 @@ test("403 retry scopes its temporary Referer rule to one manifest and tab", () =
     tabId: 42,
     manifestUrl,
     parentDocumentUrl: "https://phimvietsub.click/watch/1",
+    frameDocumentUrl: "https://embed.streamc.xyz/player/abc",
   });
   assert.deepEqual(rule.condition.tabIds, [42]);
   assert.deepEqual(rule.condition.resourceTypes, ["xmlhttprequest"]);
@@ -1991,7 +2033,26 @@ test("403 retry scopes its temporary Referer rule to one manifest and tab", () =
       operation: "set",
       value: "https://phimvietsub.click/watch/1",
     },
+    {
+      header: "Origin",
+      operation: "set",
+      value: "https://embed.streamc.xyz",
+    },
   ]);
+});
+
+test("contextual probe retries 401, 403, and blocked fetches only once", () => {
+  assert.equal(shouldRequestContextualProbeRetry("manifest_http_401"), true);
+  assert.equal(shouldRequestContextualProbeRetry("manifest_http_403"), true);
+  assert.equal(
+    shouldRequestContextualProbeRetry("fallback_fetch_blocked"),
+    true,
+  );
+  assert.equal(shouldRequestContextualProbeRetry("manifest_http_404"), false);
+  assert.equal(
+    shouldRequestContextualProbeRetry("fallback_fetch_blocked", true),
+    false,
+  );
 });
 
 test("fallback probe gate accepts HTTP manifests once and stays bounded", () => {

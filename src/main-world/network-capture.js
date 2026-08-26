@@ -274,7 +274,10 @@ function installFallbackProbe({
     const observedRequestContext = requestContexts.find(manifestUrl);
     reportProbeDiagnostic(candidate, {
       phase: "dispatched",
-      code: "manifest_fetch_dispatched",
+      code:
+        messageEvent.data.contextualRetry === true
+          ? "contextual_manifest_fetch_dispatched"
+          : "manifest_fetch_dispatched",
     });
     fetchManifestWithTimeout(
       originalFetch,
@@ -336,8 +339,10 @@ function installFallbackProbe({
         });
         reportProbeFailure(manifestUrl, candidate, errorCode);
         if (
-          errorCode === "manifest_http_403" &&
-          messageEvent.data.contextualRetry !== true
+          shouldRequestContextualProbeRetry(
+            errorCode,
+            messageEvent.data.contextualRetry === true,
+          )
         ) {
           notifyContentScript({
             type: "MEDIA_PROBE_CONTEXT_REQUIRED",
@@ -353,6 +358,18 @@ function installFallbackProbe({
     stopped = true;
     window.removeEventListener("message", onProbeRequest);
   };
+}
+
+export function shouldRequestContextualProbeRetry(
+  errorCode,
+  contextualRetry = false,
+) {
+  if (contextualRetry) return false;
+  return [
+    "manifest_http_401",
+    "manifest_http_403",
+    "fallback_fetch_blocked",
+  ].includes(String(errorCode || ""));
 }
 
 export async function tryHlsProbeAttempts({

@@ -6190,14 +6190,16 @@ ${body}`;
   async function prepareMediaProbeReferer({
     tabId,
     manifestUrl,
-    parentDocumentUrl
+    parentDocumentUrl,
+    frameDocumentUrl
   }) {
     const ruleId = nextProbeRuleId();
     const rule = createMediaProbeRefererRule({
       ruleId,
       tabId,
       manifestUrl,
-      parentDocumentUrl
+      parentDocumentUrl,
+      frameDocumentUrl
     });
     const support = await chrome.declarativeNetRequest.isRegexSupported({
       regex: rule.condition.regexFilter
@@ -6219,7 +6221,8 @@ ${body}`;
     ruleId,
     tabId,
     manifestUrl,
-    parentDocumentUrl
+    parentDocumentUrl,
+    frameDocumentUrl = parentDocumentUrl
   }) {
     if (!Number.isInteger(ruleId) || ruleId <= 0)
       throw new TypeError("Media probe rule needs a positive integer ID.");
@@ -6227,13 +6230,15 @@ ${body}`;
       throw new TypeError("Media probe rule needs a valid tab ID.");
     const manifest = requiredHttpUrl3(manifestUrl, "manifestUrl");
     const parent = requiredHttpUrl3(parentDocumentUrl, "parentDocumentUrl");
+    const frame = requiredHttpUrl3(frameDocumentUrl, "frameDocumentUrl");
     return {
       id: ruleId,
       priority: 1,
       action: {
         type: "modifyHeaders",
         requestHeaders: [
-          { header: "Referer", operation: "set", value: parent.href }
+          { header: "Referer", operation: "set", value: parent.href },
+          { header: "Origin", operation: "set", value: frame.origin }
         ]
       },
       condition: {
@@ -6612,10 +6617,13 @@ ${body}`;
         (item) => item.id === message.mediaId && item.manifestUrl === message.manifestUrl && item.frameId === frameId
       );
       if (!candidate) return { status: "unknown_media" };
+      if (candidate.frameUrl && !sameOrigin2(message.frameDocumentUrl, candidate.frameUrl))
+        return { status: "invalid_frame" };
       return prepareMediaProbeReferer({
         tabId,
         manifestUrl: candidate.manifestUrl,
-        parentDocumentUrl: message.parentDocumentUrl
+        parentDocumentUrl: message.parentDocumentUrl,
+        frameDocumentUrl: candidate.frameUrl || message.frameDocumentUrl
       });
     }
     if (message.type === "GET_MEDIA_CATALOG") {

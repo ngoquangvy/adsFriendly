@@ -279,10 +279,16 @@ async function route(message, sender) {
         item.frameId === frameId,
     );
     if (!candidate) return { status: "unknown_media" };
+    if (
+      candidate.frameUrl &&
+      !sameOrigin(message.frameDocumentUrl, candidate.frameUrl)
+    )
+      return { status: "invalid_frame" };
     return prepareMediaProbeReferer({
       tabId,
       manifestUrl: candidate.manifestUrl,
       parentDocumentUrl: message.parentDocumentUrl,
+      frameDocumentUrl: candidate.frameUrl || message.frameDocumentUrl,
     });
   }
   if (message.type === "GET_MEDIA_CATALOG") {

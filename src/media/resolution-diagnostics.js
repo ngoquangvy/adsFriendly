@@ -73,7 +73,11 @@ export function diagnoseMediaResolution(item, items = []) {
     return diagnostic(S.PLAYBACK_ONLY, D.BLOCKED, "drm_playback_only", {
       message: "Playback only · DRM protected",
     });
-  if (isWeakSampleAesSignal(target) && !isFfmpegCompatibleSampleAes(target))
+  if (
+    target.probeStatus === "ready" &&
+    isWeakSampleAesSignal(target) &&
+    !isFfmpegCompatibleSampleAes(target)
+  )
     return diagnostic(
       S.PLAYER_SEGMENT_RESOLUTION,
       D.WAITING,
@@ -114,6 +118,15 @@ export function diagnoseMediaResolution(item, items = []) {
       "hls_manifest_unsupported",
       { message: "Manifest probe · HLS format not handled" },
     );
+
+  const latestTargetProbe = latestProbeDiagnostic([target]);
+  if (latestTargetProbe?.code?.startsWith("contextual_probe_")) {
+    const described = describeProbeDiagnostic(latestTargetProbe);
+    return diagnostic(S.MANIFEST_PROBE, described.status, described.code, {
+      probeDiagnostic: latestTargetProbe,
+      message: `Manifest probe · ${described.message}`,
+    });
+  }
 
   const children = findObservedChildren(target, items);
   const readyChildren = children.filter(isUsableChild);
@@ -247,6 +260,24 @@ function describeProbeDiagnostic(diagnostic) {
     return described(D.WAITING, code, "scheduled in player frame");
   if (code === "manifest_fetch_dispatched")
     return described(D.WAITING, code, "request sent · waiting for response");
+  if (code === "contextual_probe_prepared")
+    return described(
+      D.WAITING,
+      code,
+      "Referer/Origin prepared · retry starting",
+    );
+  if (code === "contextual_manifest_fetch_dispatched")
+    return described(
+      D.WAITING,
+      code,
+      "contextual request sent · waiting for response",
+    );
+  if (code.startsWith("contextual_probe_"))
+    return described(
+      D.FAILED,
+      code,
+      `context setup failed · ${code.slice("contextual_probe_".length)}`,
+    );
   if (code === "content_duplicate")
     return described(D.WAITING, code, "duplicate schedule skipped");
   if (code === "probe_gate_duplicate")

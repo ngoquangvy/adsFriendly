@@ -6,6 +6,7 @@ export async function prepareMediaProbeReferer({
   tabId,
   manifestUrl,
   parentDocumentUrl,
+  frameDocumentUrl,
 }) {
   const ruleId = nextProbeRuleId();
   const rule = createMediaProbeRefererRule({
@@ -13,6 +14,7 @@ export async function prepareMediaProbeReferer({
     tabId,
     manifestUrl,
     parentDocumentUrl,
+    frameDocumentUrl,
   });
   const support = await chrome.declarativeNetRequest.isRegexSupported({
     regex: rule.condition.regexFilter,
@@ -37,6 +39,7 @@ export function createMediaProbeRefererRule({
   tabId,
   manifestUrl,
   parentDocumentUrl,
+  frameDocumentUrl = parentDocumentUrl,
 }) {
   if (!Number.isInteger(ruleId) || ruleId <= 0)
     throw new TypeError("Media probe rule needs a positive integer ID.");
@@ -44,6 +47,7 @@ export function createMediaProbeRefererRule({
     throw new TypeError("Media probe rule needs a valid tab ID.");
   const manifest = requiredHttpUrl(manifestUrl, "manifestUrl");
   const parent = requiredHttpUrl(parentDocumentUrl, "parentDocumentUrl");
+  const frame = requiredHttpUrl(frameDocumentUrl, "frameDocumentUrl");
   return {
     id: ruleId,
     priority: 1,
@@ -51,6 +55,7 @@ export function createMediaProbeRefererRule({
       type: "modifyHeaders",
       requestHeaders: [
         { header: "Referer", operation: "set", value: parent.href },
+        { header: "Origin", operation: "set", value: frame.origin },
       ],
     },
     condition: {
