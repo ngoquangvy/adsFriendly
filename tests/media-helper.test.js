@@ -102,7 +102,7 @@ test("built helper downloads direct media with ranges, cancellation, and resume"
   assert.deepEqual(await readFile(completed.payload.outputPath), bytes);
 });
 
-test("built helper remuxes a discontinuous HLS VOD with FFmpeg", async (t) => {
+test("built helper remuxes an inline decrypted HLS VOD when its manifest URL is unavailable", async (t) => {
   if (
     !(await executableAvailable("ffmpeg")) ||
     !(await executableAvailable("ffprobe"))
@@ -166,6 +166,10 @@ test("built helper remuxes a discontinuous HLS VOD with FFmpeg", async (t) => {
       const filename = basename(
         new URL(request.url, "http://fixture").pathname,
       );
+      if (filename === "index.m3u8") {
+        response.writeHead(403).end();
+        return;
+      }
       const bytes = await readFile(join(fixtureDirectory, filename));
       response.setHeader(
         "content-type",
@@ -186,7 +190,14 @@ test("built helper remuxes a discontinuous HLS VOD with FFmpeg", async (t) => {
   t.after(() => child.kill());
   const frames = createFrameReader(child.stdout);
   child.stdin.write(
-    frame(hlsDownloadRequest("hls-download-1", manifestUrl, outputDirectory)),
+    frame(
+      hlsDownloadRequest(
+        "hls-download-1",
+        manifestUrl,
+        outputDirectory,
+        playlist.replace(/(segment000\.ts\r?\n)/, "$1#EXT-X-DISCONTINUITY\n"),
+      ),
+    ),
   );
   const started = await frames.next(
     (event) => event.type === MEDIA_HELPER_EVENTS.DOWNLOAD_STARTED,
@@ -516,7 +527,12 @@ function downloadRequest(jobId, sourceUrl, outputDirectory) {
   };
 }
 
-function hlsDownloadRequest(jobId, manifestUrl, outputDirectory) {
+function hlsDownloadRequest(
+  jobId,
+  manifestUrl,
+  outputDirectory,
+  manifestBody = null,
+) {
   return {
     type: MEDIA_HELPER_REQUESTS.DOWNLOAD_START,
     requestId: jobId,
@@ -541,6 +557,14 @@ function hlsDownloadRequest(jobId, manifestUrl, outputDirectory) {
           credentials: "omit",
           requiresBrowserSession: false,
         },
+        manifestHandoff: manifestBody
+          ? {
+              kind: "hls",
+              manifestUrl,
+              body: manifestBody,
+              revisionId: "fixture-inline-manifest",
+            }
+          : null,
       },
     },
   };

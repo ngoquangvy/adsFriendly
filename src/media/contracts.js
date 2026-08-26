@@ -333,6 +333,19 @@ export function normalizeBlobSourceTrace(value = {}) {
   };
 }
 
+export function normalizeMediaManifestHandoff(value = {}) {
+  return {
+    mediaId: requiredString(value.mediaId, "mediaId"),
+    pageUrl: requiredString(value.pageUrl, "pageUrl"),
+    manifestUrl: requiredString(value.manifestUrl, "manifestUrl"),
+    kind: enumValue(value.kind, [MEDIA_KINDS.HLS, MEDIA_KINDS.DASH], "kind"),
+    bodyBytes: optionalNonNegativeInteger(value.bodyBytes) || 0,
+    revisionId: optionalString(value.revisionId),
+    capturedAt: optionalFiniteNumber(value.capturedAt) || Date.now(),
+    expiresAt: optionalFiniteNumber(value.expiresAt),
+  };
+}
+
 export function normalizeMediaResolutionAttempt(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const strategy = optionalEnumValue(

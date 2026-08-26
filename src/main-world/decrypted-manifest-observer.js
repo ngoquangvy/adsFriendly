@@ -211,6 +211,18 @@ async function inspectBlob(blob, objectUrl, observedAt) {
     }),
   });
 
+  if (isUsableMediaProbe(probe)) {
+    notifyContentScript({
+      type: "MEDIA_DECRYPTED_MANIFEST_READY",
+      handoff: {
+        mediaId: match.envelope.mediaId,
+        manifestUrl: match.envelope.manifestUrl,
+        kind,
+        body,
+      },
+    });
+  }
+
   if (!isUsableMediaProbe(probe)) {
     notifyContentScript({
       type: "MEDIA_DEBUG_MANIFEST_CAPTURE",

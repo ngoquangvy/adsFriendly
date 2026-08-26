@@ -63,7 +63,10 @@ export function diagnoseMediaResolution(item, items = []) {
       message: "Playback only · DRM protected",
     });
   if (target.kind === "dash") return diagnoseDash(target);
-  if (target.probeSource === "decrypted_blob")
+  if (
+    target.probeSource === "decrypted_blob" &&
+    !(Number(target.manifestHandoff?.expiresAt) > Date.now())
+  )
     return diagnostic(
       S.PLAYER_DECRYPTION,
       D.UNHANDLED,

@@ -234,6 +234,7 @@ var AdsFriendlyOptions = (() => {
     ]),
     feature("background.media-catalog", "background", C2.MEDIA_CATALOG),
     feature("background.media-debug-capture", "background", C2.MEDIA_CATALOG),
+    feature("background.media-manifest-handoff", "background", C2.MEDIA_CATALOG),
     feature(
       "background.media-request-observer",
       "background",

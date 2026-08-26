@@ -16,6 +16,7 @@ export function createMediaCatalogViewSignature({
           helperVersion: helper.helperVersion,
           canDownloadDirect: helper.canDownloadDirect,
           canDownloadHls: helper.canDownloadHls,
+          canDownloadDecryptedHls: helper.canDownloadDecryptedHls,
           canDownloadDash: helper.canDownloadDash,
           error: helper.error,
         }
@@ -39,6 +40,23 @@ export function selectVisibleMediaItems(items = [], maximum = 8) {
       ])
       .filter(Boolean),
   );
+  for (const blob of diagnosedItems.filter(
+    (item) => item.kind === "blob" && item.selectedMediaId,
+  )) {
+    for (const source of diagnosedItems) {
+      if (
+        source.kind !== "blob" &&
+        samePlaybackFrame(blob, source) &&
+        (source.selectedMediaId === blob.selectedMediaId ||
+          source.resolvedMediaIds?.includes(blob.selectedMediaId) ||
+          (blob.resolvedMediaIds || []).some((id) =>
+            source.resolvedMediaIds?.includes(id),
+          ))
+      ) {
+        blobResolvedSourceIds.add(source.id);
+      }
+    }
+  }
   const sorted = [...diagnosedItems].sort(
     (left, right) =>
       (right.firstSeenAt || 0) - (left.firstSeenAt || 0) ||
@@ -470,6 +488,7 @@ function mediaRenderFacts(item) {
     revisionId: item.revisionId,
     probeSource: item.probeSource,
     manifestEnvelope: item.manifestEnvelope,
+    manifestHandoff: item.manifestHandoff,
     relatedCount: item.relatedCount,
     parentManifestIds: item.parentManifestIds,
     childManifestIds: item.childManifestIds,
@@ -496,4 +515,12 @@ function mediaRenderFacts(item) {
     subtitles: item.subtitles,
     resolutionDiagnostic: item.resolutionDiagnostic,
   };
+}
+
+function samePlaybackFrame(left, right) {
+  if (Number.isInteger(left.frameId) && Number.isInteger(right.frameId))
+    return left.frameId === right.frameId;
+  return Boolean(
+    left.frameUrl && right.frameUrl && left.frameUrl === right.frameUrl,
+  );
 }

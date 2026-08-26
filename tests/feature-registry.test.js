@@ -130,6 +130,10 @@ test("temporary media debug capture is owned by the catalog capability", () => {
   const definition = getFeatureDefinition("background.media-debug-capture");
   assert.equal(definition.context, "background");
   assert.deepEqual(definition.capabilities, [CAPABILITIES.MEDIA_CATALOG]);
+  assert.deepEqual(
+    getFeatureDefinition("background.media-manifest-handoff").capabilities,
+    [CAPABILITIES.MEDIA_CATALOG],
+  );
 });
 
 test("legacy settings migrate deterministically", () => {

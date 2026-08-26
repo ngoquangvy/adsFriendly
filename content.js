@@ -1168,6 +1168,7 @@ var AdsFriendlyContent = (() => {
     ]),
     feature("background.media-catalog", "background", C2.MEDIA_CATALOG),
     feature("background.media-debug-capture", "background", C2.MEDIA_CATALOG),
+    feature("background.media-manifest-handoff", "background", C2.MEDIA_CATALOG),
     feature(
       "background.media-request-observer",
       "background",
@@ -2753,6 +2754,18 @@ var AdsFriendlyContent = (() => {
       observedAt: optionalFiniteNumber(value.observedAt) || Date.now()
     };
   }
+  function normalizeMediaManifestHandoff(value = {}) {
+    return {
+      mediaId: requiredString(value.mediaId, "mediaId"),
+      pageUrl: requiredString(value.pageUrl, "pageUrl"),
+      manifestUrl: requiredString(value.manifestUrl, "manifestUrl"),
+      kind: enumValue(value.kind, [MEDIA_KINDS.HLS, MEDIA_KINDS.DASH], "kind"),
+      bodyBytes: optionalNonNegativeInteger(value.bodyBytes) || 0,
+      revisionId: optionalString(value.revisionId),
+      capturedAt: optionalFiniteNumber(value.capturedAt) || Date.now(),
+      expiresAt: optionalFiniteNumber(value.expiresAt)
+    };
+  }
   function normalizeMediaResolutionAttempt(value) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
     const strategy = optionalEnumValue(
@@ -3002,6 +3015,7 @@ var AdsFriendlyContent = (() => {
     MEDIA_PROBED: "media.probed",
     MEDIA_PROBE_DIAGNOSTIC: "media.probe_diagnostic",
     MEDIA_BLOB_TRACED: "media.blob_traced",
+    MEDIA_MANIFEST_HANDOFF_READY: "media.manifest_handoff_ready",
     MEDIA_EME_OBSERVED: "media.eme_observed",
     MEDIA_CATALOG_UPDATED: "media.catalog.updated",
     VIDEO_AD_EVIDENCE_FOUND: "video_ad.evidence_found",
@@ -3032,6 +3046,12 @@ var AdsFriendlyContent = (() => {
       "media.blob-source-tracer",
       ["media.catalog"],
       normalizeBlobSourceTrace
+    ),
+    [E.MEDIA_MANIFEST_HANDOFF_READY]: event(
+      E.MEDIA_MANIFEST_HANDOFF_READY,
+      "media.manifest-handoff",
+      ["media.catalog", "media.downloader"],
+      normalizeMediaManifestHandoff
     ),
     [E.MEDIA_EME_OBSERVED]: event(
       E.MEDIA_EME_OBSERVED,
@@ -3169,6 +3189,10 @@ var AdsFriendlyContent = (() => {
           capture: messageEvent.data.capture
         }).catch(() => {
         });
+        return;
+      }
+      if (messageEvent.source === window && messageEvent.data?.source === "adsfriendly-spy" && messageEvent.data?.type === "MEDIA_DECRYPTED_MANIFEST_READY") {
+        saveDecryptedManifestHandoff(messageEvent.data.handoff);
         return;
       }
       if (messageEvent.source !== window || messageEvent.data?.source !== "adsfriendly-spy" || messageEvent.data?.type !== "REGISTERED_EVENT" || ![
@@ -3354,6 +3378,24 @@ var AdsFriendlyContent = (() => {
           },
           "*"
         );
+      }).catch(() => {
+      });
+    }
+    function saveDecryptedManifestHandoff(handoff, attempt = 0) {
+      if (stopped || !handoff) return;
+      chrome.runtime.sendMessage({
+        type: "SAVE_DECRYPTED_MEDIA_MANIFEST",
+        handoff
+      }).then((response) => {
+        if (response?.status !== "catalog_pending" || attempt >= 4) return;
+        const retryId = setTimeout(
+          () => {
+            retryTimers.delete(retryId);
+            saveDecryptedManifestHandoff(handoff, attempt + 1);
+          },
+          100 * (attempt + 1)
+        );
+        retryTimers.add(retryId);
       }).catch(() => {
       });
     }

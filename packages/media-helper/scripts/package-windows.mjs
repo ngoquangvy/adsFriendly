@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import { copyFile, mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { MEDIA_HELPER_PROTOCOL_VERSION } from "../../../src/media/helper-contract.js";
 
 if (process.platform !== "win32") {
   throw new Error("This packaging script currently targets Windows only.");
@@ -78,7 +79,7 @@ async function verifyExecutable(path) {
     JSON.stringify({
       type: "helper.hello",
       requestId: "packaging-check",
-      protocolVersion: 1,
+      protocolVersion: MEDIA_HELPER_PROTOCOL_VERSION,
       payload: { extensionVersion: "packaging-check" },
     }),
     "utf8",
@@ -132,6 +133,15 @@ async function verifyExecutable(path) {
     typeof response.payload?.capabilities?.["download.hls_vod"] !== "boolean"
   ) {
     throw new Error("Packaged helper returned an invalid HLS capability.");
+  }
+  if (
+    typeof response.payload?.capabilities?.[
+      "download.hls_decrypted_manifest"
+    ] !== "boolean"
+  ) {
+    throw new Error(
+      "Packaged helper returned an invalid decrypted HLS capability.",
+    );
   }
   if (
     typeof response.payload?.capabilities?.["download.dash_vod"] !== "boolean"

@@ -392,6 +392,8 @@ function createMediaItem(item, tab, helper, itemsById) {
 }
 
 function debugCaptureMediaId(item) {
+  const handoff = item.resolvedStream?.manifestHandoff || item.manifestHandoff;
+  if (Number(handoff?.expiresAt) > Date.now()) return null;
   const diagnostic =
     item.resolutionDiagnostic?.probeDiagnostic || item.probeDiagnostic;
   return [

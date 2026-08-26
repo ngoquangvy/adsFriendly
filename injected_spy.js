@@ -327,6 +327,18 @@ var AdsFriendlyMainWorld = (() => {
       observedAt: optionalFiniteNumber(value.observedAt) || Date.now()
     };
   }
+  function normalizeMediaManifestHandoff(value = {}) {
+    return {
+      mediaId: requiredString(value.mediaId, "mediaId"),
+      pageUrl: requiredString(value.pageUrl, "pageUrl"),
+      manifestUrl: requiredString(value.manifestUrl, "manifestUrl"),
+      kind: enumValue(value.kind, [MEDIA_KINDS.HLS, MEDIA_KINDS.DASH], "kind"),
+      bodyBytes: optionalNonNegativeInteger(value.bodyBytes) || 0,
+      revisionId: optionalString(value.revisionId),
+      capturedAt: optionalFiniteNumber(value.capturedAt) || Date.now(),
+      expiresAt: optionalFiniteNumber(value.expiresAt)
+    };
+  }
   function normalizeMediaResolutionAttempt(value) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
     const strategy = optionalEnumValue(
@@ -1306,6 +1318,7 @@ ${body}`;
     MEDIA_PROBED: "media.probed",
     MEDIA_PROBE_DIAGNOSTIC: "media.probe_diagnostic",
     MEDIA_BLOB_TRACED: "media.blob_traced",
+    MEDIA_MANIFEST_HANDOFF_READY: "media.manifest_handoff_ready",
     MEDIA_EME_OBSERVED: "media.eme_observed",
     MEDIA_CATALOG_UPDATED: "media.catalog.updated",
     VIDEO_AD_EVIDENCE_FOUND: "video_ad.evidence_found",
@@ -1336,6 +1349,12 @@ ${body}`;
       "media.blob-source-tracer",
       ["media.catalog"],
       normalizeBlobSourceTrace
+    ),
+    [E.MEDIA_MANIFEST_HANDOFF_READY]: event(
+      E.MEDIA_MANIFEST_HANDOFF_READY,
+      "media.manifest-handoff",
+      ["media.catalog", "media.downloader"],
+      normalizeMediaManifestHandoff
     ),
     [E.MEDIA_EME_OBSERVED]: event(
       E.MEDIA_EME_OBSERVED,
@@ -1661,6 +1680,7 @@ ${body}`;
     ]),
     feature("background.media-catalog", "background", C2.MEDIA_CATALOG),
     feature("background.media-debug-capture", "background", C2.MEDIA_CATALOG),
+    feature("background.media-manifest-handoff", "background", C2.MEDIA_CATALOG),
     feature(
       "background.media-request-observer",
       "background",
@@ -2145,6 +2165,17 @@ ${body}`;
         observedAt
       })
     });
+    if (isUsableMediaProbe(probe)) {
+      notifyContentScript({
+        type: "MEDIA_DECRYPTED_MANIFEST_READY",
+        handoff: {
+          mediaId: match.envelope.mediaId,
+          manifestUrl: match.envelope.manifestUrl,
+          kind,
+          body
+        }
+      });
+    }
     if (!isUsableMediaProbe(probe)) {
       notifyContentScript({
         type: "MEDIA_DEBUG_MANIFEST_CAPTURE",

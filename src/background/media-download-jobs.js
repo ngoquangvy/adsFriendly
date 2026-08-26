@@ -21,6 +21,7 @@ import {
   runMediaHelperOutputAction,
   startMediaHelperDownload,
 } from "./media-helper-bridge.js";
+import { getMediaManifestHandoff } from "./media-manifest-handoff.js";
 
 let broker = null;
 
@@ -112,6 +113,9 @@ async function createJob({ tabId, mediaId, connections } = {}) {
     return { status: "unsupported", reason: availability.reason };
   const helperFailure = await helperFailureFor(candidate);
   if (helperFailure) return helperFailure;
+  const handoffResult = await attachManifestHandoff(tabId, candidate);
+  if (handoffResult.status !== "ready") return handoffResult;
+  candidate = handoffResult.candidate;
   const job = normalizeMediaDownloadJob({
     id: randomId(),
     createdAt: Date.now(),
@@ -208,7 +212,7 @@ async function clearJobHistory() {
 }
 
 async function restartJob(state, requestedConnections) {
-  const candidate = state.candidate || (await recoverCandidate(state));
+  let candidate = (await recoverCandidate(state)) || state.candidate;
   if (!candidate) {
     return {
       status: "media_not_found",
@@ -216,6 +220,12 @@ async function restartJob(state, requestedConnections) {
         "The original media source is no longer available. Reopen its video page.",
     };
   }
+  const handoffResult = await attachManifestHandoff(
+    state.sourceTabId,
+    candidate,
+  );
+  if (handoffResult.status !== "ready") return handoffResult;
+  candidate = handoffResult.candidate;
   const helperFailure = await helperFailureFor(candidate);
   if (helperFailure) return helperFailure;
   const job = normalizeMediaDownloadJob({
@@ -231,6 +241,29 @@ async function restartJob(state, requestedConnections) {
     ),
     attempt: Math.max(1, Number(state.attempt) || 1) + 1,
   });
+}
+
+async function attachManifestHandoff(tabId, candidate) {
+  if (candidate.probeSource !== "decrypted_blob")
+    return { status: "ready", candidate };
+  const response = await getMediaManifestHandoff(tabId, candidate.id);
+  const handoff = response.handoff;
+  if (
+    response.status !== "found" ||
+    handoff?.manifestUrl !== candidate.manifestUrl ||
+    handoff?.kind !== candidate.kind ||
+    (candidate.revisionId && handoff?.revisionId !== candidate.revisionId)
+  ) {
+    return {
+      status: "manifest_handoff_expired",
+      reason:
+        "The decrypted manifest expired. Reload the video page and retry.",
+    };
+  }
+  return {
+    status: "ready",
+    candidate: { ...candidate, manifestHandoff: handoff },
+  };
 }
 
 async function recoverCandidate(state) {
@@ -252,7 +285,9 @@ async function helperFailureFor(candidate) {
     candidate.kind === "direct"
       ? helper.canDownloadDirect
       : candidate.kind === "hls"
-        ? helper.canDownloadHls
+        ? candidate.probeSource === "decrypted_blob"
+          ? helper.canDownloadHls && helper.canDownloadDecryptedHls
+          : helper.canDownloadHls
         : helper.canDownloadDash;
   if (capabilityReady) return null;
   return {
@@ -262,7 +297,9 @@ async function helperFailureFor(candidate) {
       candidate.kind === "direct"
         ? "This Media Helper build cannot download direct media yet."
         : candidate.kind === "hls"
-          ? "This Media Helper build does not execute HLS downloads yet."
+          ? candidate.probeSource === "decrypted_blob"
+            ? "This Media Helper build cannot accept a player-decrypted HLS manifest yet."
+            : "This Media Helper build does not execute HLS downloads yet."
           : "This Media Helper build does not execute DASH downloads yet.",
   };
 }

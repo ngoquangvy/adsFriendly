@@ -165,6 +165,7 @@ export const FEATURE_CATALOG = Object.freeze([
   ]),
   feature("background.media-catalog", "background", C.MEDIA_CATALOG),
   feature("background.media-debug-capture", "background", C.MEDIA_CATALOG),
+  feature("background.media-manifest-handoff", "background", C.MEDIA_CATALOG),
   feature(
     "background.media-request-observer",
     "background",

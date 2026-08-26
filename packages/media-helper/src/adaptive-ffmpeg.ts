@@ -27,7 +27,7 @@ export async function runAdaptiveFfmpeg(
     "-stats_period",
     "0.2",
     "-protocol_whitelist",
-    "http,https,tcp,tls,crypto",
+    "file,http,https,tcp,tls,crypto",
     "-user_agent",
     headers["User-Agent"],
     "-headers",

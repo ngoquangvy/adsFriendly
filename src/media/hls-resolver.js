@@ -201,6 +201,7 @@ function summarizeStream(stream) {
           evidence: [...(item.manifestEnvelope.evidence || [])],
         }
       : null,
+    manifestHandoff: item.manifestHandoff ? { ...item.manifestHandoff } : null,
     resolution: quality?.resolution || null,
     bandwidth: quality?.bandwidth || null,
     resolutionStrategy: strategyId || null,

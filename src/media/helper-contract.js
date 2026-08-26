@@ -1,4 +1,4 @@
-export const MEDIA_HELPER_PROTOCOL_VERSION = 1;
+export const MEDIA_HELPER_PROTOCOL_VERSION = 2;
 export const MEDIA_HELPER_HOST_NAME = "com.adsfriendly.media_helper";
 
 export const MEDIA_HELPER_REQUESTS = Object.freeze({
@@ -24,6 +24,7 @@ export const MEDIA_HELPER_EVENTS = Object.freeze({
 export const MEDIA_HELPER_CAPABILITIES = Object.freeze({
   DIRECT_HTTP_DOWNLOAD: "download.direct_http",
   HLS_VOD_DOWNLOAD: "download.hls_vod",
+  HLS_DECRYPTED_MANIFEST: "download.hls_decrypted_manifest",
   DASH_VOD_DOWNLOAD: "download.dash_vod",
   FFMPEG_MUX: "mux.ffmpeg",
   OUTPUT_OPEN: "output.open",
@@ -145,7 +146,38 @@ export function normalizeHelperDownloadPayload(value = {}) {
       requestContext: ["hls", "dash"].includes(kind)
         ? normalizeHelperRequestContext(candidate.requestContext)
         : null,
+      manifestHandoff:
+        kind === "hls"
+          ? normalizeHelperManifestHandoff(candidate.manifestHandoff, sourceUrl)
+          : null,
     },
+  };
+}
+
+function normalizeHelperManifestHandoff(value, manifestUrl) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const body = typeof value.body === "string" ? value.body : "";
+  const bodyBytes = new TextEncoder().encode(body).byteLength;
+  if (!body || bodyBytes > 512 * 1024) {
+    throw new Error(
+      "[MediaHelperProtocol] Decrypted manifest handoff is invalid.",
+    );
+  }
+  const handoffUrl = requiredHttpUrl(
+    value.manifestUrl,
+    "candidate.manifestHandoff.manifestUrl",
+  );
+  if (handoffUrl !== manifestUrl || value.kind !== "hls") {
+    throw new Error(
+      "[MediaHelperProtocol] Decrypted manifest handoff does not match the candidate.",
+    );
+  }
+  return {
+    kind: "hls",
+    manifestUrl: handoffUrl,
+    body,
+    bodyBytes,
+    revisionId: optionalString(value.revisionId),
   };
 }
 

@@ -251,6 +251,29 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
       trimOldest(tabCatalog.items, maximumPerTab);
       return cloneItem(item);
     },
+    applyManifestHandoff(tabId, rawEvent) {
+      assertTabId(tabId);
+      const event = normalizeRegisteredEvent(rawEvent);
+      if (event.type !== EVENTS.MEDIA_MANIFEST_HANDOFF_READY) {
+        throw new Error(
+          `[MediaCatalog] Cannot apply manifest handoff event "${event.type}".`,
+        );
+      }
+      const handoff = event.payload;
+      const tabCatalog = tabs.get(tabId);
+      if (!tabCatalog || !samePageUrl(tabCatalog.pageUrl, handoff.pageUrl))
+        return null;
+      const existing = tabCatalog.items.get(handoff.mediaId);
+      if (!existing || existing.manifestUrl !== handoff.manifestUrl)
+        return null;
+      const item = {
+        ...existing,
+        manifestHandoff: { ...handoff },
+        lastSeenAt: Math.max(existing.lastSeenAt || 0, event.timestamp),
+      };
+      tabCatalog.items.set(handoff.mediaId, item);
+      return cloneItem(item);
+    },
     applyEme(tabId, rawEvent) {
       assertTabId(tabId);
       const event = normalizeRegisteredEvent(rawEvent);
@@ -642,6 +665,7 @@ function cloneItem(item, resolution = null) {
           evidence: [...(item.manifestEnvelope.evidence || [])],
         }
       : null,
+    manifestHandoff: item.manifestHandoff ? { ...item.manifestHandoff } : null,
     blobTrace: item.blobTrace
       ? {
           ...item.blobTrace,

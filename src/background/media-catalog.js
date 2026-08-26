@@ -62,6 +62,14 @@ export async function recordBlobSourceTrace(tabId, event) {
   return { status: "recorded", item };
 }
 
+export async function recordMediaManifestHandoff(tabId, event) {
+  if (!active) return { status: "catalog_disabled" };
+  const item = catalog.applyManifestHandoff(tabId, event);
+  if (!item) return { status: "catalog_pending" };
+  await persistTab(tabId).catch(() => {});
+  return { status: "recorded", item };
+}
+
 export async function recordMediaEmeObservation(tabId, event) {
   if (!active) return { status: "catalog_disabled" };
   const items = catalog.applyEme(tabId, event);
@@ -129,6 +137,20 @@ async function hydrateCatalog() {
               pageUrl: item.pageUrl,
               blobUrl: item.sourceUrl,
               ...item.blobTrace,
+            }),
+          );
+        } catch {}
+      }
+      if (item.manifestHandoff) {
+        try {
+          catalog.applyManifestHandoff(
+            tabId,
+            createRegisteredEvent(EVENTS.MEDIA_MANIFEST_HANDOFF_READY, {
+              ...item.manifestHandoff,
+              mediaId: item.id,
+              pageUrl: item.pageUrl,
+              manifestUrl: item.manifestUrl,
+              kind: item.kind,
             }),
           );
         } catch {}

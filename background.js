@@ -977,6 +977,7 @@ var AdsFriendlyBackground = (() => {
     ]),
     feature("background.media-catalog", "background", C2.MEDIA_CATALOG),
     feature("background.media-debug-capture", "background", C2.MEDIA_CATALOG),
+    feature("background.media-manifest-handoff", "background", C2.MEDIA_CATALOG),
     feature(
       "background.media-request-observer",
       "background",
@@ -2452,6 +2453,18 @@ var AdsFriendlyBackground = (() => {
       observedAt: optionalFiniteNumber(value.observedAt) || Date.now()
     };
   }
+  function normalizeMediaManifestHandoff(value = {}) {
+    return {
+      mediaId: requiredString(value.mediaId, "mediaId"),
+      pageUrl: requiredString(value.pageUrl, "pageUrl"),
+      manifestUrl: requiredString(value.manifestUrl, "manifestUrl"),
+      kind: enumValue(value.kind, [MEDIA_KINDS.HLS, MEDIA_KINDS.DASH], "kind"),
+      bodyBytes: optionalNonNegativeInteger(value.bodyBytes) || 0,
+      revisionId: optionalString(value.revisionId),
+      capturedAt: optionalFiniteNumber(value.capturedAt) || Date.now(),
+      expiresAt: optionalFiniteNumber(value.expiresAt)
+    };
+  }
   function normalizeMediaResolutionAttempt(value) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
     const strategy2 = optionalEnumValue(
@@ -2623,6 +2636,7 @@ var AdsFriendlyBackground = (() => {
     MEDIA_PROBED: "media.probed",
     MEDIA_PROBE_DIAGNOSTIC: "media.probe_diagnostic",
     MEDIA_BLOB_TRACED: "media.blob_traced",
+    MEDIA_MANIFEST_HANDOFF_READY: "media.manifest_handoff_ready",
     MEDIA_EME_OBSERVED: "media.eme_observed",
     MEDIA_CATALOG_UPDATED: "media.catalog.updated",
     VIDEO_AD_EVIDENCE_FOUND: "video_ad.evidence_found",
@@ -2653,6 +2667,12 @@ var AdsFriendlyBackground = (() => {
       "media.blob-source-tracer",
       ["media.catalog"],
       normalizeBlobSourceTrace
+    ),
+    [E.MEDIA_MANIFEST_HANDOFF_READY]: event(
+      E.MEDIA_MANIFEST_HANDOFF_READY,
+      "media.manifest-handoff",
+      ["media.catalog", "media.downloader"],
+      normalizeMediaManifestHandoff
     ),
     [E.MEDIA_EME_OBSERVED]: event(
       E.MEDIA_EME_OBSERVED,
@@ -3169,6 +3189,7 @@ var AdsFriendlyBackground = (() => {
         ...item.manifestEnvelope,
         evidence: [...item.manifestEnvelope.evidence || []]
       } : null,
+      manifestHandoff: item.manifestHandoff ? { ...item.manifestHandoff } : null,
       resolution: quality?.resolution || null,
       bandwidth: quality?.bandwidth || null,
       resolutionStrategy: strategyId || null,
@@ -3485,6 +3506,29 @@ var AdsFriendlyBackground = (() => {
         applyEmeToItem(item, tabCatalog.eme);
         tabCatalog.items.set(trace.mediaId, item);
         trimOldest(tabCatalog.items, maximumPerTab);
+        return cloneItem(item);
+      },
+      applyManifestHandoff(tabId, rawEvent) {
+        assertTabId(tabId);
+        const event2 = normalizeRegisteredEvent(rawEvent);
+        if (event2.type !== EVENTS.MEDIA_MANIFEST_HANDOFF_READY) {
+          throw new Error(
+            `[MediaCatalog] Cannot apply manifest handoff event "${event2.type}".`
+          );
+        }
+        const handoff = event2.payload;
+        const tabCatalog = tabs.get(tabId);
+        if (!tabCatalog || !samePageUrl(tabCatalog.pageUrl, handoff.pageUrl))
+          return null;
+        const existing = tabCatalog.items.get(handoff.mediaId);
+        if (!existing || existing.manifestUrl !== handoff.manifestUrl)
+          return null;
+        const item = {
+          ...existing,
+          manifestHandoff: { ...handoff },
+          lastSeenAt: Math.max(existing.lastSeenAt || 0, event2.timestamp)
+        };
+        tabCatalog.items.set(handoff.mediaId, item);
         return cloneItem(item);
       },
       applyEme(tabId, rawEvent) {
@@ -3841,6 +3885,7 @@ var AdsFriendlyBackground = (() => {
         ...item.manifestEnvelope,
         evidence: [...item.manifestEnvelope.evidence || []]
       } : null,
+      manifestHandoff: item.manifestHandoff ? { ...item.manifestHandoff } : null,
       blobTrace: item.blobTrace ? {
         ...item.blobTrace,
         sourceUrls: [...item.blobTrace.sourceUrls || []],
@@ -3966,6 +4011,14 @@ var AdsFriendlyBackground = (() => {
     });
     return { status: "recorded", item };
   }
+  async function recordMediaManifestHandoff(tabId, event2) {
+    if (!active) return { status: "catalog_disabled" };
+    const item = catalog.applyManifestHandoff(tabId, event2);
+    if (!item) return { status: "catalog_pending" };
+    await persistTab(tabId).catch(() => {
+    });
+    return { status: "recorded", item };
+  }
   async function recordMediaEmeObservation(tabId, event2) {
     if (!active) return { status: "catalog_disabled" };
     const items = catalog.applyEme(tabId, event2);
@@ -4029,6 +4082,21 @@ var AdsFriendlyBackground = (() => {
                 pageUrl: item.pageUrl,
                 blobUrl: item.sourceUrl,
                 ...item.blobTrace
+              })
+            );
+          } catch {
+          }
+        }
+        if (item.manifestHandoff) {
+          try {
+            catalog.applyManifestHandoff(
+              tabId,
+              createRegisteredEvent(EVENTS.MEDIA_MANIFEST_HANDOFF_READY, {
+                ...item.manifestHandoff,
+                mediaId: item.id,
+                pageUrl: item.pageUrl,
+                manifestUrl: item.manifestUrl,
+                kind: item.kind
               })
             );
           } catch {
@@ -4363,10 +4431,37 @@ var AdsFriendlyBackground = (() => {
           candidate.skippedSegmentCount
         ),
         lowLatency: candidate.lowLatency === true,
+        probeSource: candidate.probeSource === "decrypted_blob" ? "decrypted_blob" : candidate.probeSource || null,
+        manifestHandoff: normalizeDownloadManifestHandoff(
+          candidate.manifestHandoff,
+          candidate
+        ),
         requestContext: normalizeDownloadRequestContext(
           candidate.resolvedRequestContext || candidate.requestContext
         )
       }
+    };
+  }
+  function normalizeDownloadManifestHandoff(value, candidate) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const body = typeof value.body === "string" ? value.body : "";
+    const bodyBytes = new TextEncoder().encode(body).byteLength;
+    if (!body || bodyBytes > 512 * 1024)
+      throw new Error("[MediaDownload] Invalid decrypted manifest handoff.");
+    const manifestUrl = requiredHttpUrl(
+      value.manifestUrl,
+      "candidate.manifestHandoff.manifestUrl"
+    );
+    if (manifestUrl !== candidate.manifestUrl || value.kind !== candidate.kind || Number(value.expiresAt) <= Date.now()) {
+      throw new Error("[MediaDownload] Decrypted manifest handoff expired.");
+    }
+    return {
+      kind: value.kind,
+      manifestUrl,
+      body,
+      bodyBytes,
+      revisionId: optionalString2(value.revisionId),
+      expiresAt: Number(value.expiresAt)
     };
   }
   function downloadJobKey(jobId) {
@@ -4403,7 +4498,7 @@ var AdsFriendlyBackground = (() => {
       };
     if (candidate.probeStatus !== "ready")
       return { supported: false, reason: "Manifest is not ready." };
-    if (candidate.probeSource === "decrypted_blob")
+    if (candidate.probeSource === "decrypted_blob" && !hasCurrentManifestHandoff(candidate))
       return {
         supported: false,
         reason: "Player-decrypted manifest found; secure download handoff is not ready yet."
@@ -4431,6 +4526,9 @@ var AdsFriendlyBackground = (() => {
     if (!["master", "media"].includes(candidate.playlistType))
       return { supported: false, reason: "Unknown HLS playlist type." };
     return { supported: true, reason: null };
+  }
+  function hasCurrentManifestHandoff(candidate) {
+    return candidate.manifestHandoff?.mediaId === candidate.id && candidate.manifestHandoff?.manifestUrl === candidate.manifestUrl && Number(candidate.manifestHandoff?.expiresAt) > Date.now();
   }
   function isDownloadableAes128(candidate) {
     const methods = candidate.encryptionMethods || [];
@@ -4505,7 +4603,7 @@ var AdsFriendlyBackground = (() => {
   }
 
   // src/media/helper-contract.js
-  var MEDIA_HELPER_PROTOCOL_VERSION = 1;
+  var MEDIA_HELPER_PROTOCOL_VERSION = 2;
   var MEDIA_HELPER_HOST_NAME = "com.adsfriendly.media_helper";
   var MEDIA_HELPER_REQUESTS = Object.freeze({
     HELLO: "helper.hello",
@@ -4528,6 +4626,7 @@ var AdsFriendlyBackground = (() => {
   var MEDIA_HELPER_CAPABILITIES = Object.freeze({
     DIRECT_HTTP_DOWNLOAD: "download.direct_http",
     HLS_VOD_DOWNLOAD: "download.hls_vod",
+    HLS_DECRYPTED_MANIFEST: "download.hls_decrypted_manifest",
     DASH_VOD_DOWNLOAD: "download.dash_vod",
     FFMPEG_MUX: "mux.ffmpeg",
     OUTPUT_OPEN: "output.open",
@@ -4633,6 +4732,7 @@ var AdsFriendlyBackground = (() => {
         capabilities,
         canDownloadDirect: capabilities[MEDIA_HELPER_CAPABILITIES.DIRECT_HTTP_DOWNLOAD] === true,
         canDownloadHls: capabilities[MEDIA_HELPER_CAPABILITIES.HLS_VOD_DOWNLOAD] === true,
+        canDownloadDecryptedHls: capabilities[MEDIA_HELPER_CAPABILITIES.HLS_DECRYPTED_MANIFEST] === true,
         canDownloadDash: capabilities[MEDIA_HELPER_CAPABILITIES.DASH_VOD_DOWNLOAD] === true,
         canMuxWithFfmpeg: capabilities[MEDIA_HELPER_CAPABILITIES.FFMPEG_MUX] === true
       });
@@ -4663,7 +4763,7 @@ var AdsFriendlyBackground = (() => {
       kind: job.candidate.kind,
       title: job.candidate.title,
       sourceTabId: job.sourceTabId,
-      candidate: job.candidate,
+      candidate: withoutManifestBody(job.candidate),
       connections,
       attempt,
       createdAt: job.createdAt,
@@ -4711,6 +4811,11 @@ var AdsFriendlyBackground = (() => {
       }
     });
     return { status: "started", jobId: job.id };
+  }
+  function withoutManifestBody(candidate) {
+    if (!candidate.manifestHandoff) return candidate;
+    const { body: _body, ...manifestHandoff } = candidate.manifestHandoff;
+    return { ...candidate, manifestHandoff };
   }
   async function cancelMediaHelperDownload(jobId, { terminalStatus = "cancelled" } = {}) {
     const connection = activePorts.get(jobId);
@@ -4922,6 +5027,7 @@ var AdsFriendlyBackground = (() => {
       installed: status === MEDIA_HELPER_STATES.READY,
       canDownloadDirect: false,
       canDownloadHls: false,
+      canDownloadDecryptedHls: false,
       canDownloadDash: false,
       canMuxWithFfmpeg: false,
       helperVersion: null,
@@ -4956,6 +5062,739 @@ var AdsFriendlyBackground = (() => {
   }
   function messageOf(error) {
     return error instanceof Error ? error.message : String(error);
+  }
+
+  // src/media/hls-parser.js
+  var MAX_MANIFEST_LENGTH = 2 * 1024 * 1024;
+  var MAX_LINES = 2e4;
+  var MAX_VARIANTS = 100;
+  var MAX_TRACKS = 100;
+  function parseHlsManifest(manifestUrl, body) {
+    const source = typeof body === "string" ? body.replace(/^\uFEFF/, "") : "";
+    if (!source.trimStart().startsWith("#EXTM3U")) {
+      return unsupported("not_hls_manifest");
+    }
+    if (source.length > MAX_MANIFEST_LENGTH) {
+      return unsupported("manifest_too_large");
+    }
+    const lines = source.split(/\r?\n/).map((line) => line.trim());
+    if (lines.length > MAX_LINES) return unsupported("too_many_manifest_lines");
+    try {
+      const variants = [];
+      const iframeVariants = [];
+      const audioTracks = [];
+      const subtitles = [];
+      const encryptionMethods = /* @__PURE__ */ new Set();
+      const encryptionKeyFormats = /* @__PURE__ */ new Set();
+      let pendingVariant = null;
+      let pendingSegmentDuration = null;
+      let segmentCount = 0;
+      let partialSegmentCount = 0;
+      let skippedSegmentCount = 0;
+      let duration = 0;
+      let targetDuration = null;
+      let mediaSequence = null;
+      let discontinuitySequence = null;
+      let hasEndList = false;
+      let declaredPlaylistType = null;
+      let hasMediaEvidence = false;
+      let hasLowLatencyTag = false;
+      for (const line of lines) {
+        if (!line) continue;
+        if (pendingVariant && !line.startsWith("#")) {
+          if (variants.length < MAX_VARIANTS) {
+            variants.push(normalizeVariant(pendingVariant, line, manifestUrl));
+          }
+          pendingVariant = null;
+          continue;
+        }
+        if (pendingSegmentDuration !== null && !line.startsWith("#")) {
+          duration += pendingSegmentDuration;
+          segmentCount += 1;
+          pendingSegmentDuration = null;
+          continue;
+        }
+        if (line.startsWith("#EXT-X-STREAM-INF:")) {
+          pendingVariant = parseAttributeList(valueAfterColon(line));
+          continue;
+        }
+        if (line.startsWith("#EXT-X-I-FRAME-STREAM-INF:")) {
+          const attributes = parseAttributeList(valueAfterColon(line));
+          if (attributes.URI && iframeVariants.length < MAX_VARIANTS) {
+            iframeVariants.push(
+              normalizeVariant(attributes, attributes.URI, manifestUrl, true)
+            );
+          }
+          continue;
+        }
+        if (line.startsWith("#EXT-X-MEDIA:")) {
+          const track = normalizeTrack(
+            parseAttributeList(valueAfterColon(line)),
+            manifestUrl
+          );
+          if (!track) continue;
+          if (track.type === "audio" && audioTracks.length < MAX_TRACKS)
+            audioTracks.push(track);
+          if (track.type === "subtitles" && subtitles.length < MAX_TRACKS)
+            subtitles.push(track);
+          continue;
+        }
+        if (line.startsWith("#EXT-X-KEY:") || line.startsWith("#EXT-X-SESSION-KEY:")) {
+          const attributes = parseAttributeList(valueAfterColon(line));
+          const method = attributes.METHOD;
+          if (method && method.toUpperCase() !== "NONE")
+            encryptionMethods.add(method.toUpperCase());
+          if (attributes.KEYFORMAT)
+            encryptionKeyFormats.add(
+              String(attributes.KEYFORMAT).toLowerCase().slice(0, 100)
+            );
+          continue;
+        }
+        if (line.startsWith("#EXTINF:")) {
+          const value = Number(valueAfterColon(line).split(",", 1)[0]);
+          pendingSegmentDuration = Number.isFinite(value) && value >= 0 ? value : 0;
+          hasMediaEvidence = true;
+          continue;
+        }
+        if (line.startsWith("#EXT-X-PART:")) {
+          partialSegmentCount += 1;
+          hasMediaEvidence = true;
+          hasLowLatencyTag = true;
+          continue;
+        }
+        if (line.startsWith("#EXT-X-PART-INF:") || line.startsWith("#EXT-X-SERVER-CONTROL:")) {
+          hasMediaEvidence = true;
+          hasLowLatencyTag = true;
+          continue;
+        }
+        if (line.startsWith("#EXT-X-PRELOAD-HINT:")) {
+          const type = parseAttributeList(valueAfterColon(line)).TYPE;
+          hasMediaEvidence = true;
+          if (String(type || "").toUpperCase() === "PART")
+            hasLowLatencyTag = true;
+          continue;
+        }
+        if (line.startsWith("#EXT-X-SKIP:")) {
+          const skipped = Number(
+            parseAttributeList(valueAfterColon(line))["SKIPPED-SEGMENTS"]
+          );
+          if (Number.isInteger(skipped) && skipped >= 0)
+            skippedSegmentCount = skipped;
+          hasMediaEvidence = true;
+          continue;
+        }
+        if (line.startsWith("#EXT-X-TARGETDURATION:")) {
+          const value = Number(valueAfterColon(line));
+          if (Number.isFinite(value) && value >= 0) targetDuration = value;
+          hasMediaEvidence = true;
+          continue;
+        }
+        if (line.startsWith("#EXT-X-MEDIA-SEQUENCE:")) {
+          mediaSequence = optionalNonNegativeInteger3(valueAfterColon(line));
+          hasMediaEvidence = true;
+          continue;
+        }
+        if (line.startsWith("#EXT-X-DISCONTINUITY-SEQUENCE:")) {
+          discontinuitySequence = optionalNonNegativeInteger3(
+            valueAfterColon(line)
+          );
+          hasMediaEvidence = true;
+          continue;
+        }
+        if (line.startsWith("#EXT-X-MAP:")) {
+          hasMediaEvidence = true;
+          continue;
+        }
+        if (line === "#EXT-X-ENDLIST") {
+          hasEndList = true;
+          hasMediaEvidence = true;
+          continue;
+        }
+        if (line.startsWith("#EXT-X-PLAYLIST-TYPE:")) {
+          declaredPlaylistType = valueAfterColon(line).toUpperCase();
+          hasMediaEvidence = true;
+        }
+      }
+      const hasMasterEvidence = variants.length > 0 || iframeVariants.length > 0 || (audioTracks.length > 0 || subtitles.length > 0) && !hasMediaEvidence;
+      const playlistType = hasMasterEvidence ? "master" : hasMediaEvidence ? "media" : "unknown";
+      const streamType = playlistType === "master" ? null : playlistType === "unknown" ? "unknown" : hasEndList || declaredPlaylistType === "VOD" ? "vod" : segmentCount > 0 || partialSegmentCount > 0 || targetDuration !== null || declaredPlaylistType === "EVENT" ? "live" : "unknown";
+      const methods = [...encryptionMethods];
+      const keyFormats = [...encryptionKeyFormats];
+      const classification = classifyHlsEncryption(methods, keyFormats);
+      return {
+        status: "ready",
+        error: null,
+        playlistType,
+        streamType,
+        variants,
+        iframeVariants,
+        audioTracks,
+        subtitles,
+        duration: playlistType === "media" ? round(duration, 3) : null,
+        targetDuration: playlistType === "media" ? targetDuration : null,
+        segmentCount: playlistType === "media" ? segmentCount : null,
+        partialSegmentCount: playlistType === "media" ? partialSegmentCount : null,
+        skippedSegmentCount: playlistType === "media" ? skippedSegmentCount : null,
+        lowLatency: playlistType === "media" && hasLowLatencyTag,
+        mediaSequence: playlistType === "media" ? mediaSequence : null,
+        discontinuitySequence: playlistType === "media" ? discontinuitySequence : null,
+        revisionId: stableTextId(source),
+        encryptionMethods: methods,
+        encryptionKeyFormats: keyFormats,
+        ...classification
+      };
+    } catch (error) {
+      return {
+        ...unsupported("manifest_parse_failed"),
+        status: "failed",
+        error: error?.message || "Could not parse HLS manifest."
+      };
+    }
+  }
+  function normalizeVariant(attributes, uri, manifestUrl, iframeOnly = false) {
+    const bandwidth = optionalPositiveNumber(attributes.BANDWIDTH);
+    const averageBandwidth = optionalPositiveNumber(
+      attributes["AVERAGE-BANDWIDTH"]
+    );
+    return {
+      id: stableVariantId(uri, bandwidth, attributes.RESOLUTION),
+      url: resolveUrl(uri, manifestUrl),
+      bandwidth,
+      averageBandwidth,
+      resolution: parseResolution(attributes.RESOLUTION),
+      codecs: optionalText(attributes.CODECS),
+      frameRate: optionalPositiveNumber(attributes["FRAME-RATE"]),
+      audioGroup: optionalText(attributes.AUDIO),
+      subtitlesGroup: optionalText(attributes.SUBTITLES),
+      iframeOnly
+    };
+  }
+  function normalizeTrack(attributes, manifestUrl) {
+    const type = String(attributes.TYPE || "").toLowerCase();
+    if (!["audio", "subtitles"].includes(type)) return null;
+    const name = optionalText(attributes.NAME);
+    const groupId = optionalText(attributes["GROUP-ID"]);
+    return {
+      id: stableVariantId(attributes.URI || name || type, null, groupId),
+      type,
+      groupId,
+      name,
+      language: optionalText(attributes.LANGUAGE),
+      url: attributes.URI ? resolveUrl(attributes.URI, manifestUrl) : null,
+      default: yesNo(attributes.DEFAULT),
+      autoselect: yesNo(attributes.AUTOSELECT),
+      forced: yesNo(attributes.FORCED),
+      channels: optionalText(attributes.CHANNELS)
+    };
+  }
+  function parseAttributeList(value) {
+    const attributes = {};
+    let index = 0;
+    while (index < value.length) {
+      while (value[index] === "," || /\s/.test(value[index] || "")) index++;
+      const equals = value.indexOf("=", index);
+      if (equals < 0) break;
+      const key = value.slice(index, equals).trim().toUpperCase();
+      index = equals + 1;
+      let parsed = "";
+      if (value[index] === '"') {
+        index++;
+        while (index < value.length) {
+          const character = value[index++];
+          if (character === '"') break;
+          parsed += character;
+        }
+      } else {
+        const comma = value.indexOf(",", index);
+        const end = comma < 0 ? value.length : comma;
+        parsed = value.slice(index, end).trim();
+        index = end;
+      }
+      if (key) attributes[key] = parsed;
+      while (index < value.length && value[index] !== ",") index++;
+      if (value[index] === ",") index++;
+    }
+    return attributes;
+  }
+  function parseResolution(value) {
+    const match = /^(\d+)x(\d+)$/i.exec(String(value || "").trim());
+    if (!match) return null;
+    return { width: Number(match[1]), height: Number(match[2]) };
+  }
+  function unsupported(error) {
+    return {
+      status: "unsupported",
+      error,
+      playlistType: null,
+      streamType: null,
+      variants: [],
+      iframeVariants: [],
+      audioTracks: [],
+      subtitles: [],
+      duration: null,
+      targetDuration: null,
+      segmentCount: null,
+      partialSegmentCount: null,
+      skippedSegmentCount: null,
+      lowLatency: false,
+      mediaSequence: null,
+      discontinuitySequence: null,
+      revisionId: null,
+      encryptionMethods: [],
+      encryptionKeyFormats: [],
+      encryptionScheme: "none",
+      drmSystem: null,
+      drmEvidence: [],
+      drm: "none"
+    };
+  }
+  function classifyHlsEncryption(methods, keyFormats) {
+    if (!methods.length) {
+      return {
+        encryptionScheme: "none",
+        drm: "none",
+        drmSystem: null,
+        drmEvidence: []
+      };
+    }
+    const drmSystem = detectDrmSystem(keyFormats);
+    const sampleAes = methods.some((method) => method.startsWith("SAMPLE-AES"));
+    const aes128 = methods.every((method) => method === "AES-128");
+    const encryptionScheme = sampleAes ? "sample-aes" : aes128 ? "aes-128" : "unknown";
+    if (drmSystem) {
+      return {
+        encryptionScheme,
+        drm: "confirmed",
+        drmSystem,
+        drmEvidence: ["hls-keyformat"]
+      };
+    }
+    return {
+      encryptionScheme,
+      drm: sampleAes ? "suspected" : "none",
+      drmSystem: null,
+      drmEvidence: sampleAes ? ["hls-sample-aes"] : []
+    };
+  }
+  function detectDrmSystem(keyFormats) {
+    for (const format of keyFormats) {
+      if (format === "identity") continue;
+      if (format.includes("edef8ba9") || format.includes("widevine"))
+        return "widevine";
+      if (format.includes("9a04f079") || format.includes("playready"))
+        return "playready";
+      if (format.includes("94ce86fb") || format.includes("streamingkeydelivery"))
+        return "fairplay";
+      if (format.includes("e2719d58") || format.includes("clearkey"))
+        return "clearkey";
+    }
+    return null;
+  }
+  function valueAfterColon(line) {
+    return line.slice(line.indexOf(":") + 1);
+  }
+  function resolveUrl(value, baseUrl) {
+    try {
+      return new URL(value, baseUrl).href;
+    } catch {
+      return value;
+    }
+  }
+  function optionalPositiveNumber(value) {
+    const number = Number(value);
+    return Number.isFinite(number) && number >= 0 ? number : null;
+  }
+  function optionalText(value) {
+    return typeof value === "string" && value ? value : null;
+  }
+  function yesNo(value) {
+    return String(value || "").toUpperCase() === "YES";
+  }
+  function round(value, precision) {
+    const factor = 10 ** precision;
+    return Math.round(value * factor) / factor;
+  }
+  function stableVariantId(...parts) {
+    const input = parts.filter((part) => part !== null).join(":");
+    let hash = 2166136261;
+    for (let index = 0; index < input.length; index++) {
+      hash ^= input.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return `stream-${(hash >>> 0).toString(36)}`;
+  }
+  function optionalNonNegativeInteger3(value) {
+    const number = Number(value);
+    return Number.isSafeInteger(number) && number >= 0 ? number : null;
+  }
+  function stableTextId(value) {
+    let hash = 2166136261;
+    for (let index = 0; index < value.length; index++) {
+      hash ^= value.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return `revision-${(hash >>> 0).toString(36)}`;
+  }
+
+  // src/media/dash-parser.js
+  function parseDashManifest(manifestUrl, body) {
+    try {
+      const xml = String(body || "").replace(/^\uFEFF/, "").trim();
+      const root = xml.match(/<MPD\b([^>]*)>/i);
+      if (!root) return unsupported2("not_dash_manifest");
+      const rootAttributes = parseXmlAttributes(root[1]);
+      const streamType = String(rootAttributes.type || "static").toLowerCase() === "dynamic" ? "live" : "vod";
+      const duration = parseIsoDuration(rootAttributes.mediaPresentationDuration);
+      const protectionSchemes = extractProtectionSchemes(xml);
+      const drmSystem = detectDrmSystem2(protectionSchemes);
+      const drm = drmSystem ? "confirmed" : protectionSchemes.length ? "suspected" : "none";
+      const tracks = extractTracks(xml);
+      const variants = tracks.filter((track) => track.type === "video");
+      const audioTracks = tracks.filter((track) => track.type === "audio");
+      const subtitles = tracks.filter((track) => track.type === "text");
+      return {
+        kind: "dash",
+        status: "ready",
+        error: null,
+        playlistType: "master",
+        streamType,
+        duration,
+        variants,
+        iframeVariants: [],
+        audioTracks,
+        subtitles,
+        segmentCount: null,
+        partialSegmentCount: null,
+        skippedSegmentCount: null,
+        lowLatency: streamType === "live" && /availabilityTimeOffset\s*=/i.test(xml),
+        mediaSequence: null,
+        discontinuitySequence: null,
+        revisionId: revisionId(manifestUrl, xml),
+        encryptionMethods: protectionSchemes,
+        encryptionKeyFormats: [],
+        encryptionScheme: protectionSchemes.length ? /cbcs|cbc1/i.test(xml) ? "cbcs" : "cenc" : "none",
+        drmSystem,
+        drmEvidence: drmSystem ? ["dash-content-protection"] : [],
+        drm
+      };
+    } catch (error) {
+      return {
+        ...unsupported2("dash_parse_failed"),
+        error: error?.message || "dash_parse_failed"
+      };
+    }
+  }
+  function detectDrmSystem2(schemes) {
+    for (const scheme of schemes) {
+      if (scheme.includes("widevine") || scheme.includes("edef8ba9"))
+        return "widevine";
+      if (scheme.includes("playready") || scheme.includes("9a04f079"))
+        return "playready";
+      if (scheme.includes("fairplay") || scheme.includes("94ce86fb"))
+        return "fairplay";
+      if (scheme.includes("clearkey") || scheme.includes("e2719d58"))
+        return "clearkey";
+    }
+    return null;
+  }
+  function extractTracks(xml) {
+    const tracks = [];
+    const adaptations = [
+      ...xml.matchAll(/<AdaptationSet\b([^>]*)>([\s\S]*?)<\/AdaptationSet\s*>/gi)
+    ];
+    for (const [, rawAttributes, content] of adaptations) {
+      const adaptation = parseXmlAttributes(rawAttributes);
+      const representations = [
+        ...content.matchAll(/<Representation\b([^>]*?)(?:\/?>)/gi)
+      ];
+      if (!representations.length) {
+        const track = normalizeTrack2(adaptation, adaptation, tracks.length);
+        if (track) tracks.push(track);
+        continue;
+      }
+      for (const [, representationAttributes] of representations) {
+        const representation = parseXmlAttributes(representationAttributes);
+        const track = normalizeTrack2(adaptation, representation, tracks.length);
+        if (track) tracks.push(track);
+      }
+    }
+    if (adaptations.length) return deduplicateTracks(tracks);
+    for (const [, rawAttributes] of xml.matchAll(
+      /<Representation\b([^>]*?)(?:\/?>)/gi
+    )) {
+      const representation = parseXmlAttributes(rawAttributes);
+      const track = normalizeTrack2({}, representation, tracks.length);
+      if (track) tracks.push(track);
+    }
+    return deduplicateTracks(tracks);
+  }
+  function normalizeTrack2(adaptation, representation, index) {
+    const mimeType = representation.mimeType || adaptation.mimeType || null;
+    const contentType = String(
+      adaptation.contentType || representation.contentType || mimeType || ""
+    ).toLowerCase();
+    const type = contentType.includes("video") ? "video" : contentType.includes("audio") ? "audio" : contentType.includes("text") || contentType.includes("subtitle") || contentType.includes("application") ? "text" : null;
+    if (!type) return null;
+    const width = positiveInteger(representation.width || adaptation.width);
+    const height = positiveInteger(representation.height || adaptation.height);
+    const bandwidth = positiveInteger(representation.bandwidth);
+    return {
+      id: representation.id || adaptation.id || `${type}-${index + 1}`,
+      type,
+      bandwidth,
+      averageBandwidth: bandwidth,
+      width,
+      height,
+      resolution: width || height ? { width, height } : null,
+      codecs: representation.codecs || adaptation.codecs || null,
+      mimeType,
+      language: adaptation.lang || representation.lang || null,
+      name: adaptation.label || representation.label || adaptation.lang || null
+    };
+  }
+  function deduplicateTracks(tracks) {
+    const unique = /* @__PURE__ */ new Map();
+    for (const track of tracks) {
+      const key = [
+        track.type,
+        track.id,
+        track.bandwidth,
+        track.width,
+        track.height,
+        track.language
+      ].join(":");
+      unique.set(key, track);
+    }
+    return [...unique.values()].slice(0, 100);
+  }
+  function extractProtectionSchemes(xml) {
+    return [
+      ...new Set(
+        [...xml.matchAll(/<ContentProtection\b([^>]*)>/gi)].map((match) => parseXmlAttributes(match[1]).schemeIdUri).filter(Boolean).map((value) => String(value).toLowerCase().slice(0, 100))
+      )
+    ];
+  }
+  function parseIsoDuration(value) {
+    if (typeof value !== "string" || !value) return null;
+    const match = value.match(
+      /^P(?:(\d+(?:\.\d+)?)D)?(?:T(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?)?$/i
+    );
+    if (!match) return null;
+    const seconds = Number(match[1] || 0) * 86400 + Number(match[2] || 0) * 3600 + Number(match[3] || 0) * 60 + Number(match[4] || 0);
+    return Number.isFinite(seconds) ? seconds : null;
+  }
+  function parseXmlAttributes(value) {
+    const attributes = {};
+    for (const match of String(value || "").matchAll(
+      /([:\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g
+    )) {
+      attributes[match[1]] = decodeXml(match[2] ?? match[3] ?? "");
+    }
+    return attributes;
+  }
+  function decodeXml(value) {
+    return value.replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+  }
+  function positiveInteger(value) {
+    const number = Number(value);
+    return Number.isInteger(number) && number > 0 ? number : null;
+  }
+  function revisionId(url, body) {
+    let hash = 2166136261;
+    const input = `${url || ""}
+${body}`;
+    for (let index = 0; index < input.length; index++) {
+      hash ^= input.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return `dash-${(hash >>> 0).toString(36)}`;
+  }
+  function unsupported2(error) {
+    return {
+      kind: "dash",
+      status: "unsupported",
+      error,
+      playlistType: null,
+      streamType: null,
+      duration: null,
+      variants: [],
+      iframeVariants: [],
+      audioTracks: [],
+      subtitles: [],
+      segmentCount: null,
+      partialSegmentCount: null,
+      skippedSegmentCount: null,
+      lowLatency: false,
+      mediaSequence: null,
+      discontinuitySequence: null,
+      revisionId: null,
+      encryptionMethods: [],
+      encryptionKeyFormats: [],
+      encryptionScheme: "none",
+      drmSystem: null,
+      drmEvidence: [],
+      drm: "none"
+    };
+  }
+
+  // src/media/probe-gate.js
+  function isUsableMediaProbe(probe = {}) {
+    if (probe.status !== "ready") return false;
+    if (probe.kind === "dash") {
+      return Boolean(
+        probe.variants?.length || probe.audioTracks?.length || ["vod", "live"].includes(probe.streamType)
+      );
+    }
+    if (probe.playlistType === "master") {
+      return Boolean(
+        probe.variants?.length || probe.iframeVariants?.length || probe.audioTracks?.length || probe.subtitles?.length
+      );
+    }
+    if (probe.playlistType !== "media") return false;
+    return Boolean(
+      probe.segmentCount > 0 || probe.partialSegmentCount > 0 || ["vod", "live"].includes(probe.streamType)
+    );
+  }
+
+  // src/background/media-manifest-handoff.js
+  var HANDOFF_PREFIX = "adsfriendly.mediaManifestHandoff.";
+  var MAX_HANDOFF_BYTES = 512 * 1024;
+  var MAX_HANDOFFS_PER_TAB = 2;
+  var MAX_HANDOFFS_TOTAL = 8;
+  var HANDOFF_TTL_MS = 15 * 60 * 1e3;
+  var storageOperation = Promise.resolve();
+  function startMediaManifestHandoffStore() {
+    const onRemoved = (tabId) => clearMediaManifestHandoffs(tabId).catch(() => {
+    });
+    chrome.tabs.onRemoved.addListener(onRemoved);
+    return () => chrome.tabs.onRemoved.removeListener(onRemoved);
+  }
+  async function saveMediaManifestHandoff(tabId, rawHandoff) {
+    assertTabId2(tabId);
+    const handoff = normalizeMediaManifestHandoff2(rawHandoff);
+    return withStorageLock(async () => {
+      const key = handoffKey(tabId);
+      const snapshot = await chrome.storage.session.get(null);
+      const records = [{ key, handoff }];
+      for (const [storedKey, value] of Object.entries(snapshot)) {
+        if (!storedKey.startsWith(HANDOFF_PREFIX)) continue;
+        for (const storedHandoff of pruneHandoffs(value)) {
+          if (storedKey === key && storedHandoff.mediaId === handoff.mediaId)
+            continue;
+          records.push({ key: storedKey, handoff: storedHandoff });
+        }
+      }
+      records.sort(
+        (left, right) => Number(right.handoff.capturedAt) - Number(left.handoff.capturedAt)
+      );
+      const selected = [];
+      const perTab = /* @__PURE__ */ new Map();
+      for (const record of records) {
+        if (selected.length >= MAX_HANDOFFS_TOTAL) break;
+        const count = perTab.get(record.key) || 0;
+        if (count >= MAX_HANDOFFS_PER_TAB) continue;
+        selected.push(record);
+        perTab.set(record.key, count + 1);
+      }
+      const updates = {};
+      for (const record of selected) {
+        (updates[record.key] ||= []).push(record.handoff);
+      }
+      const storedKeys = Object.keys(snapshot).filter(
+        (storedKey) => storedKey.startsWith(HANDOFF_PREFIX)
+      );
+      const removedKeys = storedKeys.filter((storedKey) => !updates[storedKey]);
+      if (Object.keys(updates).length) await chrome.storage.session.set(updates);
+      if (removedKeys.length) await chrome.storage.session.remove(removedKeys);
+      return { status: "saved", handoff: publicHandoff(handoff) };
+    });
+  }
+  async function getMediaManifestHandoff(tabId, mediaId) {
+    assertTabId2(tabId);
+    if (typeof mediaId !== "string" || !mediaId)
+      return { status: "invalid_media" };
+    return withStorageLock(async () => {
+      const key = handoffKey(tabId);
+      const snapshot = await chrome.storage.session.get(key);
+      const stored = Array.isArray(snapshot[key]) ? snapshot[key] : [];
+      const handoffs = pruneHandoffs(stored);
+      if (handoffs.length !== stored.length) {
+        if (handoffs.length)
+          await chrome.storage.session.set({ [key]: handoffs });
+        else await chrome.storage.session.remove(key);
+      }
+      const handoff = handoffs.find((item) => item.mediaId === mediaId);
+      return handoff ? { status: "found", handoff: { ...handoff } } : { status: "not_found" };
+    });
+  }
+  async function clearMediaManifestHandoffs(tabId) {
+    assertTabId2(tabId);
+    return withStorageLock(
+      () => chrome.storage.session.remove(handoffKey(tabId))
+    );
+  }
+  function normalizeMediaManifestHandoff2(value = {}, now = Date.now()) {
+    const body = typeof value.body === "string" ? value.body : "";
+    const bodyBytes = new TextEncoder().encode(body).byteLength;
+    if (!body || bodyBytes > MAX_HANDOFF_BYTES) {
+      throw new Error(
+        bodyBytes > MAX_HANDOFF_BYTES ? "Decrypted manifest exceeds the 512 KB handoff limit." : "Decrypted manifest body is empty."
+      );
+    }
+    const kind = value.kind === "dash" ? "dash" : "hls";
+    const manifestUrl = requiredHttpUrl2(value.manifestUrl);
+    const parsed = kind === "dash" ? { kind, ...parseDashManifest(manifestUrl, body) } : { kind, ...parseHlsManifest(manifestUrl, body) };
+    if (!isUsableMediaProbe(parsed)) {
+      throw new Error("Decrypted manifest is not a usable media source.");
+    }
+    return Object.freeze({
+      mediaId: requiredString3(value.mediaId, "mediaId"),
+      manifestUrl,
+      kind,
+      body,
+      bodyBytes,
+      revisionId: parsed.revisionId || null,
+      playlistType: parsed.playlistType || null,
+      streamType: parsed.streamType || null,
+      capturedAt: now,
+      expiresAt: now + HANDOFF_TTL_MS
+    });
+  }
+  function pruneHandoffs(value, now = Date.now()) {
+    return (Array.isArray(value) ? value : []).filter(
+      (item) => item && typeof item.body === "string" && Number(item.expiresAt) > now
+    ).slice(0, MAX_HANDOFFS_PER_TAB);
+  }
+  function publicHandoff(handoff) {
+    const { body: _body, ...metadata } = handoff;
+    return metadata;
+  }
+  function withStorageLock(operation) {
+    const result = storageOperation.then(operation, operation);
+    storageOperation = result.catch(() => {
+    });
+    return result;
+  }
+  function handoffKey(tabId) {
+    return `${HANDOFF_PREFIX}${tabId}`;
+  }
+  function assertTabId2(tabId) {
+    if (!Number.isInteger(tabId) || tabId < 0)
+      throw new Error("A valid tab ID is required for manifest handoff.");
+  }
+  function requiredString3(value, field) {
+    if (typeof value !== "string" || !value.trim())
+      throw new Error(`Manifest handoff ${field} is required.`);
+    return value;
+  }
+  function requiredHttpUrl2(value) {
+    try {
+      const url = new URL(value);
+      if (!["http:", "https:"].includes(url.protocol)) throw new Error();
+      return url.href;
+    } catch {
+      throw new Error("Manifest handoff URL must be HTTP(S).");
+    }
   }
 
   // src/background/media-download-jobs.js
@@ -5035,6 +5874,9 @@ var AdsFriendlyBackground = (() => {
       return { status: "unsupported", reason: availability.reason };
     const helperFailure = await helperFailureFor(candidate);
     if (helperFailure) return helperFailure;
+    const handoffResult = await attachManifestHandoff(tabId, candidate);
+    if (handoffResult.status !== "ready") return handoffResult;
+    candidate = handoffResult.candidate;
     const job = normalizeMediaDownloadJob({
       id: randomId5(),
       createdAt: Date.now(),
@@ -5119,13 +5961,19 @@ var AdsFriendlyBackground = (() => {
     return { status: "removed", removedCount };
   }
   async function restartJob(state, requestedConnections) {
-    const candidate = state.candidate || await recoverCandidate(state);
+    let candidate = await recoverCandidate(state) || state.candidate;
     if (!candidate) {
       return {
         status: "media_not_found",
         reason: "The original media source is no longer available. Reopen its video page."
       };
     }
+    const handoffResult = await attachManifestHandoff(
+      state.sourceTabId,
+      candidate
+    );
+    if (handoffResult.status !== "ready") return handoffResult;
+    candidate = handoffResult.candidate;
     const helperFailure = await helperFailureFor(candidate);
     if (helperFailure) return helperFailure;
     const job = normalizeMediaDownloadJob({
@@ -5142,6 +5990,22 @@ var AdsFriendlyBackground = (() => {
       attempt: Math.max(1, Number(state.attempt) || 1) + 1
     });
   }
+  async function attachManifestHandoff(tabId, candidate) {
+    if (candidate.probeSource !== "decrypted_blob")
+      return { status: "ready", candidate };
+    const response = await getMediaManifestHandoff(tabId, candidate.id);
+    const handoff = response.handoff;
+    if (response.status !== "found" || handoff?.manifestUrl !== candidate.manifestUrl || handoff?.kind !== candidate.kind || candidate.revisionId && handoff?.revisionId !== candidate.revisionId) {
+      return {
+        status: "manifest_handoff_expired",
+        reason: "The decrypted manifest expired. Reload the video page and retry."
+      };
+    }
+    return {
+      status: "ready",
+      candidate: { ...candidate, manifestHandoff: handoff }
+    };
+  }
   async function recoverCandidate(state) {
     if (!Number.isInteger(state.sourceTabId) || !state.mediaId) return null;
     const response = await listDiscoveredMedia(state.sourceTabId);
@@ -5156,12 +6020,12 @@ var AdsFriendlyBackground = (() => {
         reason: "Media Helper must be installed and available to download video."
       };
     }
-    const capabilityReady = candidate.kind === "direct" ? helper.canDownloadDirect : candidate.kind === "hls" ? helper.canDownloadHls : helper.canDownloadDash;
+    const capabilityReady = candidate.kind === "direct" ? helper.canDownloadDirect : candidate.kind === "hls" ? candidate.probeSource === "decrypted_blob" ? helper.canDownloadHls && helper.canDownloadDecryptedHls : helper.canDownloadHls : helper.canDownloadDash;
     if (capabilityReady) return null;
     return {
       status: "helper_not_ready",
       helper,
-      reason: candidate.kind === "direct" ? "This Media Helper build cannot download direct media yet." : candidate.kind === "hls" ? "This Media Helper build does not execute HLS downloads yet." : "This Media Helper build does not execute DASH downloads yet."
+      reason: candidate.kind === "direct" ? "This Media Helper build cannot download direct media yet." : candidate.kind === "hls" ? candidate.probeSource === "decrypted_blob" ? "This Media Helper build cannot accept a player-decrypted HLS manifest yet." : "This Media Helper build does not execute HLS downloads yet." : "This Media Helper build does not execute DASH downloads yet."
     };
   }
   async function readJob(jobId) {
@@ -5225,8 +6089,8 @@ var AdsFriendlyBackground = (() => {
       throw new TypeError("Media probe rule needs a positive integer ID.");
     if (!Number.isInteger(tabId) || tabId < 0)
       throw new TypeError("Media probe rule needs a valid tab ID.");
-    const manifest = requiredHttpUrl2(manifestUrl, "manifestUrl");
-    const parent = requiredHttpUrl2(parentDocumentUrl, "parentDocumentUrl");
+    const manifest = requiredHttpUrl3(manifestUrl, "manifestUrl");
+    const parent = requiredHttpUrl3(parentDocumentUrl, "parentDocumentUrl");
     return {
       id: ruleId,
       priority: 1,
@@ -5250,7 +6114,7 @@ var AdsFriendlyBackground = (() => {
       nextRuleId = PROBE_RULE_ID_BASE;
     return ruleId;
   }
-  function requiredHttpUrl2(value, field) {
+  function requiredHttpUrl3(value, field) {
     let url;
     try {
       url = new URL(value);
@@ -5277,7 +6141,7 @@ var AdsFriendlyBackground = (() => {
     return () => chrome.tabs.onRemoved.removeListener(onRemoved);
   }
   async function saveMediaDebugCapture(tabId, rawCapture) {
-    assertTabId2(tabId);
+    assertTabId3(tabId);
     const capture = normalizeDebugCapture(rawCapture);
     const key = debugCaptureKey(tabId);
     const snapshot = await chrome.storage.session.get(key);
@@ -5290,7 +6154,7 @@ var AdsFriendlyBackground = (() => {
     return { status: "saved", capture: publicCapture(capture) };
   }
   async function getMediaDebugCapture(tabId, mediaId) {
-    assertTabId2(tabId);
+    assertTabId3(tabId);
     if (typeof mediaId !== "string" || !mediaId)
       return { status: "invalid_media" };
     const key = debugCaptureKey(tabId);
@@ -5305,7 +6169,7 @@ var AdsFriendlyBackground = (() => {
     return capture ? { status: "found", capture: { ...capture } } : { status: "not_found" };
   }
   async function clearMediaDebugCaptures(tabId) {
-    assertTabId2(tabId);
+    assertTabId3(tabId);
     await chrome.storage.session.remove(debugCaptureKey(tabId));
   }
   function normalizeDebugCapture(value = {}, now = Date.now()) {
@@ -5317,13 +6181,13 @@ var AdsFriendlyBackground = (() => {
       );
     }
     return Object.freeze({
-      mediaId: requiredString3(value.mediaId, "mediaId"),
-      manifestUrl: requiredHttpUrl3(value.manifestUrl),
+      mediaId: requiredString4(value.mediaId, "mediaId"),
+      manifestUrl: requiredHttpUrl4(value.manifestUrl),
       kind: ["hls", "dash"].includes(value.kind) ? value.kind : "hls",
       body,
       bodyBytes,
       bodyFormat: ["hls", "dash", "unknown"].includes(value.bodyFormat) ? value.bodyFormat : "unknown",
-      reason: requiredString3(value.reason, "reason").slice(0, 100),
+      reason: requiredString4(value.reason, "reason").slice(0, 100),
       capturedAt: now,
       expiresAt: now + CAPTURE_TTL_MS
     });
@@ -5340,16 +6204,16 @@ var AdsFriendlyBackground = (() => {
   function debugCaptureKey(tabId) {
     return `${DEBUG_CAPTURE_PREFIX}${tabId}`;
   }
-  function assertTabId2(tabId) {
+  function assertTabId3(tabId) {
     if (!Number.isInteger(tabId) || tabId < 0)
       throw new Error("A valid tab ID is required for debug capture.");
   }
-  function requiredString3(value, field) {
+  function requiredString4(value, field) {
     if (typeof value !== "string" || !value.trim())
       throw new Error(`Debug capture ${field} is required.`);
     return value;
   }
-  function requiredHttpUrl3(value) {
+  function requiredHttpUrl4(value) {
     try {
       const url = new URL(value);
       if (!["http:", "https:"].includes(url.protocol)) throw new Error();
@@ -5357,6 +6221,44 @@ var AdsFriendlyBackground = (() => {
     } catch {
       throw new Error("Debug capture manifestUrl must be HTTP(S).");
     }
+  }
+
+  // src/media/media-title.js
+  function chooseMediaTitle(candidateTitle, pageTitle, pageUrl = "") {
+    const candidate = cleanMediaTitle(candidateTitle, pageUrl);
+    if (candidate && !isGenericMediaTitle(candidate, pageUrl)) return candidate;
+    return cleanMediaTitle(pageTitle, pageUrl) || candidate || null;
+  }
+  function cleanMediaTitle(value, pageUrl = "") {
+    let title = typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+    if (!title) return null;
+    title = title.replace(/^(?:xem\s+phim|watch)\s+/i, "").replace(/\s+(?:vietsub|thuyết\s+minh)(?:\s*[-|].*)?$/i, "").trim();
+    const hostname = safeHostname(pageUrl);
+    if (hostname) {
+      const site = hostname.replace(/^www\./, "").split(".", 1)[0];
+      title = title.replace(
+        new RegExp(`\\s*[-|]\\s*${escapeRegex2(site)}.*$`, "i"),
+        ""
+      );
+    }
+    return title.slice(0, 180).trim() || null;
+  }
+  function isGenericMediaTitle(value, pageUrl) {
+    if (/^(?:player|video|media|blob|blob media stream)$/i.test(value))
+      return true;
+    if (/^[a-f0-9_-]{24,}$/i.test(value)) return true;
+    const hostname = safeHostname(pageUrl);
+    return Boolean(hostname && value.toLowerCase() === hostname.toLowerCase());
+  }
+  function safeHostname(value) {
+    try {
+      return new URL(value).hostname;
+    } catch {
+      return "";
+    }
+  }
+  function escapeRegex2(value) {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
 
   // src/background/message-router.js
@@ -5396,6 +6298,7 @@ var AdsFriendlyBackground = (() => {
     GET_MEDIA_CATALOG: CAPABILITIES.MEDIA_CATALOG,
     SAVE_MEDIA_DEBUG_MANIFEST: CAPABILITIES.MEDIA_CATALOG,
     GET_MEDIA_DEBUG_MANIFEST: CAPABILITIES.MEDIA_CATALOG,
+    SAVE_DECRYPTED_MEDIA_MANIFEST: CAPABILITIES.MEDIA_CATALOG,
     GET_MEDIA_HELPER_STATUS: CAPABILITIES.MEDIA_DOWNLOAD,
     CREATE_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
     CANCEL_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
@@ -5483,7 +6386,12 @@ var AdsFriendlyBackground = (() => {
         ...message.event,
         payload: {
           ...message.event?.payload,
-          pageUrl: sender.tab.url || message.event?.payload?.pageUrl
+          pageUrl: sender.tab.url || message.event?.payload?.pageUrl,
+          title: chooseMediaTitle(
+            message.event?.payload?.title,
+            sender.tab.title,
+            sender.tab.url
+          )
         },
         metadata: {
           ...message.event?.metadata,
@@ -5587,6 +6495,26 @@ var AdsFriendlyBackground = (() => {
       if (!isExtensionPageSender(sender)) return { status: "forbidden" };
       if (!Number.isInteger(message.tabId)) return { status: "invalid_tab" };
       return getMediaDebugCapture(message.tabId, message.mediaId);
+    }
+    if (message.type === "SAVE_DECRYPTED_MEDIA_MANIFEST") {
+      const tabId = sender?.tab?.id;
+      const frameId = sender?.frameId;
+      if (!Number.isInteger(tabId) || !Number.isInteger(frameId))
+        return { status: "ignored" };
+      const snapshot = await listDiscoveredMedia(tabId);
+      const candidate = snapshot.items.find(
+        (item) => item.id === message.handoff?.mediaId && item.manifestUrl === message.handoff?.manifestUrl && item.kind === message.handoff?.kind && item.probeSource === "decrypted_blob" && item.frameId === frameId
+      );
+      if (!candidate) return { status: "catalog_pending" };
+      const saved = await saveMediaManifestHandoff(tabId, message.handoff);
+      const recorded = await recordMediaManifestHandoff(
+        tabId,
+        createRegisteredEvent(EVENTS.MEDIA_MANIFEST_HANDOFF_READY, {
+          ...saved.handoff,
+          pageUrl: candidate.pageUrl
+        })
+      );
+      return recorded.status === "recorded" ? { status: "saved", handoff: saved.handoff } : recorded;
     }
     if (message.type === "GET_MEDIA_HELPER_STATUS") {
       return getMediaHelperStatus({ force: message.force === true });
@@ -6324,7 +7252,7 @@ var AdsFriendlyBackground = (() => {
       pageUrl: tab.url,
       sourceUrl: observation.url,
       mimeType: observation.mimeType,
-      title: tab.title || null,
+      title: chooseMediaTitle(null, tab.title, tab.url),
       detectedBy: "network"
     });
     if (!candidate) return;
@@ -6404,6 +7332,7 @@ var AdsFriendlyBackground = (() => {
       "background.message-router": ({ policy }) => registerMessageRouter(policy),
       "background.media-catalog": () => startBackgroundMediaCatalog(),
       "background.media-debug-capture": () => startMediaDebugCaptureStore(),
+      "background.media-manifest-handoff": () => startMediaManifestHandoffStore(),
       "background.media-request-observer": () => startBackgroundMediaRequestObserver(),
       "background.media-download-jobs": ({ policy }) => startMediaDownloadJobStore(policy),
       "background.navigation-guard": ({ policy }) => registerNavigationGuard(policy),

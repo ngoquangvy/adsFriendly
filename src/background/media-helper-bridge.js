@@ -94,6 +94,8 @@ async function probeMediaHelperStatus(timeoutMs) {
         capabilities[MEDIA_HELPER_CAPABILITIES.DIRECT_HTTP_DOWNLOAD] === true,
       canDownloadHls:
         capabilities[MEDIA_HELPER_CAPABILITIES.HLS_VOD_DOWNLOAD] === true,
+      canDownloadDecryptedHls:
+        capabilities[MEDIA_HELPER_CAPABILITIES.HLS_DECRYPTED_MANIFEST] === true,
       canDownloadDash:
         capabilities[MEDIA_HELPER_CAPABILITIES.DASH_VOD_DOWNLOAD] === true,
       canMuxWithFfmpeg:
@@ -130,7 +132,7 @@ export async function startMediaHelperDownload(
     kind: job.candidate.kind,
     title: job.candidate.title,
     sourceTabId: job.sourceTabId,
-    candidate: job.candidate,
+    candidate: withoutManifestBody(job.candidate),
     connections,
     attempt,
     createdAt: job.createdAt,
@@ -181,6 +183,12 @@ export async function startMediaHelperDownload(
     },
   });
   return { status: "started", jobId: job.id };
+}
+
+function withoutManifestBody(candidate) {
+  if (!candidate.manifestHandoff) return candidate;
+  const { body: _body, ...manifestHandoff } = candidate.manifestHandoff;
+  return { ...candidate, manifestHandoff };
 }
 
 export async function cancelMediaHelperDownload(
@@ -438,6 +446,7 @@ function helperStatus(status, details = {}) {
     installed: status === MEDIA_HELPER_STATES.READY,
     canDownloadDirect: false,
     canDownloadHls: false,
+    canDownloadDecryptedHls: false,
     canDownloadDash: false,
     canMuxWithFfmpeg: false,
     helperVersion: null,

@@ -4,6 +4,7 @@ import {
   classifyMediaSource,
 } from "../media/detection.js";
 import { EVENTS, createRegisteredEvent } from "../runtime/event-catalog.js";
+import { chooseMediaTitle } from "../media/media-title.js";
 
 const OBSERVED_RESOURCE_TYPES = Object.freeze([
   "xmlhttprequest",
@@ -69,7 +70,7 @@ async function recordObservation(observation) {
     pageUrl: tab.url,
     sourceUrl: observation.url,
     mimeType: observation.mimeType,
-    title: tab.title || null,
+    title: chooseMediaTitle(null, tab.title, tab.url),
     detectedBy: "network",
   });
   if (!candidate) return;

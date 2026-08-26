@@ -56,10 +56,45 @@ export function normalizeMediaDownloadJob(value = {}) {
               candidate.skippedSegmentCount,
             ),
             lowLatency: candidate.lowLatency === true,
+            probeSource:
+              candidate.probeSource === "decrypted_blob"
+                ? "decrypted_blob"
+                : candidate.probeSource || null,
+            manifestHandoff: normalizeDownloadManifestHandoff(
+              candidate.manifestHandoff,
+              candidate,
+            ),
             requestContext: normalizeDownloadRequestContext(
               candidate.resolvedRequestContext || candidate.requestContext,
             ),
           },
+  };
+}
+
+function normalizeDownloadManifestHandoff(value, candidate) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const body = typeof value.body === "string" ? value.body : "";
+  const bodyBytes = new TextEncoder().encode(body).byteLength;
+  if (!body || bodyBytes > 512 * 1024)
+    throw new Error("[MediaDownload] Invalid decrypted manifest handoff.");
+  const manifestUrl = requiredHttpUrl(
+    value.manifestUrl,
+    "candidate.manifestHandoff.manifestUrl",
+  );
+  if (
+    manifestUrl !== candidate.manifestUrl ||
+    value.kind !== candidate.kind ||
+    Number(value.expiresAt) <= Date.now()
+  ) {
+    throw new Error("[MediaDownload] Decrypted manifest handoff expired.");
+  }
+  return {
+    kind: value.kind,
+    manifestUrl,
+    body,
+    bodyBytes,
+    revisionId: optionalString(value.revisionId),
+    expiresAt: Number(value.expiresAt),
   };
 }
 
@@ -98,7 +133,10 @@ export function getMediaDownloadAvailability(candidate = {}) {
     };
   if (candidate.probeStatus !== "ready")
     return { supported: false, reason: "Manifest is not ready." };
-  if (candidate.probeSource === "decrypted_blob")
+  if (
+    candidate.probeSource === "decrypted_blob" &&
+    !hasCurrentManifestHandoff(candidate)
+  )
     return {
       supported: false,
       reason:
@@ -131,6 +169,14 @@ export function getMediaDownloadAvailability(candidate = {}) {
   if (!["master", "media"].includes(candidate.playlistType))
     return { supported: false, reason: "Unknown HLS playlist type." };
   return { supported: true, reason: null };
+}
+
+function hasCurrentManifestHandoff(candidate) {
+  return (
+    candidate.manifestHandoff?.mediaId === candidate.id &&
+    candidate.manifestHandoff?.manifestUrl === candidate.manifestUrl &&
+    Number(candidate.manifestHandoff?.expiresAt) > Date.now()
+  );
 }
 
 function isDownloadableAes128(candidate) {

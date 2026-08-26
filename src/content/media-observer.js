@@ -58,6 +58,14 @@ export function startMediaObserver() {
       return;
     }
     if (
+      messageEvent.source === window &&
+      messageEvent.data?.source === "adsfriendly-spy" &&
+      messageEvent.data?.type === "MEDIA_DECRYPTED_MANIFEST_READY"
+    ) {
+      saveDecryptedManifestHandoff(messageEvent.data.handoff);
+      return;
+    }
+    if (
       messageEvent.source !== window ||
       messageEvent.data?.source !== "adsfriendly-spy" ||
       messageEvent.data?.type !== "REGISTERED_EVENT" ||
@@ -290,6 +298,27 @@ export function startMediaObserver() {
           },
           "*",
         );
+      })
+      .catch(() => {});
+  }
+
+  function saveDecryptedManifestHandoff(handoff, attempt = 0) {
+    if (stopped || !handoff) return;
+    chrome.runtime
+      .sendMessage({
+        type: "SAVE_DECRYPTED_MEDIA_MANIFEST",
+        handoff,
+      })
+      .then((response) => {
+        if (response?.status !== "catalog_pending" || attempt >= 4) return;
+        const retryId = setTimeout(
+          () => {
+            retryTimers.delete(retryId);
+            saveDecryptedManifestHandoff(handoff, attempt + 1);
+          },
+          100 * (attempt + 1),
+        );
+        retryTimers.add(retryId);
       })
       .catch(() => {});
   }

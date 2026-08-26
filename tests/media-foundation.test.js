@@ -20,6 +20,7 @@ import { createMediaObserverReportKey } from "../src/content/media-observer.js";
 import { createMediaProbeRefererRule } from "../src/background/media-probe-context.js";
 import { createMediaRequestObservation } from "../src/background/media-request-observer.js";
 import { normalizeDebugCapture } from "../src/background/media-debug-capture.js";
+import { normalizeMediaManifestHandoff as normalizeStoredManifestHandoff } from "../src/background/media-manifest-handoff.js";
 import {
   createContextualProbeInit,
   readXhrResponseBody,
@@ -74,6 +75,7 @@ import {
   MEDIA_RESOLUTION_STAGES,
   diagnoseMediaResolution,
 } from "../src/media/resolution-diagnostics.js";
+import { chooseMediaTitle } from "../src/media/media-title.js";
 
 test("offers a helper setup action independently from downloadable media", () => {
   assert.deepEqual(helperSetupPresentation({ status: "permission_required" }), {
@@ -839,6 +841,80 @@ test("catalog resolves a traced Blob row to its downloadable HLS source", () => 
   assert.match(
     getMediaDownloadAvailability(resolvedBlob.resolvedStream).reason,
     /download handoff/i,
+  );
+
+  const expiresAt = Date.now() + 60_000;
+  catalog.applyManifestHandoff(
+    24,
+    createRegisteredEvent(EVENTS.MEDIA_MANIFEST_HANDOFF_READY, {
+      mediaId: hls.id,
+      pageUrl,
+      manifestUrl: hls.manifestUrl,
+      kind: "hls",
+      bodyBytes: 256,
+      revisionId: "decrypted-revision",
+      capturedAt: Date.now(),
+      expiresAt,
+    }),
+  );
+  const readyBlob = catalog.list(24).find((item) => item.id === blob.id);
+  assert.equal(selectVisibleMediaItems(catalog.list(24)).length, 1);
+  assert.equal(
+    getMediaDownloadAvailability(readyBlob.resolvedStream).supported,
+    true,
+  );
+  assert.equal(readyBlob.resolvedStream.manifestHandoff.expiresAt, expiresAt);
+});
+
+test("decrypted manifest handoff is bounded and validates a usable VOD", () => {
+  const now = Date.now();
+  const handoff = normalizeStoredManifestHandoff(
+    {
+      mediaId: "media-hls",
+      manifestUrl: "https://cdn.example/path/index.m3u8",
+      kind: "hls",
+      body: [
+        "#EXTM3U",
+        "#EXT-X-PLAYLIST-TYPE:VOD",
+        "#EXTINF:4,",
+        "segment-1.ts",
+        "#EXT-X-ENDLIST",
+      ].join("\n"),
+    },
+    now,
+  );
+  assert.equal(handoff.playlistType, "media");
+  assert.equal(handoff.streamType, "vod");
+  assert.equal(handoff.expiresAt, now + 15 * 60 * 1000);
+  assert.equal(handoff.body.includes("segment-1.ts"), true);
+  assert.throws(
+    () =>
+      normalizeStoredManifestHandoff({
+        mediaId: "media-hls",
+        manifestUrl: "https://cdn.example/path/index.m3u8",
+        kind: "hls",
+        body: "#EXTM3U\n#EXT-X-VERSION:3",
+      }),
+    /usable media source/i,
+  );
+});
+
+test("public media title prefers page metadata over a technical player name", () => {
+  assert.equal(
+    chooseMediaTitle(
+      "4fa5f5a30bd613f4d02f777ca1ef98a8",
+      "Xem phim Máu và Cổ Vật (Phần 1) Tập 1-2 Vietsub - PhimVietSub",
+      "https://phimvietsub.click/mau-va-co-vat/tap-1-2",
+    ),
+    "Máu và Cổ Vật (Phần 1) Tập 1-2",
+  );
+  assert.equal(
+    chooseMediaTitle(
+      "Player",
+      "Những khoảnh khắc hài hước nhất năm - Phần 589 | Example",
+      "https://example.com/watch/589",
+    ),
+    "Những khoảnh khắc hài hước nhất năm - Phần 589",
   );
 });
 

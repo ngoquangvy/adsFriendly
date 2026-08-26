@@ -1,6 +1,7 @@
 import {
   normalizeMediaCandidate,
   normalizeBlobSourceTrace,
+  normalizeMediaManifestHandoff,
   normalizeMediaProbe,
   normalizeMediaProbeDiagnostic,
   normalizeEmeObservation,
@@ -12,6 +13,7 @@ export const EVENTS = Object.freeze({
   MEDIA_PROBED: "media.probed",
   MEDIA_PROBE_DIAGNOSTIC: "media.probe_diagnostic",
   MEDIA_BLOB_TRACED: "media.blob_traced",
+  MEDIA_MANIFEST_HANDOFF_READY: "media.manifest_handoff_ready",
   MEDIA_EME_OBSERVED: "media.eme_observed",
   MEDIA_CATALOG_UPDATED: "media.catalog.updated",
   VIDEO_AD_EVIDENCE_FOUND: "video_ad.evidence_found",
@@ -44,6 +46,12 @@ export const EVENT_CATALOG = Object.freeze({
     "media.blob-source-tracer",
     ["media.catalog"],
     normalizeBlobSourceTrace,
+  ),
+  [E.MEDIA_MANIFEST_HANDOFF_READY]: event(
+    E.MEDIA_MANIFEST_HANDOFF_READY,
+    "media.manifest-handoff",
+    ["media.catalog", "media.downloader"],
+    normalizeMediaManifestHandoff,
   ),
   [E.MEDIA_EME_OBSERVED]: event(
     E.MEDIA_EME_OBSERVED,

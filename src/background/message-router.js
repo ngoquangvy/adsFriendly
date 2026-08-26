@@ -33,6 +33,7 @@ import {
   recordMediaProbe,
   recordMediaProbeDiagnostic,
   recordMediaEmeObservation,
+  recordMediaManifestHandoff,
 } from "./media-catalog.js";
 import {
   listMediaDownloadJobs,
@@ -52,6 +53,9 @@ import {
   getMediaDebugCapture,
   saveMediaDebugCapture,
 } from "./media-debug-capture.js";
+import { saveMediaManifestHandoff } from "./media-manifest-handoff.js";
+import { EVENTS, createRegisteredEvent } from "../runtime/event-catalog.js";
+import { chooseMediaTitle } from "../media/media-title.js";
 
 const MESSAGE_CAPABILITIES = Object.freeze({
   TRUSTED_CLICK: CAPABILITIES.NAVIGATION_INTENT,
@@ -89,6 +93,7 @@ const MESSAGE_CAPABILITIES = Object.freeze({
   GET_MEDIA_CATALOG: CAPABILITIES.MEDIA_CATALOG,
   SAVE_MEDIA_DEBUG_MANIFEST: CAPABILITIES.MEDIA_CATALOG,
   GET_MEDIA_DEBUG_MANIFEST: CAPABILITIES.MEDIA_CATALOG,
+  SAVE_DECRYPTED_MEDIA_MANIFEST: CAPABILITIES.MEDIA_CATALOG,
   GET_MEDIA_HELPER_STATUS: CAPABILITIES.MEDIA_DOWNLOAD,
   CREATE_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
   CANCEL_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
@@ -182,6 +187,11 @@ async function route(message, sender) {
       payload: {
         ...message.event?.payload,
         pageUrl: sender.tab.url || message.event?.payload?.pageUrl,
+        title: chooseMediaTitle(
+          message.event?.payload?.title,
+          sender.tab.title,
+          sender.tab.url,
+        ),
       },
       metadata: {
         ...message.event?.metadata,
@@ -288,6 +298,33 @@ async function route(message, sender) {
     if (!isExtensionPageSender(sender)) return { status: "forbidden" };
     if (!Number.isInteger(message.tabId)) return { status: "invalid_tab" };
     return getMediaDebugCapture(message.tabId, message.mediaId);
+  }
+  if (message.type === "SAVE_DECRYPTED_MEDIA_MANIFEST") {
+    const tabId = sender?.tab?.id;
+    const frameId = sender?.frameId;
+    if (!Number.isInteger(tabId) || !Number.isInteger(frameId))
+      return { status: "ignored" };
+    const snapshot = await listDiscoveredMedia(tabId);
+    const candidate = snapshot.items.find(
+      (item) =>
+        item.id === message.handoff?.mediaId &&
+        item.manifestUrl === message.handoff?.manifestUrl &&
+        item.kind === message.handoff?.kind &&
+        item.probeSource === "decrypted_blob" &&
+        item.frameId === frameId,
+    );
+    if (!candidate) return { status: "catalog_pending" };
+    const saved = await saveMediaManifestHandoff(tabId, message.handoff);
+    const recorded = await recordMediaManifestHandoff(
+      tabId,
+      createRegisteredEvent(EVENTS.MEDIA_MANIFEST_HANDOFF_READY, {
+        ...saved.handoff,
+        pageUrl: candidate.pageUrl,
+      }),
+    );
+    return recorded.status === "recorded"
+      ? { status: "saved", handoff: saved.handoff }
+      : recorded;
   }
   if (message.type === "GET_MEDIA_HELPER_STATUS") {
     return getMediaHelperStatus({ force: message.force === true });

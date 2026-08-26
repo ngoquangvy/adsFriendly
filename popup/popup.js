@@ -234,6 +234,7 @@ var AdsFriendlyPopup = (() => {
     ]),
     feature("background.media-catalog", "background", C2.MEDIA_CATALOG),
     feature("background.media-debug-capture", "background", C2.MEDIA_CATALOG),
+    feature("background.media-manifest-handoff", "background", C2.MEDIA_CATALOG),
     feature(
       "background.media-request-observer",
       "background",
@@ -508,7 +509,7 @@ var AdsFriendlyPopup = (() => {
       };
     if (candidate.probeStatus !== "ready")
       return { supported: false, reason: "Manifest is not ready." };
-    if (candidate.probeSource === "decrypted_blob")
+    if (candidate.probeSource === "decrypted_blob" && !hasCurrentManifestHandoff(candidate))
       return {
         supported: false,
         reason: "Player-decrypted manifest found; secure download handoff is not ready yet."
@@ -536,6 +537,9 @@ var AdsFriendlyPopup = (() => {
     if (!["master", "media"].includes(candidate.playlistType))
       return { supported: false, reason: "Unknown HLS playlist type." };
     return { supported: true, reason: null };
+  }
+  function hasCurrentManifestHandoff(candidate) {
+    return candidate.manifestHandoff?.mediaId === candidate.id && candidate.manifestHandoff?.manifestUrl === candidate.manifestUrl && Number(candidate.manifestHandoff?.expiresAt) > Date.now();
   }
   function isDownloadableAes128(candidate) {
     const methods = candidate.encryptionMethods || [];
@@ -803,7 +807,7 @@ var AdsFriendlyPopup = (() => {
         message: "Playback only \xB7 DRM protected"
       });
     if (target.kind === "dash") return diagnoseDash(target);
-    if (target.probeSource === "decrypted_blob")
+    if (target.probeSource === "decrypted_blob" && !(Number(target.manifestHandoff?.expiresAt) > Date.now()))
       return diagnostic(
         S.PLAYER_DECRYPTION,
         D.UNHANDLED,
@@ -1038,6 +1042,7 @@ var AdsFriendlyPopup = (() => {
         helperVersion: helper.helperVersion,
         canDownloadDirect: helper.canDownloadDirect,
         canDownloadHls: helper.canDownloadHls,
+        canDownloadDecryptedHls: helper.canDownloadDecryptedHls,
         canDownloadDash: helper.canDownloadDash,
         error: helper.error
       } : null,
@@ -1056,6 +1061,17 @@ var AdsFriendlyPopup = (() => {
         ...item.blobTrace?.candidateIds || []
       ]).filter(Boolean)
     );
+    for (const blob of diagnosedItems.filter(
+      (item) => item.kind === "blob" && item.selectedMediaId
+    )) {
+      for (const source of diagnosedItems) {
+        if (source.kind !== "blob" && samePlaybackFrame(blob, source) && (source.selectedMediaId === blob.selectedMediaId || source.resolvedMediaIds?.includes(blob.selectedMediaId) || (blob.resolvedMediaIds || []).some(
+          (id) => source.resolvedMediaIds?.includes(id)
+        ))) {
+          blobResolvedSourceIds.add(source.id);
+        }
+      }
+    }
     const sorted = [...diagnosedItems].sort(
       (left, right) => (right.firstSeenAt || 0) - (left.firstSeenAt || 0) || String(left.id || "").localeCompare(String(right.id || ""))
     );
@@ -1376,6 +1392,7 @@ ${blobTitleKey(item.title)}`;
       revisionId: item.revisionId,
       probeSource: item.probeSource,
       manifestEnvelope: item.manifestEnvelope,
+      manifestHandoff: item.manifestHandoff,
       relatedCount: item.relatedCount,
       parentManifestIds: item.parentManifestIds,
       childManifestIds: item.childManifestIds,
@@ -1401,6 +1418,13 @@ ${blobTitleKey(item.title)}`;
       subtitles: item.subtitles,
       resolutionDiagnostic: item.resolutionDiagnostic
     };
+  }
+  function samePlaybackFrame(left, right) {
+    if (Number.isInteger(left.frameId) && Number.isInteger(right.frameId))
+      return left.frameId === right.frameId;
+    return Boolean(
+      left.frameUrl && right.frameUrl && left.frameUrl === right.frameUrl
+    );
   }
 
   // src/media/storage-keys.js
@@ -1722,6 +1746,8 @@ ${blobTitleKey(item.title)}`;
     return row;
   }
   function debugCaptureMediaId(item) {
+    const handoff = item.resolvedStream?.manifestHandoff || item.manifestHandoff;
+    if (Number(handoff?.expiresAt) > Date.now()) return null;
     const diagnostic2 = item.resolutionDiagnostic?.probeDiagnostic || item.probeDiagnostic;
     return [
       "manifest_parsed_no_stream",

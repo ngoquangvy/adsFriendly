@@ -187,6 +187,53 @@ test("helper HLS context carries routing facts without arbitrary headers", () =>
   assert.equal("headers" in payload.candidate.requestContext, false);
 });
 
+test("helper accepts only an exact bounded decrypted HLS handoff", () => {
+  const manifestUrl = "https://cdn.example/session/index.m3u8";
+  const body = [
+    "#EXTM3U",
+    "#EXT-X-PLAYLIST-TYPE:VOD",
+    "#EXTINF:4,",
+    "segment.ts",
+    "#EXT-X-ENDLIST",
+  ].join("\n");
+  const candidate = {
+    id: "media-hls",
+    kind: "hls",
+    pageUrl: "https://video.example/watch",
+    manifestUrl,
+    probeStatus: "ready",
+    playlistType: "media",
+    streamType: "vod",
+    segmentCount: 1,
+    manifestHandoff: {
+      kind: "hls",
+      manifestUrl,
+      body,
+      revisionId: "revision-1",
+    },
+  };
+  const payload = normalizeHelperDownloadPayload({
+    jobId: "decrypted-hls-1",
+    candidate,
+  });
+  assert.equal(payload.candidate.manifestHandoff.body, body);
+  assert.equal(payload.candidate.manifestHandoff.manifestUrl, manifestUrl);
+  assert.throws(
+    () =>
+      normalizeHelperDownloadPayload({
+        jobId: "decrypted-hls-2",
+        candidate: {
+          ...candidate,
+          manifestHandoff: {
+            ...candidate.manifestHandoff,
+            manifestUrl: "https://cdn.example/other.m3u8",
+          },
+        },
+      }),
+    /does not match the candidate/i,
+  );
+});
+
 test("helper accepts a normalized static DASH download", () => {
   const payload = normalizeHelperDownloadPayload({
     jobId: "dash-1",
@@ -254,6 +301,7 @@ test("helper status exposes only declared download capabilities", async () => {
           helperVersion: "0.1.0",
           capabilities: {
             [MEDIA_HELPER_CAPABILITIES.DIRECT_HTTP_DOWNLOAD]: true,
+            [MEDIA_HELPER_CAPABILITIES.HLS_DECRYPTED_MANIFEST]: true,
             "download.hls_vod": false,
             "download.dash_vod": true,
             "mux.ffmpeg": true,
@@ -267,11 +315,13 @@ test("helper status exposes only declared download capabilities", async () => {
     assert.equal(status.status, MEDIA_HELPER_STATES.READY);
     assert.equal(status.canDownloadDirect, true);
     assert.equal(status.canDownloadHls, false);
+    assert.equal(status.canDownloadDecryptedHls, true);
     assert.equal(status.canDownloadDash, true);
     assert.equal(status.canMuxWithFfmpeg, true);
     assert.deepEqual(status.capabilities, {
       "download.direct_http": true,
       "download.hls_vod": false,
+      "download.hls_decrypted_manifest": true,
       "download.dash_vod": true,
       "mux.ffmpeg": true,
     });

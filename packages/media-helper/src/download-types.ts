@@ -8,6 +8,13 @@ export interface DownloadCandidate {
   mimeType: string | null;
   duration: number | null;
   segmentCount: number | null;
+  manifestHandoff: {
+    kind: "hls";
+    manifestUrl: string;
+    body: string;
+    bodyBytes: number;
+    revisionId: string | null;
+  } | null;
   requestContext: {
     requestUrl: string | null;
     finalUrl: string | null;

@@ -1,4 +1,5 @@
 import { mkdir, rename, unlink } from "node:fs/promises";
+import { createServer } from "node:http";
 import { basename, extname, join } from "node:path";
 import { parseHlsManifest } from "../../../src/media/hls-parser.js";
 import {
@@ -41,6 +42,7 @@ async function downloadHls(
     job,
     manifestUrl,
     context.signal,
+    job.candidate.manifestHandoff?.body || null,
   );
 
   const outputDirectory = resolveOutputDirectory(job.outputDirectory);
@@ -53,13 +55,25 @@ async function downloadHls(
   );
   await unlink(partialPath).catch(() => {});
 
+  let ffmpegInput = finalManifestUrl;
+  let closeTemporaryManifest: (() => Promise<void>) | null = null;
+  if (job.candidate.manifestHandoff?.body) {
+    const temporaryManifest = await serveTemporaryManifest(
+      absolutizeHlsManifest(
+        job.candidate.manifestHandoff.body,
+        job.candidate.manifestHandoff.manifestUrl,
+      ),
+    );
+    ffmpegInput = temporaryManifest.url;
+    closeTemporaryManifest = temporaryManifest.close;
+  }
   const result = await runAdaptiveFfmpeg(
     job,
-    finalManifestUrl,
+    ffmpegInput,
     partialPath,
     context,
     "HLS",
-  );
+  ).finally(() => closeTemporaryManifest?.());
   context.progress({
     phase: "finalizing",
     downloadedBytes: result.totalBytes || 0,
@@ -74,10 +88,45 @@ async function downloadHls(
   return { outputPath, totalBytes: result.totalBytes, resumedBytes: 0 };
 }
 
+async function serveTemporaryManifest(body: string) {
+  const server = createServer((request, response) => {
+    if (request.method !== "GET" || request.url !== "/manifest.m3u8") {
+      response.writeHead(404).end();
+      return;
+    }
+    response.writeHead(200, {
+      "content-type": "application/vnd.apple.mpegurl",
+      "cache-control": "no-store",
+      "content-length": Buffer.byteLength(body, "utf8"),
+    });
+    response.end(body);
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    throw new Error("Could not open the temporary manifest handoff.");
+  }
+  let closed = false;
+  return {
+    url: `http://127.0.0.1:${address.port}/manifest.m3u8`,
+    close: () =>
+      new Promise<void>((resolve) => {
+        if (closed) return resolve();
+        closed = true;
+        server.close(() => resolve());
+      }),
+  };
+}
+
 async function preflightManifestTree(
   job: DownloadJob,
   rootUrl: string,
   signal: AbortSignal,
+  inlineRootBody: string | null = null,
 ) {
   const queue = [rootUrl];
   const visited = new Set<string>();
@@ -93,25 +142,32 @@ async function preflightManifestTree(
     const requestedUrl = queue.shift()!;
     if (visited.has(requestedUrl)) continue;
     visited.add(requestedUrl);
-    const response = await fetchRemote(requestedUrl, {
-      method: "GET",
-      headers: adaptiveRequestHeaders(job),
-      signal,
-    });
-    if (!response.ok) {
-      throw new Error(`HLS manifest returned HTTP ${response.status}.`);
+    let body: string;
+    let baseUrl = requestedUrl;
+    if (requestedUrl === rootUrl && inlineRootBody !== null) {
+      body = inlineRootBody;
+    } else {
+      const response = await fetchRemote(requestedUrl, {
+        method: "GET",
+        headers: adaptiveRequestHeaders(job),
+        signal,
+      });
+      if (!response.ok) {
+        throw new Error(`HLS manifest returned HTTP ${response.status}.`);
+      }
+      const length = Number(response.headers.get("content-length"));
+      if (Number.isFinite(length) && length > MAX_MANIFEST_BYTES) {
+        await response.body?.cancel().catch(() => {});
+        throw new Error("HLS manifest is too large.");
+      }
+      body = await response.text();
+      baseUrl = response.url || requestedUrl;
     }
-    const length = Number(response.headers.get("content-length"));
-    if (Number.isFinite(length) && length > MAX_MANIFEST_BYTES) {
-      await response.body?.cancel().catch(() => {});
-      throw new Error("HLS manifest is too large.");
-    }
-    const body = await response.text();
     if (Buffer.byteLength(body, "utf8") > MAX_MANIFEST_BYTES) {
       throw new Error("HLS manifest is too large.");
     }
-    if (requestedUrl === rootUrl) finalRootUrl = response.url || requestedUrl;
-    const summary = parseHlsManifest(response.url || requestedUrl, body);
+    if (requestedUrl === rootUrl) finalRootUrl = baseUrl;
+    const summary = parseHlsManifest(baseUrl, body);
     if (summary.status !== "ready" || summary.playlistType === "unknown") {
       throw new Error("HLS endpoint did not return a usable playlist.");
     }
@@ -124,7 +180,6 @@ async function preflightManifestTree(
       );
     }
 
-    const baseUrl = response.url || requestedUrl;
     for (const keyResource of extractKeyResources(body, baseUrl)) {
       await validateResource(keyResource, checkedResources, checkedHosts);
     }
@@ -151,6 +206,21 @@ async function preflightManifestTree(
   if (!mediaPlaylistCount)
     throw new Error("HLS master exposed no VOD playlist.");
   return finalRootUrl;
+}
+
+export function absolutizeHlsManifest(body: string, baseUrl: string) {
+  return body
+    .split(/\r?\n/)
+    .map((rawLine) => {
+      const line = rawLine.trim();
+      if (!line) return rawLine;
+      if (!line.startsWith("#")) return resolveHttpUrl(line, baseUrl);
+      return rawLine.replace(
+        /URI="([^"]+)"/gi,
+        (_match, value) => `URI="${resolveHttpUrl(value, baseUrl)}"`,
+      );
+    })
+    .join("\n");
 }
 
 async function validateResource(
