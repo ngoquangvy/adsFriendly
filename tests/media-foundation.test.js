@@ -87,6 +87,7 @@ import {
   captureFetchAesKey,
   clearAesKeyHandoffs,
   getAesKeyHandoff,
+  recoverAesKeyHandoffs,
   rememberHlsKeyUris,
 } from "../src/main-world/aes-key-handoff.js";
 import { collectAesKeyHandoffTargets } from "../src/background/media-download-jobs.js";
@@ -212,6 +213,68 @@ test("browser AES handoff survives a key response that wins the manifest parse r
     );
     finishOversizedInspection();
     assert.equal(oversizedCaptured, false);
+  } finally {
+    clearAesKeyHandoffs();
+  }
+});
+
+test("browser AES handoff retries a declared key inside the player page context", async () => {
+  const manifestUrl = "https://cdn.example/video/child.m3u8";
+  const keyUrl = "https://cdn.example/video/key.bin";
+  const keyBytes = Buffer.from("0123456789abcdef");
+  clearAesKeyHandoffs();
+  try {
+    rememberHlsKeyUris(
+      manifestUrl,
+      '#EXTM3U\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI="key.bin"\n#EXTINF:4,\nsegment.ts',
+    );
+    const calls = [];
+    const result = await recoverAesKeyHandoffs(
+      [manifestUrl],
+      async (url, init) => {
+        calls.push({ url, init });
+        return new Response(keyBytes, {
+          status: 200,
+          headers: { "content-type": "application/octet-stream" },
+        });
+      },
+    );
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, keyUrl);
+    assert.equal(calls[0].init.credentials, "include");
+    assert.equal(result.keys[0].data, keyBytes.toString("base64"));
+    assert.deepEqual(result.diagnostic, {
+      requestedManifestCount: 1,
+      matchedManifestCount: 1,
+      declaredKeyCount: 1,
+      capturedKeyCount: 1,
+      pageFetchAttemptCount: 1,
+      pageFetchSuccessCount: 1,
+      pageFetchStatuses: [200],
+      pageFetchErrorCount: 0,
+    });
+  } finally {
+    clearAesKeyHandoffs();
+  }
+});
+
+test("browser AES handoff reports a rejected page-context key retry", async () => {
+  const manifestUrl = "https://cdn.example/video/child.m3u8";
+  clearAesKeyHandoffs();
+  try {
+    rememberHlsKeyUris(
+      manifestUrl,
+      '#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI="key.bin"\n#EXTINF:4,\nsegment.ts',
+    );
+    const result = await recoverAesKeyHandoffs(
+      [manifestUrl],
+      async () => new Response("Forbidden", { status: 403 }),
+    );
+    assert.deepEqual(result.keys, []);
+    assert.equal(result.diagnostic.declaredKeyCount, 1);
+    assert.equal(result.diagnostic.pageFetchAttemptCount, 1);
+    assert.equal(result.diagnostic.pageFetchSuccessCount, 0);
+    assert.deepEqual(result.diagnostic.pageFetchStatuses, [403]);
   } finally {
     clearAesKeyHandoffs();
   }

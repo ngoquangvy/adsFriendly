@@ -218,6 +218,18 @@ test("helper accepts a bounded browser user agent, key handoff, and learned scor
           },
         ],
       },
+      keyHandoffDiagnostic: {
+        framesQueried: 2,
+        framesResponded: 1,
+        requestedManifestCount: 2,
+        matchedManifestCount: 1,
+        declaredKeyCount: 1,
+        capturedKeyCount: 1,
+        pageFetchAttemptCount: 1,
+        pageFetchSuccessCount: 1,
+        pageFetchStatuses: [200, 200, 999],
+        pageFetchErrorCount: 0,
+      },
     },
   });
   assert.equal(payload.browserUserAgent, "Browser/123Injected: no");
@@ -226,6 +238,10 @@ test("helper accepts a bounded browser user agent, key handoff, and learned scor
     4.5,
   );
   assert.equal(payload.candidate.keyHandoff.keys[0].bytes, 16);
+  assert.deepEqual(
+    payload.candidate.keyHandoffDiagnostic.pageFetchStatuses,
+    [200],
+  );
   assert.throws(
     () =>
       normalizeHelperDownloadPayload({

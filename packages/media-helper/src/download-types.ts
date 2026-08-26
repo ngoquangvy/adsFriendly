@@ -20,6 +20,18 @@ export interface DownloadCandidate {
     manifestUrl: string;
     keys: Array<{ url: string; data: string; bytes: number }>;
   } | null;
+  keyHandoffDiagnostic: {
+    framesQueried: number;
+    framesResponded: number;
+    requestedManifestCount: number;
+    matchedManifestCount: number;
+    declaredKeyCount: number;
+    capturedKeyCount: number;
+    pageFetchAttemptCount: number;
+    pageFetchSuccessCount: number;
+    pageFetchStatuses: number[];
+    pageFetchErrorCount: number;
+  } | null;
   requestContext: {
     requestUrl: string | null;
     finalUrl: string | null;

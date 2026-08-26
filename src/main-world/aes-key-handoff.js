@@ -112,6 +112,69 @@ export function getAesKeyHandoffs(manifestUrls, observedAt = Date.now()) {
   return [...keys.values()].slice(0, MAX_KEYS_PER_MANIFEST);
 }
 
+export async function recoverAesKeyHandoffs(
+  manifestUrls,
+  fetchImpl = globalThis.fetch,
+  observedAt = Date.now(),
+) {
+  const urls = normalizeManifestUrls(manifestUrls);
+  prune(observedAt);
+  const declaredKeyUrls = [
+    ...new Set(
+      urls.flatMap((manifestUrl) => manifests.get(manifestUrl)?.keyUrls || []),
+    ),
+  ].slice(0, MAX_KEYS_PER_MANIFEST);
+  const diagnostic = {
+    requestedManifestCount: urls.length,
+    matchedManifestCount: urls.filter((url) => manifests.has(url)).length,
+    declaredKeyCount: declaredKeyUrls.length,
+    capturedKeyCount: declaredKeyUrls.filter((url) => capturedKeys.has(url))
+      .length,
+    pageFetchAttemptCount: 0,
+    pageFetchSuccessCount: 0,
+    pageFetchStatuses: [],
+    pageFetchErrorCount: 0,
+  };
+  if (typeof fetchImpl !== "function") {
+    diagnostic.pageFetchErrorCount = declaredKeyUrls.filter(
+      (url) => !capturedKeys.has(url),
+    ).length;
+    return { keys: getAesKeyHandoffs(urls, observedAt), diagnostic };
+  }
+  for (const keyUrl of declaredKeyUrls) {
+    if (capturedKeys.has(keyUrl)) continue;
+    diagnostic.pageFetchAttemptCount += 1;
+    try {
+      const init = {
+        method: "GET",
+        credentials: "include",
+        cache: "default",
+        redirect: "follow",
+      };
+      const pageUrl = globalThis.location?.href;
+      if (/^https?:/i.test(pageUrl || "")) init.referrer = pageUrl;
+      const response = await fetchImpl(keyUrl, init);
+      if (Number.isInteger(response?.status)) {
+        diagnostic.pageFetchStatuses.push(response.status);
+      }
+      if (!response?.ok) continue;
+      const bytes = await readActualAesKeyBytes(response);
+      if (bytes && rememberKey(keyUrl, bytes)) {
+        diagnostic.pageFetchSuccessCount += 1;
+      }
+    } catch {
+      diagnostic.pageFetchErrorCount += 1;
+    }
+  }
+  diagnostic.capturedKeyCount = declaredKeyUrls.filter((url) =>
+    capturedKeys.has(url),
+  ).length;
+  return {
+    keys: getAesKeyHandoffs(urls, observedAt),
+    diagnostic,
+  };
+}
+
 export function clearAesKeyHandoffs() {
   manifests.clear();
   capturedKeys.clear();

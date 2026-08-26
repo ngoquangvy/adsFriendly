@@ -763,7 +763,8 @@ var AdsFriendlyMediaFrame = (() => {
         pendingRequest.resolve({
           status: "ready",
           requestedManifestUrl: messageEvent.data.requestedManifestUrl,
-          keys: Array.isArray(messageEvent.data.keys) ? messageEvent.data.keys : []
+          keys: Array.isArray(messageEvent.data.keys) ? messageEvent.data.keys : [],
+          diagnostic: messageEvent.data.diagnostic && typeof messageEvent.data.diagnostic === "object" ? messageEvent.data.diagnostic : null
         });
         return;
       }
@@ -855,7 +856,7 @@ var AdsFriendlyMediaFrame = (() => {
         const timeoutId = setTimeout(() => {
           aesKeyHandoffRequests.delete(requestId);
           resolve({ status: "timeout", keys: [] });
-        }, 1500);
+        }, 5e3);
         aesKeyHandoffRequests.set(requestId, { resolve, timeoutId });
         window.postMessage(
           {

@@ -54,6 +54,11 @@ export function startMediaObserver() {
         keys: Array.isArray(messageEvent.data.keys)
           ? messageEvent.data.keys
           : [],
+        diagnostic:
+          messageEvent.data.diagnostic &&
+          typeof messageEvent.data.diagnostic === "object"
+            ? messageEvent.data.diagnostic
+            : null,
       });
       return;
     }
@@ -174,7 +179,7 @@ export function startMediaObserver() {
       const timeoutId = setTimeout(() => {
         aesKeyHandoffRequests.delete(requestId);
         resolve({ status: "timeout", keys: [] });
-      }, 1500);
+      }, 5000);
       aesKeyHandoffRequests.set(requestId, { resolve, timeoutId });
       window.postMessage(
         {

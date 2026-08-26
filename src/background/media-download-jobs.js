@@ -290,26 +290,39 @@ async function attachAesKeyHandoff(tabId, candidate) {
       manifestUrls: targets.manifestUrls,
     };
     const keys = new Map();
-    for (const frameId of targets.frameIds) {
-      try {
-        const response =
-          frameId === null
+    const diagnostics = [];
+    const responses = await Promise.all(
+      targets.frameIds.map(async (frameId) => {
+        try {
+          return frameId === null
             ? await chrome.tabs.sendMessage(tabId, message)
             : await chrome.tabs.sendMessage(tabId, message, { frameId });
-        if (
-          response?.status !== "ready" ||
-          response.requestedManifestUrl !== candidate.manifestUrl
-        ) {
-          continue;
+        } catch {
+          return null;
         }
-        for (const key of response.keys || []) {
-          if (key?.url) keys.set(key.url, key);
-        }
-      } catch {}
+      }),
+    );
+    for (const response of responses) {
+      if (
+        response?.status !== "ready" ||
+        response.requestedManifestUrl !== candidate.manifestUrl
+      ) {
+        continue;
+      }
+      for (const key of response.keys || []) {
+        if (key?.url) keys.set(key.url, key);
+      }
+      if (response.diagnostic) diagnostics.push(response.diagnostic);
     }
-    if (!keys.size) return candidate;
+    const keyHandoffDiagnostic = aggregateAesKeyHandoffDiagnostics(
+      targets,
+      responses,
+      diagnostics,
+    );
+    if (!keys.size) return { ...candidate, keyHandoffDiagnostic };
     return {
       ...candidate,
+      keyHandoffDiagnostic,
       keyHandoff: {
         kind: "hls_aes_keys",
         manifestUrl: candidate.manifestUrl,
@@ -319,6 +332,31 @@ async function attachAesKeyHandoff(tabId, candidate) {
   } catch {
     return candidate;
   }
+}
+
+function aggregateAesKeyHandoffDiagnostics(targets, responses, diagnostics) {
+  const sums = (field) =>
+    diagnostics.reduce((total, item) => total + (Number(item[field]) || 0), 0);
+  return {
+    framesQueried: targets.frameIds.length,
+    framesResponded: responses.filter(Boolean).length,
+    requestedManifestCount: diagnostics.length
+      ? sums("requestedManifestCount")
+      : targets.manifestUrls.length,
+    matchedManifestCount: sums("matchedManifestCount"),
+    declaredKeyCount: sums("declaredKeyCount"),
+    capturedKeyCount: sums("capturedKeyCount"),
+    pageFetchAttemptCount: sums("pageFetchAttemptCount"),
+    pageFetchSuccessCount: sums("pageFetchSuccessCount"),
+    pageFetchStatuses: [
+      ...new Set(
+        diagnostics.flatMap((item) =>
+          Array.isArray(item.pageFetchStatuses) ? item.pageFetchStatuses : [],
+        ),
+      ),
+    ].slice(0, 8),
+    pageFetchErrorCount: sums("pageFetchErrorCount"),
+  };
 }
 
 export function collectAesKeyHandoffTargets(candidate, items = []) {

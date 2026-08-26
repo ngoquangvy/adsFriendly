@@ -610,11 +610,20 @@ async function fetchKeyResource(
   }
   const error = new Error(
     lastStatus
-      ? `key request returned HTTP ${lastStatus} after bounded browser-header strategies; no captured browser key was available.`
-      : `key request failed after bounded browser-header strategies${lastError ? `: ${messageOf(lastError)}` : "."}`,
+      ? `key request returned HTTP ${lastStatus} after bounded browser-header strategies; no captured browser key was available.${formatBrowserKeyCaptureDiagnostic(job)}`
+      : `key request failed after bounded browser-header strategies${lastError ? `: ${messageOf(lastError)}` : "."}${formatBrowserKeyCaptureDiagnostic(job)}`,
   );
   Object.assign(error, { retryable: false });
   throw error;
+}
+
+function formatBrowserKeyCaptureDiagnostic(job: DownloadJob) {
+  const value = job.candidate.keyHandoffDiagnostic;
+  if (!value) return " Browser key capture diagnostics were unavailable.";
+  const statuses = value.pageFetchStatuses.length
+    ? `; page fetch status ${value.pageFetchStatuses.join(", ")}`
+    : "";
+  return ` Browser capture: ${value.framesResponded}/${value.framesQueried} frames responded, ${value.matchedManifestCount}/${value.requestedManifestCount} manifests matched, ${value.declaredKeyCount} keys declared, ${value.capturedKeyCount} captured, ${value.pageFetchSuccessCount}/${value.pageFetchAttemptCount} page fetches succeeded${statuses}.`;
 }
 
 async function readKeyResponse(response: Response) {
