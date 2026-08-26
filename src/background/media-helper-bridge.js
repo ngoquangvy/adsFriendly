@@ -96,6 +96,9 @@ async function probeMediaHelperStatus(timeoutMs) {
         capabilities[MEDIA_HELPER_CAPABILITIES.HLS_VOD_DOWNLOAD] === true,
       canDownloadDecryptedHls:
         capabilities[MEDIA_HELPER_CAPABILITIES.HLS_DECRYPTED_MANIFEST] === true,
+      canSelectContainer:
+        capabilities[MEDIA_HELPER_CAPABILITIES.OUTPUT_CONTAINER_SELECTION] ===
+        true,
       canDownloadDash:
         capabilities[MEDIA_HELPER_CAPABILITIES.DASH_VOD_DOWNLOAD] === true,
       canMuxWithFfmpeg:
@@ -131,6 +134,7 @@ export async function startMediaHelperDownload(
     mediaId: job.candidate.id,
     kind: job.candidate.kind,
     title: job.candidate.title,
+    output: job.output,
     sourceTabId: job.sourceTabId,
     candidate: withoutManifestBody(job.candidate),
     connections,
@@ -179,6 +183,7 @@ export async function startMediaHelperDownload(
     payload: {
       jobId: job.id,
       connections,
+      output: job.output,
       candidate: job.candidate,
     },
   });
@@ -447,6 +452,7 @@ function helperStatus(status, details = {}) {
     canDownloadDirect: false,
     canDownloadHls: false,
     canDownloadDecryptedHls: false,
+    canSelectContainer: false,
     canDownloadDash: false,
     canMuxWithFfmpeg: false,
     helperVersion: null,

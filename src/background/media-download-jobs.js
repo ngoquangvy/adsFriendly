@@ -22,6 +22,7 @@ import {
   startMediaHelperDownload,
 } from "./media-helper-bridge.js";
 import { getMediaManifestHandoff } from "./media-manifest-handoff.js";
+import { normalizeMediaDownloadOutput } from "../media/download-options.js";
 
 let broker = null;
 
@@ -96,7 +97,7 @@ export async function listMediaDownloadJobs() {
   return { status: "ok", items: await listMediaHelperDownloads() };
 }
 
-async function createJob({ tabId, mediaId, connections } = {}) {
+async function createJob({ tabId, mediaId, connections, output } = {}) {
   if (!Number.isInteger(tabId) || tabId < 0) return { status: "invalid_tab" };
   if (typeof mediaId !== "string" || !mediaId)
     return { status: "invalid_media" };
@@ -111,7 +112,8 @@ async function createJob({ tabId, mediaId, connections } = {}) {
   const availability = getMediaDownloadAvailability(candidate);
   if (!availability.supported)
     return { status: "unsupported", reason: availability.reason };
-  const helperFailure = await helperFailureFor(candidate);
+  const normalizedOutput = normalizeMediaDownloadOutput(output, candidate);
+  const helperFailure = await helperFailureFor(candidate, normalizedOutput);
   if (helperFailure) return helperFailure;
   const handoffResult = await attachManifestHandoff(tabId, candidate);
   if (handoffResult.status !== "ready") return handoffResult;
@@ -120,6 +122,7 @@ async function createJob({ tabId, mediaId, connections } = {}) {
     id: randomId(),
     createdAt: Date.now(),
     sourceTabId: tabId,
+    output: normalizedOutput,
     candidate,
   });
   const settings = await loadSettings();
@@ -226,12 +229,13 @@ async function restartJob(state, requestedConnections) {
   );
   if (handoffResult.status !== "ready") return handoffResult;
   candidate = handoffResult.candidate;
-  const helperFailure = await helperFailureFor(candidate);
+  const helperFailure = await helperFailureFor(candidate, state.output);
   if (helperFailure) return helperFailure;
   const job = normalizeMediaDownloadJob({
     id: state.id,
     createdAt: Date.now(),
     sourceTabId: state.sourceTabId,
+    output: state.output,
     candidate,
   });
   const settings = await loadSettings();
@@ -272,7 +276,7 @@ async function recoverCandidate(state) {
   return response.items.find((item) => item.id === state.mediaId) || null;
 }
 
-async function helperFailureFor(candidate) {
+async function helperFailureFor(candidate, output) {
   const helper = await getMediaHelperStatus({ force: true });
   if (helper.status !== "ready") {
     return {
@@ -280,6 +284,16 @@ async function helperFailureFor(candidate) {
       helper,
       reason: "Media Helper must be installed and available to download video.",
     };
+  }
+  if (output?.profileId !== "source" && output?.profileId !== "video-mp4") {
+    if (!helper.canSelectContainer) {
+      return {
+        status: "helper_not_ready",
+        helper,
+        reason:
+          "This Media Helper build cannot select a different output container yet.",
+      };
+    }
   }
   const capabilityReady =
     candidate.kind === "direct"

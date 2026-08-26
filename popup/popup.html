@@ -325,6 +325,33 @@
         cursor: pointer;
       }
 
+      .media-download-control {
+        display: flex;
+        max-width: 124px;
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      .media-download-profile {
+        width: 124px;
+        padding: 4px 5px;
+        overflow: hidden;
+        border: 1px solid rgba(96, 165, 250, 0.25);
+        border-radius: 6px;
+        background: #172033;
+        color: #bfdbfe;
+        font: inherit;
+        font-size: 0.58rem;
+        text-overflow: ellipsis;
+        cursor: pointer;
+      }
+
+      .media-download-profile:disabled {
+        color: #94a3b8;
+        cursor: default;
+        opacity: 0.78;
+      }
+
       .media-download:disabled {
         border-color: rgba(148, 163, 184, 0.14);
         background: rgba(148, 163, 184, 0.06);

@@ -7,6 +7,7 @@ import {
   DOWNLOAD_JOB_PREFIX,
   getMediaDownloadAvailability,
 } from "../media/download-job-contract.js";
+import { getMediaDownloadProfiles } from "../media/download-options.js";
 import {
   formatCompactMediaJobDetails,
   formatMediaJobDetails,
@@ -49,7 +50,9 @@ let mediaHelperStatus = {
   status: "checking",
   canDownloadDirect: false,
   canDownloadHls: false,
+  canDownloadDecryptedHls: false,
   canDownloadDash: false,
+  canSelectContainer: false,
 };
 let activeMediaTabId = null;
 let mediaRenderSignature = null;
@@ -382,7 +385,7 @@ function createMediaItem(item, tab, helper, itemsById) {
     (item.kind === "blob" && item.selectedMediaId)
   ) {
     const downloadItem = itemsById.get(item.selectedMediaId) || item;
-    actions.append(createMediaDownloadButton(item, downloadItem, tab, helper));
+    actions.append(createMediaDownloadControl(item, downloadItem, tab, helper));
   }
   const debugMediaId = debugCaptureMediaId(item);
   if (tab && debugMediaId)
@@ -473,8 +476,24 @@ function sanitizeFilename(value) {
   return value.replace(/[<>:"/\\|?*\x00-\x1F]/g, "-").slice(0, 180);
 }
 
-function createMediaDownloadButton(item, downloadItem, tab, helper) {
+function createMediaDownloadControl(item, downloadItem, tab, helper) {
   const availability = getMediaDownloadAvailability(downloadItem);
+  const control = document.createElement("div");
+  control.className = "media-download-control";
+  const profiles = getMediaDownloadProfiles(downloadItem, {
+    canSelectContainer: helper.canSelectContainer === true,
+  });
+  const profileSelect = document.createElement("select");
+  profileSelect.className = "media-download-profile";
+  profileSelect.title = "Output format";
+  for (const profile of profiles) {
+    const option = document.createElement("option");
+    option.value = profile.id;
+    option.textContent = profile.label;
+    option.title = profile.description;
+    profileSelect.append(option);
+  }
+  profileSelect.disabled = !availability.supported || profiles.length < 2;
   const button = document.createElement("button");
   button.className = "media-download";
   const presentation = downloadButtonPresentation(
@@ -498,6 +517,7 @@ function createMediaDownloadButton(item, downloadItem, tab, helper) {
         tabId: tab.id,
         mediaId: downloadItem.id,
         connections: settings?.mediaDownloadConnections ?? 8,
+        output: { profileId: profileSelect.value || profiles[0]?.id },
       });
       if (response?.status !== "started")
         throw new Error(
@@ -513,7 +533,9 @@ function createMediaDownloadButton(item, downloadItem, tab, helper) {
       button.title = error?.message || String(error);
     }
   });
-  return button;
+  if (profiles.length) control.append(profileSelect);
+  control.append(button);
+  return control;
 }
 
 function downloadButtonPresentation(availability, helper, item) {
@@ -561,7 +583,12 @@ function downloadButtonPresentation(availability, helper, item) {
 
 function helperCanDownload(item, helper) {
   if (item.kind === "direct") return helper.canDownloadDirect === true;
-  if (item.kind === "hls") return helper.canDownloadHls === true;
+  if (item.kind === "hls")
+    return (
+      helper.canDownloadHls === true &&
+      (item.probeSource !== "decrypted_blob" ||
+        helper.canDownloadDecryptedHls === true)
+    );
   return helper.canDownloadDash === true;
 }
 
@@ -608,7 +635,9 @@ async function readMediaHelperStatus(force = false) {
         status: "unavailable",
         canDownloadDirect: false,
         canDownloadHls: false,
+        canDownloadDecryptedHls: false,
         canDownloadDash: false,
+        canSelectContainer: false,
         error: response?.error || "Could not read Media Helper status.",
       };
 }

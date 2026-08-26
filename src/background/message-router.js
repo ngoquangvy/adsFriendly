@@ -334,6 +334,7 @@ async function route(message, sender) {
       tabId: message.tabId,
       mediaId: message.mediaId,
       connections: message.connections,
+      output: message.output,
     });
   if (message.type === "CANCEL_MEDIA_DOWNLOAD_JOB")
     return requestMediaDownloadCancel({ jobId: message.jobId });

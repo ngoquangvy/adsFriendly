@@ -9,6 +9,7 @@ import {
   assertSafeRemoteUrl,
 } from "./direct-http-adapter.js";
 import {
+  adaptiveOutputExtension,
   adaptiveRequestHeaders,
   emptyAdaptiveProgress,
   runAdaptiveFfmpeg,
@@ -43,14 +44,15 @@ async function downloadDash(
 
   const outputDirectory = resolveOutputDirectory(job.outputDirectory);
   await mkdir(outputDirectory, { recursive: true });
+  const extension = adaptiveOutputExtension(job);
   const filename = sanitizeFilename(
     job.candidate.title || "video",
-    ".mp4",
-  ).replace(/\.[a-z0-9]{1,6}$/i, ".mp4");
+    extension,
+  ).replace(/\.[a-z0-9]{1,6}$/i, extension);
   const outputPath = await availableOutputPath(outputDirectory, filename);
   const partialPath = join(
     outputDirectory,
-    `.${basename(outputPath, extname(outputPath))}.${safeId(job.jobId)}.part.mp4`,
+    `.${basename(outputPath, extname(outputPath))}.${safeId(job.jobId)}.part${extension}`,
   );
   await unlink(partialPath).catch(() => {});
 

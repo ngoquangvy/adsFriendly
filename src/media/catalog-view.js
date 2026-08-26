@@ -17,6 +17,7 @@ export function createMediaCatalogViewSignature({
           canDownloadDirect: helper.canDownloadDirect,
           canDownloadHls: helper.canDownloadHls,
           canDownloadDecryptedHls: helper.canDownloadDecryptedHls,
+          canSelectContainer: helper.canSelectContainer,
           canDownloadDash: helper.canDownloadDash,
           error: helper.error,
         }

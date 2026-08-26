@@ -44,6 +44,10 @@ test("built helper completes a framed Native Messaging handshake", async () => {
   assert.equal(typeof response.payload.capabilities, "object");
   assert.equal(response.payload.capabilities["output.open"], true);
   assert.equal(response.payload.capabilities["output.reveal"], true);
+  assert.equal(
+    response.payload.capabilities["output.container_selection"],
+    true,
+  );
 });
 
 test("built helper downloads direct media with ranges, cancellation, and resume", async (t) => {
@@ -196,6 +200,7 @@ test("built helper remuxes an inline decrypted HLS VOD when its manifest URL is 
         manifestUrl,
         outputDirectory,
         playlist.replace(/(segment000\.ts\r?\n)/, "$1#EXT-X-DISCONTINUITY\n"),
+        "video-mkv",
       ),
     ),
   );
@@ -216,6 +221,7 @@ test("built helper remuxes an inline decrypted HLS VOD when its manifest URL is 
     MEDIA_HELPER_EVENTS.DOWNLOAD_COMPLETED,
     completed.payload.message,
   );
+  assert.match(completed.payload.outputPath, /\.mkv$/i);
   const probe = JSON.parse(
     (
       await execFileAsync(
@@ -532,6 +538,7 @@ function hlsDownloadRequest(
   manifestUrl,
   outputDirectory,
   manifestBody = null,
+  profileId = null,
 ) {
   return {
     type: MEDIA_HELPER_REQUESTS.DOWNLOAD_START,
@@ -541,6 +548,7 @@ function hlsDownloadRequest(
       jobId,
       connections: 4,
       outputDirectory,
+      output: profileId ? { profileId } : undefined,
       candidate: {
         id: "hls-test",
         kind: "hls",

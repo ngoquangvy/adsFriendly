@@ -150,6 +150,7 @@ test("direct helper download payload is normalized at the protocol boundary", ()
     },
   });
   assert.equal(payload.connections, 12);
+  assert.equal(payload.output.profileId, "source");
   assert.equal(payload.candidate.sourceUrl, "https://cdn.example/movie.mp4");
   assert.throws(
     () =>
@@ -184,7 +185,40 @@ test("helper HLS context carries routing facts without arbitrary headers", () =>
   assert.equal(payload.candidate.requestContext.requiresBrowserSession, true);
   assert.equal(payload.candidate.duration, 5163.209);
   assert.equal(payload.candidate.segmentCount, 1726);
+  assert.equal(payload.output.profileId, "video-mp4");
   assert.equal("headers" in payload.candidate.requestContext, false);
+});
+
+test("helper accepts MKV only for adaptive media", () => {
+  const hls = normalizeHelperDownloadPayload({
+    jobId: "hls-mkv",
+    output: { profileId: "video-mkv" },
+    candidate: {
+      id: "media-hls",
+      kind: "hls",
+      pageUrl: "https://video.example/watch",
+      manifestUrl: "https://cdn.example/master.m3u8",
+    },
+  });
+  assert.deepEqual(hls.output, {
+    profileId: "video-mkv",
+    container: "mkv",
+    extension: ".mkv",
+  });
+  assert.throws(
+    () =>
+      normalizeHelperDownloadPayload({
+        jobId: "direct-mkv",
+        output: { profileId: "video-mkv" },
+        candidate: {
+          id: "direct",
+          kind: "direct",
+          pageUrl: "https://video.example/watch",
+          sourceUrl: "https://cdn.example/video.mp4",
+        },
+      }),
+    /not supported for direct/i,
+  );
 });
 
 test("helper accepts only an exact bounded decrypted HLS handoff", () => {
@@ -302,6 +336,7 @@ test("helper status exposes only declared download capabilities", async () => {
           capabilities: {
             [MEDIA_HELPER_CAPABILITIES.DIRECT_HTTP_DOWNLOAD]: true,
             [MEDIA_HELPER_CAPABILITIES.HLS_DECRYPTED_MANIFEST]: true,
+            [MEDIA_HELPER_CAPABILITIES.OUTPUT_CONTAINER_SELECTION]: true,
             "download.hls_vod": false,
             "download.dash_vod": true,
             "mux.ffmpeg": true,
@@ -316,12 +351,14 @@ test("helper status exposes only declared download capabilities", async () => {
     assert.equal(status.canDownloadDirect, true);
     assert.equal(status.canDownloadHls, false);
     assert.equal(status.canDownloadDecryptedHls, true);
+    assert.equal(status.canSelectContainer, true);
     assert.equal(status.canDownloadDash, true);
     assert.equal(status.canMuxWithFfmpeg, true);
     assert.deepEqual(status.capabilities, {
       "download.direct_http": true,
       "download.hls_vod": false,
       "download.hls_decrypted_manifest": true,
+      "output.container_selection": true,
       "download.dash_vod": true,
       "mux.ffmpeg": true,
     });

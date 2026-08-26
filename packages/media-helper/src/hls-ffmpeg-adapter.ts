@@ -16,6 +16,7 @@ import type {
   DownloadResult,
 } from "./download-types.js";
 import {
+  adaptiveOutputExtension,
   adaptiveRequestHeaders,
   emptyAdaptiveProgress,
   runAdaptiveFfmpeg,
@@ -51,7 +52,7 @@ async function downloadHls(
   const outputPath = await availableOutputPath(outputDirectory, filename);
   const partialPath = join(
     outputDirectory,
-    `.${basename(outputPath, extname(outputPath))}.${safeId(job.jobId)}.part.mp4`,
+    `.${basename(outputPath, extname(outputPath))}.${safeId(job.jobId)}.part${adaptiveOutputExtension(job)}`,
   );
   await unlink(partialPath).catch(() => {});
 
@@ -334,7 +335,11 @@ function resolveHttpUrl(value: string, baseUrl: string) {
 
 function chooseFilename(job: DownloadJob) {
   const title = job.candidate.title || "video";
-  return sanitizeFilename(title, ".mp4").replace(/\.[a-z0-9]{1,6}$/i, ".mp4");
+  const extension = adaptiveOutputExtension(job);
+  return sanitizeFilename(title, extension).replace(
+    /\.[a-z0-9]{1,6}$/i,
+    extension,
+  );
 }
 
 function safeId(value: string) {

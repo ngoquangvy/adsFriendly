@@ -144,6 +144,14 @@ async function verifyExecutable(path) {
     );
   }
   if (
+    typeof response.payload?.capabilities?.["output.container_selection"] !==
+    "boolean"
+  ) {
+    throw new Error(
+      "Packaged helper returned an invalid output container capability.",
+    );
+  }
+  if (
     typeof response.payload?.capabilities?.["download.dash_vod"] !== "boolean"
   ) {
     throw new Error("Packaged helper returned an invalid DASH capability.");

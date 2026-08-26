@@ -808,6 +808,13 @@ var AdsFriendlyOptions = (() => {
     });
   }
 
+  // src/media/download-options.js
+  var MEDIA_OUTPUT_CONTAINERS = Object.freeze({
+    SOURCE: "source",
+    MP4: "mp4",
+    MKV: "mkv"
+  });
+
   // src/media/download-job-contract.js
   var DOWNLOAD_JOB_PREFIX = "adsfriendly.mediaDownloadJob.";
   var DOWNLOAD_HISTORY_KEY = "mediaDownloadHistory";

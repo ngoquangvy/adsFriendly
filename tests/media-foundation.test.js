@@ -36,6 +36,10 @@ import {
   normalizeMediaDownloadJob,
 } from "../src/media/download-job-contract.js";
 import {
+  classifyDirectMediaContainer,
+  getMediaDownloadProfiles,
+} from "../src/media/download-options.js";
+import {
   createMediaCatalogViewSignature,
   formatMediaDetails,
   formatMediaHelperSummary,
@@ -2168,6 +2172,38 @@ test("direct downloads require a valid HTTP source and normalize independently o
   });
   assert.equal(job.candidate.kind, "direct");
   assert.equal(job.candidate.sourceUrl, candidate.sourceUrl);
+  assert.deepEqual(job.output, {
+    profileId: "source",
+    container: "source",
+    extension: ".mp4",
+  });
+});
+
+test("download profiles classify direct sources and expose real adaptive containers", () => {
+  assert.equal(
+    classifyDirectMediaContainer({
+      sourceUrl: "https://cdn.example/no-extension",
+      mimeType: "video/webm; codecs=vp9",
+    }),
+    "webm",
+  );
+  assert.deepEqual(
+    getMediaDownloadProfiles({ kind: "direct", mimeType: "video/mp4" }).map(
+      (profile) => profile.id,
+    ),
+    ["source"],
+  );
+  assert.deepEqual(
+    getMediaDownloadProfiles({ kind: "hls" }).map((profile) => profile.id),
+    ["video-mp4", "video-mkv"],
+  );
+  assert.deepEqual(
+    getMediaDownloadProfiles(
+      { kind: "dash" },
+      { canSelectContainer: false },
+    ).map((profile) => profile.id),
+    ["video-mp4"],
+  );
 });
 
 test("media popup signature ignores heartbeat timestamps but detects visible changes", () => {

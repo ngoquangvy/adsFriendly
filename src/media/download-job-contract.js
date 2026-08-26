@@ -1,3 +1,5 @@
+import { normalizeMediaDownloadOutput } from "./download-options.js";
+
 export const DOWNLOAD_JOB_PREFIX = "adsfriendly.mediaDownloadJob.";
 export const DOWNLOAD_HISTORY_KEY = "mediaDownloadHistory";
 export const DOWNLOAD_JOB_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -22,6 +24,7 @@ export function normalizeMediaDownloadJob(value = {}) {
     id: requiredString(value.id, "id"),
     createdAt: finiteNumber(value.createdAt, "createdAt"),
     sourceTabId: nonNegativeInteger(value.sourceTabId, "sourceTabId"),
+    output: normalizeMediaDownloadOutput(value.output, candidate),
     candidate:
       candidate.kind === "direct"
         ? {

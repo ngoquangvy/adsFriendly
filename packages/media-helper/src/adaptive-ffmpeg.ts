@@ -19,6 +19,7 @@ export async function runAdaptiveFfmpeg(
     throw context.signal.reason || new Error("Download cancelled.");
   }
   const headers = adaptiveRequestHeaders(job);
+  const outputSpec = adaptiveOutputSpec(job);
   const args = [
     "-hide_banner",
     "-nostdin",
@@ -42,14 +43,13 @@ export async function runAdaptiveFfmpeg(
     "copy",
     "-avoid_negative_ts",
     "make_zero",
-    "-movflags",
-    "+faststart",
+    ...(outputSpec.container === "mp4" ? ["-movflags", "+faststart"] : []),
     "-max_muxing_queue_size",
     "4096",
     "-progress",
     "pipe:1",
     "-f",
-    "mp4",
+    outputSpec.muxer,
     "-y",
     partialPath,
   ];
@@ -128,6 +128,17 @@ export async function runAdaptiveFfmpeg(
   const output = await stat(partialPath);
   if (!output.size) throw new Error("FFmpeg produced an empty media file.");
   return { totalBytes: output.size };
+}
+
+export function adaptiveOutputExtension(job: DownloadJob) {
+  return adaptiveOutputSpec(job).extension;
+}
+
+function adaptiveOutputSpec(job: DownloadJob) {
+  if (job.output.container === "mkv") {
+    return { container: "mkv", extension: ".mkv", muxer: "matroska" };
+  }
+  return { container: "mp4", extension: ".mp4", muxer: "mp4" };
 }
 
 export function adaptiveRequestHeaders(job: DownloadJob) {

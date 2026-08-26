@@ -475,6 +475,69 @@ var AdsFriendlyPopup = (() => {
     return settings2;
   }
 
+  // src/media/download-options.js
+  var MEDIA_OUTPUT_CONTAINERS = Object.freeze({
+    SOURCE: "source",
+    MP4: "mp4",
+    MKV: "mkv"
+  });
+  function getMediaDownloadProfiles(candidate = {}, { canSelectContainer = true } = {}) {
+    if (candidate.kind === "direct") {
+      const container = classifyDirectMediaContainer(candidate);
+      return [
+        Object.freeze({
+          id: "source",
+          container: MEDIA_OUTPUT_CONTAINERS.SOURCE,
+          extension: container ? `.${container}` : null,
+          label: `Original${container ? ` \xB7 ${container.toUpperCase()}` : ""}`,
+          description: "Download the original file without conversion."
+        })
+      ];
+    }
+    if (!["hls", "dash"].includes(candidate.kind)) return [];
+    const profiles = [
+      Object.freeze({
+        id: "video-mp4",
+        container: MEDIA_OUTPUT_CONTAINERS.MP4,
+        extension: ".mp4",
+        label: "MP4 \xB7 compatible",
+        description: "Best compatibility for browsers, phones, and TVs."
+      })
+    ];
+    if (canSelectContainer) {
+      profiles.push(
+        Object.freeze({
+          id: "video-mkv",
+          container: MEDIA_OUTPUT_CONTAINERS.MKV,
+          extension: ".mkv",
+          label: "MKV \xB7 flexible",
+          description: "Keeps more source codecs without re-encoding."
+        })
+      );
+    }
+    return profiles;
+  }
+  function classifyDirectMediaContainer(candidate = {}) {
+    const mime = String(candidate.mimeType || "").split(";", 1)[0].trim().toLowerCase();
+    const byMime = {
+      "video/mp4": "mp4",
+      "video/webm": "webm",
+      "video/quicktime": "mov",
+      "audio/mpeg": "mp3",
+      "audio/mp4": "m4a",
+      "audio/webm": "webm",
+      "audio/ogg": "ogg"
+    }[mime];
+    if (byMime) return byMime;
+    try {
+      const path = new URL(candidate.sourceUrl).pathname;
+      const extension = path.match(/\.([a-z0-9]{2,6})$/i)?.[1]?.toLowerCase();
+      return extension || null;
+    } catch {
+      return null;
+    }
+  }
+
   // src/media/download-job-contract.js
   var DOWNLOAD_JOB_PREFIX = "adsfriendly.mediaDownloadJob.";
   var DOWNLOAD_JOB_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
@@ -1043,6 +1106,7 @@ var AdsFriendlyPopup = (() => {
         canDownloadDirect: helper.canDownloadDirect,
         canDownloadHls: helper.canDownloadHls,
         canDownloadDecryptedHls: helper.canDownloadDecryptedHls,
+        canSelectContainer: helper.canSelectContainer,
         canDownloadDash: helper.canDownloadDash,
         error: helper.error
       } : null,
@@ -1458,7 +1522,9 @@ ${blobTitleKey(item.title)}`;
     status: "checking",
     canDownloadDirect: false,
     canDownloadHls: false,
-    canDownloadDash: false
+    canDownloadDecryptedHls: false,
+    canDownloadDash: false,
+    canSelectContainer: false
   };
   var activeMediaTabId = null;
   var mediaRenderSignature = null;
@@ -1737,7 +1803,7 @@ ${blobTitleKey(item.title)}`;
     actions.className = "media-actions";
     if (["direct", "hls", "dash"].includes(item.kind) || item.kind === "blob" && item.selectedMediaId) {
       const downloadItem = itemsById.get(item.selectedMediaId) || item;
-      actions.append(createMediaDownloadButton(item, downloadItem, tab, helper));
+      actions.append(createMediaDownloadControl(item, downloadItem, tab, helper));
     }
     const debugMediaId = debugCaptureMediaId(item);
     if (tab && debugMediaId)
@@ -1813,8 +1879,24 @@ ${blobTitleKey(item.title)}`;
   function sanitizeFilename(value) {
     return value.replace(/[<>:"/\\|?*\x00-\x1F]/g, "-").slice(0, 180);
   }
-  function createMediaDownloadButton(item, downloadItem, tab, helper) {
+  function createMediaDownloadControl(item, downloadItem, tab, helper) {
     const availability = getMediaDownloadAvailability(downloadItem);
+    const control = document.createElement("div");
+    control.className = "media-download-control";
+    const profiles = getMediaDownloadProfiles(downloadItem, {
+      canSelectContainer: helper.canSelectContainer === true
+    });
+    const profileSelect = document.createElement("select");
+    profileSelect.className = "media-download-profile";
+    profileSelect.title = "Output format";
+    for (const profile of profiles) {
+      const option = document.createElement("option");
+      option.value = profile.id;
+      option.textContent = profile.label;
+      option.title = profile.description;
+      profileSelect.append(option);
+    }
+    profileSelect.disabled = !availability.supported || profiles.length < 2;
     const button = document.createElement("button");
     button.className = "media-download";
     const presentation = downloadButtonPresentation(
@@ -1837,7 +1919,8 @@ ${blobTitleKey(item.title)}`;
           type: "CREATE_MEDIA_DOWNLOAD_JOB",
           tabId: tab.id,
           mediaId: downloadItem.id,
-          connections: settings?.mediaDownloadConnections ?? 8
+          connections: settings?.mediaDownloadConnections ?? 8,
+          output: { profileId: profileSelect.value || profiles[0]?.id }
         });
         if (response?.status !== "started")
           throw new Error(
@@ -1851,7 +1934,9 @@ ${blobTitleKey(item.title)}`;
         button.title = error?.message || String(error);
       }
     });
-    return button;
+    if (profiles.length) control.append(profileSelect);
+    control.append(button);
+    return control;
   }
   function downloadButtonPresentation(availability, helper, item) {
     if (!availability.supported) {
@@ -1897,7 +1982,8 @@ ${blobTitleKey(item.title)}`;
   }
   function helperCanDownload(item, helper) {
     if (item.kind === "direct") return helper.canDownloadDirect === true;
-    if (item.kind === "hls") return helper.canDownloadHls === true;
+    if (item.kind === "hls")
+      return helper.canDownloadHls === true && (item.probeSource !== "decrypted_blob" || helper.canDownloadDecryptedHls === true);
     return helper.canDownloadDash === true;
   }
   async function setupMediaHelper(button, helper) {
@@ -1940,7 +2026,9 @@ ${blobTitleKey(item.title)}`;
       status: "unavailable",
       canDownloadDirect: false,
       canDownloadHls: false,
+      canDownloadDecryptedHls: false,
       canDownloadDash: false,
+      canSelectContainer: false,
       error: response?.error || "Could not read Media Helper status."
     };
   }

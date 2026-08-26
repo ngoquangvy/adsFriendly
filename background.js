@@ -4376,6 +4376,86 @@ var AdsFriendlyBackground = (() => {
     return () => chrome.storage.onChanged.removeListener(onChanged);
   }
 
+  // src/media/download-options.js
+  var MEDIA_OUTPUT_CONTAINERS = Object.freeze({
+    SOURCE: "source",
+    MP4: "mp4",
+    MKV: "mkv"
+  });
+  function getMediaDownloadProfiles(candidate = {}, { canSelectContainer = true } = {}) {
+    if (candidate.kind === "direct") {
+      const container = classifyDirectMediaContainer(candidate);
+      return [
+        Object.freeze({
+          id: "source",
+          container: MEDIA_OUTPUT_CONTAINERS.SOURCE,
+          extension: container ? `.${container}` : null,
+          label: `Original${container ? ` \xB7 ${container.toUpperCase()}` : ""}`,
+          description: "Download the original file without conversion."
+        })
+      ];
+    }
+    if (!["hls", "dash"].includes(candidate.kind)) return [];
+    const profiles = [
+      Object.freeze({
+        id: "video-mp4",
+        container: MEDIA_OUTPUT_CONTAINERS.MP4,
+        extension: ".mp4",
+        label: "MP4 \xB7 compatible",
+        description: "Best compatibility for browsers, phones, and TVs."
+      })
+    ];
+    if (canSelectContainer) {
+      profiles.push(
+        Object.freeze({
+          id: "video-mkv",
+          container: MEDIA_OUTPUT_CONTAINERS.MKV,
+          extension: ".mkv",
+          label: "MKV \xB7 flexible",
+          description: "Keeps more source codecs without re-encoding."
+        })
+      );
+    }
+    return profiles;
+  }
+  function normalizeMediaDownloadOutput(value, candidate = {}) {
+    const profiles = getMediaDownloadProfiles(candidate);
+    if (!profiles.length)
+      throw new Error("[MediaDownload] No output format is available.");
+    const requested = typeof value?.profileId === "string" ? value.profileId : profiles[0].id;
+    const profile = profiles.find((item) => item.id === requested);
+    if (!profile) {
+      throw new Error(
+        `[MediaDownload] Output profile "${requested}" is not supported for ${candidate.kind || "this media"}.`
+      );
+    }
+    return {
+      profileId: profile.id,
+      container: profile.container,
+      extension: profile.extension
+    };
+  }
+  function classifyDirectMediaContainer(candidate = {}) {
+    const mime = String(candidate.mimeType || "").split(";", 1)[0].trim().toLowerCase();
+    const byMime = {
+      "video/mp4": "mp4",
+      "video/webm": "webm",
+      "video/quicktime": "mov",
+      "audio/mpeg": "mp3",
+      "audio/mp4": "m4a",
+      "audio/webm": "webm",
+      "audio/ogg": "ogg"
+    }[mime];
+    if (byMime) return byMime;
+    try {
+      const path = new URL(candidate.sourceUrl).pathname;
+      const extension = path.match(/\.([a-z0-9]{2,6})$/i)?.[1]?.toLowerCase();
+      return extension || null;
+    } catch {
+      return null;
+    }
+  }
+
   // src/media/download-job-contract.js
   var DOWNLOAD_JOB_PREFIX = "adsfriendly.mediaDownloadJob.";
   var DOWNLOAD_HISTORY_KEY = "mediaDownloadHistory";
@@ -4400,6 +4480,7 @@ var AdsFriendlyBackground = (() => {
       id: requiredString2(value.id, "id"),
       createdAt: finiteNumber(value.createdAt, "createdAt"),
       sourceTabId: nonNegativeInteger(value.sourceTabId, "sourceTabId"),
+      output: normalizeMediaDownloadOutput(value.output, candidate),
       candidate: candidate.kind === "direct" ? {
         ...shared,
         sourceUrl: requiredHttpUrl(
@@ -4627,6 +4708,7 @@ var AdsFriendlyBackground = (() => {
     DIRECT_HTTP_DOWNLOAD: "download.direct_http",
     HLS_VOD_DOWNLOAD: "download.hls_vod",
     HLS_DECRYPTED_MANIFEST: "download.hls_decrypted_manifest",
+    OUTPUT_CONTAINER_SELECTION: "output.container_selection",
     DASH_VOD_DOWNLOAD: "download.dash_vod",
     FFMPEG_MUX: "mux.ffmpeg",
     OUTPUT_OPEN: "output.open",
@@ -4733,6 +4815,7 @@ var AdsFriendlyBackground = (() => {
         canDownloadDirect: capabilities[MEDIA_HELPER_CAPABILITIES.DIRECT_HTTP_DOWNLOAD] === true,
         canDownloadHls: capabilities[MEDIA_HELPER_CAPABILITIES.HLS_VOD_DOWNLOAD] === true,
         canDownloadDecryptedHls: capabilities[MEDIA_HELPER_CAPABILITIES.HLS_DECRYPTED_MANIFEST] === true,
+        canSelectContainer: capabilities[MEDIA_HELPER_CAPABILITIES.OUTPUT_CONTAINER_SELECTION] === true,
         canDownloadDash: capabilities[MEDIA_HELPER_CAPABILITIES.DASH_VOD_DOWNLOAD] === true,
         canMuxWithFfmpeg: capabilities[MEDIA_HELPER_CAPABILITIES.FFMPEG_MUX] === true
       });
@@ -4762,6 +4845,7 @@ var AdsFriendlyBackground = (() => {
       mediaId: job.candidate.id,
       kind: job.candidate.kind,
       title: job.candidate.title,
+      output: job.output,
       sourceTabId: job.sourceTabId,
       candidate: withoutManifestBody(job.candidate),
       connections,
@@ -4807,6 +4891,7 @@ var AdsFriendlyBackground = (() => {
       payload: {
         jobId: job.id,
         connections,
+        output: job.output,
         candidate: job.candidate
       }
     });
@@ -5028,6 +5113,7 @@ var AdsFriendlyBackground = (() => {
       canDownloadDirect: false,
       canDownloadHls: false,
       canDownloadDecryptedHls: false,
+      canSelectContainer: false,
       canDownloadDash: false,
       canMuxWithFfmpeg: false,
       helperVersion: null,
@@ -5859,7 +5945,7 @@ ${body}`;
   async function listMediaDownloadJobs() {
     return { status: "ok", items: await listMediaHelperDownloads() };
   }
-  async function createJob({ tabId, mediaId, connections } = {}) {
+  async function createJob({ tabId, mediaId, connections, output } = {}) {
     if (!Number.isInteger(tabId) || tabId < 0) return { status: "invalid_tab" };
     if (typeof mediaId !== "string" || !mediaId)
       return { status: "invalid_media" };
@@ -5872,7 +5958,8 @@ ${body}`;
     const availability = getMediaDownloadAvailability(candidate);
     if (!availability.supported)
       return { status: "unsupported", reason: availability.reason };
-    const helperFailure = await helperFailureFor(candidate);
+    const normalizedOutput = normalizeMediaDownloadOutput(output, candidate);
+    const helperFailure = await helperFailureFor(candidate, normalizedOutput);
     if (helperFailure) return helperFailure;
     const handoffResult = await attachManifestHandoff(tabId, candidate);
     if (handoffResult.status !== "ready") return handoffResult;
@@ -5881,6 +5968,7 @@ ${body}`;
       id: randomId5(),
       createdAt: Date.now(),
       sourceTabId: tabId,
+      output: normalizedOutput,
       candidate
     });
     const settings = await loadSettings();
@@ -5974,12 +6062,13 @@ ${body}`;
     );
     if (handoffResult.status !== "ready") return handoffResult;
     candidate = handoffResult.candidate;
-    const helperFailure = await helperFailureFor(candidate);
+    const helperFailure = await helperFailureFor(candidate, state.output);
     if (helperFailure) return helperFailure;
     const job = normalizeMediaDownloadJob({
       id: state.id,
       createdAt: Date.now(),
       sourceTabId: state.sourceTabId,
+      output: state.output,
       candidate
     });
     const settings = await loadSettings();
@@ -6011,7 +6100,7 @@ ${body}`;
     const response = await listDiscoveredMedia(state.sourceTabId);
     return response.items.find((item) => item.id === state.mediaId) || null;
   }
-  async function helperFailureFor(candidate) {
+  async function helperFailureFor(candidate, output) {
     const helper = await getMediaHelperStatus({ force: true });
     if (helper.status !== "ready") {
       return {
@@ -6019,6 +6108,15 @@ ${body}`;
         helper,
         reason: "Media Helper must be installed and available to download video."
       };
+    }
+    if (output?.profileId !== "source" && output?.profileId !== "video-mp4") {
+      if (!helper.canSelectContainer) {
+        return {
+          status: "helper_not_ready",
+          helper,
+          reason: "This Media Helper build cannot select a different output container yet."
+        };
+      }
     }
     const capabilityReady = candidate.kind === "direct" ? helper.canDownloadDirect : candidate.kind === "hls" ? candidate.probeSource === "decrypted_blob" ? helper.canDownloadHls && helper.canDownloadDecryptedHls : helper.canDownloadHls : helper.canDownloadDash;
     if (capabilityReady) return null;
@@ -6523,7 +6621,8 @@ ${body}`;
       return requestMediaDownloadJob({
         tabId: message.tabId,
         mediaId: message.mediaId,
-        connections: message.connections
+        connections: message.connections,
+        output: message.output
       });
     if (message.type === "CANCEL_MEDIA_DOWNLOAD_JOB")
       return requestMediaDownloadCancel({ jobId: message.jobId });

@@ -31,6 +31,11 @@ export interface DownloadJob {
   jobId: string;
   connections: number;
   outputDirectory: string | null;
+  output: {
+    profileId: "source" | "video-mp4" | "video-mkv";
+    container: "source" | "mp4" | "mkv";
+    extension: string | null;
+  };
   candidate: DownloadCandidate;
 }
 

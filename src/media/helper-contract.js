@@ -1,3 +1,5 @@
+import { normalizeMediaDownloadOutput } from "./download-options.js";
+
 export const MEDIA_HELPER_PROTOCOL_VERSION = 2;
 export const MEDIA_HELPER_HOST_NAME = "com.adsfriendly.media_helper";
 
@@ -25,6 +27,7 @@ export const MEDIA_HELPER_CAPABILITIES = Object.freeze({
   DIRECT_HTTP_DOWNLOAD: "download.direct_http",
   HLS_VOD_DOWNLOAD: "download.hls_vod",
   HLS_DECRYPTED_MANIFEST: "download.hls_decrypted_manifest",
+  OUTPUT_CONTAINER_SELECTION: "output.container_selection",
   DASH_VOD_DOWNLOAD: "download.dash_vod",
   FFMPEG_MUX: "mux.ffmpeg",
   OUTPUT_OPEN: "output.open",
@@ -128,6 +131,7 @@ export function normalizeHelperDownloadPayload(value = {}) {
     jobId: requiredString(value.jobId, "jobId"),
     connections,
     outputDirectory: optionalString(value.outputDirectory),
+    output: normalizeMediaDownloadOutput(value.output, candidate),
     candidate: {
       id: requiredString(candidate.id, "candidate.id"),
       kind,
