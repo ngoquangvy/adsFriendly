@@ -67,8 +67,7 @@ export function resolveHlsSources(items = []) {
       resolvedRequestContext: selected
         ? chooseRequestContext(selected.item.requestContexts)
         : chooseRequestContext(item.requestContexts),
-      resolutionStrategy:
-        selected?.strategyId || null,
+      resolutionStrategy: selected?.strategyId || null,
       resolutionConfidence: selected?.confidence ?? null,
       resolutionEvidence: [...(selected?.evidence || [])],
     });
@@ -183,14 +182,7 @@ function compareResolvedStreams(left, right) {
 }
 
 function summarizeStream(stream) {
-  const {
-    item,
-    quality,
-    readiness,
-    strategyId,
-    confidence,
-    evidence,
-  } = stream;
+  const { item, quality, readiness, strategyId, confidence, evidence } = stream;
   return {
     id: item.id,
     manifestUrl: item.manifestUrl,
@@ -202,6 +194,13 @@ function summarizeStream(stream) {
     lowLatency: item.lowLatency === true,
     drm: item.drm,
     encryptionMethods: [...(item.encryptionMethods || [])],
+    probeSource: item.probeSource || null,
+    manifestEnvelope: item.manifestEnvelope
+      ? {
+          ...item.manifestEnvelope,
+          evidence: [...(item.manifestEnvelope.evidence || [])],
+        }
+      : null,
     resolution: quality?.resolution || null,
     bandwidth: quality?.bandwidth || null,
     resolutionStrategy: strategyId || null,
@@ -237,8 +236,7 @@ function edgeStrategy(edge, child) {
   if (edge.kind === "passive_child") {
     return {
       strategyId:
-        edge.metadata?.strategyId ||
-        MEDIA_RESOLUTION_STRATEGIES.OBSERVED_CHILD,
+        edge.metadata?.strategyId || MEDIA_RESOLUTION_STRATEGIES.OBSERVED_CHILD,
       confidence: edge.metadata?.confidence ?? 0.8,
       evidence: [...(edge.metadata?.evidence || [])],
     };
@@ -258,6 +256,16 @@ function edgeStrategy(edge, child) {
 }
 
 function itemStrategy(item) {
+  if (item.probeSource === "decrypted_blob") {
+    return {
+      strategyId: MEDIA_RESOLUTION_STRATEGIES.DECRYPTED_MANIFEST,
+      confidence: item.manifestEnvelope?.correlationConfidence ?? 0.9,
+      evidence: [
+        "player-decrypted-manifest",
+        ...(item.manifestEnvelope?.evidence || []),
+      ],
+    };
+  }
   if (item.resolutionAttempt) {
     return {
       strategyId: MEDIA_RESOLUTION_STRATEGIES.BOUNDED_URL_ADAPTER,
@@ -273,7 +281,10 @@ function itemStrategy(item) {
       evidence: ["contextual-probe"],
     };
   }
-  if (item.playerAdapters?.length || item.detectionSources?.includes("player")) {
+  if (
+    item.playerAdapters?.length ||
+    item.detectionSources?.includes("player")
+  ) {
     return {
       strategyId: MEDIA_RESOLUTION_STRATEGIES.PLAYER_API,
       confidence: 0.9,

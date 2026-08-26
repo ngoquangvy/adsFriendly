@@ -325,6 +325,8 @@ function probeFields(item) {
     mediaSequence: item.mediaSequence,
     discontinuitySequence: item.discontinuitySequence,
     revisionId: item.revisionId,
+    probeSource: item.probeSource,
+    manifestEnvelope: item.manifestEnvelope,
     resolutionAttempt: item.resolutionAttempt,
     encryptionMethods: item.encryptionMethods,
     encryptionKeyFormats: item.encryptionKeyFormats,
@@ -355,6 +357,8 @@ function probeFieldsFromProbe(probe) {
     mediaSequence: probe.mediaSequence,
     discontinuitySequence: probe.discontinuitySequence,
     revisionId: probe.revisionId,
+    probeSource: probe.probeSource,
+    manifestEnvelope: probe.manifestEnvelope,
     resolutionAttempt: probe.resolutionAttempt,
     encryptionMethods: probe.encryptionMethods,
     encryptionKeyFormats: probe.encryptionKeyFormats,
@@ -543,6 +547,7 @@ function resolveBlobSources(items, adaptiveResolutions) {
     );
     const selected = uniqueCandidates[0];
     if (!selected) continue;
+    const selectedResolution = adaptiveResolutions.get(selected.id);
     resolved.set(blob.id, {
       parents: [],
       children: [],
@@ -555,6 +560,9 @@ function resolveBlobSources(items, adaptiveResolutions) {
         selected.resolvedRequestContext ||
         selected.requestContexts?.[0] ||
         null,
+      resolutionStrategy: selectedResolution?.resolutionStrategy || null,
+      resolutionConfidence: selectedResolution?.resolutionConfidence ?? null,
+      resolutionEvidence: [...(selectedResolution?.resolutionEvidence || [])],
     });
   }
   return resolved;
@@ -626,6 +634,12 @@ function cloneItem(item, resolution = null) {
       ? {
           ...item.resolutionAttempt,
           evidence: [...(item.resolutionAttempt.evidence || [])],
+        }
+      : null,
+    manifestEnvelope: item.manifestEnvelope
+      ? {
+          ...item.manifestEnvelope,
+          evidence: [...(item.manifestEnvelope.evidence || [])],
         }
       : null,
     blobTrace: item.blobTrace

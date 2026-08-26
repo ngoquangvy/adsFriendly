@@ -3,6 +3,7 @@ import { findRelatedMediaObservations } from "./media-observation-ledger.js";
 import { stableMediaId } from "../media/detection.js";
 import { EVENTS, createRegisteredEvent } from "../runtime/event-catalog.js";
 import { CAPABILITIES } from "../runtime/feature-catalog.js";
+import { publishCreatedBlob } from "./decrypted-manifest-observer.js";
 
 const MAX_SOURCE_URLS = 32;
 const MAX_MIME_TYPES = 8;
@@ -164,6 +165,7 @@ export function installBlobSourceTracer(policy) {
     if (typeof originalCreate === "function") {
       const createWrapper = function (object) {
         const objectUrl = originalCreate.call(this, object);
+        if (object instanceof Blob) publishCreatedBlob(object, objectUrl);
         if (object instanceof MediaSource) {
           const state = mediaSourceState(object);
           state.blobUrl = objectUrl;

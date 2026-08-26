@@ -98,6 +98,12 @@ export function getMediaDownloadAvailability(candidate = {}) {
     };
   if (candidate.probeStatus !== "ready")
     return { supported: false, reason: "Manifest is not ready." };
+  if (candidate.probeSource === "decrypted_blob")
+    return {
+      supported: false,
+      reason:
+        "Player-decrypted manifest found; secure download handoff is not ready yet.",
+    };
   if (candidate.drm === "suspected" || candidate.drm === "confirmed")
     return { supported: false, reason: drmPlaybackOnlyReason(candidate) };
   if (candidate.encryptionMethods?.length && !isDownloadableAes128(candidate))

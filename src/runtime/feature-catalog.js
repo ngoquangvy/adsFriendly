@@ -228,6 +228,12 @@ export const FEATURE_CATALOG = Object.freeze([
   feature("main-world.player-source-observer", "main-world", C.CORE_MESSAGING, [
     C.MEDIA_OBSERVE,
   ]),
+  feature(
+    "main-world.decrypted-manifest-observer",
+    "main-world",
+    C.CORE_MESSAGING,
+    [C.MEDIA_OBSERVE],
+  ),
   feature("main-world.blob-source-tracer", "main-world", C.CORE_MESSAGING, [
     C.MEDIA_OBSERVE,
   ]),

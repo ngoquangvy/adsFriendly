@@ -1227,6 +1227,12 @@ var AdsFriendlyContent = (() => {
     feature("main-world.player-source-observer", "main-world", C2.CORE_MESSAGING, [
       C2.MEDIA_OBSERVE
     ]),
+    feature(
+      "main-world.decrypted-manifest-observer",
+      "main-world",
+      C2.CORE_MESSAGING,
+      [C2.MEDIA_OBSERVE]
+    ),
     feature("main-world.blob-source-tracer", "main-world", C2.CORE_MESSAGING, [
       C2.MEDIA_OBSERVE
     ]),
@@ -2491,6 +2497,10 @@ var AdsFriendlyContent = (() => {
     SKIPPED: "skipped",
     FAILED: "failed"
   });
+  var MEDIA_PROBE_SOURCES = Object.freeze({
+    NETWORK_RESPONSE: "network_response",
+    DECRYPTED_BLOB: "decrypted_blob"
+  });
   function normalizeMediaCandidate(value = {}) {
     const candidate = {
       id: requiredString(value.id, "id"),
@@ -2607,6 +2617,12 @@ var AdsFriendlyContent = (() => {
         value.discontinuitySequence
       ),
       revisionId: optionalString(value.revisionId),
+      probeSource: optionalEnumValue(
+        value.probeSource,
+        Object.values(MEDIA_PROBE_SOURCES),
+        "probeSource"
+      ),
+      manifestEnvelope: normalizeManifestEnvelope(value.manifestEnvelope),
       requestContext: normalizeMediaRequestContext(value.requestContext),
       resolutionAttempt: normalizeMediaResolutionAttempt(value.resolutionAttempt),
       encryptionMethods: normalizeStrings(value.encryptionMethods),
@@ -2650,7 +2666,38 @@ var AdsFriendlyContent = (() => {
         "playlistType"
       ),
       segmentCount: optionalNonNegativeInteger(value.segmentCount),
+      observationSource: optionalEnumValue(
+        value.observationSource,
+        [
+          "network_response",
+          "active_probe",
+          "decrypted_blob",
+          "player_api",
+          "media_source"
+        ],
+        "observationSource"
+      ),
+      envelopeScheme: optionalEnumValue(
+        value.envelopeScheme,
+        ["aes-gcm", "unknown"],
+        "envelopeScheme"
+      ),
+      correlationConfidence: optionalConfidence(value.correlationConfidence),
+      evidence: normalizeStrings(value.evidence).slice(0, 20),
       observedAt: optionalFiniteNumber(value.observedAt) || Date.now()
+    };
+  }
+  function normalizeManifestEnvelope(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    return {
+      scheme: enumValue(
+        value.scheme || "unknown",
+        ["aes-gcm", "unknown"],
+        "manifestEnvelope.scheme"
+      ),
+      observedAt: optionalFiniteNumber(value.observedAt),
+      correlationConfidence: optionalConfidence(value.correlationConfidence),
+      evidence: normalizeStrings(value.evidence).slice(0, 20)
     };
   }
   function normalizeEmeObservation(value = {}) {
@@ -2777,6 +2824,14 @@ var AdsFriendlyContent = (() => {
   }
   function optionalString(value) {
     return typeof value === "string" && value ? value : null;
+  }
+  function optionalConfidence(value) {
+    if (value === null || value === void 0 || value === "") return null;
+    const number = Number(value);
+    if (!Number.isFinite(number) || number < 0 || number > 1) {
+      throw new Error("[MediaContract] confidence must be between 0 and 1.");
+    }
+    return number;
   }
   function enumValue(value, allowed, field) {
     if (!allowed.includes(value)) {

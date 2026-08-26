@@ -55,6 +55,12 @@ import { EVENTS, createRegisteredEvent } from "../src/runtime/event-catalog.js";
 import { normalizeMediaRequestContext } from "../src/media/contracts.js";
 import { installBlobSourceTracer } from "../src/main-world/blob-source-tracer.js";
 import {
+  classifyEncryptedManifestEnvelope,
+  clearEncryptedManifestEnvelopes,
+  installDecryptedManifestObserver,
+  rememberEncryptedManifestEnvelope,
+} from "../src/main-world/decrypted-manifest-observer.js";
+import {
   clearMediaObservations,
   findRelatedMediaObservations,
   rememberMediaObservation,
@@ -394,6 +400,26 @@ test("resolution diagnostics expose the exact child probe outcome", () => {
   );
 });
 
+test("resolution diagnostics stop at the explicit decrypted-manifest handoff", () => {
+  const result = diagnoseMediaResolution({
+    id: "decrypted-hls",
+    kind: "hls",
+    probeStatus: "ready",
+    probeSource: "decrypted_blob",
+    playlistType: "media",
+    streamType: "vod",
+    segmentCount: 20,
+    drm: "none",
+  });
+  assert.equal(result.stage, MEDIA_RESOLUTION_STAGES.PLAYER_DECRYPTION);
+  assert.equal(result.code, "decrypted_manifest_handoff_pending");
+  assert.equal(result.status, "unhandled");
+  assert.deepEqual(MEDIA_RESOLUTION_STAGE_CATALOG[result.stage], {
+    input: "Encrypted manifest + player Blob",
+    output: "Parsed plaintext manifest",
+  });
+});
+
 test("catalog retains bounded probe metadata without storing manifest bodies", () => {
   const catalog = createMediaCatalog();
   const candidate = createMediaCandidateFromSource({
@@ -429,6 +455,10 @@ test("catalog retains bounded probe metadata without storing manifest bodies", (
     bodyFormat: "hls",
     playlistType: null,
     segmentCount: null,
+    observationSource: null,
+    envelopeScheme: null,
+    correlationConfidence: null,
+    evidence: [],
     observedAt: 2000,
   });
   assert.equal("body" in updated.probeDiagnostic, false);
@@ -630,6 +660,103 @@ test("blob source tracing links an appended network buffer to an adaptive manife
   }
 });
 
+test("recognizes a custom encrypted HLS envelope without retaining its payload", () => {
+  const result = classifyEncryptedManifestEnvelope(`#EXTM3U
+#ENC-AESGCM;iv=00112233445566778899aabb
+#EXT-X-B65:0-138
+QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo0123456789abcd==`);
+  assert.deepEqual(result, {
+    scheme: "aes-gcm",
+    evidence: [
+      "custom-encryption-tag",
+      "base64-payload-tag",
+      "opaque-base64-payload",
+    ],
+  });
+  assert.equal(
+    classifyEncryptedManifestEnvelope("#EXTM3U\n#EXTINF:5,\na.ts"),
+    null,
+  );
+});
+
+test("player-decrypted HLS Blob is parsed against its encrypted network source", async () => {
+  const previous = {
+    MediaSource: globalThis.MediaSource,
+    window: globalThis.window,
+    location: globalThis.location,
+    createObjectURL: URL.createObjectURL,
+    revokeObjectURL: URL.revokeObjectURL,
+  };
+  const messages = [];
+  class FakeMediaSource {}
+  globalThis.MediaSource = FakeMediaSource;
+  globalThis.window = {
+    postMessage(message) {
+      messages.push(message);
+    },
+  };
+  globalThis.location = { href: "https://embed.example/player" };
+  URL.createObjectURL = () => "blob:https://embed.example/decrypted";
+  URL.revokeObjectURL = () => {};
+  const policy = { can: () => true };
+  const stopObserver = installDecryptedManifestObserver(policy);
+  const stopTracer = installBlobSourceTracer(policy);
+  try {
+    const plaintext = `#EXTM3U
+#EXT-X-PLAYLIST-TYPE:VOD
+#EXTINF:5,
+segment-1.ts
+#EXTINF:5,
+segment-2.ts
+#EXT-X-ENDLIST`;
+    const blob = new Blob([plaintext], {
+      type: "application/vnd.apple.mpegurl",
+    });
+    const objectUrl = URL.createObjectURL(blob);
+    assert.equal(objectUrl, "blob:https://embed.example/decrypted");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    rememberEncryptedManifestEnvelope({
+      candidate: { id: "encrypted-hls", kind: "hls" },
+      manifestUrl: "https://cdn.example/path/encrypted.m3u8",
+      body: `#EXTM3U
+#ENC-AESGCM;iv=00112233445566778899aabb
+#EXT-X-B65:0-138
+QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo0123456789abcd==`,
+      observedAt: Date.now(),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    const probe = messages.find(
+      (message) => message.event?.type === EVENTS.MEDIA_PROBED,
+    )?.event?.payload;
+    assert.equal(probe.mediaId, "encrypted-hls");
+    assert.equal(probe.probeSource, "decrypted_blob");
+    assert.equal(probe.playlistType, "media");
+    assert.equal(probe.streamType, "vod");
+    assert.equal(probe.segmentCount, 2);
+    assert.equal(probe.manifestEnvelope.scheme, "aes-gcm");
+    assert.equal("body" in probe, false);
+
+    const trace = messages.find(
+      (message) => message.event?.type === EVENTS.MEDIA_BLOB_TRACED,
+    )?.event?.payload;
+    assert.deepEqual(trace.candidateIds, ["encrypted-hls"]);
+    assert.deepEqual(trace.sourceUrls, [
+      "https://cdn.example/path/encrypted.m3u8",
+    ]);
+    assert.equal(await blob.text(), plaintext);
+  } finally {
+    stopTracer();
+    stopObserver();
+    clearEncryptedManifestEnvelopes();
+    globalThis.MediaSource = previous.MediaSource;
+    globalThis.window = previous.window;
+    globalThis.location = previous.location;
+    URL.createObjectURL = previous.createObjectURL;
+    URL.revokeObjectURL = previous.revokeObjectURL;
+  }
+});
+
 test("blob tracing does not associate a different-host ad manifest", () => {
   clearMediaObservations();
   rememberMediaObservation({
@@ -672,6 +799,13 @@ test("catalog resolves a traced Blob row to its downloadable HLS source", () => 
       streamType: "vod",
       duration: 120,
       segmentCount: 20,
+      probeSource: "decrypted_blob",
+      manifestEnvelope: {
+        scheme: "aes-gcm",
+        observedAt: Date.now(),
+        correlationConfidence: 0.98,
+        evidence: ["same-frame", "nearby-blob"],
+      },
     }),
   );
   catalog.add(24, createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, blob));
@@ -693,9 +827,18 @@ test("catalog resolves a traced Blob row to its downloadable HLS source", () => 
   assert.equal(resolvedBlob.selectedMediaId, hls.id);
   assert.equal(resolvedBlob.resolvedKind, "hls");
   assert.match(formatMediaDetails(resolvedBlob), /Blob resolved to HLS/);
+  assert.match(formatMediaDetails(resolvedBlob), /Player decrypted/);
+  assert.equal(
+    resolvedBlob.resolutionStrategy,
+    MEDIA_RESOLUTION_STRATEGIES.DECRYPTED_MANIFEST,
+  );
   assert.equal(
     getMediaDownloadAvailability(resolvedBlob.resolvedStream).supported,
-    true,
+    false,
+  );
+  assert.match(
+    getMediaDownloadAvailability(resolvedBlob.resolvedStream).reason,
+    /download handoff/i,
   );
 });
 
@@ -1448,6 +1591,7 @@ test("media resolution strategies keep passive methods ahead of active probes", 
     MEDIA_RESOLUTION_STRATEGY_CATALOG.map((item) => item.id),
     [
       "captured_response",
+      "decrypted_manifest",
       "observed_child",
       "player_api",
       "contextual_probe",

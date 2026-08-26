@@ -293,6 +293,12 @@ var AdsFriendlyPopup = (() => {
     feature("main-world.player-source-observer", "main-world", C2.CORE_MESSAGING, [
       C2.MEDIA_OBSERVE
     ]),
+    feature(
+      "main-world.decrypted-manifest-observer",
+      "main-world",
+      C2.CORE_MESSAGING,
+      [C2.MEDIA_OBSERVE]
+    ),
     feature("main-world.blob-source-tracer", "main-world", C2.CORE_MESSAGING, [
       C2.MEDIA_OBSERVE
     ]),
@@ -502,6 +508,11 @@ var AdsFriendlyPopup = (() => {
       };
     if (candidate.probeStatus !== "ready")
       return { supported: false, reason: "Manifest is not ready." };
+    if (candidate.probeSource === "decrypted_blob")
+      return {
+        supported: false,
+        reason: "Player-decrypted manifest found; secure download handoff is not ready yet."
+      };
     if (candidate.drm === "suspected" || candidate.drm === "confirmed")
       return { supported: false, reason: drmPlaybackOnlyReason(candidate) };
     if (candidate.encryptionMethods?.length && !isDownloadableAes128(candidate))
@@ -740,6 +751,7 @@ var AdsFriendlyPopup = (() => {
     CHILD_DISCOVERY: "child_discovery",
     CHILD_PROBE: "child_probe",
     SOURCE_MATCHING: "source_matching",
+    PLAYER_DECRYPTION: "player_decryption",
     DOWNLOAD_READY: "download_ready",
     PLAYBACK_ONLY: "playback_only"
   });
@@ -764,6 +776,10 @@ var AdsFriendlyPopup = (() => {
       "Playable child stream + player context",
       "Selected media source"
     ),
+    [S.PLAYER_DECRYPTION]: stage(
+      "Encrypted manifest + player Blob",
+      "Parsed plaintext manifest"
+    ),
     [S.DOWNLOAD_READY]: stage("Selected media source", "Download plan input"),
     [S.PLAYBACK_ONLY]: stage("Protected media metadata", "Playback-only result")
   });
@@ -787,6 +803,15 @@ var AdsFriendlyPopup = (() => {
         message: "Playback only \xB7 DRM protected"
       });
     if (target.kind === "dash") return diagnoseDash(target);
+    if (target.probeSource === "decrypted_blob")
+      return diagnostic(
+        S.PLAYER_DECRYPTION,
+        D.UNHANDLED,
+        "decrypted_manifest_handoff_pending",
+        {
+          message: "Player decryption \xB7 manifest parsed \xB7 download handoff pending"
+        }
+      );
     if (target.resolutionStatus === "resolved" || target.probeStatus === "ready" && target.playlistType === "media" && target.streamType === "vod" && target.segmentCount > 0)
       return diagnostic(S.DOWNLOAD_READY, D.READY, "hls_ready", {
         message: "Download ready \xB7 HLS VOD resolved"
@@ -941,6 +966,34 @@ var AdsFriendlyPopup = (() => {
         code,
         `${diagnostic2.playlistType || "manifest"} parsed \xB7 ${diagnostic2.segmentCount || 0} segments \xB7 matching pending`
       );
+    if (code === "decrypted_manifest_blob_observed")
+      return described(
+        D.WAITING,
+        code,
+        `player decrypted ${diagnostic2.bodyFormat || "manifest"} \xB7 parser pending`
+      );
+    if (code === "decrypted_manifest_parsed")
+      return described(
+        D.READY,
+        code,
+        `player-decrypted ${diagnostic2.playlistType || "manifest"} parsed \xB7 ${diagnostic2.segmentCount || 0} segments`
+      );
+    if (code === "decrypted_manifest_zero_segments")
+      return described(
+        D.UNHANDLED,
+        code,
+        "player-decrypted manifest \xB7 0 segments"
+      );
+    if (code === "decrypted_manifest_no_stream")
+      return described(
+        D.UNHANDLED,
+        code,
+        "player-decrypted manifest \xB7 no playable stream"
+      );
+    if (code === "decrypted_manifest_unsupported")
+      return described(D.UNHANDLED, code, "player-decrypted format unsupported");
+    if (code === "decrypted_manifest_parse_failed")
+      return described(D.FAILED, code, "player-decrypted manifest parse failed");
     return described(
       diagnostic2.phase === "failed" ? D.FAILED : D.WAITING,
       code,
@@ -1116,6 +1169,7 @@ var AdsFriendlyPopup = (() => {
     if (item.playlistType === "unknown")
       return item.resolutionDiagnostic?.message || "HLS endpoint \xB7 watching for a playable stream";
     const facts = [];
+    if (item.probeSource === "decrypted_blob") facts.push("Player decrypted");
     if (item.playlistType === "master") {
       const qualityLabels = [...item.variants || []].sort(compareVariantQuality).map(variantLabel).filter(
         (label, index, labels) => label && labels.indexOf(label) === index
@@ -1173,6 +1227,7 @@ var AdsFriendlyPopup = (() => {
       item.resolvedKind || stream.kind || "media"
     ).toUpperCase();
     const facts = [`Blob resolved to ${kind}`];
+    if (stream.probeSource === "decrypted_blob") facts.push("Player decrypted");
     if (item.resolutionDiagnostic?.message && !["ready", "blocked"].includes(item.resolutionDiagnostic.status)) {
       facts.push(item.resolutionDiagnostic.message);
       return facts.join(" \xB7 ");
@@ -1319,6 +1374,8 @@ ${blobTitleKey(item.title)}`;
       mediaSequence: item.mediaSequence,
       discontinuitySequence: item.discontinuitySequence,
       revisionId: item.revisionId,
+      probeSource: item.probeSource,
+      manifestEnvelope: item.manifestEnvelope,
       relatedCount: item.relatedCount,
       parentManifestIds: item.parentManifestIds,
       childManifestIds: item.childManifestIds,
@@ -1670,7 +1727,11 @@ ${blobTitleKey(item.title)}`;
       "manifest_parsed_no_stream",
       "manifest_parsed_zero_segments",
       "manifest_unsupported",
-      "manifest_parse_failed"
+      "manifest_parse_failed",
+      "decrypted_manifest_no_stream",
+      "decrypted_manifest_zero_segments",
+      "decrypted_manifest_unsupported",
+      "decrypted_manifest_parse_failed"
     ].includes(diagnostic2?.code) ? diagnostic2.mediaId : null;
   }
   function createManifestSaveButton(item, tab, mediaId) {

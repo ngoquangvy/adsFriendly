@@ -107,6 +107,10 @@ test("player source observer is centrally registered as passive media work", () 
     getFeatureDefinition("main-world.network-capture").capabilities,
     [CAPABILITIES.CORE_MESSAGING, CAPABILITIES.MEDIA_OBSERVE],
   );
+  assert.deepEqual(
+    getFeatureDefinition("main-world.decrypted-manifest-observer").capabilities,
+    [CAPABILITIES.CORE_MESSAGING, CAPABILITIES.MEDIA_OBSERVE],
+  );
 });
 
 test("background media request observation is registered with one explicit permission", () => {

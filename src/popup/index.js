@@ -399,6 +399,10 @@ function debugCaptureMediaId(item) {
     "manifest_parsed_zero_segments",
     "manifest_unsupported",
     "manifest_parse_failed",
+    "decrypted_manifest_no_stream",
+    "decrypted_manifest_zero_segments",
+    "decrypted_manifest_unsupported",
+    "decrypted_manifest_parse_failed",
   ].includes(diagnostic?.code)
     ? diagnostic.mediaId
     : null;

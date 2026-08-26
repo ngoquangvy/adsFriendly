@@ -1036,6 +1036,12 @@ var AdsFriendlyBackground = (() => {
     feature("main-world.player-source-observer", "main-world", C2.CORE_MESSAGING, [
       C2.MEDIA_OBSERVE
     ]),
+    feature(
+      "main-world.decrypted-manifest-observer",
+      "main-world",
+      C2.CORE_MESSAGING,
+      [C2.MEDIA_OBSERVE]
+    ),
     feature("main-world.blob-source-tracer", "main-world", C2.CORE_MESSAGING, [
       C2.MEDIA_OBSERVE
     ]),
@@ -2190,6 +2196,10 @@ var AdsFriendlyBackground = (() => {
     SKIPPED: "skipped",
     FAILED: "failed"
   });
+  var MEDIA_PROBE_SOURCES = Object.freeze({
+    NETWORK_RESPONSE: "network_response",
+    DECRYPTED_BLOB: "decrypted_blob"
+  });
   function normalizeMediaCandidate(value = {}) {
     const candidate = {
       id: requiredString(value.id, "id"),
@@ -2306,6 +2316,12 @@ var AdsFriendlyBackground = (() => {
         value.discontinuitySequence
       ),
       revisionId: optionalString(value.revisionId),
+      probeSource: optionalEnumValue(
+        value.probeSource,
+        Object.values(MEDIA_PROBE_SOURCES),
+        "probeSource"
+      ),
+      manifestEnvelope: normalizeManifestEnvelope(value.manifestEnvelope),
       requestContext: normalizeMediaRequestContext(value.requestContext),
       resolutionAttempt: normalizeMediaResolutionAttempt(value.resolutionAttempt),
       encryptionMethods: normalizeStrings(value.encryptionMethods),
@@ -2349,7 +2365,38 @@ var AdsFriendlyBackground = (() => {
         "playlistType"
       ),
       segmentCount: optionalNonNegativeInteger(value.segmentCount),
+      observationSource: optionalEnumValue(
+        value.observationSource,
+        [
+          "network_response",
+          "active_probe",
+          "decrypted_blob",
+          "player_api",
+          "media_source"
+        ],
+        "observationSource"
+      ),
+      envelopeScheme: optionalEnumValue(
+        value.envelopeScheme,
+        ["aes-gcm", "unknown"],
+        "envelopeScheme"
+      ),
+      correlationConfidence: optionalConfidence(value.correlationConfidence),
+      evidence: normalizeStrings(value.evidence).slice(0, 20),
       observedAt: optionalFiniteNumber(value.observedAt) || Date.now()
+    };
+  }
+  function normalizeManifestEnvelope(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    return {
+      scheme: enumValue(
+        value.scheme || "unknown",
+        ["aes-gcm", "unknown"],
+        "manifestEnvelope.scheme"
+      ),
+      observedAt: optionalFiniteNumber(value.observedAt),
+      correlationConfidence: optionalConfidence(value.correlationConfidence),
+      evidence: normalizeStrings(value.evidence).slice(0, 20)
     };
   }
   function normalizeEmeObservation(value = {}) {
@@ -2476,6 +2523,14 @@ var AdsFriendlyBackground = (() => {
   }
   function optionalString(value) {
     return typeof value === "string" && value ? value : null;
+  }
+  function optionalConfidence(value) {
+    if (value === null || value === void 0 || value === "") return null;
+    const number = Number(value);
+    if (!Number.isFinite(number) || number < 0 || number > 1) {
+      throw new Error("[MediaContract] confidence must be between 0 and 1.");
+    }
+    return number;
   }
   function enumValue(value, allowed, field) {
     if (!allowed.includes(value)) {
@@ -2783,11 +2838,13 @@ var AdsFriendlyBackground = (() => {
     OBSERVED_CHILD: "observed_child",
     PLAYER_API: "player_api",
     CONTEXTUAL_PROBE: "contextual_probe",
-    BOUNDED_URL_ADAPTER: "bounded_url_adapter"
+    BOUNDED_URL_ADAPTER: "bounded_url_adapter",
+    DECRYPTED_MANIFEST: "decrypted_manifest"
   });
   var S = MEDIA_RESOLUTION_STRATEGIES;
   var MEDIA_RESOLUTION_STRATEGY_CATALOG = Object.freeze([
     strategy(S.CAPTURED_RESPONSE, 100, 0, "passive"),
+    strategy(S.DECRYPTED_MANIFEST, 95, 0, "passive"),
     strategy(S.OBSERVED_CHILD, 90, 0, "passive"),
     strategy(S.PLAYER_API, 80, 0, "passive"),
     strategy(S.CONTEXTUAL_PROBE, 60, 1, "active"),
@@ -3095,14 +3152,7 @@ var AdsFriendlyBackground = (() => {
     return (readinessRank[right.readiness] || 0) - (readinessRank[left.readiness] || 0) || (right.quality?.height || 0) - (left.quality?.height || 0) || (right.quality?.bandwidth || 0) - (left.quality?.bandwidth || 0) || (right.item.segmentCount || 0) - (left.item.segmentCount || 0);
   }
   function summarizeStream(stream) {
-    const {
-      item,
-      quality,
-      readiness,
-      strategyId,
-      confidence,
-      evidence
-    } = stream;
+    const { item, quality, readiness, strategyId, confidence, evidence } = stream;
     return {
       id: item.id,
       manifestUrl: item.manifestUrl,
@@ -3114,6 +3164,11 @@ var AdsFriendlyBackground = (() => {
       lowLatency: item.lowLatency === true,
       drm: item.drm,
       encryptionMethods: [...item.encryptionMethods || []],
+      probeSource: item.probeSource || null,
+      manifestEnvelope: item.manifestEnvelope ? {
+        ...item.manifestEnvelope,
+        evidence: [...item.manifestEnvelope.evidence || []]
+      } : null,
       resolution: quality?.resolution || null,
       bandwidth: quality?.bandwidth || null,
       resolutionStrategy: strategyId || null,
@@ -3164,6 +3219,16 @@ var AdsFriendlyBackground = (() => {
     };
   }
   function itemStrategy(item) {
+    if (item.probeSource === "decrypted_blob") {
+      return {
+        strategyId: MEDIA_RESOLUTION_STRATEGIES.DECRYPTED_MANIFEST,
+        confidence: item.manifestEnvelope?.correlationConfidence ?? 0.9,
+        evidence: [
+          "player-decrypted-manifest",
+          ...item.manifestEnvelope?.evidence || []
+        ]
+      };
+    }
     if (item.resolutionAttempt) {
       return {
         strategyId: MEDIA_RESOLUTION_STRATEGIES.BOUNDED_URL_ADAPTER,
@@ -3495,6 +3560,8 @@ var AdsFriendlyBackground = (() => {
       mediaSequence: item.mediaSequence,
       discontinuitySequence: item.discontinuitySequence,
       revisionId: item.revisionId,
+      probeSource: item.probeSource,
+      manifestEnvelope: item.manifestEnvelope,
       resolutionAttempt: item.resolutionAttempt,
       encryptionMethods: item.encryptionMethods,
       encryptionKeyFormats: item.encryptionKeyFormats,
@@ -3524,6 +3591,8 @@ var AdsFriendlyBackground = (() => {
       mediaSequence: probe.mediaSequence,
       discontinuitySequence: probe.discontinuitySequence,
       revisionId: probe.revisionId,
+      probeSource: probe.probeSource,
+      manifestEnvelope: probe.manifestEnvelope,
       resolutionAttempt: probe.resolutionAttempt,
       encryptionMethods: probe.encryptionMethods,
       encryptionKeyFormats: probe.encryptionKeyFormats,
@@ -3690,6 +3759,7 @@ var AdsFriendlyBackground = (() => {
       );
       const selected = uniqueCandidates[0];
       if (!selected) continue;
+      const selectedResolution = adaptiveResolutions.get(selected.id);
       resolved.set(blob.id, {
         parents: [],
         children: [],
@@ -3698,7 +3768,10 @@ var AdsFriendlyBackground = (() => {
         selectedMediaId: selected.id,
         resolvedKind: selected.kind,
         resolvedStream: selected,
-        resolvedRequestContext: selected.resolvedRequestContext || selected.requestContexts?.[0] || null
+        resolvedRequestContext: selected.resolvedRequestContext || selected.requestContexts?.[0] || null,
+        resolutionStrategy: selectedResolution?.resolutionStrategy || null,
+        resolutionConfidence: selectedResolution?.resolutionConfidence ?? null,
+        resolutionEvidence: [...selectedResolution?.resolutionEvidence || []]
       });
     }
     return resolved;
@@ -3763,6 +3836,10 @@ var AdsFriendlyBackground = (() => {
       resolutionAttempt: item.resolutionAttempt ? {
         ...item.resolutionAttempt,
         evidence: [...item.resolutionAttempt.evidence || []]
+      } : null,
+      manifestEnvelope: item.manifestEnvelope ? {
+        ...item.manifestEnvelope,
+        evidence: [...item.manifestEnvelope.evidence || []]
       } : null,
       blobTrace: item.blobTrace ? {
         ...item.blobTrace,
@@ -4326,6 +4403,11 @@ var AdsFriendlyBackground = (() => {
       };
     if (candidate.probeStatus !== "ready")
       return { supported: false, reason: "Manifest is not ready." };
+    if (candidate.probeSource === "decrypted_blob")
+      return {
+        supported: false,
+        reason: "Player-decrypted manifest found; secure download handoff is not ready yet."
+      };
     if (candidate.drm === "suspected" || candidate.drm === "confirmed")
       return { supported: false, reason: drmPlaybackOnlyReason(candidate) };
     if (candidate.encryptionMethods?.length && !isDownloadableAes128(candidate))

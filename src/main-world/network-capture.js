@@ -16,6 +16,10 @@ import {
   clearMediaObservations,
   rememberMediaObservation,
 } from "./media-observation-ledger.js";
+import {
+  clearEncryptedManifestEnvelopes,
+  rememberEncryptedManifestEnvelope,
+} from "./decrypted-manifest-observer.js";
 
 export function installNetworkCapture(policy) {
   const originalFetch = window.fetch;
@@ -81,6 +85,7 @@ export function installNetworkCapture(policy) {
     probeGate.clear();
     requestContexts.clear();
     clearMediaObservations();
+    clearEncryptedManifestEnvelopes();
   };
 }
 
@@ -446,6 +451,12 @@ function inspectManifest(
   }
   if (![MEDIA_KINDS.HLS, MEDIA_KINDS.DASH].includes(manifestCandidate?.kind))
     return null;
+  const manifestEnvelope = rememberEncryptedManifestEnvelope({
+    candidate: manifestCandidate,
+    manifestUrl,
+    body,
+    requestContext,
+  });
   const parsedProbe =
     manifestCandidate.kind === MEDIA_KINDS.DASH
       ? parseDashManifest(manifestUrl, body)
@@ -459,6 +470,9 @@ function inspectManifest(
     bodyFormat: detectManifestBodyFormat(body),
     playlistType: probe.playlistType,
     segmentCount: probe.segmentCount,
+    observationSource: "network_response",
+    envelopeScheme: manifestEnvelope?.scheme || null,
+    evidence: manifestEnvelope?.evidence || [],
   });
   if (diagnosticCode !== "manifest_parsed") {
     notifyContentScript({
@@ -483,6 +497,8 @@ function inspectManifest(
       ...probe,
       requestContext,
       resolutionAttempt,
+      probeSource: "network_response",
+      manifestEnvelope,
     }),
   });
   return probe;

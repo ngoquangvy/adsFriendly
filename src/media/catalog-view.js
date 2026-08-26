@@ -192,6 +192,7 @@ export function formatMediaDetails(item) {
     );
 
   const facts = [];
+  if (item.probeSource === "decrypted_blob") facts.push("Player decrypted");
   if (item.playlistType === "master") {
     const qualityLabels = [...(item.variants || [])]
       .sort(compareVariantQuality)
@@ -279,6 +280,7 @@ function resolvedBlobDetails(item) {
     item.resolvedKind || stream.kind || "media",
   ).toUpperCase();
   const facts = [`Blob resolved to ${kind}`];
+  if (stream.probeSource === "decrypted_blob") facts.push("Player decrypted");
   if (
     item.resolutionDiagnostic?.message &&
     !["ready", "blocked"].includes(item.resolutionDiagnostic.status)
@@ -466,6 +468,8 @@ function mediaRenderFacts(item) {
     mediaSequence: item.mediaSequence,
     discontinuitySequence: item.discontinuitySequence,
     revisionId: item.revisionId,
+    probeSource: item.probeSource,
+    manifestEnvelope: item.manifestEnvelope,
     relatedCount: item.relatedCount,
     parentManifestIds: item.parentManifestIds,
     childManifestIds: item.childManifestIds,

@@ -4,12 +4,14 @@ export const MEDIA_RESOLUTION_STRATEGIES = Object.freeze({
   PLAYER_API: "player_api",
   CONTEXTUAL_PROBE: "contextual_probe",
   BOUNDED_URL_ADAPTER: "bounded_url_adapter",
+  DECRYPTED_MANIFEST: "decrypted_manifest",
 });
 
 const S = MEDIA_RESOLUTION_STRATEGIES;
 
 export const MEDIA_RESOLUTION_STRATEGY_CATALOG = Object.freeze([
   strategy(S.CAPTURED_RESPONSE, 100, 0, "passive"),
+  strategy(S.DECRYPTED_MANIFEST, 95, 0, "passive"),
   strategy(S.OBSERVED_CHILD, 90, 0, "passive"),
   strategy(S.PLAYER_API, 80, 0, "passive"),
   strategy(S.CONTEXTUAL_PROBE, 60, 1, "active"),

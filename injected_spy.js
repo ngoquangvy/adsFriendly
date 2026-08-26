@@ -71,6 +71,10 @@ var AdsFriendlyMainWorld = (() => {
     SKIPPED: "skipped",
     FAILED: "failed"
   });
+  var MEDIA_PROBE_SOURCES = Object.freeze({
+    NETWORK_RESPONSE: "network_response",
+    DECRYPTED_BLOB: "decrypted_blob"
+  });
   function normalizeMediaCandidate(value = {}) {
     const candidate = {
       id: requiredString(value.id, "id"),
@@ -187,6 +191,12 @@ var AdsFriendlyMainWorld = (() => {
         value.discontinuitySequence
       ),
       revisionId: optionalString(value.revisionId),
+      probeSource: optionalEnumValue(
+        value.probeSource,
+        Object.values(MEDIA_PROBE_SOURCES),
+        "probeSource"
+      ),
+      manifestEnvelope: normalizeManifestEnvelope(value.manifestEnvelope),
       requestContext: normalizeMediaRequestContext(value.requestContext),
       resolutionAttempt: normalizeMediaResolutionAttempt(value.resolutionAttempt),
       encryptionMethods: normalizeStrings(value.encryptionMethods),
@@ -230,7 +240,38 @@ var AdsFriendlyMainWorld = (() => {
         "playlistType"
       ),
       segmentCount: optionalNonNegativeInteger(value.segmentCount),
+      observationSource: optionalEnumValue(
+        value.observationSource,
+        [
+          "network_response",
+          "active_probe",
+          "decrypted_blob",
+          "player_api",
+          "media_source"
+        ],
+        "observationSource"
+      ),
+      envelopeScheme: optionalEnumValue(
+        value.envelopeScheme,
+        ["aes-gcm", "unknown"],
+        "envelopeScheme"
+      ),
+      correlationConfidence: optionalConfidence(value.correlationConfidence),
+      evidence: normalizeStrings(value.evidence).slice(0, 20),
       observedAt: optionalFiniteNumber(value.observedAt) || Date.now()
+    };
+  }
+  function normalizeManifestEnvelope(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    return {
+      scheme: enumValue(
+        value.scheme || "unknown",
+        ["aes-gcm", "unknown"],
+        "manifestEnvelope.scheme"
+      ),
+      observedAt: optionalFiniteNumber(value.observedAt),
+      correlationConfidence: optionalConfidence(value.correlationConfidence),
+      evidence: normalizeStrings(value.evidence).slice(0, 20)
     };
   }
   function normalizeEmeObservation(value = {}) {
@@ -357,6 +398,14 @@ var AdsFriendlyMainWorld = (() => {
   }
   function optionalString(value) {
     return typeof value === "string" && value ? value : null;
+  }
+  function optionalConfidence(value) {
+    if (value === null || value === void 0 || value === "") return null;
+    const number = Number(value);
+    if (!Number.isFinite(number) || number < 0 || number > 1) {
+      throw new Error("[MediaContract] confidence must be between 0 and 1.");
+    }
+    return number;
   }
   function enumValue(value, allowed, field) {
     if (!allowed.includes(value)) {
@@ -1671,6 +1720,12 @@ ${body}`;
     feature("main-world.player-source-observer", "main-world", C2.CORE_MESSAGING, [
       C2.MEDIA_OBSERVE
     ]),
+    feature(
+      "main-world.decrypted-manifest-observer",
+      "main-world",
+      C2.CORE_MESSAGING,
+      [C2.MEDIA_OBSERVE]
+    ),
     feature("main-world.blob-source-tracer", "main-world", C2.CORE_MESSAGING, [
       C2.MEDIA_OBSERVE
     ]),
@@ -1911,6 +1966,273 @@ ${body}`;
     }
   }
 
+  // src/main-world/decrypted-manifest-observer.js
+  var MAX_MANIFEST_BYTES = 2 * 1024 * 1024;
+  var MAX_ENVELOPES = 16;
+  var ENVELOPE_MAXIMUM_AGE_MS = 2e4;
+  var PENDING_BLOB_MAXIMUM_AGE_MS = 5e3;
+  var createdBlobListeners = /* @__PURE__ */ new Set();
+  var encryptedEnvelopeListeners = /* @__PURE__ */ new Set();
+  var encryptedEnvelopes = [];
+  function publishCreatedBlob(object, objectUrl) {
+    for (const listener of createdBlobListeners) {
+      try {
+        const result = listener({ object, objectUrl, observedAt: Date.now() });
+        result?.catch?.(() => {
+        });
+      } catch {
+      }
+    }
+  }
+  function installDecryptedManifestObserver(policy) {
+    const inspectedObjectUrls = /* @__PURE__ */ new Set();
+    const pendingBlobs = /* @__PURE__ */ new Map();
+    let stopped = false;
+    const listener = async ({ object, objectUrl, observedAt }) => {
+      if (stopped || inspectedObjectUrls.has(objectUrl) || !(object instanceof Blob) || !policy.can(CAPABILITIES.MEDIA_OBSERVE) || !shouldInspectBlob(object, observedAt))
+        return;
+      inspectedObjectUrls.add(objectUrl);
+      const matched = await inspectBlob(object, objectUrl, observedAt).catch(
+        () => false
+      );
+      if (!matched && isManifestMimeType(object.type)) {
+        pendingBlobs.set(objectUrl, { object, objectUrl, observedAt });
+        trimPendingBlobs(pendingBlobs, Date.now());
+      }
+    };
+    const envelopeListener = () => {
+      const now = Date.now();
+      trimPendingBlobs(pendingBlobs, now);
+      for (const pending of pendingBlobs.values()) {
+        if (pending.processing) continue;
+        pending.processing = true;
+        inspectBlob(pending.object, pending.objectUrl, pending.observedAt).then((matched) => {
+          if (matched) pendingBlobs.delete(pending.objectUrl);
+          else pending.processing = false;
+        }).catch(() => {
+          pending.processing = false;
+        });
+      }
+    };
+    createdBlobListeners.add(listener);
+    encryptedEnvelopeListeners.add(envelopeListener);
+    return () => {
+      stopped = true;
+      createdBlobListeners.delete(listener);
+      encryptedEnvelopeListeners.delete(envelopeListener);
+      inspectedObjectUrls.clear();
+      pendingBlobs.clear();
+    };
+  }
+  function rememberEncryptedManifestEnvelope({
+    candidate,
+    manifestUrl,
+    body,
+    requestContext: requestContext2 = null,
+    observedAt = Date.now()
+  } = {}) {
+    const classification = classifyEncryptedManifestEnvelope(body);
+    if (!classification || !candidate?.id || !manifestUrl) return null;
+    const envelope = {
+      mediaId: candidate.id,
+      manifestUrl,
+      kind: candidate.kind,
+      scheme: classification.scheme,
+      evidence: classification.evidence,
+      requestContext: requestContext2 ? { ...requestContext2 } : null,
+      observedAt
+    };
+    encryptedEnvelopes.push(envelope);
+    trimEncryptedEnvelopes(observedAt);
+    for (const listener of encryptedEnvelopeListeners) {
+      try {
+        listener(envelope);
+      } catch {
+      }
+    }
+    return { ...envelope, evidence: [...envelope.evidence] };
+  }
+  function classifyEncryptedManifestEnvelope(body) {
+    const source = String(body || "").replace(/^\uFEFF/, "").trim();
+    if (!source.startsWith("#EXTM3U")) return null;
+    const lines = source.split(/\r?\n/).map((line) => line.trim());
+    const encryptionTag = lines.find(
+      (line) => /^#ENC-[A-Z0-9-]+(?::|;|$)/i.test(line)
+    );
+    const base64Tag = lines.find(
+      (line) => /^#EXT-X-B(?:64|65)(?::|;|$)/i.test(line)
+    );
+    const payloads = lines.filter((line) => line && !line.startsWith("#"));
+    if (!encryptionTag || payloads.length !== 1) return null;
+    const payload = payloads[0];
+    if (payload.length < (base64Tag ? 32 : 256) || !/^[A-Za-z0-9+/]+={0,2}$/.test(payload))
+      return null;
+    const tagScheme = /^#ENC-([A-Z0-9-]+)/i.exec(encryptionTag)?.[1] || "";
+    return {
+      scheme: tagScheme.toLowerCase().replaceAll("-", "") === "aesgcm" ? "aes-gcm" : "unknown",
+      evidence: [
+        "custom-encryption-tag",
+        ...base64Tag ? ["base64-payload-tag"] : [],
+        "opaque-base64-payload"
+      ]
+    };
+  }
+  function clearEncryptedManifestEnvelopes() {
+    encryptedEnvelopes.length = 0;
+  }
+  async function inspectBlob(blob, objectUrl, observedAt) {
+    const body = await blob.text();
+    if (byteLength(body) > MAX_MANIFEST_BYTES) return false;
+    const kind = manifestKind(body);
+    if (!kind) return false;
+    const match = findRecentEncryptedEnvelope(kind, observedAt);
+    if (!match) return false;
+    const parsed = kind === MEDIA_KINDS.DASH ? parseDashManifest(match.envelope.manifestUrl, body) : parseHlsManifest(match.envelope.manifestUrl, body);
+    const probe = { kind, ...parsed };
+    const bodyBytes = byteLength(body);
+    const manifestEnvelope = {
+      scheme: match.envelope.scheme,
+      observedAt: match.envelope.observedAt,
+      correlationConfidence: match.confidence,
+      evidence: [...match.envelope.evidence, "same-frame", "nearby-blob"]
+    };
+    reportDiagnostic(match.envelope, {
+      phase: "response_received",
+      code: "decrypted_manifest_blob_observed",
+      bodyBytes,
+      bodyFormat: kind,
+      observationSource: "decrypted_blob",
+      envelopeScheme: match.envelope.scheme,
+      correlationConfidence: match.confidence,
+      evidence: manifestEnvelope.evidence
+    });
+    reportDiagnostic(match.envelope, {
+      phase: "parsed",
+      code: decryptedProbeDiagnosticCode(probe),
+      bodyBytes,
+      bodyFormat: kind,
+      playlistType: probe.playlistType,
+      segmentCount: probe.segmentCount,
+      observationSource: "decrypted_blob",
+      envelopeScheme: match.envelope.scheme,
+      correlationConfidence: match.confidence,
+      evidence: manifestEnvelope.evidence
+    });
+    notifyContentScript({
+      type: "REGISTERED_EVENT",
+      event: createRegisteredEvent(EVENTS.MEDIA_PROBED, {
+        mediaId: match.envelope.mediaId,
+        pageUrl: location.href,
+        manifestUrl: match.envelope.manifestUrl,
+        kind,
+        ...probe,
+        requestContext: match.envelope.requestContext,
+        probeSource: "decrypted_blob",
+        manifestEnvelope
+      })
+    });
+    notifyContentScript({
+      type: "REGISTERED_EVENT",
+      event: createRegisteredEvent(EVENTS.MEDIA_BLOB_TRACED, {
+        mediaId: stableMediaId("blob", objectUrl),
+        pageUrl: location.href,
+        blobUrl: objectUrl,
+        sourceUrls: [match.envelope.manifestUrl],
+        candidateIds: [match.envelope.mediaId],
+        mimeTypes: [blob.type || manifestMimeType(kind)],
+        appendCount: 0,
+        totalAppendedBytes: blob.size,
+        observedAt
+      })
+    });
+    if (!isUsableMediaProbe(probe)) {
+      notifyContentScript({
+        type: "MEDIA_DEBUG_MANIFEST_CAPTURE",
+        capture: {
+          mediaId: match.envelope.mediaId,
+          manifestUrl: match.envelope.manifestUrl,
+          kind,
+          body,
+          bodyFormat: kind,
+          reason: decryptedProbeDiagnosticCode(probe)
+        }
+      });
+    }
+    return true;
+  }
+  function shouldInspectBlob(blob, observedAt) {
+    if (!Number.isFinite(blob.size) || blob.size <= 0 || blob.size > MAX_MANIFEST_BYTES)
+      return false;
+    const mimeType = String(blob.type || "").toLowerCase();
+    if (isManifestMimeType(mimeType)) return true;
+    if (mimeType && !["application/octet-stream", "text/plain"].includes(mimeType))
+      return false;
+    trimEncryptedEnvelopes(observedAt);
+    return encryptedEnvelopes.length > 0;
+  }
+  function findRecentEncryptedEnvelope(kind, observedAt) {
+    trimEncryptedEnvelopes(observedAt);
+    const candidates = encryptedEnvelopes.filter(
+      (item) => item.kind === kind && Math.abs(observedAt - item.observedAt) <= ENVELOPE_MAXIMUM_AGE_MS
+    ).sort((left, right) => right.observedAt - left.observedAt);
+    if (!candidates.length) return null;
+    const closest = candidates[0];
+    const next = candidates[1];
+    const distance = Math.max(0, observedAt - closest.observedAt);
+    let confidence = distance <= 5e3 ? 0.98 : 0.9;
+    if (next && Math.abs(closest.observedAt - next.observedAt) < 500)
+      confidence = 0.78;
+    return { envelope: closest, confidence };
+  }
+  function trimPendingBlobs(pendingBlobs, now) {
+    for (const [objectUrl, pending] of pendingBlobs) {
+      if (now - pending.observedAt > PENDING_BLOB_MAXIMUM_AGE_MS)
+        pendingBlobs.delete(objectUrl);
+    }
+  }
+  function trimEncryptedEnvelopes(now) {
+    const cutoff = now - ENVELOPE_MAXIMUM_AGE_MS;
+    while (encryptedEnvelopes.length && (encryptedEnvelopes.length > MAX_ENVELOPES || encryptedEnvelopes[0].observedAt < cutoff)) {
+      encryptedEnvelopes.shift();
+    }
+  }
+  function manifestKind(body) {
+    const source = String(body || "").replace(/^\uFEFF/, "").trimStart();
+    if (source.startsWith("#EXTM3U")) return MEDIA_KINDS.HLS;
+    if (/^(?:<\?xml[^>]*>\s*)?<MPD\b/i.test(source)) return MEDIA_KINDS.DASH;
+    return null;
+  }
+  function isManifestMimeType(value) {
+    return /(?:mpegurl|dash\+xml)/i.test(value);
+  }
+  function manifestMimeType(kind) {
+    return kind === MEDIA_KINDS.DASH ? "application/dash+xml" : "application/vnd.apple.mpegurl";
+  }
+  function decryptedProbeDiagnosticCode(probe) {
+    if (probe.status === "unsupported") return "decrypted_manifest_unsupported";
+    if (probe.status === "failed") return "decrypted_manifest_parse_failed";
+    if (probe.playlistType === "unknown") return "decrypted_manifest_no_stream";
+    if (probe.playlistType === "media" && !probe.segmentCount && !probe.partialSegmentCount)
+      return "decrypted_manifest_zero_segments";
+    return "decrypted_manifest_parsed";
+  }
+  function reportDiagnostic(envelope, facts) {
+    notifyContentScript({
+      type: "REGISTERED_EVENT",
+      event: createRegisteredEvent(EVENTS.MEDIA_PROBE_DIAGNOSTIC, {
+        mediaId: envelope.mediaId,
+        pageUrl: location.href,
+        manifestUrl: envelope.manifestUrl,
+        kind: envelope.kind,
+        observedAt: Date.now(),
+        ...facts
+      })
+    });
+  }
+  function byteLength(value) {
+    return new TextEncoder().encode(String(value || "")).byteLength;
+  }
+
   // src/main-world/network-capture.js
   function installNetworkCapture(policy) {
     const originalFetch = window.fetch;
@@ -1970,6 +2292,7 @@ ${body}`;
       probeGate.clear();
       requestContexts.clear();
       clearMediaObservations();
+      clearEncryptedManifestEnvelopes();
     };
   }
   function installFetchCapture(policy, inspect, resolveAttempts, requestContexts) {
@@ -2130,7 +2453,7 @@ ${body}`;
           phase: "response_received",
           code: "manifest_body_received",
           httpStatus: response.status,
-          bodyBytes: byteLength(body),
+          bodyBytes: byteLength2(body),
           bodyFormat: detectManifestBodyFormat(body)
         });
         const finalCandidate = finalUrl === manifestUrl ? candidate : reportMediaSource(
@@ -2256,16 +2579,25 @@ ${body}`;
     }
     if (![MEDIA_KINDS.HLS, MEDIA_KINDS.DASH].includes(manifestCandidate?.kind))
       return null;
+    const manifestEnvelope = rememberEncryptedManifestEnvelope({
+      candidate: manifestCandidate,
+      manifestUrl,
+      body,
+      requestContext: requestContext2
+    });
     const parsedProbe = manifestCandidate.kind === MEDIA_KINDS.DASH ? parseDashManifest(manifestUrl, body) : parseHlsManifest(manifestUrl, body);
     const probe = { kind: manifestCandidate.kind, ...parsedProbe };
     const diagnosticCode = parsedProbeDiagnosticCode(probe);
     reportProbeDiagnostic(manifestCandidate, {
       phase: "parsed",
       code: diagnosticCode,
-      bodyBytes: byteLength(body),
+      bodyBytes: byteLength2(body),
       bodyFormat: detectManifestBodyFormat(body),
       playlistType: probe.playlistType,
-      segmentCount: probe.segmentCount
+      segmentCount: probe.segmentCount,
+      observationSource: "network_response",
+      envelopeScheme: manifestEnvelope?.scheme || null,
+      evidence: manifestEnvelope?.evidence || []
     });
     if (diagnosticCode !== "manifest_parsed") {
       notifyContentScript({
@@ -2289,7 +2621,9 @@ ${body}`;
         kind: manifestCandidate.kind,
         ...probe,
         requestContext: requestContext2,
-        resolutionAttempt
+        resolutionAttempt,
+        probeSource: "network_response",
+        manifestEnvelope
       })
     });
     return probe;
@@ -2360,7 +2694,7 @@ ${body}`;
     if (/^(?:<\?xml[^>]*>\s*)?<MPD\b/i.test(normalized)) return "dash";
     return "unknown";
   }
-  function byteLength(value) {
+  function byteLength2(value) {
     return new TextEncoder().encode(String(value || "")).byteLength;
   }
   function httpStatusFromProbeError(code) {
@@ -2808,6 +3142,7 @@ ${body}`;
       if (typeof originalCreate === "function") {
         const createWrapper = function(object) {
           const objectUrl = originalCreate.call(this, object);
+          if (object instanceof Blob) publishCreatedBlob(object, objectUrl);
           if (object instanceof MediaSource) {
             const state = mediaSourceState(object);
             state.blobUrl = objectUrl;
@@ -3367,6 +3702,7 @@ ${body}`;
     implementations: {
       "main-world.network-capture": ({ policy }) => installNetworkCapture(policy),
       "main-world.player-source-observer": ({ policy }) => installPlayerSourceObserver(policy),
+      "main-world.decrypted-manifest-observer": ({ policy }) => installDecryptedManifestObserver(policy),
       "main-world.blob-source-tracer": ({ policy }) => installBlobSourceTracer(policy),
       "main-world.eme-observer": () => installEmeObserver(),
       "main-world.timer-control": ({ policy }) => installTimerControl(policy)

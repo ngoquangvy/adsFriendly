@@ -50,6 +50,11 @@ export const MEDIA_PROBE_DIAGNOSTIC_PHASES = Object.freeze({
   FAILED: "failed",
 });
 
+export const MEDIA_PROBE_SOURCES = Object.freeze({
+  NETWORK_RESPONSE: "network_response",
+  DECRYPTED_BLOB: "decrypted_blob",
+});
+
 export function normalizeMediaCandidate(value = {}) {
   const candidate = {
     id: requiredString(value.id, "id"),
@@ -167,6 +172,12 @@ export function normalizeMediaProbe(value = {}) {
       value.discontinuitySequence,
     ),
     revisionId: optionalString(value.revisionId),
+    probeSource: optionalEnumValue(
+      value.probeSource,
+      Object.values(MEDIA_PROBE_SOURCES),
+      "probeSource",
+    ),
+    manifestEnvelope: normalizeManifestEnvelope(value.manifestEnvelope),
     requestContext: normalizeMediaRequestContext(value.requestContext),
     resolutionAttempt: normalizeMediaResolutionAttempt(value.resolutionAttempt),
     encryptionMethods: normalizeStrings(value.encryptionMethods),
@@ -211,7 +222,39 @@ export function normalizeMediaProbeDiagnostic(value = {}) {
       "playlistType",
     ),
     segmentCount: optionalNonNegativeInteger(value.segmentCount),
+    observationSource: optionalEnumValue(
+      value.observationSource,
+      [
+        "network_response",
+        "active_probe",
+        "decrypted_blob",
+        "player_api",
+        "media_source",
+      ],
+      "observationSource",
+    ),
+    envelopeScheme: optionalEnumValue(
+      value.envelopeScheme,
+      ["aes-gcm", "unknown"],
+      "envelopeScheme",
+    ),
+    correlationConfidence: optionalConfidence(value.correlationConfidence),
+    evidence: normalizeStrings(value.evidence).slice(0, 20),
     observedAt: optionalFiniteNumber(value.observedAt) || Date.now(),
+  };
+}
+
+export function normalizeManifestEnvelope(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return {
+    scheme: enumValue(
+      value.scheme || "unknown",
+      ["aes-gcm", "unknown"],
+      "manifestEnvelope.scheme",
+    ),
+    observedAt: optionalFiniteNumber(value.observedAt),
+    correlationConfidence: optionalConfidence(value.correlationConfidence),
+    evidence: normalizeStrings(value.evidence).slice(0, 20),
   };
 }
 
@@ -371,6 +414,15 @@ function requiredString(value, field) {
 
 function optionalString(value) {
   return typeof value === "string" && value ? value : null;
+}
+
+function optionalConfidence(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0 || number > 1) {
+    throw new Error("[MediaContract] confidence must be between 0 and 1.");
+  }
+  return number;
 }
 
 function enumValue(value, allowed, field) {

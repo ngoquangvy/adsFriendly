@@ -4,6 +4,7 @@ export const MEDIA_RESOLUTION_STAGES = Object.freeze({
   CHILD_DISCOVERY: "child_discovery",
   CHILD_PROBE: "child_probe",
   SOURCE_MATCHING: "source_matching",
+  PLAYER_DECRYPTION: "player_decryption",
   DOWNLOAD_READY: "download_ready",
   PLAYBACK_ONLY: "playback_only",
 });
@@ -30,6 +31,10 @@ export const MEDIA_RESOLUTION_STAGE_CATALOG = Object.freeze({
   [S.SOURCE_MATCHING]: stage(
     "Playable child stream + player context",
     "Selected media source",
+  ),
+  [S.PLAYER_DECRYPTION]: stage(
+    "Encrypted manifest + player Blob",
+    "Parsed plaintext manifest",
   ),
   [S.DOWNLOAD_READY]: stage("Selected media source", "Download plan input"),
   [S.PLAYBACK_ONLY]: stage("Protected media metadata", "Playback-only result"),
@@ -58,6 +63,16 @@ export function diagnoseMediaResolution(item, items = []) {
       message: "Playback only · DRM protected",
     });
   if (target.kind === "dash") return diagnoseDash(target);
+  if (target.probeSource === "decrypted_blob")
+    return diagnostic(
+      S.PLAYER_DECRYPTION,
+      D.UNHANDLED,
+      "decrypted_manifest_handoff_pending",
+      {
+        message:
+          "Player decryption · manifest parsed · download handoff pending",
+      },
+    );
   if (
     target.resolutionStatus === "resolved" ||
     (target.probeStatus === "ready" &&
@@ -249,6 +264,34 @@ function describeProbeDiagnostic(diagnostic) {
       code,
       `${diagnostic.playlistType || "manifest"} parsed · ${diagnostic.segmentCount || 0} segments · matching pending`,
     );
+  if (code === "decrypted_manifest_blob_observed")
+    return described(
+      D.WAITING,
+      code,
+      `player decrypted ${diagnostic.bodyFormat || "manifest"} · parser pending`,
+    );
+  if (code === "decrypted_manifest_parsed")
+    return described(
+      D.READY,
+      code,
+      `player-decrypted ${diagnostic.playlistType || "manifest"} parsed · ${diagnostic.segmentCount || 0} segments`,
+    );
+  if (code === "decrypted_manifest_zero_segments")
+    return described(
+      D.UNHANDLED,
+      code,
+      "player-decrypted manifest · 0 segments",
+    );
+  if (code === "decrypted_manifest_no_stream")
+    return described(
+      D.UNHANDLED,
+      code,
+      "player-decrypted manifest · no playable stream",
+    );
+  if (code === "decrypted_manifest_unsupported")
+    return described(D.UNHANDLED, code, "player-decrypted format unsupported");
+  if (code === "decrypted_manifest_parse_failed")
+    return described(D.FAILED, code, "player-decrypted manifest parse failed");
   return described(
     diagnostic.phase === "failed" ? D.FAILED : D.WAITING,
     code,
