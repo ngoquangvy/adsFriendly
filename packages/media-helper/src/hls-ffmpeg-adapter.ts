@@ -2,6 +2,7 @@ import { mkdir, rename, unlink } from "node:fs/promises";
 import { createServer } from "node:http";
 import { basename, extname, join } from "node:path";
 import { parseHlsManifest } from "../../../src/media/hls-parser.js";
+import { hasStrongDrmEvidence } from "../../../src/media/protection-policy.js";
 import {
   assertSafeRemoteUrl,
   availableOutputPath,
@@ -172,12 +173,12 @@ async function preflightManifestTree(
     if (summary.status !== "ready" || summary.playlistType === "unknown") {
       throw new Error("HLS endpoint did not return a usable playlist.");
     }
-    if (summary.drm !== "none") {
+    if (hasStrongDrmEvidence(summary)) {
       throw new Error("DRM-protected HLS is playback only.");
     }
     if (!supportsEncryption(summary)) {
       throw new Error(
-        "Only unencrypted HLS or HLS encrypted with AES-128 identity keys is supported.",
+        "Only unencrypted HLS, AES-128 identity keys, or SAMPLE-AES identity keys are supported.",
       );
     }
 
@@ -315,8 +316,11 @@ function extractKeyResources(body: string, baseUrl: string) {
 
 function supportsEncryption(summary: ReturnType<typeof parseHlsManifest>) {
   if (!summary.encryptionMethods.length) return true;
+  const supportedMethod = summary.encryptionMethods.every(
+    (method) => method === "AES-128" || method.startsWith("SAMPLE-AES"),
+  );
   return (
-    summary.encryptionMethods.every((method) => method === "AES-128") &&
+    supportedMethod &&
     summary.encryptionKeyFormats.every((format) => format === "identity")
   );
 }

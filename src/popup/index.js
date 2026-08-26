@@ -533,7 +533,7 @@ function createMediaDownloadControl(item, downloadItem, tab, helper) {
       button.title = error?.message || String(error);
     }
   });
-  if (profiles.length) control.append(profileSelect);
+  if (availability.supported && profiles.length) control.append(profileSelect);
   control.append(button);
   return control;
 }
@@ -816,7 +816,11 @@ function downloadUnavailableLabel(reason = "") {
   if (reason.includes("DRM")) return "Playback only";
   if (reason.includes("Live")) return "Live";
   if (reason.includes("Encrypted")) return "Encrypted";
-  if (reason.includes("waiting") || reason.includes("not exposed"))
+  if (
+    reason.includes("waiting") ||
+    reason.includes("not exposed") ||
+    reason.includes("player-resolved")
+  )
     return "Watching";
   if (reason.includes("no media")) return "No media";
   return "Unavailable";

@@ -1,3 +1,9 @@
+import {
+  hasStrongDrmEvidence,
+  isFfmpegCompatibleSampleAes,
+  isWeakSampleAesSignal,
+} from "./protection-policy.js";
+
 export const MEDIA_RESOLUTION_STAGES = Object.freeze({
   NETWORK_OBSERVATION: "network_observation",
   MANIFEST_PROBE: "manifest_probe",
@@ -5,6 +11,7 @@ export const MEDIA_RESOLUTION_STAGES = Object.freeze({
   CHILD_PROBE: "child_probe",
   SOURCE_MATCHING: "source_matching",
   PLAYER_DECRYPTION: "player_decryption",
+  PLAYER_SEGMENT_RESOLUTION: "player_segment_resolution",
   DOWNLOAD_READY: "download_ready",
   PLAYBACK_ONLY: "playback_only",
 });
@@ -36,6 +43,10 @@ export const MEDIA_RESOLUTION_STAGE_CATALOG = Object.freeze({
     "Encrypted manifest + player Blob",
     "Parsed plaintext manifest",
   ),
+  [S.PLAYER_SEGMENT_RESOLUTION]: stage(
+    "SAMPLE-AES candidate + player playback",
+    "Resolved media segment sequence",
+  ),
   [S.DOWNLOAD_READY]: stage("Selected media source", "Download plan input"),
   [S.PLAYBACK_ONLY]: stage("Protected media metadata", "Playback-only result"),
 });
@@ -58,10 +69,19 @@ export function diagnoseMediaResolution(item, items = []) {
     return diagnostic(S.NETWORK_OBSERVATION, D.UNHANDLED, "media_unhandled", {
       message: "Network observation · media type not handled",
     });
-  if (["suspected", "confirmed"].includes(target.drm))
+  if (hasStrongDrmEvidence(target))
     return diagnostic(S.PLAYBACK_ONLY, D.BLOCKED, "drm_playback_only", {
       message: "Playback only · DRM protected",
     });
+  if (isWeakSampleAesSignal(target) && !isFfmpegCompatibleSampleAes(target))
+    return diagnostic(
+      S.PLAYER_SEGMENT_RESOLUTION,
+      D.WAITING,
+      "sample_aes_player_segments_pending",
+      {
+        message: "Player URL resolution · waiting for resolved media segments",
+      },
+    );
   if (target.kind === "dash") return diagnoseDash(target);
   if (
     target.probeSource === "decrypted_blob" &&

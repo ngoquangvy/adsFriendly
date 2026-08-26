@@ -4456,6 +4456,41 @@ var AdsFriendlyBackground = (() => {
     }
   }
 
+  // src/media/protection-policy.js
+  var STRONG_DRM_EVIDENCE = /* @__PURE__ */ new Set([
+    "hls-keyformat",
+    "eme-key-system-access"
+  ]);
+  function hasStrongDrmEvidence(candidate = {}) {
+    if (candidate.drm === "confirmed") return true;
+    if (candidate.drm !== "suspected") return false;
+    if (candidate.drmSystem) return true;
+    if ((candidate.drmEvidence || []).some(
+      (evidence) => STRONG_DRM_EVIDENCE.has(String(evidence).toLowerCase())
+    )) {
+      return true;
+    }
+    const eme = candidate.eme;
+    return Boolean(
+      eme?.keySystems?.length || eme?.keyStatuses?.length || eme?.licenseStatus
+    );
+  }
+  function isWeakSampleAesSignal(candidate = {}) {
+    if (candidate.drm !== "suspected") return false;
+    if (candidate.encryptionScheme !== "sample-aes") return false;
+    return !hasStrongDrmEvidence(candidate);
+  }
+  function isFfmpegCompatibleSampleAes(candidate = {}) {
+    if (!isWeakSampleAesSignal(candidate)) return false;
+    const methods = candidate.encryptionMethods || [];
+    const keyFormats = candidate.encryptionKeyFormats || [];
+    return methods.length > 0 && methods.every(
+      (method) => String(method).toUpperCase().startsWith("SAMPLE-AES")
+    ) && keyFormats.every(
+      (format) => !format || String(format).toLowerCase() === "identity"
+    );
+  }
+
   // src/media/download-job-contract.js
   var DOWNLOAD_JOB_PREFIX = "adsfriendly.mediaDownloadJob.";
   var DOWNLOAD_HISTORY_KEY = "mediaDownloadHistory";
@@ -4555,14 +4590,14 @@ var AdsFriendlyBackground = (() => {
       } catch {
         return { supported: false, reason: "Direct media URL is not ready." };
       }
-      if (candidate.drm === "suspected" || candidate.drm === "confirmed")
+      if (hasStrongDrmEvidence(candidate))
         return { supported: false, reason: drmPlaybackOnlyReason(candidate) };
       return { supported: true, reason: null };
     }
     if (candidate.kind === "dash") {
       if (candidate.probeStatus !== "ready")
         return { supported: false, reason: "DASH manifest is not ready." };
-      if (candidate.drm === "suspected" || candidate.drm === "confirmed")
+      if (hasStrongDrmEvidence(candidate))
         return { supported: false, reason: drmPlaybackOnlyReason(candidate) };
       if (candidate.streamType === "live")
         return { supported: false, reason: "Live DASH is not supported yet." };
@@ -4584,9 +4619,14 @@ var AdsFriendlyBackground = (() => {
         supported: false,
         reason: "Player-decrypted manifest found; secure download handoff is not ready yet."
       };
-    if (candidate.drm === "suspected" || candidate.drm === "confirmed")
+    if (hasStrongDrmEvidence(candidate))
       return { supported: false, reason: drmPlaybackOnlyReason(candidate) };
-    if (candidate.encryptionMethods?.length && !isDownloadableAes128(candidate))
+    if (isWeakSampleAesSignal(candidate) && !isFfmpegCompatibleSampleAes(candidate))
+      return {
+        supported: false,
+        reason: "SAMPLE-AES signal needs player-resolved segments before download."
+      };
+    if (candidate.encryptionMethods?.length && !isDownloadableHlsEncryption(candidate))
       return { supported: false, reason: "Encrypted HLS is not supported yet." };
     if (candidate.playlistType === "unknown")
       return {
@@ -4611,7 +4651,8 @@ var AdsFriendlyBackground = (() => {
   function hasCurrentManifestHandoff(candidate) {
     return candidate.manifestHandoff?.mediaId === candidate.id && candidate.manifestHandoff?.manifestUrl === candidate.manifestUrl && Number(candidate.manifestHandoff?.expiresAt) > Date.now();
   }
-  function isDownloadableAes128(candidate) {
+  function isDownloadableHlsEncryption(candidate) {
+    if (isFfmpegCompatibleSampleAes(candidate)) return true;
     const methods = candidate.encryptionMethods || [];
     const formats = candidate.encryptionKeyFormats || [];
     return methods.length > 0 && methods.every((method) => String(method).toUpperCase() === "AES-128") && formats.every((format) => String(format).toLowerCase() === "identity");

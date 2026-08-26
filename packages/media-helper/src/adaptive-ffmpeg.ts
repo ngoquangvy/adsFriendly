@@ -32,7 +32,7 @@ export async function runAdaptiveFfmpeg(
     "-user_agent",
     headers["User-Agent"],
     "-headers",
-    `Referer: ${headers.Referer}\r\n`,
+    `Referer: ${headers.Referer}\r\nOrigin: ${headers.Origin}\r\n`,
     "-i",
     manifestUrl,
     "-map",
@@ -151,8 +151,13 @@ export function adaptiveRequestHeaders(job: DownloadJob) {
     const parsed = new URL(preferred);
     if (["http:", "https:"].includes(parsed.protocol)) referer = parsed.href;
   } catch {}
+  let origin = "null";
+  try {
+    origin = new URL(referer).origin;
+  } catch {}
   return {
     Referer: referer.replace(/[\r\n]/g, ""),
+    Origin: origin.replace(/[\r\n]/g, ""),
     "User-Agent": "AdsFriendlyMediaHelper/0.4",
   };
 }

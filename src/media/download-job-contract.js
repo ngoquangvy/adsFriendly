@@ -1,4 +1,9 @@
 import { normalizeMediaDownloadOutput } from "./download-options.js";
+import {
+  hasStrongDrmEvidence,
+  isFfmpegCompatibleSampleAes,
+  isWeakSampleAesSignal,
+} from "./protection-policy.js";
 
 export const DOWNLOAD_JOB_PREFIX = "adsfriendly.mediaDownloadJob.";
 export const DOWNLOAD_HISTORY_KEY = "mediaDownloadHistory";
@@ -112,14 +117,14 @@ export function getMediaDownloadAvailability(candidate = {}) {
     } catch {
       return { supported: false, reason: "Direct media URL is not ready." };
     }
-    if (candidate.drm === "suspected" || candidate.drm === "confirmed")
+    if (hasStrongDrmEvidence(candidate))
       return { supported: false, reason: drmPlaybackOnlyReason(candidate) };
     return { supported: true, reason: null };
   }
   if (candidate.kind === "dash") {
     if (candidate.probeStatus !== "ready")
       return { supported: false, reason: "DASH manifest is not ready." };
-    if (candidate.drm === "suspected" || candidate.drm === "confirmed")
+    if (hasStrongDrmEvidence(candidate))
       return { supported: false, reason: drmPlaybackOnlyReason(candidate) };
     if (candidate.streamType === "live")
       return { supported: false, reason: "Live DASH is not supported yet." };
@@ -145,9 +150,21 @@ export function getMediaDownloadAvailability(candidate = {}) {
       reason:
         "Player-decrypted manifest found; secure download handoff is not ready yet.",
     };
-  if (candidate.drm === "suspected" || candidate.drm === "confirmed")
+  if (hasStrongDrmEvidence(candidate))
     return { supported: false, reason: drmPlaybackOnlyReason(candidate) };
-  if (candidate.encryptionMethods?.length && !isDownloadableAes128(candidate))
+  if (
+    isWeakSampleAesSignal(candidate) &&
+    !isFfmpegCompatibleSampleAes(candidate)
+  )
+    return {
+      supported: false,
+      reason:
+        "SAMPLE-AES signal needs player-resolved segments before download.",
+    };
+  if (
+    candidate.encryptionMethods?.length &&
+    !isDownloadableHlsEncryption(candidate)
+  )
     return { supported: false, reason: "Encrypted HLS is not supported yet." };
   if (candidate.playlistType === "unknown")
     return {
@@ -182,7 +199,8 @@ function hasCurrentManifestHandoff(candidate) {
   );
 }
 
-function isDownloadableAes128(candidate) {
+function isDownloadableHlsEncryption(candidate) {
+  if (isFfmpegCompatibleSampleAes(candidate)) return true;
   const methods = candidate.encryptionMethods || [];
   const formats = candidate.encryptionKeyFormats || [];
   return (

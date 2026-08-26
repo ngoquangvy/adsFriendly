@@ -538,6 +538,41 @@ var AdsFriendlyPopup = (() => {
     }
   }
 
+  // src/media/protection-policy.js
+  var STRONG_DRM_EVIDENCE = /* @__PURE__ */ new Set([
+    "hls-keyformat",
+    "eme-key-system-access"
+  ]);
+  function hasStrongDrmEvidence(candidate = {}) {
+    if (candidate.drm === "confirmed") return true;
+    if (candidate.drm !== "suspected") return false;
+    if (candidate.drmSystem) return true;
+    if ((candidate.drmEvidence || []).some(
+      (evidence) => STRONG_DRM_EVIDENCE.has(String(evidence).toLowerCase())
+    )) {
+      return true;
+    }
+    const eme = candidate.eme;
+    return Boolean(
+      eme?.keySystems?.length || eme?.keyStatuses?.length || eme?.licenseStatus
+    );
+  }
+  function isWeakSampleAesSignal(candidate = {}) {
+    if (candidate.drm !== "suspected") return false;
+    if (candidate.encryptionScheme !== "sample-aes") return false;
+    return !hasStrongDrmEvidence(candidate);
+  }
+  function isFfmpegCompatibleSampleAes(candidate = {}) {
+    if (!isWeakSampleAesSignal(candidate)) return false;
+    const methods = candidate.encryptionMethods || [];
+    const keyFormats = candidate.encryptionKeyFormats || [];
+    return methods.length > 0 && methods.every(
+      (method) => String(method).toUpperCase().startsWith("SAMPLE-AES")
+    ) && keyFormats.every(
+      (format) => !format || String(format).toLowerCase() === "identity"
+    );
+  }
+
   // src/media/download-job-contract.js
   var DOWNLOAD_JOB_PREFIX = "adsfriendly.mediaDownloadJob.";
   var DOWNLOAD_JOB_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
@@ -548,14 +583,14 @@ var AdsFriendlyPopup = (() => {
       } catch {
         return { supported: false, reason: "Direct media URL is not ready." };
       }
-      if (candidate.drm === "suspected" || candidate.drm === "confirmed")
+      if (hasStrongDrmEvidence(candidate))
         return { supported: false, reason: drmPlaybackOnlyReason(candidate) };
       return { supported: true, reason: null };
     }
     if (candidate.kind === "dash") {
       if (candidate.probeStatus !== "ready")
         return { supported: false, reason: "DASH manifest is not ready." };
-      if (candidate.drm === "suspected" || candidate.drm === "confirmed")
+      if (hasStrongDrmEvidence(candidate))
         return { supported: false, reason: drmPlaybackOnlyReason(candidate) };
       if (candidate.streamType === "live")
         return { supported: false, reason: "Live DASH is not supported yet." };
@@ -577,9 +612,14 @@ var AdsFriendlyPopup = (() => {
         supported: false,
         reason: "Player-decrypted manifest found; secure download handoff is not ready yet."
       };
-    if (candidate.drm === "suspected" || candidate.drm === "confirmed")
+    if (hasStrongDrmEvidence(candidate))
       return { supported: false, reason: drmPlaybackOnlyReason(candidate) };
-    if (candidate.encryptionMethods?.length && !isDownloadableAes128(candidate))
+    if (isWeakSampleAesSignal(candidate) && !isFfmpegCompatibleSampleAes(candidate))
+      return {
+        supported: false,
+        reason: "SAMPLE-AES signal needs player-resolved segments before download."
+      };
+    if (candidate.encryptionMethods?.length && !isDownloadableHlsEncryption(candidate))
       return { supported: false, reason: "Encrypted HLS is not supported yet." };
     if (candidate.playlistType === "unknown")
       return {
@@ -604,7 +644,8 @@ var AdsFriendlyPopup = (() => {
   function hasCurrentManifestHandoff(candidate) {
     return candidate.manifestHandoff?.mediaId === candidate.id && candidate.manifestHandoff?.manifestUrl === candidate.manifestUrl && Number(candidate.manifestHandoff?.expiresAt) > Date.now();
   }
-  function isDownloadableAes128(candidate) {
+  function isDownloadableHlsEncryption(candidate) {
+    if (isFfmpegCompatibleSampleAes(candidate)) return true;
     const methods = candidate.encryptionMethods || [];
     const formats = candidate.encryptionKeyFormats || [];
     return methods.length > 0 && methods.every((method) => String(method).toUpperCase() === "AES-128") && formats.every((format) => String(format).toLowerCase() === "identity");
@@ -819,6 +860,7 @@ var AdsFriendlyPopup = (() => {
     CHILD_PROBE: "child_probe",
     SOURCE_MATCHING: "source_matching",
     PLAYER_DECRYPTION: "player_decryption",
+    PLAYER_SEGMENT_RESOLUTION: "player_segment_resolution",
     DOWNLOAD_READY: "download_ready",
     PLAYBACK_ONLY: "playback_only"
   });
@@ -847,6 +889,10 @@ var AdsFriendlyPopup = (() => {
       "Encrypted manifest + player Blob",
       "Parsed plaintext manifest"
     ),
+    [S.PLAYER_SEGMENT_RESOLUTION]: stage(
+      "SAMPLE-AES candidate + player playback",
+      "Resolved media segment sequence"
+    ),
     [S.DOWNLOAD_READY]: stage("Selected media source", "Download plan input"),
     [S.PLAYBACK_ONLY]: stage("Protected media metadata", "Playback-only result")
   });
@@ -865,10 +911,19 @@ var AdsFriendlyPopup = (() => {
       return diagnostic(S.NETWORK_OBSERVATION, D.UNHANDLED, "media_unhandled", {
         message: "Network observation \xB7 media type not handled"
       });
-    if (["suspected", "confirmed"].includes(target.drm))
+    if (hasStrongDrmEvidence(target))
       return diagnostic(S.PLAYBACK_ONLY, D.BLOCKED, "drm_playback_only", {
         message: "Playback only \xB7 DRM protected"
       });
+    if (isWeakSampleAesSignal(target) && !isFfmpegCompatibleSampleAes(target))
+      return diagnostic(
+        S.PLAYER_SEGMENT_RESOLUTION,
+        D.WAITING,
+        "sample_aes_player_segments_pending",
+        {
+          message: "Player URL resolution \xB7 waiting for resolved media segments"
+        }
+      );
     if (target.kind === "dash") return diagnoseDash(target);
     if (target.probeSource === "decrypted_blob" && !(Number(target.manifestHandoff?.expiresAt) > Date.now()))
       return diagnostic(
@@ -1357,6 +1412,19 @@ var AdsFriendlyPopup = (() => {
       facts.push(
         `DRM confirmed${item.drmSystem ? ` \xB7 ${formatDrmSystem2(item.drmSystem)}` : ""}`,
         "Playback only"
+      );
+      return;
+    }
+    if (hasStrongDrmEvidence(item)) {
+      facts.push(
+        `DRM suspected${item.drmSystem ? ` \xB7 ${formatDrmSystem2(item.drmSystem)}` : ""}`,
+        "Playback only"
+      );
+      return;
+    }
+    if (isWeakSampleAesSignal(item)) {
+      facts.push(
+        isFfmpegCompatibleSampleAes(item) ? "Encrypted HLS \xB7 SAMPLE-AES \xB7 Helper compatible" : "SAMPLE-AES signal \xB7 DRM not confirmed"
       );
       return;
     }
@@ -1934,7 +2002,7 @@ ${blobTitleKey(item.title)}`;
         button.title = error?.message || String(error);
       }
     });
-    if (profiles.length) control.append(profileSelect);
+    if (availability.supported && profiles.length) control.append(profileSelect);
     control.append(button);
     return control;
   }
@@ -2175,7 +2243,7 @@ ${blobTitleKey(item.title)}`;
     if (reason.includes("DRM")) return "Playback only";
     if (reason.includes("Live")) return "Live";
     if (reason.includes("Encrypted")) return "Encrypted";
-    if (reason.includes("waiting") || reason.includes("not exposed"))
+    if (reason.includes("waiting") || reason.includes("not exposed") || reason.includes("player-resolved"))
       return "Watching";
     if (reason.includes("no media")) return "No media";
     return "Unavailable";

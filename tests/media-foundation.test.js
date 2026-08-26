@@ -426,6 +426,31 @@ test("resolution diagnostics stop at the explicit decrypted-manifest handoff", (
   });
 });
 
+test("resolution diagnostics wait when SAMPLE-AES lacks usable key metadata", () => {
+  const result = diagnoseMediaResolution({
+    id: "sample-aes-hls",
+    kind: "hls",
+    probeStatus: "ready",
+    playlistType: "media",
+    streamType: "vod",
+    segmentCount: 20,
+    drm: "suspected",
+    encryptionScheme: "sample-aes",
+    drmEvidence: ["hls-sample-aes"],
+  });
+  assert.equal(result.stage, MEDIA_RESOLUTION_STAGES.PLAYER_SEGMENT_RESOLUTION);
+  assert.equal(result.status, "waiting");
+  assert.equal(result.code, "sample_aes_player_segments_pending");
+  assert.deepEqual(MEDIA_RESOLUTION_STAGE_CATALOG[result.stage], {
+    input: "SAMPLE-AES candidate + player playback",
+    output: "Resolved media segment sequence",
+  });
+  assert.equal(
+    result.message,
+    "Player URL resolution · waiting for resolved media segments",
+  );
+});
+
 test("catalog retains bounded probe metadata without storing manifest bodies", () => {
   const catalog = createMediaCatalog();
   const candidate = createMediaCandidateFromSource({
@@ -922,7 +947,7 @@ test("public media title prefers page metadata over a technical player name", ()
   );
 });
 
-test("DRM-only resolved Blob does not request helper setup", () => {
+test("SAMPLE-AES identity resolved Blob is offered to the Media Helper", () => {
   const hls = {
     id: "drm-hls",
     kind: "hls",
@@ -932,6 +957,8 @@ test("DRM-only resolved Blob does not request helper setup", () => {
     segmentCount: 10,
     drm: "suspected",
     encryptionMethods: ["SAMPLE-AES"],
+    encryptionScheme: "sample-aes",
+    drmEvidence: ["hls-sample-aes"],
     manifestUrl: "https://cdn.example/movie.m3u8",
   };
   const blob = {
@@ -948,21 +975,21 @@ test("DRM-only resolved Blob does not request helper setup", () => {
   const state = getMediaCatalogDownloadState([blob, hls]);
   assert.deepEqual(state, {
     candidateCount: 1,
-    downloadableCount: 0,
-    drmBlockedCount: 1,
-    unavailableCount: 1,
+    downloadableCount: 1,
+    drmBlockedCount: 0,
+    unavailableCount: 0,
   });
   assert.equal(
     helperSetupPresentation(
       { status: "permission_required" },
       { hasDownloadableMedia: state.downloadableCount > 0 },
-    ),
-    null,
+    ).label,
+    "Allow helper connection",
   );
   assert.equal(formatMediaName(blob), "cdn.example · HLS source");
   assert.equal(
     formatMediaHelperSummary({ status: "permission_required" }, state),
-    "Media found · DRM stream is playback only.",
+    "Media found · allow Media Helper connection to download.",
   );
   assert.equal(selectVisibleMediaItems([blob, hls]).length, 1);
 });
@@ -1116,7 +1143,7 @@ segment-2.ts
   assert.equal(sampleAes.drm, "suspected");
   assert.match(
     formatMediaDetails({ kind: "hls", probeStatus: "ready", ...sampleAes }),
-    /DRM suspected · SAMPLE-AES · Playback only/,
+    /Encrypted HLS · SAMPLE-AES · Helper compatible/,
   );
 
   const widevine = parseHlsManifest(
@@ -2131,9 +2158,23 @@ test("download availability blocks DRM and live HLS before job creation", () => 
     }).supported,
     true,
   );
+  assert.equal(
+    getMediaDownloadAvailability({
+      ...base,
+      drm: "suspected",
+      encryptionScheme: "sample-aes",
+      encryptionMethods: ["SAMPLE-AES"],
+      drmEvidence: ["hls-sample-aes"],
+    }).supported,
+    true,
+  );
   assert.match(
-    getMediaDownloadAvailability({ ...base, drm: "suspected" }).reason,
-    /DRM/,
+    getMediaDownloadAvailability({
+      ...base,
+      drm: "suspected",
+      drmSystem: "widevine",
+    }).reason,
+    /DRM suspected · Widevine · Playback only/,
   );
   assert.match(
     getMediaDownloadAvailability({

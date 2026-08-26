@@ -1,4 +1,9 @@
 import { getMediaDownloadAvailability } from "./download-job-contract.js";
+import {
+  hasStrongDrmEvidence,
+  isFfmpegCompatibleSampleAes,
+  isWeakSampleAesSignal,
+} from "./protection-policy.js";
 import { diagnoseMediaResolution } from "./resolution-diagnostics.js";
 
 export function createMediaCatalogViewSignature({
@@ -361,6 +366,21 @@ function appendProtectionFacts(facts, item) {
     facts.push(
       `DRM confirmed${item.drmSystem ? ` · ${formatDrmSystem(item.drmSystem)}` : ""}`,
       "Playback only",
+    );
+    return;
+  }
+  if (hasStrongDrmEvidence(item)) {
+    facts.push(
+      `DRM suspected${item.drmSystem ? ` · ${formatDrmSystem(item.drmSystem)}` : ""}`,
+      "Playback only",
+    );
+    return;
+  }
+  if (isWeakSampleAesSignal(item)) {
+    facts.push(
+      isFfmpegCompatibleSampleAes(item)
+        ? "Encrypted HLS · SAMPLE-AES · Helper compatible"
+        : "SAMPLE-AES signal · DRM not confirmed",
     );
     return;
   }
