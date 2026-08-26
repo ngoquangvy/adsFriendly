@@ -12,6 +12,7 @@ import {
   downloadJobKey,
   normalizeMediaDownloadJob,
 } from "../media/download-job-contract.js";
+import { formatAesKeyHandoffDiagnostic } from "../media/key-handoff-diagnostics.js";
 import {
   getMediaAccessStrategyPreferences,
   recordMediaAccessStrategyResult,
@@ -359,9 +360,13 @@ async function handleJobEvent(jobId, requestId, rawEvent) {
     }
     if (event.type === MEDIA_HELPER_EVENTS.ERROR) {
       markTerminal(jobId);
+      const message = await appendStoredKeyCaptureDiagnostic(
+        jobId,
+        event.payload.message || "Media Helper download failed.",
+      );
       await updateJobState(jobId, {
         status: "failed",
-        error: event.payload.message || "Media Helper download failed.",
+        error: message,
       });
       activePorts.get(jobId)?.port.disconnect();
     }
@@ -370,6 +375,21 @@ async function handleJobEvent(jobId, requestId, rawEvent) {
     await updateJobState(jobId, { status: "failed", error: messageOf(error) });
     activePorts.get(jobId)?.port.disconnect();
   }
+}
+
+async function appendStoredKeyCaptureDiagnostic(jobId, message) {
+  if (
+    !/no captured browser key was available/i.test(message) ||
+    /Browser capture:/i.test(message)
+  ) {
+    return message;
+  }
+  const key = downloadJobKey(jobId);
+  const state = (await chrome.storage.session.get(key))[key];
+  const detail = formatAesKeyHandoffDiagnostic(
+    state?.candidate?.keyHandoffDiagnostic,
+  );
+  return detail ? `${message}${detail}` : message;
 }
 
 function markTerminal(jobId) {

@@ -1,5 +1,6 @@
 import { normalizeMediaDownloadOutput } from "./download-options.js";
 import { isRegisteredMediaAccessStrategy } from "./access-strategy-catalog.js";
+import { normalizeAesKeyHandoffDiagnostic } from "./key-handoff-diagnostics.js";
 
 export const MEDIA_HELPER_PROTOCOL_VERSION = 3;
 export const MEDIA_HELPER_HOST_NAME = "com.adsfriendly.media_helper";
@@ -167,36 +168,9 @@ export function normalizeHelperDownloadPayload(value = {}) {
           : null,
       keyHandoffDiagnostic:
         kind === "hls"
-          ? normalizeHelperKeyHandoffDiagnostic(candidate.keyHandoffDiagnostic)
+          ? normalizeAesKeyHandoffDiagnostic(candidate.keyHandoffDiagnostic)
           : null,
     },
-  };
-}
-
-function normalizeHelperKeyHandoffDiagnostic(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const count = (field) =>
-    Math.max(0, Math.min(1000, Math.trunc(Number(value[field]) || 0)));
-  return {
-    framesQueried: count("framesQueried"),
-    framesResponded: count("framesResponded"),
-    requestedManifestCount: count("requestedManifestCount"),
-    matchedManifestCount: count("matchedManifestCount"),
-    declaredKeyCount: count("declaredKeyCount"),
-    capturedKeyCount: count("capturedKeyCount"),
-    pageFetchAttemptCount: count("pageFetchAttemptCount"),
-    pageFetchSuccessCount: count("pageFetchSuccessCount"),
-    pageFetchStatuses: [
-      ...new Set(
-        Array.isArray(value.pageFetchStatuses) ? value.pageFetchStatuses : [],
-      ),
-    ]
-      .map(Number)
-      .filter(
-        (status) => Number.isInteger(status) && status >= 0 && status <= 599,
-      )
-      .slice(0, 8),
-    pageFetchErrorCount: count("pageFetchErrorCount"),
   };
 }
 

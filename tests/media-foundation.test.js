@@ -91,6 +91,10 @@ import {
   rememberHlsKeyUris,
 } from "../src/main-world/aes-key-handoff.js";
 import { collectAesKeyHandoffTargets } from "../src/background/media-download-jobs.js";
+import {
+  formatAesKeyHandoffDiagnostic,
+  normalizeAesKeyHandoffDiagnostic,
+} from "../src/media/key-handoff-diagnostics.js";
 
 test("offers a helper setup action independently from downloadable media", () => {
   assert.deepEqual(helperSetupPresentation({ status: "permission_required" }), {
@@ -278,6 +282,26 @@ test("browser AES handoff reports a rejected page-context key retry", async () =
   } finally {
     clearAesKeyHandoffs();
   }
+});
+
+test("AES key diagnostics are bounded and explain a page-context rejection", () => {
+  const diagnostic = normalizeAesKeyHandoffDiagnostic({
+    framesQueried: 2,
+    framesResponded: 1,
+    requestedManifestCount: 4,
+    matchedManifestCount: 1,
+    declaredKeyCount: 1,
+    capturedKeyCount: 0,
+    pageFetchAttemptCount: 1,
+    pageFetchSuccessCount: 0,
+    pageFetchStatuses: [403, 403, 999],
+    pageFetchErrorCount: 0,
+  });
+  assert.deepEqual(diagnostic.pageFetchStatuses, [403]);
+  assert.match(
+    formatAesKeyHandoffDiagnostic(diagnostic),
+    /1\/2 frames responded.*1 keys declared.*page fetch status 403/i,
+  );
 });
 
 test("AES handoff targets retain validated master-child URLs and iframe IDs", () => {

@@ -11,6 +11,7 @@ import {
   MEDIA_ACCESS_STRATEGIES,
   getMediaAccessStrategy,
 } from "../../../src/media/access-strategy-catalog.js";
+import { formatAesKeyHandoffDiagnostic } from "../../../src/media/key-handoff-diagnostics.js";
 import { fetchRemote } from "./direct-http-adapter.js";
 import {
   adaptiveRequestHeaderProfiles,
@@ -618,12 +619,10 @@ async function fetchKeyResource(
 }
 
 function formatBrowserKeyCaptureDiagnostic(job: DownloadJob) {
-  const value = job.candidate.keyHandoffDiagnostic;
-  if (!value) return " Browser key capture diagnostics were unavailable.";
-  const statuses = value.pageFetchStatuses.length
-    ? `; page fetch status ${value.pageFetchStatuses.join(", ")}`
-    : "";
-  return ` Browser capture: ${value.framesResponded}/${value.framesQueried} frames responded, ${value.matchedManifestCount}/${value.requestedManifestCount} manifests matched, ${value.declaredKeyCount} keys declared, ${value.capturedKeyCount} captured, ${value.pageFetchSuccessCount}/${value.pageFetchAttemptCount} page fetches succeeded${statuses}.`;
+  return (
+    formatAesKeyHandoffDiagnostic(job.candidate.keyHandoffDiagnostic) ||
+    " Browser key capture diagnostics were unavailable."
+  );
 }
 
 async function readKeyResponse(response: Response) {

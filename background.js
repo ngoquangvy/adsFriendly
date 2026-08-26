@@ -4515,6 +4515,36 @@ var AdsFriendlyBackground = (() => {
     return String(value || "").trim().replace(/^["']|["']$/g, "").trim().toLowerCase().slice(0, 100);
   }
 
+  // src/media/key-handoff-diagnostics.js
+  function normalizeAesKeyHandoffDiagnostic(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const count = (field) => Math.max(0, Math.min(1e3, Math.trunc(Number(value[field]) || 0)));
+    return {
+      framesQueried: count("framesQueried"),
+      framesResponded: count("framesResponded"),
+      requestedManifestCount: count("requestedManifestCount"),
+      matchedManifestCount: count("matchedManifestCount"),
+      declaredKeyCount: count("declaredKeyCount"),
+      capturedKeyCount: count("capturedKeyCount"),
+      pageFetchAttemptCount: count("pageFetchAttemptCount"),
+      pageFetchSuccessCount: count("pageFetchSuccessCount"),
+      pageFetchStatuses: [
+        ...new Set(
+          Array.isArray(value.pageFetchStatuses) ? value.pageFetchStatuses : []
+        )
+      ].map(Number).filter(
+        (status) => Number.isInteger(status) && status >= 0 && status <= 599
+      ).slice(0, 8),
+      pageFetchErrorCount: count("pageFetchErrorCount")
+    };
+  }
+  function formatAesKeyHandoffDiagnostic(value) {
+    const diagnostic = normalizeAesKeyHandoffDiagnostic(value);
+    if (!diagnostic) return "";
+    const statuses = diagnostic.pageFetchStatuses.length ? `; page fetch status ${diagnostic.pageFetchStatuses.join(", ")}` : "";
+    return ` Browser capture: ${diagnostic.framesResponded}/${diagnostic.framesQueried} frames responded, ${diagnostic.matchedManifestCount}/${diagnostic.requestedManifestCount} manifest checks matched, ${diagnostic.declaredKeyCount} keys declared, ${diagnostic.capturedKeyCount} captured, ${diagnostic.pageFetchSuccessCount}/${diagnostic.pageFetchAttemptCount} page fetches succeeded${statuses}.`;
+  }
+
   // src/media/download-job-contract.js
   var DOWNLOAD_JOB_PREFIX = "adsfriendly.mediaDownloadJob.";
   var DOWNLOAD_HISTORY_KEY = "mediaDownloadHistory";
@@ -4584,28 +4614,6 @@ var AdsFriendlyBackground = (() => {
           candidate.resolvedRequestContext || candidate.requestContext
         )
       }
-    };
-  }
-  function normalizeAesKeyHandoffDiagnostic(value) {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-    const count = (field) => Math.max(0, Math.min(1e3, Math.trunc(Number(value[field]) || 0)));
-    return {
-      framesQueried: count("framesQueried"),
-      framesResponded: count("framesResponded"),
-      requestedManifestCount: count("requestedManifestCount"),
-      matchedManifestCount: count("matchedManifestCount"),
-      declaredKeyCount: count("declaredKeyCount"),
-      capturedKeyCount: count("capturedKeyCount"),
-      pageFetchAttemptCount: count("pageFetchAttemptCount"),
-      pageFetchSuccessCount: count("pageFetchSuccessCount"),
-      pageFetchStatuses: [
-        ...new Set(
-          Array.isArray(value.pageFetchStatuses) ? value.pageFetchStatuses : []
-        )
-      ].map(Number).filter(
-        (status) => Number.isInteger(status) && status >= 0 && status <= 599
-      ).slice(0, 8),
-      pageFetchErrorCount: count("pageFetchErrorCount")
     };
   }
   function normalizeAesKeyHandoff(value, candidate) {
@@ -5281,9 +5289,13 @@ var AdsFriendlyBackground = (() => {
       }
       if (event2.type === MEDIA_HELPER_EVENTS.ERROR) {
         markTerminal(jobId);
+        const message = await appendStoredKeyCaptureDiagnostic(
+          jobId,
+          event2.payload.message || "Media Helper download failed."
+        );
         await updateJobState(jobId, {
           status: "failed",
-          error: event2.payload.message || "Media Helper download failed."
+          error: message
         });
         activePorts.get(jobId)?.port.disconnect();
       }
@@ -5292,6 +5304,17 @@ var AdsFriendlyBackground = (() => {
       await updateJobState(jobId, { status: "failed", error: messageOf(error) });
       activePorts.get(jobId)?.port.disconnect();
     }
+  }
+  async function appendStoredKeyCaptureDiagnostic(jobId, message) {
+    if (!/no captured browser key was available/i.test(message) || /Browser capture:/i.test(message)) {
+      return message;
+    }
+    const key = downloadJobKey(jobId);
+    const state = (await chrome.storage.session.get(key))[key];
+    const detail = formatAesKeyHandoffDiagnostic(
+      state?.candidate?.keyHandoffDiagnostic
+    );
+    return detail ? `${message}${detail}` : message;
   }
   function markTerminal(jobId) {
     const connection = activePorts.get(jobId);
