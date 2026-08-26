@@ -9,6 +9,7 @@ import {
   normalizeRegisteredEvent,
 } from "../runtime/event-catalog.js";
 import { isExtensionContextInvalidated } from "../shared/extension-context.js";
+import { createYouTubeCandidateFromObservedSource } from "../media/youtube-track-profile.js";
 
 export function startMediaObserver() {
   let stopped = false;
@@ -248,15 +249,22 @@ export function startMediaObserver() {
     duration = null,
     resolution = null,
   ) {
-    const candidate = createMediaCandidateFromSource({
-      pageUrl: location.href,
-      sourceUrl,
-      mimeType,
-      title: document.title || null,
-      duration,
-      resolution,
-      detectedBy,
-    });
+    const candidate =
+      createYouTubeCandidateFromObservedSource({
+        pageUrl: location.href,
+        sourceUrl,
+        mimeType,
+        title: document.title || null,
+      }) ||
+      createMediaCandidateFromSource({
+        pageUrl: location.href,
+        sourceUrl,
+        mimeType,
+        title: document.title || null,
+        duration,
+        resolution,
+        detectedBy,
+      });
     if (!candidate) return;
     reportEvent(createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, candidate));
   }
@@ -429,6 +437,17 @@ export function createMediaObserverReportKey(event) {
   const payload = event?.payload || {};
   const mediaId = payload.id || payload.mediaId || "unknown";
   if (event?.type === EVENTS.MEDIA_DISCOVERED) {
+    if (payload.kind === "adaptive") {
+      const videoTracks = (payload.variants || [])
+        .map((track) => track.id || track.itag || track.sourceUrl)
+        .filter(Boolean)
+        .join(",");
+      const audioTracks = (payload.audioTracks || [])
+        .map((track) => track.id || track.itag || track.sourceUrl)
+        .filter(Boolean)
+        .join(",");
+      return `${event.type}:${mediaId}:${payload.detectedBy || "unknown"}:video=${videoTracks || "none"}:audio=${audioTracks || "none"}`;
+    }
     const playbackDuration =
       payload.kind === "blob" && Number.isFinite(payload.duration)
         ? Math.round(payload.duration)

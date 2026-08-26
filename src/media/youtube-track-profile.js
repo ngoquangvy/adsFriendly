@@ -135,6 +135,21 @@ export function createYouTubeAdaptiveCandidate({
   });
 }
 
+export function createYouTubeCandidateFromObservedSource({
+  pageUrl,
+  sourceUrl,
+  title = null,
+  mimeType = null,
+  responseHeaders = [],
+}) {
+  const track = parseYouTubePlaybackTrack(sourceUrl, {
+    mimeType,
+    responseHeaders,
+  });
+  if (!track) return null;
+  return createYouTubeAdaptiveCandidate({ pageUrl, title, track });
+}
+
 export function isYouTubePage(value) {
   try {
     const hostname = new URL(value).hostname.toLowerCase();

@@ -2728,6 +2728,186 @@ ${body}`;
     return new TextEncoder().encode(String(value || "")).byteLength;
   }
 
+  // src/media/youtube-track-profile.js
+  var YOUTUBE_PAGE_HOSTS = /* @__PURE__ */ new Set([
+    "youtube.com",
+    "www.youtube.com",
+    "m.youtube.com",
+    "music.youtube.com"
+  ]);
+  function parseYouTubePlaybackTrack(sourceUrl, { mimeType = null, responseHeaders = [] } = {}) {
+    let url;
+    try {
+      url = new URL(sourceUrl);
+    } catch {
+      return null;
+    }
+    if (!["http:", "https:"].includes(url.protocol) || !isGoogleVideoHost(url.hostname) || url.pathname !== "/videoplayback") {
+      return null;
+    }
+    const declaredMime = cleanMimeType(url.searchParams.get("mime") || mimeType);
+    const responseMime = cleanMimeType(mimeType);
+    const effectiveMime = declaredMime || responseMime;
+    const type = effectiveMime?.startsWith("video/") ? "video" : effectiveMime?.startsWith("audio/") ? "audio" : null;
+    const itag = safeToken(url.searchParams.get("itag"), 24);
+    if (!type || !itag) return null;
+    const normalizedUrl = new URL(url);
+    normalizedUrl.searchParams.delete("range");
+    const size = parseSize(url.searchParams.get("size"));
+    const duration = positiveNumber(url.searchParams.get("dur"));
+    const contentLength = positiveInteger2(url.searchParams.get("clen")) || contentRangeTotal(responseHeaders) || positiveInteger2(headerValue(responseHeaders, "content-length"));
+    const bitrate = positiveInteger2(url.searchParams.get("bitrate"));
+    const codecs = parseCodecs(url.searchParams.get("mime"));
+    const assetToken = safeToken(url.searchParams.get("id"), 180) || safeToken(url.searchParams.get("docid"), 64) || null;
+    return Object.freeze({
+      id: `youtube-${type}-${itag}`,
+      provider: "youtube",
+      acquisitionProfile: "youtube_resolved_tracks",
+      type,
+      itag,
+      assetToken,
+      sourceUrl: normalizedUrl.href,
+      observedUrl: url.href,
+      mimeType: effectiveMime,
+      codecs,
+      duration,
+      bandwidth: bitrate,
+      averageBandwidth: bitrate,
+      contentLength,
+      width: size?.width || null,
+      height: size?.height || null,
+      resolution: size,
+      qualityLabel: safeToken(url.searchParams.get("quality_label"), 40) || safeToken(url.searchParams.get("quality"), 40),
+      observedAt: Date.now()
+    });
+  }
+  function createYouTubeAdaptiveCandidate({
+    pageUrl,
+    title = null,
+    track
+  }) {
+    if (!track || track.provider !== "youtube") return null;
+    const videoId = youtubeVideoId(pageUrl);
+    if (!videoId || !isYouTubePage(pageUrl)) return null;
+    const id = stableMediaId(
+      MEDIA_KINDS.ADAPTIVE,
+      `youtube:${videoId}:${track.assetToken || videoId}`
+    );
+    const normalizedTrack = {
+      id: track.id,
+      type: track.type,
+      sourceUrl: track.sourceUrl,
+      mimeType: track.mimeType,
+      codecs: track.codecs,
+      itag: track.itag,
+      bandwidth: track.bandwidth,
+      averageBandwidth: track.averageBandwidth,
+      contentLength: track.contentLength,
+      width: track.width,
+      height: track.height,
+      resolution: track.resolution,
+      qualityLabel: track.qualityLabel,
+      observedAt: track.observedAt
+    };
+    return normalizeMediaCandidate({
+      id,
+      pageUrl,
+      sourceUrl: track.sourceUrl,
+      kind: MEDIA_KINDS.ADAPTIVE,
+      title,
+      mimeType: track.mimeType,
+      duration: track.duration,
+      resolution: track.resolution,
+      bandwidth: track.bandwidth,
+      averageBandwidth: track.averageBandwidth,
+      variants: track.type === "video" ? [normalizedTrack] : [],
+      audioTracks: track.type === "audio" ? [normalizedTrack] : [],
+      detectedBy: MEDIA_DETECTION_SOURCES.NETWORK,
+      probeStatus: MEDIA_PROBE_STATES.DISCOVERED,
+      streamType: "vod",
+      provider: "youtube",
+      acquisitionProfile: "youtube_resolved_tracks"
+    });
+  }
+  function createYouTubeCandidateFromObservedSource({
+    pageUrl,
+    sourceUrl,
+    title = null,
+    mimeType = null,
+    responseHeaders = []
+  }) {
+    const track = parseYouTubePlaybackTrack(sourceUrl, {
+      mimeType,
+      responseHeaders
+    });
+    if (!track) return null;
+    return createYouTubeAdaptiveCandidate({ pageUrl, title, track });
+  }
+  function isYouTubePage(value) {
+    try {
+      const hostname = new URL(value).hostname.toLowerCase();
+      return YOUTUBE_PAGE_HOSTS.has(hostname) || hostname.endsWith(".youtube.com");
+    } catch {
+      return false;
+    }
+  }
+  function youtubeVideoId(value) {
+    try {
+      const url = new URL(value);
+      if (!isYouTubePage(url.href)) return null;
+      if (url.pathname === "/watch")
+        return safeToken(url.searchParams.get("v"), 64);
+      const shortMatch = url.pathname.match(
+        /^\/(?:shorts|embed|live)\/([^/?#]+)/i
+      );
+      return shortMatch ? safeToken(shortMatch[1], 64) : null;
+    } catch {
+      return null;
+    }
+  }
+  function isGoogleVideoHost(hostname) {
+    const normalized = hostname.toLowerCase();
+    return normalized === "googlevideo.com" || normalized.endsWith(".googlevideo.com");
+  }
+  function cleanMimeType(value) {
+    const normalized = String(value || "").split(";", 1)[0].trim().toLowerCase();
+    return /^(?:video|audio)\/[a-z0-9.+-]+$/.test(normalized) ? normalized : null;
+  }
+  function parseCodecs(value) {
+    const match = String(value || "").match(/codecs\s*=\s*["']?([^"';]+)/i);
+    return match?.[1]?.trim().slice(0, 120) || null;
+  }
+  function parseSize(value) {
+    const match = String(value || "").match(/^(\d{2,5})x(\d{2,5})$/i);
+    if (!match) return null;
+    const width = positiveInteger2(match[1]);
+    const height = positiveInteger2(match[2]);
+    return width && height ? { width, height } : null;
+  }
+  function contentRangeTotal(headers) {
+    const value = headerValue(headers, "content-range");
+    return positiveInteger2(String(value || "").match(/\/(\d+)$/)?.[1]);
+  }
+  function headerValue(headers, name) {
+    const match = (headers || []).find(
+      (item) => String(item?.name || "").toLowerCase() === name
+    );
+    return typeof match?.value === "string" ? match.value : null;
+  }
+  function safeToken(value, maximum) {
+    if (typeof value !== "string") return null;
+    const normalized = value.trim();
+    return normalized && normalized.length <= maximum ? normalized : null;
+  }
+  function positiveInteger2(value) {
+    const number = Number(value);
+    return Number.isSafeInteger(number) && number > 0 ? number : null;
+  }
+  function positiveNumber(value) {
+    const number = Number(value);
+    return Number.isFinite(number) && number > 0 ? number : null;
+  }
+
   // src/main-world/network-capture.js
   function installNetworkCapture(policy) {
     const originalFetch = window.fetch;
@@ -2806,7 +2986,11 @@ ${body}`;
       const requestContext2 = createFetchRequestContext(args, url, finalUrl);
       requestContexts.remember(requestContext2);
       const mimeType = response.headers.get("content-type");
-      const candidate = reportMediaSource(finalUrl, mimeType);
+      const candidate = reportMediaSource(
+        finalUrl,
+        mimeType,
+        responseHeaderEntries(response.headers)
+      );
       if (url && finalUrl !== url && [MEDIA_KINDS.HLS, MEDIA_KINDS.DASH].includes(candidate?.kind)) {
         reportMediaSource(url, mimeType);
       }
@@ -2861,7 +3045,11 @@ ${body}`;
         const requestContext2 = createXhrRequestContext(this, url);
         requestContexts.remember(requestContext2);
         const mimeType = this.getResponseHeader("content-type");
-        const candidate = reportMediaSource(url, mimeType);
+        const candidate = reportMediaSource(
+          url,
+          mimeType,
+          xhrResponseHeaderEntries(this)
+        );
         if (this.__adsfriendly_url && url !== this.__adsfriendly_url && [MEDIA_KINDS.HLS, MEDIA_KINDS.DASH].includes(candidate?.kind)) {
           reportMediaSource(this.__adsfriendly_url, mimeType);
         }
@@ -3064,8 +3252,14 @@ ${body}`;
     }
     return null;
   }
-  function reportMediaSource(sourceUrl, mimeType) {
-    const candidate = createMediaCandidateFromSource({
+  function reportMediaSource(sourceUrl, mimeType, responseHeaders = []) {
+    const candidate = createYouTubeCandidateFromObservedSource({
+      pageUrl: location.href,
+      sourceUrl,
+      mimeType,
+      responseHeaders,
+      title: document.title || null
+    }) || createMediaCandidateFromSource({
       pageUrl: location.href,
       sourceUrl,
       mimeType,
@@ -3079,6 +3273,26 @@ ${body}`;
       event: createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, candidate)
     });
     return candidate;
+  }
+  function responseHeaderEntries(headers) {
+    try {
+      return [...headers.entries()].map(([name, value]) => ({ name, value }));
+    } catch {
+      return [];
+    }
+  }
+  function xhrResponseHeaderEntries(xhr) {
+    try {
+      return String(xhr.getAllResponseHeaders?.() || "").split(/\r?\n/).map((line) => {
+        const separator = line.indexOf(":");
+        return separator > 0 ? {
+          name: line.slice(0, separator).trim(),
+          value: line.slice(separator + 1).trim()
+        } : null;
+      }).filter(Boolean);
+    } catch {
+      return [];
+    }
   }
   function inspectManifest(manifestUrl, body, candidate, requestContext2 = null, resolutionAttempt = null) {
     analyzeManifest(manifestUrl, body);

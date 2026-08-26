@@ -90,6 +90,7 @@ import {
 import { chooseMediaTitle } from "../src/media/media-title.js";
 import {
   createYouTubeAdaptiveCandidate,
+  createYouTubeCandidateFromObservedSource,
   parseYouTubePlaybackTrack,
 } from "../src/media/youtube-track-profile.js";
 import {
@@ -125,6 +126,29 @@ test("parses browser-resolved YouTube playback tracks without retaining the play
     new URL(track.sourceUrl).searchParams.get("sig"),
     "browser-resolved",
   );
+});
+
+test("creates the same YouTube adaptive candidate from page-network and resource timing observations", () => {
+  const pageUrl = "https://www.youtube.com/watch?v=video-1";
+  const sourceUrl =
+    "https://rr1---sn.example.googlevideo.com/videoplayback?id=asset-1&itag=137&mime=video%2Fmp4&dur=19.021&clen=123456&size=1920x1080&range=0-65535&sig=browser-resolved";
+  const fromFetch = createYouTubeCandidateFromObservedSource({
+    pageUrl,
+    sourceUrl,
+    title: "Example - YouTube",
+    mimeType: "video/mp4",
+    responseHeaders: [{ name: "content-length", value: "65536" }],
+  });
+  const fromResourceTiming = createYouTubeCandidateFromObservedSource({
+    pageUrl,
+    sourceUrl,
+    title: "Example - YouTube",
+  });
+
+  assert.equal(fromFetch.kind, "adaptive");
+  assert.equal(fromFetch.id, fromResourceTiming.id);
+  assert.equal(fromResourceTiming.variants[0].itag, "137");
+  assert.equal(fromResourceTiming.variants[0].contentLength, 123456);
 });
 
 test("groups resolved YouTube video and audio observations into one ready adaptive asset", () => {
@@ -174,6 +198,32 @@ test("groups resolved YouTube video and audio observations into one ready adapti
   assert.equal(job.candidate.audioTracks.length, 1);
 });
 
+test("media observer reports separate YouTube video and audio tracks before catalog merging", () => {
+  const pageUrl = "https://www.youtube.com/watch?v=video-1";
+  const candidate = (itag, mimeType) =>
+    createYouTubeCandidateFromObservedSource({
+      pageUrl,
+      sourceUrl: `https://r1.googlevideo.com/videoplayback?id=asset-1&itag=${itag}&mime=${encodeURIComponent(mimeType)}&dur=20&clen=1000&sig=ok`,
+      mimeType,
+    });
+  const videoKey = createMediaObserverReportKey(
+    createRegisteredEvent(
+      EVENTS.MEDIA_DISCOVERED,
+      candidate("137", "video/mp4"),
+    ),
+  );
+  const audioKey = createMediaObserverReportKey(
+    createRegisteredEvent(
+      EVENTS.MEDIA_DISCOVERED,
+      candidate("140", "audio/mp4"),
+    ),
+  );
+
+  assert.notEqual(videoKey, audioKey);
+  assert.match(videoKey, /video=youtube-video-137/);
+  assert.match(audioKey, /audio=youtube-audio-140/);
+});
+
 test("YouTube popup diagnostics expose the exact unresolved acquisition stage", () => {
   const blob = createMediaCandidateFromSource({
     pageUrl: "https://www.youtube.com/watch?v=video-1",
@@ -185,9 +235,9 @@ test("YouTube popup diagnostics expose the exact unresolved acquisition stage", 
   assert.equal(blobState.diagnosticCode, "youtube_network_track_missing");
   assert.match(
     formatMediaHelperSummary({ status: "ready" }, blobState),
-    /no googlevideo playback request was captured/i,
+    /no googlevideo playback URL was visible/i,
   );
-  assert.match(formatMediaDetails(blob), /waiting for a googlevideo/i);
+  assert.match(formatMediaDetails(blob), /page hook\/resource timing/i);
 
   const videoTrack = parseYouTubePlaybackTrack(
     "https://r1.googlevideo.com/videoplayback?id=asset-1&itag=137&mime=video%2Fmp4&dur=20&clen=1000&sig=ok",

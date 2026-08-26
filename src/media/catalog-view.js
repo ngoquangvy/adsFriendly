@@ -232,7 +232,7 @@ function mediaDownloadDiagnostic(items, availability) {
     return {
       code: "youtube_network_track_missing",
       message:
-        "YouTube Blob player found · no googlevideo playback request was captured yet.",
+        "YouTube Blob player found · no googlevideo playback URL was visible to webRequest, page hooks, or Resource Timing.",
     };
   return null;
 }
@@ -244,7 +244,7 @@ export function formatMediaDetails(item) {
     return (
       item.resolutionDiagnostic?.message ||
       (isYouTubeUrl(item.pageUrl)
-        ? "YouTube Blob player · waiting for a googlevideo playback request"
+        ? "Network observation · Blob found · webRequest/page hook/resource timing source missing"
         : null) ||
       (item.relatedCount > 1
         ? `${item.relatedCount} Blob signals · tracing source buffers`

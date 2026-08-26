@@ -27,6 +27,7 @@ import {
   clearAesKeyHandoffs,
   rememberHlsKeyUris,
 } from "./aes-key-handoff.js";
+import { createYouTubeCandidateFromObservedSource } from "../media/youtube-track-profile.js";
 
 export function installNetworkCapture(policy) {
   const originalFetch = window.fetch;
@@ -116,7 +117,11 @@ function installFetchCapture(
     const requestContext = createFetchRequestContext(args, url, finalUrl);
     requestContexts.remember(requestContext);
     const mimeType = response.headers.get("content-type");
-    const candidate = reportMediaSource(finalUrl, mimeType);
+    const candidate = reportMediaSource(
+      finalUrl,
+      mimeType,
+      responseHeaderEntries(response.headers),
+    );
     if (
       url &&
       finalUrl !== url &&
@@ -186,7 +191,11 @@ function installXhrCapture(policy, inspect, resolveAttempts, requestContexts) {
       const requestContext = createXhrRequestContext(this, url);
       requestContexts.remember(requestContext);
       const mimeType = this.getResponseHeader("content-type");
-      const candidate = reportMediaSource(url, mimeType);
+      const candidate = reportMediaSource(
+        url,
+        mimeType,
+        xhrResponseHeaderEntries(this),
+      );
       if (
         this.__adsfriendly_url &&
         url !== this.__adsfriendly_url &&
@@ -440,14 +449,22 @@ export async function tryHlsProbeAttempts({
   return null;
 }
 
-function reportMediaSource(sourceUrl, mimeType) {
-  const candidate = createMediaCandidateFromSource({
-    pageUrl: location.href,
-    sourceUrl,
-    mimeType,
-    title: document.title || null,
-    detectedBy: MEDIA_DETECTION_SOURCES.NETWORK,
-  });
+function reportMediaSource(sourceUrl, mimeType, responseHeaders = []) {
+  const candidate =
+    createYouTubeCandidateFromObservedSource({
+      pageUrl: location.href,
+      sourceUrl,
+      mimeType,
+      responseHeaders,
+      title: document.title || null,
+    }) ||
+    createMediaCandidateFromSource({
+      pageUrl: location.href,
+      sourceUrl,
+      mimeType,
+      title: document.title || null,
+      detectedBy: MEDIA_DETECTION_SOURCES.NETWORK,
+    });
   if (!candidate) return null;
   rememberMediaObservation(candidate);
   notifyContentScript({
@@ -455,6 +472,33 @@ function reportMediaSource(sourceUrl, mimeType) {
     event: createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, candidate),
   });
   return candidate;
+}
+
+function responseHeaderEntries(headers) {
+  try {
+    return [...headers.entries()].map(([name, value]) => ({ name, value }));
+  } catch {
+    return [];
+  }
+}
+
+function xhrResponseHeaderEntries(xhr) {
+  try {
+    return String(xhr.getAllResponseHeaders?.() || "")
+      .split(/\r?\n/)
+      .map((line) => {
+        const separator = line.indexOf(":");
+        return separator > 0
+          ? {
+              name: line.slice(0, separator).trim(),
+              value: line.slice(separator + 1).trim(),
+            }
+          : null;
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
 }
 
 function inspectManifest(

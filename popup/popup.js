@@ -1541,7 +1541,7 @@ var AdsFriendlyPopup = (() => {
     if (youtubeBlob)
       return {
         code: "youtube_network_track_missing",
-        message: "YouTube Blob player found \xB7 no googlevideo playback request was captured yet."
+        message: "YouTube Blob player found \xB7 no googlevideo playback URL was visible to webRequest, page hooks, or Resource Timing."
       };
     return null;
   }
@@ -1549,7 +1549,7 @@ var AdsFriendlyPopup = (() => {
     if (item.kind === "blob" && item.selectedMediaId)
       return resolvedBlobDetails(item);
     if (item.kind === "blob")
-      return item.resolutionDiagnostic?.message || (isYouTubeUrl(item.pageUrl) ? "YouTube Blob player \xB7 waiting for a googlevideo playback request" : null) || (item.relatedCount > 1 ? `${item.relatedCount} Blob signals \xB7 tracing source buffers` : item.blobTrace?.appendCount ? `${item.blobTrace.appendCount} buffers observed \xB7 matching source` : "Blob signal \xB7 tracing source buffers");
+      return item.resolutionDiagnostic?.message || (isYouTubeUrl(item.pageUrl) ? "Network observation \xB7 Blob found \xB7 webRequest/page hook/resource timing source missing" : null) || (item.relatedCount > 1 ? `${item.relatedCount} Blob signals \xB7 tracing source buffers` : item.blobTrace?.appendCount ? `${item.blobTrace.appendCount} buffers observed \xB7 matching source` : "Blob signal \xB7 tracing source buffers");
     if (item.kind === "direct") return "Direct video file";
     if (item.kind === "adaptive") return adaptiveDetails(item);
     if (item.kind === "dash") return dashDetails(item);
