@@ -253,13 +253,55 @@ test("browser AES handoff retries a declared key inside the player page context"
     assert.deepEqual(result.diagnostic, {
       requestedManifestCount: 1,
       matchedManifestCount: 1,
+      relatedManifestCount: 1,
       declaredKeyCount: 1,
       capturedKeyCount: 1,
+      pageManifestFetchAttemptCount: 0,
+      pageManifestFetchSuccessCount: 0,
+      pageManifestFetchStatuses: [],
+      pageManifestFetchErrorCount: 0,
       pageFetchAttemptCount: 1,
       pageFetchSuccessCount: 1,
       pageFetchStatuses: [200],
       pageFetchErrorCount: 0,
     });
+  } finally {
+    clearAesKeyHandoffs();
+  }
+});
+
+test("browser AES handoff follows declared HLS master children before fetching a key", async () => {
+  const masterUrl = "https://cdn.example/video/master.m3u8";
+  const childUrl = "https://cdn.example/video/720p/index.m3u8";
+  const keyUrl = "https://cdn.example/video/720p/key.bin";
+  const keyBytes = Buffer.from("0123456789abcdef");
+  clearAesKeyHandoffs();
+  try {
+    assert.deepEqual(
+      rememberHlsKeyUris(
+        masterUrl,
+        "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=3000000\n720p/index.m3u8",
+      ),
+      [],
+    );
+    const calls = [];
+    const result = await recoverAesKeyHandoffs([masterUrl], async (url) => {
+      calls.push(url);
+      if (url === childUrl) {
+        return new Response(
+          '#EXTM3U\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI="key.bin"\n#EXTINF:4,\nsegment.ts',
+          { status: 200 },
+        );
+      }
+      if (url === keyUrl) return new Response(keyBytes, { status: 200 });
+      return new Response("Not found", { status: 404 });
+    });
+    assert.deepEqual(calls, [childUrl, keyUrl]);
+    assert.equal(result.keys[0].url, keyUrl);
+    assert.equal(result.diagnostic.matchedManifestCount, 1);
+    assert.equal(result.diagnostic.relatedManifestCount, 2);
+    assert.equal(result.diagnostic.pageManifestFetchSuccessCount, 1);
+    assert.equal(result.diagnostic.pageFetchSuccessCount, 1);
   } finally {
     clearAesKeyHandoffs();
   }
@@ -293,17 +335,22 @@ test("AES key diagnostics are bounded and explain a page-context rejection", () 
     framesResponded: 1,
     requestedManifestCount: 4,
     matchedManifestCount: 1,
+    relatedManifestCount: 1,
     declaredKeyCount: 1,
     capturedKeyCount: 0,
     pageFetchAttemptCount: 1,
     pageFetchSuccessCount: 0,
     pageFetchStatuses: [403, 403, 999],
     pageFetchErrorCount: 0,
+    pageManifestFetchAttemptCount: 0,
+    pageManifestFetchSuccessCount: 0,
+    pageManifestFetchStatuses: [],
+    pageManifestFetchErrorCount: 0,
   });
   assert.deepEqual(diagnostic.pageFetchStatuses, [403]);
   assert.match(
     formatAesKeyHandoffDiagnostic(diagnostic),
-    /1\/2 frames responded.*1 keys declared.*page fetch status 403/i,
+    /1\/2 frames responded.*1 keys declared.*key fetch status 403/i,
   );
 });
 

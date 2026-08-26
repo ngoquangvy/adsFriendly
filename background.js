@@ -4524,6 +4524,7 @@ var AdsFriendlyBackground = (() => {
       framesResponded: count("framesResponded"),
       requestedManifestCount: count("requestedManifestCount"),
       matchedManifestCount: count("matchedManifestCount"),
+      relatedManifestCount: count("relatedManifestCount"),
       declaredKeyCount: count("declaredKeyCount"),
       capturedKeyCount: count("capturedKeyCount"),
       pageFetchAttemptCount: count("pageFetchAttemptCount"),
@@ -4535,14 +4536,25 @@ var AdsFriendlyBackground = (() => {
       ].map(Number).filter(
         (status) => Number.isInteger(status) && status >= 0 && status <= 599
       ).slice(0, 8),
-      pageFetchErrorCount: count("pageFetchErrorCount")
+      pageFetchErrorCount: count("pageFetchErrorCount"),
+      pageManifestFetchAttemptCount: count("pageManifestFetchAttemptCount"),
+      pageManifestFetchSuccessCount: count("pageManifestFetchSuccessCount"),
+      pageManifestFetchStatuses: [
+        ...new Set(
+          Array.isArray(value.pageManifestFetchStatuses) ? value.pageManifestFetchStatuses : []
+        )
+      ].map(Number).filter(
+        (status) => Number.isInteger(status) && status >= 0 && status <= 599
+      ).slice(0, 8),
+      pageManifestFetchErrorCount: count("pageManifestFetchErrorCount")
     };
   }
   function formatAesKeyHandoffDiagnostic(value) {
     const diagnostic = normalizeAesKeyHandoffDiagnostic(value);
     if (!diagnostic) return "";
-    const statuses = diagnostic.pageFetchStatuses.length ? `; page fetch status ${diagnostic.pageFetchStatuses.join(", ")}` : "";
-    return ` Browser capture: ${diagnostic.framesResponded}/${diagnostic.framesQueried} frames responded, ${diagnostic.matchedManifestCount}/${diagnostic.requestedManifestCount} manifest checks matched, ${diagnostic.declaredKeyCount} keys declared, ${diagnostic.capturedKeyCount} captured, ${diagnostic.pageFetchSuccessCount}/${diagnostic.pageFetchAttemptCount} page fetches succeeded${statuses}.`;
+    const statuses = diagnostic.pageFetchStatuses.length ? `; key fetch status ${diagnostic.pageFetchStatuses.join(", ")}` : "";
+    const manifestStatuses = diagnostic.pageManifestFetchStatuses.length ? `; manifest fetch status ${diagnostic.pageManifestFetchStatuses.join(", ")}` : "";
+    return ` Browser capture: ${diagnostic.framesResponded}/${diagnostic.framesQueried} frames responded, ${diagnostic.matchedManifestCount}/${diagnostic.requestedManifestCount} requested manifests matched, ${diagnostic.relatedManifestCount} related manifests found, ${diagnostic.pageManifestFetchSuccessCount}/${diagnostic.pageManifestFetchAttemptCount} manifest fetches succeeded${manifestStatuses}, ${diagnostic.declaredKeyCount} keys declared, ${diagnostic.capturedKeyCount} captured, ${diagnostic.pageFetchSuccessCount}/${diagnostic.pageFetchAttemptCount} key fetches succeeded${statuses}.`;
   }
 
   // src/media/download-job-contract.js
@@ -6454,6 +6466,7 @@ ${body}`;
       framesResponded: responses.filter(Boolean).length,
       requestedManifestCount: diagnostics.length ? sums("requestedManifestCount") : targets.manifestUrls.length,
       matchedManifestCount: sums("matchedManifestCount"),
+      relatedManifestCount: sums("relatedManifestCount"),
       declaredKeyCount: sums("declaredKeyCount"),
       capturedKeyCount: sums("capturedKeyCount"),
       pageFetchAttemptCount: sums("pageFetchAttemptCount"),
@@ -6465,7 +6478,17 @@ ${body}`;
           )
         )
       ].slice(0, 8),
-      pageFetchErrorCount: sums("pageFetchErrorCount")
+      pageFetchErrorCount: sums("pageFetchErrorCount"),
+      pageManifestFetchAttemptCount: sums("pageManifestFetchAttemptCount"),
+      pageManifestFetchSuccessCount: sums("pageManifestFetchSuccessCount"),
+      pageManifestFetchStatuses: [
+        ...new Set(
+          diagnostics.flatMap(
+            (item) => Array.isArray(item.pageManifestFetchStatuses) ? item.pageManifestFetchStatuses : []
+          )
+        )
+      ].slice(0, 8),
+      pageManifestFetchErrorCount: sums("pageManifestFetchErrorCount")
     };
   }
   function collectAesKeyHandoffTargets(candidate, items = []) {

@@ -2027,7 +2027,9 @@ ${body}`;
 
   // src/main-world/aes-key-handoff.js
   var MAX_KEY_BYTES = 64 * 1024;
+  var MAX_MANIFEST_BYTES = 512 * 1024;
   var MAX_MANIFESTS = 16;
+  var MAX_MANIFEST_DEPTH = 3;
   var MAX_KEYS_PER_MANIFEST = 16;
   var MAXIMUM_AGE_MS2 = 10 * 60 * 1e3;
   var RECENT_RESPONSE_MAXIMUM_AGE_MS = 15 * 1e3;
@@ -2047,8 +2049,28 @@ ${body}`;
   }
   function rememberHlsKeyUris(manifestUrl, body, observedAt = Date.now()) {
     const keyUrls = [];
-    for (const rawLine of String(body || "").split(/\r?\n/)) {
+    const childManifestUrls = [];
+    const text = String(body || "");
+    if (!text.trimStart().startsWith("#EXTM3U")) return [];
+    let expectsVariantUri = false;
+    for (const rawLine of text.split(/\r?\n/)) {
       const line = rawLine.trim();
+      if (expectsVariantUri && line && !line.startsWith("#")) {
+        rememberHttpUrl(childManifestUrls, line, manifestUrl);
+        expectsVariantUri = false;
+      }
+      if (line.startsWith("#EXT-X-STREAM-INF:")) {
+        expectsVariantUri = true;
+        continue;
+      }
+      if (line.startsWith("#EXT-X-I-FRAME-STREAM-INF:") || line.startsWith("#EXT-X-MEDIA:")) {
+        const attributes2 = parseHlsAttributeList(
+          line.slice(line.indexOf(":") + 1)
+        );
+        if (attributes2.URI) {
+          rememberHttpUrl(childManifestUrls, attributes2.URI, manifestUrl);
+        }
+      }
       if (!line.startsWith("#EXT-X-KEY:")) continue;
       const attributes = parseHlsAttributeList(line.slice(line.indexOf(":") + 1));
       const method = String(attributes.METHOD || "").toUpperCase();
@@ -2056,16 +2078,12 @@ ${body}`;
       if (!attributes.URI || method === "NONE" || !["AES-128", "SAMPLE-AES"].includes(method) || !["", "identity"].includes(keyFormat)) {
         continue;
       }
-      try {
-        const url = new URL(attributes.URI, manifestUrl);
-        if (["http:", "https:"].includes(url.protocol)) keyUrls.push(url.href);
-      } catch {
-      }
+      rememberHttpUrl(keyUrls, attributes.URI, manifestUrl);
     }
-    if (!keyUrls.length) return [];
     prune(observedAt);
     manifests.set(manifestUrl, {
       keyUrls: [...new Set(keyUrls)].slice(0, MAX_KEYS_PER_MANIFEST),
+      childManifestUrls: [...new Set(childManifestUrls)].slice(0, MAX_MANIFESTS),
       observedAt
     });
     while (manifests.size > MAX_MANIFESTS) {
@@ -2124,40 +2142,55 @@ ${body}`;
   async function recoverAesKeyHandoffs(manifestUrls, fetchImpl = globalThis.fetch, observedAt = Date.now()) {
     const urls = normalizeManifestUrls(manifestUrls);
     prune(observedAt);
-    const declaredKeyUrls = [
-      ...new Set(
-        urls.flatMap((manifestUrl) => manifests.get(manifestUrl)?.keyUrls || [])
-      )
-    ].slice(0, MAX_KEYS_PER_MANIFEST);
     const diagnostic = {
       requestedManifestCount: urls.length,
       matchedManifestCount: urls.filter((url) => manifests.has(url)).length,
-      declaredKeyCount: declaredKeyUrls.length,
-      capturedKeyCount: declaredKeyUrls.filter((url) => capturedKeys.has(url)).length,
+      relatedManifestCount: 0,
+      declaredKeyCount: 0,
+      capturedKeyCount: 0,
+      pageManifestFetchAttemptCount: 0,
+      pageManifestFetchSuccessCount: 0,
+      pageManifestFetchStatuses: [],
+      pageManifestFetchErrorCount: 0,
       pageFetchAttemptCount: 0,
       pageFetchSuccessCount: 0,
       pageFetchStatuses: [],
       pageFetchErrorCount: 0
     };
+    const relatedManifestUrls = await recoverRelatedManifestUrls(
+      urls,
+      fetchImpl,
+      diagnostic
+    );
+    diagnostic.matchedManifestCount = urls.filter(
+      (url) => manifests.has(url)
+    ).length;
+    diagnostic.relatedManifestCount = relatedManifestUrls.length;
+    const declaredKeyUrls = [
+      ...new Set(
+        relatedManifestUrls.flatMap(
+          (manifestUrl) => manifests.get(manifestUrl)?.keyUrls || []
+        )
+      )
+    ].slice(0, MAX_KEYS_PER_MANIFEST);
+    diagnostic.declaredKeyCount = declaredKeyUrls.length;
+    diagnostic.capturedKeyCount = declaredKeyUrls.filter(
+      (url) => capturedKeys.has(url)
+    ).length;
     if (typeof fetchImpl !== "function") {
       diagnostic.pageFetchErrorCount = declaredKeyUrls.filter(
         (url) => !capturedKeys.has(url)
       ).length;
-      return { keys: getAesKeyHandoffs(urls, observedAt), diagnostic };
+      return {
+        keys: getAesKeyHandoffs(relatedManifestUrls, observedAt),
+        diagnostic
+      };
     }
     for (const keyUrl of declaredKeyUrls) {
       if (capturedKeys.has(keyUrl)) continue;
       diagnostic.pageFetchAttemptCount += 1;
       try {
-        const init = {
-          method: "GET",
-          credentials: "include",
-          cache: "default",
-          redirect: "follow"
-        };
-        const pageUrl = globalThis.location?.href;
-        if (/^https?:/i.test(pageUrl || "")) init.referrer = pageUrl;
-        const response = await fetchImpl(keyUrl, init);
+        const response = await fetchImpl(keyUrl, browserFetchInit());
         if (Number.isInteger(response?.status)) {
           diagnostic.pageFetchStatuses.push(response.status);
         }
@@ -2174,9 +2207,67 @@ ${body}`;
       (url) => capturedKeys.has(url)
     ).length;
     return {
-      keys: getAesKeyHandoffs(urls, observedAt),
+      keys: getAesKeyHandoffs(relatedManifestUrls, observedAt),
       diagnostic
     };
+  }
+  async function recoverRelatedManifestUrls(urls, fetchImpl, diagnostic) {
+    const queue = urls.map((url) => ({ url, depth: 0 }));
+    const visited = /* @__PURE__ */ new Set();
+    while (queue.length && visited.size < MAX_MANIFESTS) {
+      const current = queue.shift();
+      if (!current || visited.has(current.url)) continue;
+      visited.add(current.url);
+      if (!manifests.has(current.url) && typeof fetchImpl === "function") {
+        diagnostic.pageManifestFetchAttemptCount += 1;
+        try {
+          const response = await fetchImpl(current.url, browserFetchInit());
+          if (Number.isInteger(response?.status)) {
+            diagnostic.pageManifestFetchStatuses.push(response.status);
+          }
+          if (response?.ok) {
+            const body = await readBoundedManifestBody(response);
+            if (body !== null) {
+              rememberHlsKeyUris(current.url, body);
+              if (manifests.has(current.url)) {
+                diagnostic.pageManifestFetchSuccessCount += 1;
+              }
+            }
+          }
+        } catch {
+          diagnostic.pageManifestFetchErrorCount += 1;
+        }
+      }
+      const entry = manifests.get(current.url);
+      if (!entry || current.depth >= MAX_MANIFEST_DEPTH) continue;
+      for (const childUrl of entry.childManifestUrls || []) {
+        if (!visited.has(childUrl)) {
+          queue.push({ url: childUrl, depth: current.depth + 1 });
+        }
+      }
+    }
+    return [...visited].filter((url) => manifests.has(url));
+  }
+  async function readBoundedManifestBody(response) {
+    const length = Number(response.headers?.get?.("content-length"));
+    if (Number.isFinite(length) && length > MAX_MANIFEST_BYTES) {
+      await response.body?.cancel?.().catch(() => {
+      });
+      return null;
+    }
+    const body = await response.text();
+    return new TextEncoder().encode(body).byteLength <= MAX_MANIFEST_BYTES ? body : null;
+  }
+  function browserFetchInit() {
+    const init = {
+      method: "GET",
+      credentials: "include",
+      cache: "default",
+      redirect: "follow"
+    };
+    const pageUrl = globalThis.location?.href;
+    if (/^https?:/i.test(pageUrl || "")) init.referrer = pageUrl;
+    return init;
   }
   function clearAesKeyHandoffs() {
     manifests.clear();
@@ -2278,6 +2369,13 @@ ${body}`;
     }
     return [...new Set(urls)];
   }
+  function rememberHttpUrl(output, value, baseUrl) {
+    try {
+      const url = new URL(value, baseUrl);
+      if (["http:", "https:"].includes(url.protocol)) output.push(url.href);
+    } catch {
+    }
+  }
   function bytesToBase64(bytes) {
     let binary = "";
     for (let offset = 0; offset < bytes.length; offset += 32768) {
@@ -2287,7 +2385,7 @@ ${body}`;
   }
 
   // src/main-world/decrypted-manifest-observer.js
-  var MAX_MANIFEST_BYTES = 2 * 1024 * 1024;
+  var MAX_MANIFEST_BYTES2 = 2 * 1024 * 1024;
   var MAX_ENVELOPES = 16;
   var ENVELOPE_MAXIMUM_AGE_MS = 2e4;
   var PENDING_BLOB_MAXIMUM_AGE_MS = 5e3;
@@ -2402,7 +2500,7 @@ ${body}`;
   }
   async function inspectBlob(blob, objectUrl, observedAt) {
     const body = await blob.text();
-    if (byteLength(body) > MAX_MANIFEST_BYTES) return false;
+    if (byteLength(body) > MAX_MANIFEST_BYTES2) return false;
     const kind = manifestKind(body);
     if (!kind) return false;
     const match = findRecentEncryptedEnvelope(kind, observedAt);
@@ -2495,7 +2593,7 @@ ${body}`;
     return true;
   }
   function shouldInspectBlob(blob, observedAt) {
-    if (!Number.isFinite(blob.size) || blob.size <= 0 || blob.size > MAX_MANIFEST_BYTES)
+    if (!Number.isFinite(blob.size) || blob.size <= 0 || blob.size > MAX_MANIFEST_BYTES2)
       return false;
     const mimeType = String(blob.type || "").toLowerCase();
     if (isManifestMimeType(mimeType)) return true;

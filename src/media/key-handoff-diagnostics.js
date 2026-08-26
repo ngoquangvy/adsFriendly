@@ -7,6 +7,7 @@ export function normalizeAesKeyHandoffDiagnostic(value) {
     framesResponded: count("framesResponded"),
     requestedManifestCount: count("requestedManifestCount"),
     matchedManifestCount: count("matchedManifestCount"),
+    relatedManifestCount: count("relatedManifestCount"),
     declaredKeyCount: count("declaredKeyCount"),
     capturedKeyCount: count("capturedKeyCount"),
     pageFetchAttemptCount: count("pageFetchAttemptCount"),
@@ -22,6 +23,21 @@ export function normalizeAesKeyHandoffDiagnostic(value) {
       )
       .slice(0, 8),
     pageFetchErrorCount: count("pageFetchErrorCount"),
+    pageManifestFetchAttemptCount: count("pageManifestFetchAttemptCount"),
+    pageManifestFetchSuccessCount: count("pageManifestFetchSuccessCount"),
+    pageManifestFetchStatuses: [
+      ...new Set(
+        Array.isArray(value.pageManifestFetchStatuses)
+          ? value.pageManifestFetchStatuses
+          : [],
+      ),
+    ]
+      .map(Number)
+      .filter(
+        (status) => Number.isInteger(status) && status >= 0 && status <= 599,
+      )
+      .slice(0, 8),
+    pageManifestFetchErrorCount: count("pageManifestFetchErrorCount"),
   };
 }
 
@@ -29,7 +45,10 @@ export function formatAesKeyHandoffDiagnostic(value) {
   const diagnostic = normalizeAesKeyHandoffDiagnostic(value);
   if (!diagnostic) return "";
   const statuses = diagnostic.pageFetchStatuses.length
-    ? `; page fetch status ${diagnostic.pageFetchStatuses.join(", ")}`
+    ? `; key fetch status ${diagnostic.pageFetchStatuses.join(", ")}`
     : "";
-  return ` Browser capture: ${diagnostic.framesResponded}/${diagnostic.framesQueried} frames responded, ${diagnostic.matchedManifestCount}/${diagnostic.requestedManifestCount} manifest checks matched, ${diagnostic.declaredKeyCount} keys declared, ${diagnostic.capturedKeyCount} captured, ${diagnostic.pageFetchSuccessCount}/${diagnostic.pageFetchAttemptCount} page fetches succeeded${statuses}.`;
+  const manifestStatuses = diagnostic.pageManifestFetchStatuses.length
+    ? `; manifest fetch status ${diagnostic.pageManifestFetchStatuses.join(", ")}`
+    : "";
+  return ` Browser capture: ${diagnostic.framesResponded}/${diagnostic.framesQueried} frames responded, ${diagnostic.matchedManifestCount}/${diagnostic.requestedManifestCount} requested manifests matched, ${diagnostic.relatedManifestCount} related manifests found, ${diagnostic.pageManifestFetchSuccessCount}/${diagnostic.pageManifestFetchAttemptCount} manifest fetches succeeded${manifestStatuses}, ${diagnostic.declaredKeyCount} keys declared, ${diagnostic.capturedKeyCount} captured, ${diagnostic.pageFetchSuccessCount}/${diagnostic.pageFetchAttemptCount} key fetches succeeded${statuses}.`;
 }

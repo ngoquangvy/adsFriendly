@@ -345,6 +345,7 @@ function aggregateAesKeyHandoffDiagnostics(targets, responses, diagnostics) {
       ? sums("requestedManifestCount")
       : targets.manifestUrls.length,
     matchedManifestCount: sums("matchedManifestCount"),
+    relatedManifestCount: sums("relatedManifestCount"),
     declaredKeyCount: sums("declaredKeyCount"),
     capturedKeyCount: sums("capturedKeyCount"),
     pageFetchAttemptCount: sums("pageFetchAttemptCount"),
@@ -357,6 +358,18 @@ function aggregateAesKeyHandoffDiagnostics(targets, responses, diagnostics) {
       ),
     ].slice(0, 8),
     pageFetchErrorCount: sums("pageFetchErrorCount"),
+    pageManifestFetchAttemptCount: sums("pageManifestFetchAttemptCount"),
+    pageManifestFetchSuccessCount: sums("pageManifestFetchSuccessCount"),
+    pageManifestFetchStatuses: [
+      ...new Set(
+        diagnostics.flatMap((item) =>
+          Array.isArray(item.pageManifestFetchStatuses)
+            ? item.pageManifestFetchStatuses
+            : [],
+        ),
+      ),
+    ].slice(0, 8),
+    pageManifestFetchErrorCount: sums("pageManifestFetchErrorCount"),
   };
 }
 

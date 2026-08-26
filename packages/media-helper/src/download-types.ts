@@ -25,12 +25,17 @@ export interface DownloadCandidate {
     framesResponded: number;
     requestedManifestCount: number;
     matchedManifestCount: number;
+    relatedManifestCount: number;
     declaredKeyCount: number;
     capturedKeyCount: number;
     pageFetchAttemptCount: number;
     pageFetchSuccessCount: number;
     pageFetchStatuses: number[];
     pageFetchErrorCount: number;
+    pageManifestFetchAttemptCount: number;
+    pageManifestFetchSuccessCount: number;
+    pageManifestFetchStatuses: number[];
+    pageManifestFetchErrorCount: number;
   } | null;
   requestContext: {
     requestUrl: string | null;
