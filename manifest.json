@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AdsFriendly",
-  "version": "2.4.10",
+  "version": "2.4.11",
   "description": "Friendly protection against pop-unders, intrusive ad tabs, and disruptive ad behavior.",
   "permissions": [
     "declarativeNetRequest",

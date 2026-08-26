@@ -32,6 +32,7 @@ const packageStatusEl = $("package-status");
 let currentSnapshot = {};
 let storageRefreshTimer = null;
 let downloadRefreshTimer = null;
+const DOWNLOAD_HISTORY_VISIBLE_ITEMS = 15;
 
 initialize().catch((error) => showPackageStatus(error.message, true));
 window.addEventListener("unhandledrejection", (event) => {
@@ -151,6 +152,7 @@ async function renderDownloads() {
       empty.className = "empty-msg";
       empty.textContent = "No download history yet.";
       container.replaceChildren(empty);
+      updateDownloadHistoryViewport(container);
       return;
     }
     container.querySelector(".empty-msg")?.remove();
@@ -170,10 +172,29 @@ async function renderDownloads() {
     for (const [jobId, row] of existing) {
       if (!visibleIds.has(jobId)) row.remove();
     }
+    updateDownloadHistoryViewport(container);
   } catch (error) {
     status.textContent = `Downloads unavailable · ${error.message}`;
     status.style.color = "#f87171";
   }
+}
+
+function updateDownloadHistoryViewport(container) {
+  const rows = [...container.querySelectorAll(".download-history-item")];
+  const scrollable = rows.length > DOWNLOAD_HISTORY_VISIBLE_ITEMS;
+  container.classList.toggle("is-scrollable", scrollable);
+  if (!scrollable) {
+    container.style.removeProperty("max-height");
+    return;
+  }
+  const visibleRows = rows.slice(0, DOWNLOAD_HISTORY_VISIBLE_ITEMS);
+  const styles = getComputedStyle(container);
+  const gap = Number.parseFloat(styles.rowGap || styles.gap) || 0;
+  const height = visibleRows.reduce(
+    (total, row) => total + row.getBoundingClientRect().height,
+    gap * (visibleRows.length - 1),
+  );
+  container.style.maxHeight = `${Math.ceil(height)}px`;
 }
 
 function createDownloadHistoryItem() {
