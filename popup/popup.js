@@ -539,10 +539,7 @@ var AdsFriendlyPopup = (() => {
   }
 
   // src/media/protection-policy.js
-  var STRONG_DRM_EVIDENCE = /* @__PURE__ */ new Set([
-    "hls-keyformat",
-    "eme-key-system-access"
-  ]);
+  var STRONG_DRM_EVIDENCE = /* @__PURE__ */ new Set(["hls-keyformat", "eme-key-system-access"]);
   function hasStrongDrmEvidence(candidate = {}) {
     if (candidate.drm === "confirmed") return true;
     if (candidate.drm !== "suspected") return false;
@@ -566,9 +563,9 @@ var AdsFriendlyPopup = (() => {
     if (!isWeakSampleAesSignal(candidate)) return false;
     const methods = candidate.encryptionMethods || [];
     const keyFormats = candidate.encryptionKeyFormats || [];
-    return methods.length > 0 && methods.every(
+    return (methods.length === 0 || methods.every(
       (method) => String(method).toUpperCase().startsWith("SAMPLE-AES")
-    ) && keyFormats.every(
+    )) && keyFormats.every(
       (format) => !format || String(format).toLowerCase() === "identity"
     );
   }

@@ -28,10 +28,10 @@ export function isFfmpegCompatibleSampleAes(candidate = {}) {
   const methods = candidate.encryptionMethods || [];
   const keyFormats = candidate.encryptionKeyFormats || [];
   return (
-    methods.length > 0 &&
-    methods.every((method) =>
-      String(method).toUpperCase().startsWith("SAMPLE-AES"),
-    ) &&
+    (methods.length === 0 ||
+      methods.every((method) =>
+        String(method).toUpperCase().startsWith("SAMPLE-AES"),
+      )) &&
     keyFormats.every(
       (format) => !format || String(format).toLowerCase() === "identity",
     )

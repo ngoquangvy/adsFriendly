@@ -426,7 +426,7 @@ test("resolution diagnostics stop at the explicit decrypted-manifest handoff", (
   });
 });
 
-test("resolution diagnostics wait when SAMPLE-AES lacks usable key metadata", () => {
+test("resolution diagnostics wait for a non-identity SAMPLE-AES key format", () => {
   const result = diagnoseMediaResolution({
     id: "sample-aes-hls",
     kind: "hls",
@@ -436,6 +436,7 @@ test("resolution diagnostics wait when SAMPLE-AES lacks usable key metadata", ()
     segmentCount: 20,
     drm: "suspected",
     encryptionScheme: "sample-aes",
+    encryptionKeyFormats: ["com.example.keyformat"],
     drmEvidence: ["hls-sample-aes"],
   });
   assert.equal(result.stage, MEDIA_RESOLUTION_STAGES.PLAYER_SEGMENT_RESOLUTION);
@@ -947,7 +948,7 @@ test("public media title prefers page metadata over a technical player name", ()
   );
 });
 
-test("SAMPLE-AES identity resolved Blob is offered to the Media Helper", () => {
+test("summarized SAMPLE-AES identity Blob is offered to the Media Helper", () => {
   const hls = {
     id: "drm-hls",
     kind: "hls",
@@ -956,7 +957,6 @@ test("SAMPLE-AES identity resolved Blob is offered to the Media Helper", () => {
     streamType: "vod",
     segmentCount: 10,
     drm: "suspected",
-    encryptionMethods: ["SAMPLE-AES"],
     encryptionScheme: "sample-aes",
     drmEvidence: ["hls-sample-aes"],
     manifestUrl: "https://cdn.example/movie.m3u8",
