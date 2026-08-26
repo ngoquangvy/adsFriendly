@@ -19,7 +19,7 @@ import { dashFfmpegAdapter } from "./dash-ffmpeg-adapter.js";
 import { DownloadJobManager } from "./job-manager.js";
 import { openManagedOutput, revealManagedOutput } from "./output-actions.js";
 
-const HELPER_VERSION = "0.9.2";
+const HELPER_VERSION = "0.10.0";
 const callerOrigin = process.argv[2] || null;
 const reader = new NativeMessageReader();
 const adapters = new DownloadAdapterRegistry([
@@ -138,6 +138,7 @@ async function inspectCapabilities() {
   return {
     [MEDIA_HELPER_CAPABILITIES.DIRECT_HTTP_DOWNLOAD]: true,
     [MEDIA_HELPER_CAPABILITIES.HLS_VOD_DOWNLOAD]: ffmpeg.available,
+    [MEDIA_HELPER_CAPABILITIES.HLS_PARALLEL_ACQUISITION]: ffmpeg.available,
     [MEDIA_HELPER_CAPABILITIES.HLS_DECRYPTED_MANIFEST]: ffmpeg.available,
     [MEDIA_HELPER_CAPABILITIES.OUTPUT_CONTAINER_SELECTION]: ffmpeg.available,
     [MEDIA_HELPER_CAPABILITIES.DASH_VOD_DOWNLOAD]: ffmpeg.available,

@@ -153,6 +153,10 @@ export function formatMediaJobStage(job = {}) {
     resource_check: "Checking HLS key and segment URLs…",
     output_prepare: "Preparing output file…",
     ffmpeg_start: "Starting FFmpeg…",
+    compatibility_check: "Testing key and sample segment…",
+    segment_download: "Downloading HLS segments…",
+    local_assembly: "Preparing local HLS manifest…",
+    local_processing: "Processing downloaded media…",
   };
   return stages[job.progress?.stage] || "Checking media source…";
 }

@@ -10,6 +10,7 @@ export async function downloadResourcesInParallel(
     onProgress = () => {},
     signal = null,
     retryDelay = defaultRetryDelay,
+    writeInOrder = true,
   } = {},
 ) {
   if (!Array.isArray(resources) || !resources.length)
@@ -23,6 +24,49 @@ export async function downloadResourcesInParallel(
   let fetchedResources = 0;
   let writtenResources = 0;
   let downloadedBytes = 0;
+
+  if (!writeInOrder) {
+    let nextIndex = 0;
+    const workers = Array.from(
+      { length: Math.min(workerCount, resources.length) },
+      async () => {
+        while (true) {
+          throwIfAborted(signal);
+          const index = nextIndex;
+          nextIndex += 1;
+          if (index >= resources.length) return;
+          const resource = resources[index];
+          const bytes = await fetchWithRetry(resource, {
+            retries,
+            fetchResource,
+            signal,
+            retryDelay,
+          });
+          fetchedResources += 1;
+          downloadedBytes += bytes.byteLength;
+          onProgress({
+            phase: "download",
+            fetchedResources,
+            writtenResources,
+            totalResources: resources.length,
+            downloadedBytes,
+          });
+          throwIfAborted(signal);
+          await writeResource(bytes, resource);
+          writtenResources += 1;
+          onProgress({
+            phase: "write",
+            fetchedResources,
+            writtenResources,
+            totalResources: resources.length,
+            downloadedBytes,
+          });
+        }
+      },
+    );
+    await Promise.all(workers);
+    return { downloadedBytes, fetchedResources, writtenResources };
+  }
 
   for (let start = 0; start < resources.length; start += workerCount) {
     throwIfAborted(signal);

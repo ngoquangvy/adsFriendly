@@ -42,7 +42,14 @@ export interface DownloadJob {
 export interface DownloadProgress {
   phase: "probing" | "downloading" | "finalizing";
   stage?:
-    "manifest_fetch" | "resource_check" | "output_prepare" | "ffmpeg_start";
+    | "manifest_fetch"
+    | "resource_check"
+    | "output_prepare"
+    | "ffmpeg_start"
+    | "compatibility_check"
+    | "segment_download"
+    | "local_assembly"
+    | "local_processing";
   downloadedBytes: number;
   totalBytes: number | null;
   bytesPerSecond: number;

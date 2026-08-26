@@ -45,6 +45,10 @@ test("built helper completes a framed Native Messaging handshake", async () => {
   assert.equal(response.payload.capabilities["output.open"], true);
   assert.equal(response.payload.capabilities["output.reveal"], true);
   assert.equal(
+    response.payload.capabilities["download.hls_parallel_acquisition"],
+    true,
+  );
+  assert.equal(
     response.payload.capabilities["output.container_selection"],
     true,
   );
@@ -184,6 +188,12 @@ test("built helper remuxes an inline decrypted HLS VOD when its manifest URL is 
       "ultrafast",
       "-pix_fmt",
       "yuv420p",
+      "-g",
+      "5",
+      "-keyint_min",
+      "5",
+      "-sc_threshold",
+      "0",
       "-c:a",
       "aac",
       "-hls_time",
@@ -328,6 +338,12 @@ test("built helper downloads HLS encrypted with an AES-128 identity key", async 
       "ultrafast",
       "-pix_fmt",
       "yuv420p",
+      "-g",
+      "5",
+      "-keyint_min",
+      "5",
+      "-sc_threshold",
+      "0",
       "-c:a",
       "aac",
       "-hls_time",
@@ -345,11 +361,24 @@ test("built helper downloads HLS encrypted with an AES-128 identity key", async 
     { windowsHide: true, cwd: fixtureDirectory },
   );
 
+  let activeSegmentRequests = 0;
+  let maximumConcurrentSegmentRequests = 0;
+  const requestedSegments = new Set();
   const server = createServer(async (request, response) => {
     try {
       const filename = basename(
         new URL(request.url, "http://fixture").pathname,
       );
+      if (filename.endsWith(".ts")) {
+        requestedSegments.add(filename);
+        activeSegmentRequests += 1;
+        maximumConcurrentSegmentRequests = Math.max(
+          maximumConcurrentSegmentRequests,
+          activeSegmentRequests,
+        );
+        await new Promise((resolve) => setTimeout(resolve, 60));
+        activeSegmentRequests -= 1;
+      }
       const bytes = await readFile(join(fixtureDirectory, filename));
       response.setHeader(
         "content-type",
@@ -377,6 +406,12 @@ test("built helper downloads HLS encrypted with an AES-128 identity key", async 
   await frames.next(
     (event) => event.type === MEDIA_HELPER_EVENTS.DOWNLOAD_STARTED,
   );
+  const segmentProgress = await frames.next(
+    (event) =>
+      event.type === MEDIA_HELPER_EVENTS.DOWNLOAD_PROGRESS &&
+      event.payload.stage === "segment_download",
+  );
+  assert.equal(segmentProgress.payload.resumable, true);
   const completed = await frames.next(
     (event) =>
       event.requestId === "hls-aes128-1" &&
@@ -412,6 +447,204 @@ test("built helper downloads HLS encrypted with an AES-128 identity key", async 
     [...new Set(probe.streams.map((stream) => stream.codec_type))].sort(),
     ["audio", "video"],
   );
+  assert.ok(requestedSegments.size >= 3);
+  assert.ok(maximumConcurrentSegmentRequests >= 2);
+});
+
+test("built helper resumes cached HLS segments after cancellation", async (t) => {
+  if (!(await executableAvailable("ffmpeg"))) {
+    t.skip("FFmpeg is not installed.");
+    return;
+  }
+  const fixtureDirectory = await mkdtemp(
+    join(tmpdir(), "adsfriendly-hls-resume-fixture-"),
+  );
+  const outputDirectory = await mkdtemp(
+    join(tmpdir(), "adsfriendly-hls-resume-output-"),
+  );
+  t.after(() => rm(fixtureDirectory, { recursive: true, force: true }));
+  t.after(() => rm(outputDirectory, { recursive: true, force: true }));
+  const manifestPath = join(fixtureDirectory, "resume.m3u8");
+  await execFileAsync(
+    "ffmpeg",
+    [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-f",
+      "lavfi",
+      "-i",
+      "testsrc=size=160x90:rate=10",
+      "-t",
+      "6",
+      "-c:v",
+      "libx264",
+      "-preset",
+      "ultrafast",
+      "-pix_fmt",
+      "yuv420p",
+      "-g",
+      "5",
+      "-keyint_min",
+      "5",
+      "-sc_threshold",
+      "0",
+      "-hls_time",
+      "0.5",
+      "-hls_list_size",
+      "0",
+      "-hls_playlist_type",
+      "vod",
+      "-hls_segment_filename",
+      join(fixtureDirectory, "resume%03d.ts"),
+      manifestPath,
+    ],
+    { windowsHide: true, cwd: fixtureDirectory },
+  );
+
+  const requests = new Map();
+  const server = createServer(async (request, response) => {
+    try {
+      const filename = basename(
+        new URL(request.url, "http://fixture").pathname,
+      );
+      requests.set(filename, (requests.get(filename) || 0) + 1);
+      if (filename.endsWith(".ts")) {
+        await new Promise((resolve) => setTimeout(resolve, 150));
+      }
+      const bytes = await readFile(join(fixtureDirectory, filename));
+      response.setHeader(
+        "content-type",
+        filename.endsWith(".m3u8")
+          ? "application/vnd.apple.mpegurl"
+          : "video/mp2t",
+      );
+      response.end(bytes);
+    } catch {
+      response.writeHead(404).end();
+    }
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const address = server.address();
+  const manifestUrl = `http://127.0.0.1:${address.port}/resume.m3u8`;
+  const child = spawnHelper();
+  t.after(() => child.kill());
+  const frames = createFrameReader(child.stdout);
+  const jobId = "hls-resume-1";
+
+  child.stdin.write(
+    frame(hlsDownloadRequest(jobId, manifestUrl, outputDirectory)),
+  );
+  const firstWritten = await frames.next(
+    (event) =>
+      event.requestId === jobId &&
+      event.type === MEDIA_HELPER_EVENTS.DOWNLOAD_PROGRESS &&
+      event.payload.stage === "segment_download" &&
+      event.payload.downloadedBytes > event.payload.resumedBytes,
+  );
+  child.stdin.write(
+    frame({
+      type: MEDIA_HELPER_REQUESTS.DOWNLOAD_CANCEL,
+      requestId: "hls-resume-cancel-1",
+      protocolVersion: MEDIA_HELPER_PROTOCOL_VERSION,
+      payload: { jobId },
+    }),
+  );
+  await frames.next(
+    (event) =>
+      event.requestId === jobId &&
+      event.type === MEDIA_HELPER_EVENTS.DOWNLOAD_CANCELLED,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  child.stdin.write(
+    frame(hlsDownloadRequest(jobId, manifestUrl, outputDirectory)),
+  );
+  const resumed = await frames.next(
+    (event) =>
+      event.requestId === jobId &&
+      event.type === MEDIA_HELPER_EVENTS.DOWNLOAD_PROGRESS &&
+      event.payload.stage === "segment_download" &&
+      event.payload.resumedBytes > firstWritten.payload.resumedBytes,
+  );
+  const completed = await frames.next(
+    (event) =>
+      event.requestId === jobId &&
+      [
+        MEDIA_HELPER_EVENTS.DOWNLOAD_COMPLETED,
+        MEDIA_HELPER_EVENTS.ERROR,
+      ].includes(event.type),
+  );
+  assert.ok(resumed.payload.resumedBytes > 0);
+  assert.equal(
+    completed.type,
+    MEDIA_HELPER_EVENTS.DOWNLOAD_COMPLETED,
+    completed.payload.message,
+  );
+  assert.ok(
+    [...requests.entries()].some(
+      ([filename, count]) => filename.endsWith(".ts") && count === 1,
+    ),
+  );
+});
+
+test("built helper stops after a failed HLS canary without downloading the full playlist", async (t) => {
+  if (!(await executableAvailable("ffmpeg"))) {
+    t.skip("FFmpeg is not installed.");
+    return;
+  }
+  const outputDirectory = await mkdtemp(
+    join(tmpdir(), "adsfriendly-hls-canary-failure-"),
+  );
+  t.after(() => rm(outputDirectory, { recursive: true, force: true }));
+  const requestedSegments = [];
+  const manifest = [
+    "#EXTM3U",
+    "#EXT-X-VERSION:3",
+    "#EXT-X-TARGETDURATION:2",
+    "#EXT-X-PLAYLIST-TYPE:VOD",
+    "#EXTINF:2,",
+    "segment000.ts",
+    "#EXTINF:2,",
+    "segment001.ts",
+    "#EXTINF:2,",
+    "segment002.ts",
+    "#EXT-X-ENDLIST",
+  ].join("\n");
+  const server = createServer((request, response) => {
+    const filename = basename(new URL(request.url, "http://fixture").pathname);
+    if (filename === "index.m3u8") {
+      response.setHeader("content-type", "application/vnd.apple.mpegurl");
+      response.end(manifest);
+      return;
+    }
+    requestedSegments.push(filename);
+    response.setHeader("content-type", "video/mp2t");
+    response.end(Buffer.from("not-a-transport-stream"));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const address = server.address();
+  const child = spawnHelper();
+  t.after(() => child.kill());
+  const frames = createFrameReader(child.stdout);
+  child.stdin.write(
+    frame(
+      hlsDownloadRequest(
+        "hls-canary-failure-1",
+        `http://127.0.0.1:${address.port}/index.m3u8`,
+        outputDirectory,
+      ),
+    ),
+  );
+  const failed = await frames.next(
+    (event) =>
+      event.requestId === "hls-canary-failure-1" &&
+      event.type === MEDIA_HELPER_EVENTS.ERROR,
+  );
+  assert.match(failed.payload.message, /HLS compatibility check failed/);
+  assert.deepEqual(requestedSegments, ["segment000.ts"]);
 });
 
 test("built helper downloads and muxes a static DASH VOD with FFmpeg", async (t) => {

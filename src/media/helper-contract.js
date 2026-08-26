@@ -26,6 +26,7 @@ export const MEDIA_HELPER_EVENTS = Object.freeze({
 export const MEDIA_HELPER_CAPABILITIES = Object.freeze({
   DIRECT_HTTP_DOWNLOAD: "download.direct_http",
   HLS_VOD_DOWNLOAD: "download.hls_vod",
+  HLS_PARALLEL_ACQUISITION: "download.hls_parallel_acquisition",
   HLS_DECRYPTED_MANIFEST: "download.hls_decrypted_manifest",
   OUTPUT_CONTAINER_SELECTION: "output.container_selection",
   DASH_VOD_DOWNLOAD: "download.dash_vod",

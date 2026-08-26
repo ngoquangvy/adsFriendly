@@ -958,7 +958,11 @@ var AdsFriendlyOptions = (() => {
       manifest_fetch: "Reading HLS manifest\u2026",
       resource_check: "Checking HLS key and segment URLs\u2026",
       output_prepare: "Preparing output file\u2026",
-      ffmpeg_start: "Starting FFmpeg\u2026"
+      ffmpeg_start: "Starting FFmpeg\u2026",
+      compatibility_check: "Testing key and sample segment\u2026",
+      segment_download: "Downloading HLS segments\u2026",
+      local_assembly: "Preparing local HLS manifest\u2026",
+      local_processing: "Processing downloaded media\u2026"
     };
     return stages[job.progress?.stage] || "Checking media source\u2026";
   }

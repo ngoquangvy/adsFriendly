@@ -94,6 +94,9 @@ async function probeMediaHelperStatus(timeoutMs) {
         capabilities[MEDIA_HELPER_CAPABILITIES.DIRECT_HTTP_DOWNLOAD] === true,
       canDownloadHls:
         capabilities[MEDIA_HELPER_CAPABILITIES.HLS_VOD_DOWNLOAD] === true,
+      canAcquireHlsInParallel:
+        capabilities[MEDIA_HELPER_CAPABILITIES.HLS_PARALLEL_ACQUISITION] ===
+        true,
       canDownloadDecryptedHls:
         capabilities[MEDIA_HELPER_CAPABILITIES.HLS_DECRYPTED_MANIFEST] === true,
       canSelectContainer:
@@ -451,6 +454,7 @@ function helperStatus(status, details = {}) {
     installed: status === MEDIA_HELPER_STATES.READY,
     canDownloadDirect: false,
     canDownloadHls: false,
+    canAcquireHlsInParallel: false,
     canDownloadDecryptedHls: false,
     canSelectContainer: false,
     canDownloadDash: false,

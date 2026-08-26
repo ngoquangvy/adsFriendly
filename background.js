@@ -4746,6 +4746,7 @@ var AdsFriendlyBackground = (() => {
   var MEDIA_HELPER_CAPABILITIES = Object.freeze({
     DIRECT_HTTP_DOWNLOAD: "download.direct_http",
     HLS_VOD_DOWNLOAD: "download.hls_vod",
+    HLS_PARALLEL_ACQUISITION: "download.hls_parallel_acquisition",
     HLS_DECRYPTED_MANIFEST: "download.hls_decrypted_manifest",
     OUTPUT_CONTAINER_SELECTION: "output.container_selection",
     DASH_VOD_DOWNLOAD: "download.dash_vod",
@@ -4853,6 +4854,7 @@ var AdsFriendlyBackground = (() => {
         capabilities,
         canDownloadDirect: capabilities[MEDIA_HELPER_CAPABILITIES.DIRECT_HTTP_DOWNLOAD] === true,
         canDownloadHls: capabilities[MEDIA_HELPER_CAPABILITIES.HLS_VOD_DOWNLOAD] === true,
+        canAcquireHlsInParallel: capabilities[MEDIA_HELPER_CAPABILITIES.HLS_PARALLEL_ACQUISITION] === true,
         canDownloadDecryptedHls: capabilities[MEDIA_HELPER_CAPABILITIES.HLS_DECRYPTED_MANIFEST] === true,
         canSelectContainer: capabilities[MEDIA_HELPER_CAPABILITIES.OUTPUT_CONTAINER_SELECTION] === true,
         canDownloadDash: capabilities[MEDIA_HELPER_CAPABILITIES.DASH_VOD_DOWNLOAD] === true,
@@ -5151,6 +5153,7 @@ var AdsFriendlyBackground = (() => {
       installed: status === MEDIA_HELPER_STATES.READY,
       canDownloadDirect: false,
       canDownloadHls: false,
+      canAcquireHlsInParallel: false,
       canDownloadDecryptedHls: false,
       canSelectContainer: false,
       canDownloadDash: false,

@@ -2245,6 +2245,35 @@ test("parallel downloader bounds concurrency, retries, and writes in order", asy
   assert.equal(result.downloadedBytes, 7);
 });
 
+test("parallel downloader can write completed resources immediately", async () => {
+  const resources = Array.from({ length: 4 }, (_, index) => ({ index }));
+  const written = [];
+  let active = 0;
+  let maximumActive = 0;
+  await downloadResourcesInParallel(resources, {
+    concurrency: 3,
+    writeInOrder: false,
+    async fetchResource(resource) {
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      await new Promise((resolve) =>
+        setTimeout(resolve, resource.index === 0 ? 20 : 2),
+      );
+      active -= 1;
+      return Uint8Array.of(resource.index);
+    },
+    async writeResource(bytes) {
+      written.push(bytes[0]);
+    },
+  });
+  assert.equal(maximumActive, 3);
+  assert.notEqual(written[0], 0);
+  assert.deepEqual(
+    [...written].sort((left, right) => left - right),
+    [0, 1, 2, 3],
+  );
+});
+
 test("download availability blocks DRM and live HLS before job creation", () => {
   const base = {
     kind: "hls",
