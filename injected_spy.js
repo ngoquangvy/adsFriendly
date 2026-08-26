@@ -2035,6 +2035,16 @@ ${body}`;
   var manifests = /* @__PURE__ */ new Map();
   var capturedKeys = /* @__PURE__ */ new Map();
   var recentKeySizedResponses = /* @__PURE__ */ new Map();
+  var pendingManifestInspections = 0;
+  function beginHlsManifestInspection() {
+    pendingManifestInspections += 1;
+    let finished = false;
+    return () => {
+      if (finished) return;
+      finished = true;
+      pendingManifestInspections = Math.max(0, pendingManifestInspections - 1);
+    };
+  }
   function rememberHlsKeyUris(manifestUrl, body, observedAt = Date.now()) {
     const keyUrls = [];
     for (const rawLine of String(body || "").split(/\r?\n/)) {
@@ -2072,11 +2082,13 @@ ${body}`;
     return [...manifests.values()].some((item) => item.keyUrls.includes(url));
   }
   async function captureFetchAesKey(url, response) {
-    if (!response?.ok || !mayInspectResponse(response, mayCaptureAesKey(url))) {
+    const declaredKey = mayCaptureAesKey(url);
+    if (!response?.ok || !mayInspectResponse(response, declaredKey)) {
       return false;
     }
-    const bytes = new Uint8Array(await response.clone().arrayBuffer());
-    if (mayCaptureAesKey(url)) return rememberKey(url, bytes);
+    const bytes = await readActualAesKeyBytes(response);
+    if (!bytes) return false;
+    if (declaredKey || mayCaptureAesKey(url)) return rememberKey(url, bytes);
     return rememberRecentKeySizedResponse(url, bytes);
   }
   async function captureXhrAesKey(url, xhr) {
@@ -2113,6 +2125,7 @@ ${body}`;
     manifests.clear();
     capturedKeys.clear();
     recentKeySizedResponses.clear();
+    pendingManifestInspections = 0;
   }
   function rememberKey(url, bytes, capturedAt = Date.now()) {
     if (!(bytes instanceof Uint8Array) || !isAesKeySize(bytes.byteLength)) {
@@ -2152,10 +2165,47 @@ ${body}`;
   }
   function mayInspectResponse(response, declaredKey) {
     if (declaredKey) return true;
-    const length = Number(response.headers?.get?.("content-length"));
-    if (!Number.isFinite(length) || !isAesKeySize(length)) return false;
+    const lengthHeader = response.headers?.get?.("content-length");
+    const length = typeof lengthHeader === "string" && lengthHeader.trim() ? Number(lengthHeader) : null;
     const mimeType = String(response.headers?.get?.("content-type") || "").split(";", 1)[0].trim().toLowerCase();
-    return !(mimeType.startsWith("text/") || mimeType.startsWith("image/") || mimeType.startsWith("audio/") || mimeType.startsWith("video/") || mimeType.includes("json") || mimeType.includes("mpegurl"));
+    const plausibleBinary = !(mimeType.startsWith("text/") || mimeType.startsWith("image/") || mimeType.startsWith("audio/") || mimeType.startsWith("video/") || mimeType.includes("json") || mimeType.includes("mpegurl"));
+    if (!plausibleBinary) return false;
+    if (Number.isFinite(length)) return isAesKeySize(length);
+    return pendingManifestInspections > 0;
+  }
+  async function readActualAesKeyBytes(response) {
+    const clone = response.clone();
+    const reader = clone.body?.getReader?.();
+    if (!reader) {
+      const bytes2 = new Uint8Array(await clone.arrayBuffer());
+      return isAesKeySize(bytes2.byteLength) ? bytes2 : null;
+    }
+    const chunks = [];
+    let byteLength3 = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = value instanceof Uint8Array ? value : new Uint8Array(value);
+        byteLength3 += chunk.byteLength;
+        if (byteLength3 > 32) {
+          reader.cancel().catch(() => {
+          });
+          return null;
+        }
+        chunks.push(chunk);
+      }
+    } finally {
+      reader.releaseLock?.();
+    }
+    if (!isAesKeySize(byteLength3)) return null;
+    const bytes = new Uint8Array(byteLength3);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return bytes;
   }
   function isAesKeySize(value) {
     return [16, 24, 32].includes(value) && value <= MAX_KEY_BYTES;
@@ -2205,9 +2255,8 @@ ${body}`;
       if (stopped || inspectedObjectUrls.has(objectUrl) || !(object instanceof Blob) || !policy.can(CAPABILITIES.MEDIA_OBSERVE) || !shouldInspectBlob(object, observedAt))
         return;
       inspectedObjectUrls.add(objectUrl);
-      const matched = await inspectBlob(object, objectUrl, observedAt).catch(
-        () => false
-      );
+      const finishManifestInspection = beginHlsManifestInspection();
+      const matched = await inspectBlob(object, objectUrl, observedAt).catch(() => false).finally(finishManifestInspection);
       if (!matched && isManifestMimeType(object.type)) {
         pendingBlobs.set(objectUrl, { object, objectUrl, observedAt });
         trimPendingBlobs(pendingBlobs, Date.now());
@@ -2219,12 +2268,13 @@ ${body}`;
       for (const pending of pendingBlobs.values()) {
         if (pending.processing) continue;
         pending.processing = true;
+        const finishManifestInspection = beginHlsManifestInspection();
         inspectBlob(pending.object, pending.objectUrl, pending.observedAt).then((matched) => {
           if (matched) pendingBlobs.delete(pending.objectUrl);
           else pending.processing = false;
         }).catch(() => {
           pending.processing = false;
-        });
+        }).finally(finishManifestInspection);
       }
     };
     createdBlobListeners.add(listener);
@@ -2543,6 +2593,8 @@ ${body}`;
         reportMediaSource(url, mimeType);
       }
       if (isManifestLike(finalUrl) || [MEDIA_KINDS.HLS, MEDIA_KINDS.DASH].includes(candidate?.kind)) {
+        const finishManifestInspection = candidate?.kind === MEDIA_KINDS.HLS ? beginHlsManifestInspection() : () => {
+        };
         response.clone().text().then((body) => {
           const primaryProbe = inspect(
             finalUrl,
@@ -2560,7 +2612,7 @@ ${body}`;
             });
           }
         }).catch(() => {
-        });
+        }).finally(finishManifestInspection);
       }
       return response;
     };
@@ -2597,6 +2649,8 @@ ${body}`;
         }
         if (!isManifestLike(url) && ![MEDIA_KINDS.HLS, MEDIA_KINDS.DASH].includes(candidate?.kind))
           return;
+        const finishManifestInspection = candidate?.kind === MEDIA_KINDS.HLS ? beginHlsManifestInspection() : () => {
+        };
         readXhrResponseBody(this).then((body) => {
           if (typeof body !== "string") return;
           const primaryProbe = inspect(url, body, candidate, requestContext2);
@@ -2610,7 +2664,7 @@ ${body}`;
             });
           }
         }).catch(() => {
-        });
+        }).finally(finishManifestInspection);
       });
       return originalSend.apply(this, args);
     };

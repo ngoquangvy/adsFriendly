@@ -170,7 +170,10 @@ finished parsing, at most 32 binary responses of an exact AES key size may be
 held in page memory for 15 seconds; a response is never exposed unless its
 exact URL then appears in a parsed identity AES key tag. Master/child manifest
 relations and observed frame IDs bound which page frames may answer the
-handoff. Per-host strategy outcomes are scored locally so a successful
+handoff. Chunked key responses do not require `Content-Length`: during this
+short parsing window the observer reads the actual response stream, accepts
+only 16/24/32-byte AES keys, and cancels a clone as soon as it exceeds 32
+bytes. Per-host strategy outcomes are scored locally so a successful
 registered method is preferred on the next download. Sensitive
 headers and key material are excluded from this memory and from persisted job
 history; temporary key files are removed after any terminal outcome. See

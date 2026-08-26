@@ -9,6 +9,17 @@ const MAX_RECENT_RESPONSES = 32;
 const manifests = new Map();
 const capturedKeys = new Map();
 const recentKeySizedResponses = new Map();
+let pendingManifestInspections = 0;
+
+export function beginHlsManifestInspection() {
+  pendingManifestInspections += 1;
+  let finished = false;
+  return () => {
+    if (finished) return;
+    finished = true;
+    pendingManifestInspections = Math.max(0, pendingManifestInspections - 1);
+  };
+}
 
 export function rememberHlsKeyUris(manifestUrl, body, observedAt = Date.now()) {
   const keyUrls = [];
@@ -53,11 +64,13 @@ export function mayCaptureAesKey(url) {
 }
 
 export async function captureFetchAesKey(url, response) {
-  if (!response?.ok || !mayInspectResponse(response, mayCaptureAesKey(url))) {
+  const declaredKey = mayCaptureAesKey(url);
+  if (!response?.ok || !mayInspectResponse(response, declaredKey)) {
     return false;
   }
-  const bytes = new Uint8Array(await response.clone().arrayBuffer());
-  if (mayCaptureAesKey(url)) return rememberKey(url, bytes);
+  const bytes = await readActualAesKeyBytes(response);
+  if (!bytes) return false;
+  if (declaredKey || mayCaptureAesKey(url)) return rememberKey(url, bytes);
   return rememberRecentKeySizedResponse(url, bytes);
 }
 
@@ -103,6 +116,7 @@ export function clearAesKeyHandoffs() {
   manifests.clear();
   capturedKeys.clear();
   recentKeySizedResponses.clear();
+  pendingManifestInspections = 0;
 }
 
 function rememberKey(url, bytes, capturedAt = Date.now()) {
@@ -146,13 +160,16 @@ function prune(now) {
 
 function mayInspectResponse(response, declaredKey) {
   if (declaredKey) return true;
-  const length = Number(response.headers?.get?.("content-length"));
-  if (!Number.isFinite(length) || !isAesKeySize(length)) return false;
+  const lengthHeader = response.headers?.get?.("content-length");
+  const length =
+    typeof lengthHeader === "string" && lengthHeader.trim()
+      ? Number(lengthHeader)
+      : null;
   const mimeType = String(response.headers?.get?.("content-type") || "")
     .split(";", 1)[0]
     .trim()
     .toLowerCase();
-  return !(
+  const plausibleBinary = !(
     mimeType.startsWith("text/") ||
     mimeType.startsWith("image/") ||
     mimeType.startsWith("audio/") ||
@@ -160,6 +177,43 @@ function mayInspectResponse(response, declaredKey) {
     mimeType.includes("json") ||
     mimeType.includes("mpegurl")
   );
+  if (!plausibleBinary) return false;
+  if (Number.isFinite(length)) return isAesKeySize(length);
+  return pendingManifestInspections > 0;
+}
+
+async function readActualAesKeyBytes(response) {
+  const clone = response.clone();
+  const reader = clone.body?.getReader?.();
+  if (!reader) {
+    const bytes = new Uint8Array(await clone.arrayBuffer());
+    return isAesKeySize(bytes.byteLength) ? bytes : null;
+  }
+  const chunks = [];
+  let byteLength = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = value instanceof Uint8Array ? value : new Uint8Array(value);
+      byteLength += chunk.byteLength;
+      if (byteLength > 32) {
+        reader.cancel().catch(() => {});
+        return null;
+      }
+      chunks.push(chunk);
+    }
+  } finally {
+    reader.releaseLock?.();
+  }
+  if (!isAesKeySize(byteLength)) return null;
+  const bytes = new Uint8Array(byteLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
 }
 
 function isAesKeySize(value) {

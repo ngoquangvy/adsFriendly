@@ -21,6 +21,7 @@ import {
   rememberEncryptedManifestEnvelope,
 } from "./decrypted-manifest-observer.js";
 import {
+  beginHlsManifestInspection,
   captureFetchAesKey,
   captureXhrAesKey,
   clearAesKeyHandoffs,
@@ -127,6 +128,10 @@ function installFetchCapture(
       isManifestLike(finalUrl) ||
       [MEDIA_KINDS.HLS, MEDIA_KINDS.DASH].includes(candidate?.kind)
     ) {
+      const finishManifestInspection =
+        candidate?.kind === MEDIA_KINDS.HLS
+          ? beginHlsManifestInspection()
+          : () => {};
       response
         .clone()
         .text()
@@ -149,7 +154,8 @@ function installFetchCapture(
             }).catch(() => {});
           }
         })
-        .catch(() => {});
+        .catch(() => {})
+        .finally(finishManifestInspection);
     }
     return response;
   };
@@ -193,6 +199,10 @@ function installXhrCapture(policy, inspect, resolveAttempts, requestContexts) {
         ![MEDIA_KINDS.HLS, MEDIA_KINDS.DASH].includes(candidate?.kind)
       )
         return;
+      const finishManifestInspection =
+        candidate?.kind === MEDIA_KINDS.HLS
+          ? beginHlsManifestInspection()
+          : () => {};
       readXhrResponseBody(this)
         .then((body) => {
           if (typeof body !== "string") return;
@@ -209,7 +219,8 @@ function installXhrCapture(policy, inspect, resolveAttempts, requestContexts) {
             }).catch(() => {});
           }
         })
-        .catch(() => {});
+        .catch(() => {})
+        .finally(finishManifestInspection);
     });
     return originalSend.apply(this, args);
   };

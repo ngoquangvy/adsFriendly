@@ -83,6 +83,7 @@ import {
 } from "../src/media/resolution-diagnostics.js";
 import { chooseMediaTitle } from "../src/media/media-title.js";
 import {
+  beginHlsManifestInspection,
   captureFetchAesKey,
   clearAesKeyHandoffs,
   getAesKeyHandoff,
@@ -179,18 +180,19 @@ test("browser AES handoff survives a key response that wins the manifest parse r
   const keyBytes = Buffer.from("0123456789abcdef");
   clearAesKeyHandoffs();
   try {
+    const responseWithoutLength = () =>
+      new Response(keyBytes, {
+        headers: { "content-type": "application/octet-stream" },
+      });
+    assert.equal(responseWithoutLength().headers.get("content-length"), null);
     assert.equal(
-      await captureFetchAesKey(
-        keyUrl,
-        new Response(keyBytes, {
-          headers: {
-            "content-length": String(keyBytes.length),
-            "content-type": "application/octet-stream",
-          },
-        }),
-      ),
-      true,
+      await captureFetchAesKey(keyUrl, responseWithoutLength()),
+      false,
     );
+    const finishManifestInspection = beginHlsManifestInspection();
+    const captured = await captureFetchAesKey(keyUrl, responseWithoutLength());
+    finishManifestInspection();
+    assert.equal(captured, true);
     assert.deepEqual(getAesKeyHandoff(manifestUrl), []);
     rememberHlsKeyUris(
       manifestUrl,
@@ -200,6 +202,16 @@ test("browser AES handoff survives a key response that wins the manifest parse r
       getAesKeyHandoff(manifestUrl)[0].data,
       keyBytes.toString("base64"),
     );
+
+    const finishOversizedInspection = beginHlsManifestInspection();
+    const oversizedCaptured = await captureFetchAesKey(
+      "https://cdn.example/video/not-a-key.bin",
+      new Response(Buffer.alloc(64), {
+        headers: { "content-type": "application/octet-stream" },
+      }),
+    );
+    finishOversizedInspection();
+    assert.equal(oversizedCaptured, false);
   } finally {
     clearAesKeyHandoffs();
   }

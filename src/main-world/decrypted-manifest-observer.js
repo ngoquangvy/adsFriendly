@@ -6,7 +6,10 @@ import { parseDashManifest } from "../media/dash-parser.js";
 import { isUsableMediaProbe } from "../media/probe-gate.js";
 import { EVENTS, createRegisteredEvent } from "../runtime/event-catalog.js";
 import { CAPABILITIES } from "../runtime/feature-catalog.js";
-import { rememberHlsKeyUris } from "./aes-key-handoff.js";
+import {
+  beginHlsManifestInspection,
+  rememberHlsKeyUris,
+} from "./aes-key-handoff.js";
 
 const MAX_MANIFEST_BYTES = 2 * 1024 * 1024;
 const MAX_ENVELOPES = 16;
@@ -39,9 +42,10 @@ export function installDecryptedManifestObserver(policy) {
     )
       return;
     inspectedObjectUrls.add(objectUrl);
-    const matched = await inspectBlob(object, objectUrl, observedAt).catch(
-      () => false,
-    );
+    const finishManifestInspection = beginHlsManifestInspection();
+    const matched = await inspectBlob(object, objectUrl, observedAt)
+      .catch(() => false)
+      .finally(finishManifestInspection);
     if (!matched && isManifestMimeType(object.type)) {
       pendingBlobs.set(objectUrl, { object, objectUrl, observedAt });
       trimPendingBlobs(pendingBlobs, Date.now());
@@ -53,6 +57,7 @@ export function installDecryptedManifestObserver(policy) {
     for (const pending of pendingBlobs.values()) {
       if (pending.processing) continue;
       pending.processing = true;
+      const finishManifestInspection = beginHlsManifestInspection();
       inspectBlob(pending.object, pending.objectUrl, pending.observedAt)
         .then((matched) => {
           if (matched) pendingBlobs.delete(pending.objectUrl);
@@ -60,7 +65,8 @@ export function installDecryptedManifestObserver(policy) {
         })
         .catch(() => {
           pending.processing = false;
-        });
+        })
+        .finally(finishManifestInspection);
     }
   };
   createdBlobListeners.add(listener);
