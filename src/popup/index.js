@@ -375,14 +375,96 @@ function createMediaItem(item, tab, helper, itemsById) {
   details.textContent = formatMediaDetails(item);
   copy.append(name, details);
   row.append(kind, copy);
+  const actions = document.createElement("div");
+  actions.className = "media-actions";
   if (
     ["direct", "hls", "dash"].includes(item.kind) ||
     (item.kind === "blob" && item.selectedMediaId)
   ) {
     const downloadItem = itemsById.get(item.selectedMediaId) || item;
-    row.append(createMediaDownloadButton(item, downloadItem, tab, helper));
+    actions.append(createMediaDownloadButton(item, downloadItem, tab, helper));
   }
+  const debugMediaId = debugCaptureMediaId(item);
+  if (tab && debugMediaId)
+    actions.append(createManifestSaveButton(item, tab, debugMediaId));
+  if (actions.childElementCount) row.append(actions);
   return row;
+}
+
+function debugCaptureMediaId(item) {
+  const diagnostic =
+    item.resolutionDiagnostic?.probeDiagnostic || item.probeDiagnostic;
+  return [
+    "manifest_parsed_no_stream",
+    "manifest_parsed_zero_segments",
+    "manifest_unsupported",
+    "manifest_parse_failed",
+  ].includes(diagnostic?.code)
+    ? diagnostic.mediaId
+    : null;
+}
+
+function createManifestSaveButton(item, tab, mediaId) {
+  const button = document.createElement("button");
+  button.className = "media-download media-debug-save";
+  button.textContent = "Save manifest";
+  button.title =
+    "Save the temporary unresolved manifest locally for debugging.";
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    button.textContent = "Saving…";
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: "GET_MEDIA_DEBUG_MANIFEST",
+        tabId: tab.id,
+        mediaId,
+      });
+      if (response?.status !== "found" || !response.capture?.body)
+        throw new Error("Temporary manifest expired. Reload the video page.");
+      saveDebugManifestFile(response.capture, item);
+      button.textContent = "Saved";
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = "Retry save";
+      button.title = error?.message || String(error);
+    }
+  });
+  return button;
+}
+
+function saveDebugManifestFile(capture, item) {
+  const extension = capture.kind === "dash" ? "mpd" : "m3u8";
+  const hostname = safeHostname(capture.manifestUrl) || "manifest";
+  const timestamp = new Date(capture.capturedAt || Date.now())
+    .toISOString()
+    .replaceAll(":", "-");
+  const filename = sanitizeFilename(
+    `adsfriendly-debug-${hostname}-${item.id}-${timestamp}.${extension}`,
+  );
+  const blob = new Blob([capture.body], {
+    type:
+      capture.kind === "dash"
+        ? "application/dash+xml"
+        : "application/vnd.apple.mpegurl",
+  });
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = filename;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 10_000);
+}
+
+function safeHostname(value) {
+  try {
+    return new URL(value).hostname;
+  } catch {
+    return null;
+  }
+}
+
+function sanitizeFilename(value) {
+  return value.replace(/[<>:"/\\|?*\x00-\x1F]/g, "-").slice(0, 180);
 }
 
 function createMediaDownloadButton(item, downloadItem, tab, helper) {

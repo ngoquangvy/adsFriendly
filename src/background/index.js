@@ -10,6 +10,7 @@ import { migrateLegacyTrainingStorage } from "../storage/training-store.js";
 import { startBackgroundMediaCatalog } from "./media-catalog.js";
 import { startMediaDownloadJobStore } from "./media-download-jobs.js";
 import { startBackgroundMediaRequestObserver } from "./media-request-observer.js";
+import { startMediaDebugCaptureStore } from "./media-debug-capture.js";
 
 const controller = createMainController({
   context: "background",
@@ -17,6 +18,7 @@ const controller = createMainController({
   implementations: {
     "background.message-router": ({ policy }) => registerMessageRouter(policy),
     "background.media-catalog": () => startBackgroundMediaCatalog(),
+    "background.media-debug-capture": () => startMediaDebugCaptureStore(),
     "background.media-request-observer": () =>
       startBackgroundMediaRequestObserver(),
     "background.media-download-jobs": ({ policy }) =>

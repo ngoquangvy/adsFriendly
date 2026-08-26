@@ -122,6 +122,12 @@ test("background media request observation is registered with one explicit permi
   );
 });
 
+test("temporary media debug capture is owned by the catalog capability", () => {
+  const definition = getFeatureDefinition("background.media-debug-capture");
+  assert.equal(definition.context, "background");
+  assert.deepEqual(definition.capabilities, [CAPABILITIES.MEDIA_CATALOG]);
+});
+
 test("legacy settings migrate deterministically", () => {
   assert.deepEqual(migrateLegacySettings({ friendlyMode: true }), {
     enabled: true,

@@ -19,6 +19,7 @@ import {
 import { createMediaObserverReportKey } from "../src/content/media-observer.js";
 import { createMediaProbeRefererRule } from "../src/background/media-probe-context.js";
 import { createMediaRequestObservation } from "../src/background/media-request-observer.js";
+import { normalizeDebugCapture } from "../src/background/media-debug-capture.js";
 import {
   createContextualProbeInit,
   readXhrResponseBody,
@@ -267,6 +268,31 @@ test("background request observation exposes a bounded catalog input", () => {
       responseHeaders: [{ name: "content-type", value: "video/mp2t" }],
     }),
     null,
+  );
+});
+
+test("temporary manifest capture is bounded and expires without entering the catalog", () => {
+  const capture = normalizeDebugCapture(
+    {
+      mediaId: "child",
+      manifestUrl: "https://cdn.example/child.m3u8?token=secret",
+      kind: "hls",
+      body: "#EXTM3U\n#EXTINF:4,\nsegment.ts",
+      bodyFormat: "hls",
+      reason: "manifest_parsed_no_stream",
+    },
+    1000,
+  );
+  assert.equal(capture.bodyBytes, 29);
+  assert.equal(capture.capturedAt, 1000);
+  assert.equal(capture.expiresAt, 901000);
+  assert.throws(
+    () =>
+      normalizeDebugCapture({
+        ...capture,
+        body: "x".repeat(512 * 1024 + 1),
+      }),
+    /512 KB session limit/,
   );
 });
 

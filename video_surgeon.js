@@ -318,6 +318,7 @@ var AdsFriendlyVideo = (() => {
       C2.MEDIA_DOWNLOAD
     ]),
     feature("background.media-catalog", "background", C2.MEDIA_CATALOG),
+    feature("background.media-debug-capture", "background", C2.MEDIA_CATALOG),
     feature(
       "background.media-request-observer",
       "background",

@@ -976,6 +976,7 @@ var AdsFriendlyBackground = (() => {
       C2.MEDIA_DOWNLOAD
     ]),
     feature("background.media-catalog", "background", C2.MEDIA_CATALOG),
+    feature("background.media-debug-capture", "background", C2.MEDIA_CATALOG),
     feature(
       "background.media-request-observer",
       "background",
@@ -5182,6 +5183,100 @@ var AdsFriendlyBackground = (() => {
     return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
 
+  // src/background/media-debug-capture.js
+  var DEBUG_CAPTURE_PREFIX = "adsfriendly.mediaDebugCaptures.";
+  var MAX_CAPTURE_BYTES = 512 * 1024;
+  var MAX_CAPTURES_PER_TAB = 3;
+  var CAPTURE_TTL_MS = 15 * 60 * 1e3;
+  function startMediaDebugCaptureStore() {
+    const onRemoved = (tabId) => clearMediaDebugCaptures(tabId).catch(() => {
+    });
+    chrome.tabs.onRemoved.addListener(onRemoved);
+    return () => chrome.tabs.onRemoved.removeListener(onRemoved);
+  }
+  async function saveMediaDebugCapture(tabId, rawCapture) {
+    assertTabId2(tabId);
+    const capture = normalizeDebugCapture(rawCapture);
+    const key = debugCaptureKey(tabId);
+    const snapshot = await chrome.storage.session.get(key);
+    const captures = pruneCaptures(snapshot[key]);
+    const next = [
+      capture,
+      ...captures.filter((item) => item.mediaId !== capture.mediaId)
+    ].slice(0, MAX_CAPTURES_PER_TAB);
+    await chrome.storage.session.set({ [key]: next });
+    return { status: "saved", capture: publicCapture(capture) };
+  }
+  async function getMediaDebugCapture(tabId, mediaId) {
+    assertTabId2(tabId);
+    if (typeof mediaId !== "string" || !mediaId)
+      return { status: "invalid_media" };
+    const key = debugCaptureKey(tabId);
+    const snapshot = await chrome.storage.session.get(key);
+    const stored = Array.isArray(snapshot[key]) ? snapshot[key] : [];
+    const captures = pruneCaptures(stored);
+    if (captures.length !== stored.length) {
+      if (captures.length) await chrome.storage.session.set({ [key]: captures });
+      else await chrome.storage.session.remove(key);
+    }
+    const capture = captures.find((item) => item.mediaId === mediaId);
+    return capture ? { status: "found", capture: { ...capture } } : { status: "not_found" };
+  }
+  async function clearMediaDebugCaptures(tabId) {
+    assertTabId2(tabId);
+    await chrome.storage.session.remove(debugCaptureKey(tabId));
+  }
+  function normalizeDebugCapture(value = {}, now = Date.now()) {
+    const body = typeof value.body === "string" ? value.body : "";
+    const bodyBytes = new TextEncoder().encode(body).byteLength;
+    if (!body || bodyBytes > MAX_CAPTURE_BYTES) {
+      throw new Error(
+        bodyBytes > MAX_CAPTURE_BYTES ? "Debug manifest exceeds the 512 KB session limit." : "Debug manifest body is empty."
+      );
+    }
+    return Object.freeze({
+      mediaId: requiredString3(value.mediaId, "mediaId"),
+      manifestUrl: requiredHttpUrl3(value.manifestUrl),
+      kind: ["hls", "dash"].includes(value.kind) ? value.kind : "hls",
+      body,
+      bodyBytes,
+      bodyFormat: ["hls", "dash", "unknown"].includes(value.bodyFormat) ? value.bodyFormat : "unknown",
+      reason: requiredString3(value.reason, "reason").slice(0, 100),
+      capturedAt: now,
+      expiresAt: now + CAPTURE_TTL_MS
+    });
+  }
+  function pruneCaptures(value, now = Date.now()) {
+    return (Array.isArray(value) ? value : []).filter(
+      (item) => item && typeof item.body === "string" && Number(item.expiresAt) > now
+    ).slice(0, MAX_CAPTURES_PER_TAB);
+  }
+  function publicCapture(capture) {
+    const { body: _body, ...metadata } = capture;
+    return metadata;
+  }
+  function debugCaptureKey(tabId) {
+    return `${DEBUG_CAPTURE_PREFIX}${tabId}`;
+  }
+  function assertTabId2(tabId) {
+    if (!Number.isInteger(tabId) || tabId < 0)
+      throw new Error("A valid tab ID is required for debug capture.");
+  }
+  function requiredString3(value, field) {
+    if (typeof value !== "string" || !value.trim())
+      throw new Error(`Debug capture ${field} is required.`);
+    return value;
+  }
+  function requiredHttpUrl3(value) {
+    try {
+      const url = new URL(value);
+      if (!["http:", "https:"].includes(url.protocol)) throw new Error();
+      return url.href;
+    } catch {
+      throw new Error("Debug capture manifestUrl must be HTTP(S).");
+    }
+  }
+
   // src/background/message-router.js
   var MESSAGE_CAPABILITIES = Object.freeze({
     TRUSTED_CLICK: CAPABILITIES.NAVIGATION_INTENT,
@@ -5217,6 +5312,8 @@ var AdsFriendlyBackground = (() => {
     MEDIA_EME_OBSERVED: CAPABILITIES.MEDIA_CATALOG,
     PREPARE_MEDIA_CONTEXTUAL_PROBE: CAPABILITIES.MEDIA_CATALOG,
     GET_MEDIA_CATALOG: CAPABILITIES.MEDIA_CATALOG,
+    SAVE_MEDIA_DEBUG_MANIFEST: CAPABILITIES.MEDIA_CATALOG,
+    GET_MEDIA_DEBUG_MANIFEST: CAPABILITIES.MEDIA_CATALOG,
     GET_MEDIA_HELPER_STATUS: CAPABILITIES.MEDIA_DOWNLOAD,
     CREATE_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
     CANCEL_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
@@ -5398,6 +5495,16 @@ var AdsFriendlyBackground = (() => {
     if (message.type === "GET_MEDIA_CATALOG") {
       if (!Number.isInteger(message.tabId)) return { status: "invalid_tab" };
       return listDiscoveredMedia(message.tabId, message.pageUrl || null);
+    }
+    if (message.type === "SAVE_MEDIA_DEBUG_MANIFEST") {
+      const tabId = sender?.tab?.id;
+      if (!Number.isInteger(tabId)) return { status: "ignored" };
+      return saveMediaDebugCapture(tabId, message.capture);
+    }
+    if (message.type === "GET_MEDIA_DEBUG_MANIFEST") {
+      if (!isExtensionPageSender(sender)) return { status: "forbidden" };
+      if (!Number.isInteger(message.tabId)) return { status: "invalid_tab" };
+      return getMediaDebugCapture(message.tabId, message.mediaId);
     }
     if (message.type === "GET_MEDIA_HELPER_STATUS") {
       return getMediaHelperStatus({ force: message.force === true });
@@ -5606,6 +5713,10 @@ var AdsFriendlyBackground = (() => {
     } catch {
       return false;
     }
+  }
+  function isExtensionPageSender(sender) {
+    const baseUrl = chrome.runtime.getURL("");
+    return sender?.id === chrome.runtime.id && typeof sender.url === "string" && sender.url.startsWith(baseUrl);
   }
   function senderSourceHostname(sender) {
     try {
@@ -6210,6 +6321,7 @@ var AdsFriendlyBackground = (() => {
     implementations: {
       "background.message-router": ({ policy }) => registerMessageRouter(policy),
       "background.media-catalog": () => startBackgroundMediaCatalog(),
+      "background.media-debug-capture": () => startMediaDebugCaptureStore(),
       "background.media-request-observer": () => startBackgroundMediaRequestObserver(),
       "background.media-download-jobs": ({ policy }) => startMediaDownloadJobStore(policy),
       "background.navigation-guard": ({ policy }) => registerNavigationGuard(policy),

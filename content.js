@@ -1167,6 +1167,7 @@ var AdsFriendlyContent = (() => {
       C2.MEDIA_DOWNLOAD
     ]),
     feature("background.media-catalog", "background", C2.MEDIA_CATALOG),
+    feature("background.media-debug-capture", "background", C2.MEDIA_CATALOG),
     feature(
       "background.media-request-observer",
       "background",
@@ -3105,6 +3106,14 @@ var AdsFriendlyContent = (() => {
     const onMainWorldMessage = (messageEvent) => {
       if (messageEvent.source === window && messageEvent.data?.source === "adsfriendly-spy" && messageEvent.data?.type === "MEDIA_PROBE_CONTEXT_REQUIRED") {
         retryProbeWithParentContext(messageEvent.data);
+        return;
+      }
+      if (messageEvent.source === window && messageEvent.data?.source === "adsfriendly-spy" && messageEvent.data?.type === "MEDIA_DEBUG_MANIFEST_CAPTURE") {
+        chrome.runtime.sendMessage({
+          type: "SAVE_MEDIA_DEBUG_MANIFEST",
+          capture: messageEvent.data.capture
+        }).catch(() => {
+        });
         return;
       }
       if (messageEvent.source !== window || messageEvent.data?.source !== "adsfriendly-spy" || messageEvent.data?.type !== "REGISTERED_EVENT" || ![

@@ -45,6 +45,19 @@ export function startMediaObserver() {
       return;
     }
     if (
+      messageEvent.source === window &&
+      messageEvent.data?.source === "adsfriendly-spy" &&
+      messageEvent.data?.type === "MEDIA_DEBUG_MANIFEST_CAPTURE"
+    ) {
+      chrome.runtime
+        .sendMessage({
+          type: "SAVE_MEDIA_DEBUG_MANIFEST",
+          capture: messageEvent.data.capture,
+        })
+        .catch(() => {});
+      return;
+    }
+    if (
       messageEvent.source !== window ||
       messageEvent.data?.source !== "adsfriendly-spy" ||
       messageEvent.data?.type !== "REGISTERED_EVENT" ||

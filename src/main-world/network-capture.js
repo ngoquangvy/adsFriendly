@@ -451,14 +451,28 @@ function inspectManifest(
       ? parseDashManifest(manifestUrl, body)
       : parseHlsManifest(manifestUrl, body);
   const probe = { kind: manifestCandidate.kind, ...parsedProbe };
+  const diagnosticCode = parsedProbeDiagnosticCode(probe);
   reportProbeDiagnostic(manifestCandidate, {
     phase: "parsed",
-    code: parsedProbeDiagnosticCode(probe),
+    code: diagnosticCode,
     bodyBytes: byteLength(body),
     bodyFormat: detectManifestBodyFormat(body),
     playlistType: probe.playlistType,
     segmentCount: probe.segmentCount,
   });
+  if (diagnosticCode !== "manifest_parsed") {
+    notifyContentScript({
+      type: "MEDIA_DEBUG_MANIFEST_CAPTURE",
+      capture: {
+        mediaId: manifestCandidate.id,
+        manifestUrl: manifestCandidate.manifestUrl,
+        kind: manifestCandidate.kind,
+        body,
+        bodyFormat: detectManifestBodyFormat(body),
+        reason: diagnosticCode,
+      },
+    });
+  }
   notifyContentScript({
     type: "REGISTERED_EVENT",
     event: createRegisteredEvent(EVENTS.MEDIA_PROBED, {

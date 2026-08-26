@@ -48,6 +48,10 @@ import {
 } from "./media-download-jobs.js";
 import { getMediaHelperStatus } from "./media-helper-bridge.js";
 import { prepareMediaProbeReferer } from "./media-probe-context.js";
+import {
+  getMediaDebugCapture,
+  saveMediaDebugCapture,
+} from "./media-debug-capture.js";
 
 const MESSAGE_CAPABILITIES = Object.freeze({
   TRUSTED_CLICK: CAPABILITIES.NAVIGATION_INTENT,
@@ -83,6 +87,8 @@ const MESSAGE_CAPABILITIES = Object.freeze({
   MEDIA_EME_OBSERVED: CAPABILITIES.MEDIA_CATALOG,
   PREPARE_MEDIA_CONTEXTUAL_PROBE: CAPABILITIES.MEDIA_CATALOG,
   GET_MEDIA_CATALOG: CAPABILITIES.MEDIA_CATALOG,
+  SAVE_MEDIA_DEBUG_MANIFEST: CAPABILITIES.MEDIA_CATALOG,
+  GET_MEDIA_DEBUG_MANIFEST: CAPABILITIES.MEDIA_CATALOG,
   GET_MEDIA_HELPER_STATUS: CAPABILITIES.MEDIA_DOWNLOAD,
   CREATE_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
   CANCEL_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
@@ -272,6 +278,16 @@ async function route(message, sender) {
   if (message.type === "GET_MEDIA_CATALOG") {
     if (!Number.isInteger(message.tabId)) return { status: "invalid_tab" };
     return listDiscoveredMedia(message.tabId, message.pageUrl || null);
+  }
+  if (message.type === "SAVE_MEDIA_DEBUG_MANIFEST") {
+    const tabId = sender?.tab?.id;
+    if (!Number.isInteger(tabId)) return { status: "ignored" };
+    return saveMediaDebugCapture(tabId, message.capture);
+  }
+  if (message.type === "GET_MEDIA_DEBUG_MANIFEST") {
+    if (!isExtensionPageSender(sender)) return { status: "forbidden" };
+    if (!Number.isInteger(message.tabId)) return { status: "invalid_tab" };
+    return getMediaDebugCapture(message.tabId, message.mediaId);
   }
   if (message.type === "GET_MEDIA_HELPER_STATUS") {
     return getMediaHelperStatus({ force: message.force === true });
@@ -480,6 +496,15 @@ function sameOrigin(left, right) {
   } catch {
     return false;
   }
+}
+
+function isExtensionPageSender(sender) {
+  const baseUrl = chrome.runtime.getURL("");
+  return (
+    sender?.id === chrome.runtime.id &&
+    typeof sender.url === "string" &&
+    sender.url.startsWith(baseUrl)
+  );
 }
 
 function senderSourceHostname(sender) {
