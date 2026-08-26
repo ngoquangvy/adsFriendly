@@ -582,6 +582,11 @@ var AdsFriendlyMainWorld = (() => {
     }
   }
 
+  // src/media/protection-policy.js
+  function normalizeHlsKeyFormat(value) {
+    return String(value || "").trim().replace(/^["']|["']$/g, "").trim().toLowerCase().slice(0, 100);
+  }
+
   // src/media/hls-parser.js
   var MAX_MANIFEST_LENGTH = 2 * 1024 * 1024;
   var MAX_LINES = 2e4;
@@ -663,9 +668,7 @@ var AdsFriendlyMainWorld = (() => {
           if (method && method.toUpperCase() !== "NONE")
             encryptionMethods.add(method.toUpperCase());
           if (attributes.KEYFORMAT)
-            encryptionKeyFormats.add(
-              String(attributes.KEYFORMAT).toLowerCase().slice(0, 100)
-            );
+            encryptionKeyFormats.add(normalizeHlsKeyFormat(attributes.KEYFORMAT));
           continue;
         }
         if (line.startsWith("#EXTINF:")) {

@@ -1,3 +1,5 @@
+import { normalizeHlsKeyFormat } from "./protection-policy.js";
+
 const MAX_MANIFEST_LENGTH = 2 * 1024 * 1024;
 const MAX_LINES = 20_000;
 const MAX_VARIANTS = 100;
@@ -85,9 +87,7 @@ export function parseHlsManifest(manifestUrl, body) {
         if (method && method.toUpperCase() !== "NONE")
           encryptionMethods.add(method.toUpperCase());
         if (attributes.KEYFORMAT)
-          encryptionKeyFormats.add(
-            String(attributes.KEYFORMAT).toLowerCase().slice(0, 100),
-          );
+          encryptionKeyFormats.add(normalizeHlsKeyFormat(attributes.KEYFORMAT));
         continue;
       }
       if (line.startsWith("#EXTINF:")) {

@@ -26,14 +26,20 @@ export function isWeakSampleAesSignal(candidate = {}) {
 export function isFfmpegCompatibleSampleAes(candidate = {}) {
   if (!isWeakSampleAesSignal(candidate)) return false;
   const methods = candidate.encryptionMethods || [];
-  const keyFormats = candidate.encryptionKeyFormats || [];
   return (
-    (methods.length === 0 ||
-      methods.every((method) =>
-        String(method).toUpperCase().startsWith("SAMPLE-AES"),
-      )) &&
-    keyFormats.every(
-      (format) => !format || String(format).toLowerCase() === "identity",
-    )
+    methods.length === 0 ||
+    methods.every((method) => {
+      const normalized = String(method).trim().toUpperCase();
+      return normalized === "AES-128" || normalized.startsWith("SAMPLE-AES");
+    })
   );
+}
+
+export function normalizeHlsKeyFormat(value) {
+  return String(value || "")
+    .trim()
+    .replace(/^["']|["']$/g, "")
+    .trim()
+    .toLowerCase()
+    .slice(0, 100);
 }

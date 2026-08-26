@@ -427,7 +427,7 @@ test("resolution diagnostics stop at the explicit decrypted-manifest handoff", (
   });
 });
 
-test("resolution diagnostics wait for a non-identity SAMPLE-AES key format", () => {
+test("resolution diagnostics wait for an unsupported mixed SAMPLE-AES method", () => {
   const result = diagnoseMediaResolution({
     id: "sample-aes-hls",
     kind: "hls",
@@ -437,6 +437,7 @@ test("resolution diagnostics wait for a non-identity SAMPLE-AES key format", () 
     segmentCount: 20,
     drm: "suspected",
     encryptionScheme: "sample-aes",
+    encryptionMethods: ["SAMPLE-AES", "VENDOR-CIPHER"],
     encryptionKeyFormats: ["com.example.keyformat"],
     drmEvidence: ["hls-sample-aes"],
   });
@@ -450,6 +451,43 @@ test("resolution diagnostics wait for a non-identity SAMPLE-AES key format", () 
   assert.equal(
     result.message,
     "Player URL resolution · waiting for resolved media segments",
+  );
+});
+
+test("custom non-DRM SAMPLE-AES key formats are handed to FFmpeg", () => {
+  const availability = getMediaDownloadAvailability({
+    kind: "hls",
+    probeStatus: "ready",
+    playlistType: "media",
+    streamType: "vod",
+    segmentCount: 20,
+    drm: "suspected",
+    encryptionScheme: "sample-aes",
+    encryptionMethods: ["SAMPLE-AES"],
+    encryptionKeyFormats: ["com.example.raw-key"],
+    drmEvidence: ["hls-sample-aes"],
+  });
+  assert.deepEqual(availability, { supported: true, reason: null });
+});
+
+test("HLS key formats are canonicalized before protection classification", () => {
+  const parsed = parseHlsManifest(
+    "https://media.example.test/video/index.m3u8",
+    '#EXTM3U\n#EXT-X-KEY:METHOD=SAMPLE-AES,KEYFORMAT=" Identity ",URI="key.bin"\n#EXTINF:6,\nsegment.ts\n#EXT-X-ENDLIST',
+  );
+
+  assert.deepEqual(parsed.encryptionKeyFormats, ["identity"]);
+  assert.equal(parsed.drm, "suspected");
+  assert.deepEqual(
+    getMediaDownloadAvailability({
+      kind: "hls",
+      probeStatus: "ready",
+      ...parsed,
+    }),
+    {
+      supported: true,
+      reason: null,
+    },
   );
 });
 

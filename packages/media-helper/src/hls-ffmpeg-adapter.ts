@@ -178,7 +178,7 @@ async function preflightManifestTree(
     }
     if (!supportsEncryption(summary)) {
       throw new Error(
-        "Only unencrypted HLS, AES-128 identity keys, or SAMPLE-AES identity keys are supported.",
+        "Only unencrypted HLS, AES-128 identity keys, or SAMPLE-AES without confirmed DRM are supported.",
       );
     }
 
@@ -316,13 +316,15 @@ function extractKeyResources(body: string, baseUrl: string) {
 
 function supportsEncryption(summary: ReturnType<typeof parseHlsManifest>) {
   if (!summary.encryptionMethods.length) return true;
-  const supportedMethod = summary.encryptionMethods.every(
+  const supportedMethods = summary.encryptionMethods.every(
     (method) => method === "AES-128" || method.startsWith("SAMPLE-AES"),
   );
-  return (
-    supportedMethod &&
-    summary.encryptionKeyFormats.every((format) => format === "identity")
-  );
+  if (!supportedMethods) return false;
+  if (
+    summary.encryptionMethods.some((method) => method.startsWith("SAMPLE-AES"))
+  )
+    return true;
+  return summary.encryptionKeyFormats.every((format) => format === "identity");
 }
 
 function attributeUri(line: string) {

@@ -4480,12 +4480,13 @@ var AdsFriendlyBackground = (() => {
   function isFfmpegCompatibleSampleAes(candidate = {}) {
     if (!isWeakSampleAesSignal(candidate)) return false;
     const methods = candidate.encryptionMethods || [];
-    const keyFormats = candidate.encryptionKeyFormats || [];
-    return (methods.length === 0 || methods.every(
-      (method) => String(method).toUpperCase().startsWith("SAMPLE-AES")
-    )) && keyFormats.every(
-      (format) => !format || String(format).toLowerCase() === "identity"
-    );
+    return methods.length === 0 || methods.every((method) => {
+      const normalized = String(method).trim().toUpperCase();
+      return normalized === "AES-128" || normalized.startsWith("SAMPLE-AES");
+    });
+  }
+  function normalizeHlsKeyFormat(value) {
+    return String(value || "").trim().replace(/^["']|["']$/g, "").trim().toLowerCase().slice(0, 100);
   }
 
   // src/media/download-job-contract.js
@@ -5269,9 +5270,7 @@ var AdsFriendlyBackground = (() => {
           if (method && method.toUpperCase() !== "NONE")
             encryptionMethods.add(method.toUpperCase());
           if (attributes.KEYFORMAT)
-            encryptionKeyFormats.add(
-              String(attributes.KEYFORMAT).toLowerCase().slice(0, 100)
-            );
+            encryptionKeyFormats.add(normalizeHlsKeyFormat(attributes.KEYFORMAT));
           continue;
         }
         if (line.startsWith("#EXTINF:")) {

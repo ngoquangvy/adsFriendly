@@ -19,7 +19,7 @@ import { dashFfmpegAdapter } from "./dash-ffmpeg-adapter.js";
 import { DownloadJobManager } from "./job-manager.js";
 import { openManagedOutput, revealManagedOutput } from "./output-actions.js";
 
-const HELPER_VERSION = "0.9.0";
+const HELPER_VERSION = "0.9.1";
 const callerOrigin = process.argv[2] || null;
 const reader = new NativeMessageReader();
 const adapters = new DownloadAdapterRegistry([

@@ -1,6 +1,6 @@
 {
   "name": "@adsfriendly/media-helper",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "private": true,
   "description": "Optional native media backend for the AdsFriendly ecosystem",
   "type": "module",
