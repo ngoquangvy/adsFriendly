@@ -2,7 +2,7 @@ import { normalizeMediaDownloadOutput } from "./download-options.js";
 import { isRegisteredMediaAccessStrategy } from "./access-strategy-catalog.js";
 import { normalizeAesKeyHandoffDiagnostic } from "./key-handoff-diagnostics.js";
 
-export const MEDIA_HELPER_PROTOCOL_VERSION = 5;
+export const MEDIA_HELPER_PROTOCOL_VERSION = 6;
 export const MEDIA_HELPER_HOST_NAME = "com.adsfriendly.media_helper";
 
 export const MEDIA_HELPER_REQUESTS = Object.freeze({
@@ -224,11 +224,39 @@ function normalizeHelperAdaptiveTracks(value, expectedType) {
       track?.height || track?.resolution?.height,
     ),
     qualityLabel: optionalString(track?.qualityLabel),
-    urlResolution:
-      track?.urlResolution === "n_transform_pending"
-        ? "n_transform_pending"
-        : "resolved",
+    urlResolution: ["n_transform_pending", "signature_cipher_pending"].includes(
+      track?.urlResolution,
+    )
+      ? track.urlResolution
+      : "resolved",
+    signatureCipher:
+      track?.urlResolution === "signature_cipher_pending"
+        ? normalizeYouTubeSignatureCipher(track?.signatureCipher)
+        : null,
   }));
+}
+
+function normalizeYouTubeSignatureCipher(value) {
+  if (typeof value !== "string" || !value || value.length > 12_000)
+    throw new Error("[MediaHelperProtocol] Invalid YouTube signature cipher.");
+  const params = new URLSearchParams(value);
+  const sourceUrl = requiredHttpUrl(
+    params.get("url"),
+    "candidate.track.signatureCipher.url",
+  );
+  const signature = params.get("s");
+  const signatureParameter = params.get("sp") || "signature";
+  if (
+    !signature ||
+    signature.length > 4_096 ||
+    !/^[a-zA-Z0-9_.-]{1,40}$/.test(signatureParameter)
+  )
+    throw new Error("[MediaHelperProtocol] Invalid YouTube signature cipher.");
+  return new URLSearchParams({
+    url: sourceUrl,
+    sp: signatureParameter,
+    s: signature,
+  }).toString();
 }
 
 function normalizeYouTubePlayerUrl(value) {

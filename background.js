@@ -3947,7 +3947,9 @@ var AdsFriendlyBackground = (() => {
     try {
       const url = new URL(track?.sourceUrl);
       if (!["http:", "https:"].includes(url.protocol)) return false;
-      return track.urlResolution !== "n_transform_pending" || Boolean(playerUrl);
+      return !["n_transform_pending", "signature_cipher_pending"].includes(
+        track.urlResolution
+      ) ? true : Boolean(playerUrl);
     } catch {
       return false;
     }
@@ -3961,7 +3963,8 @@ var AdsFriendlyBackground = (() => {
       tracks.set(key, {
         ...previous,
         ...track,
-        sourceUrl: track.sourceUrl || previous.sourceUrl || null
+        sourceUrl: track.sourceUrl || previous.sourceUrl || null,
+        signatureCipher: track.signatureCipher || previous.signatureCipher || null
       });
     }
     return [...tracks.values()];
@@ -5054,7 +5057,7 @@ var AdsFriendlyBackground = (() => {
   }
 
   // src/media/helper-contract.js
-  var MEDIA_HELPER_PROTOCOL_VERSION = 5;
+  var MEDIA_HELPER_PROTOCOL_VERSION = 6;
   var MEDIA_HELPER_HOST_NAME = "com.adsfriendly.media_helper";
   var MEDIA_HELPER_REQUESTS = Object.freeze({
     HELLO: "helper.hello",
@@ -8062,7 +8065,8 @@ ${body}`;
       resolution: track.resolution,
       qualityLabel: track.qualityLabel,
       observedAt: track.observedAt,
-      urlResolution: track.urlResolution || "resolved"
+      urlResolution: track.urlResolution || "resolved",
+      signatureCipher: track.signatureCipher || null
     };
     return normalizeMediaCandidate({
       id,
@@ -8081,7 +8085,10 @@ ${body}`;
       probeStatus: MEDIA_PROBE_STATES.DISCOVERED,
       streamType: "vod",
       provider: "youtube",
-      acquisitionProfile: track.urlResolution === "n_transform_pending" ? "youtube_player_js_challenge" : "youtube_resolved_tracks",
+      acquisitionProfile: [
+        "n_transform_pending",
+        "signature_cipher_pending"
+      ].includes(track.urlResolution) ? "youtube_player_js_challenge" : "youtube_resolved_tracks",
       playerUrl
     });
   }

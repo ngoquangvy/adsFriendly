@@ -682,7 +682,11 @@ function hasAcquirableAdaptiveTrack(track, playerUrl) {
   try {
     const url = new URL(track?.sourceUrl);
     if (!["http:", "https:"].includes(url.protocol)) return false;
-    return track.urlResolution !== "n_transform_pending" || Boolean(playerUrl);
+    return !["n_transform_pending", "signature_cipher_pending"].includes(
+      track.urlResolution,
+    )
+      ? true
+      : Boolean(playerUrl);
   } catch {
     return false;
   }
@@ -699,6 +703,8 @@ function mergeTrackList(existing = [], incoming = []) {
       ...previous,
       ...track,
       sourceUrl: track.sourceUrl || previous.sourceUrl || null,
+      signatureCipher:
+        track.signatureCipher || previous.signatureCipher || null,
     });
   }
   return [...tracks.values()];

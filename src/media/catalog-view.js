@@ -460,6 +460,8 @@ function adaptiveDetails(item) {
     facts.push(formatDuration(item.duration));
   if (acquisition?.stage === "n_transform_pending")
     facts.push("Helper resolves n");
+  if (acquisition?.stage === "signature_cipher_pending")
+    facts.push("Helper resolves signature");
   return facts.join(" · ");
 }
 

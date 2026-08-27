@@ -375,6 +375,101 @@ test("YouTube n challenge tracks become Helper-ready when Player JS is known", (
   assert.equal(getMediaDownloadAvailability(item).supported, true);
 });
 
+test("YouTube signatureCipher video and audio tracks use the same Player JS resolver", () => {
+  const mediaUrl = (itag, mimeType, extra = "") =>
+    `https://r1.googlevideo.com/videoplayback?id=asset-1&itag=${itag}&mime=${encodeURIComponent(mimeType)}&dur=20&clen=1000${extra}`;
+  const cipher = (url, signature) =>
+    new URLSearchParams({ url, sp: "sig", s: signature }).toString();
+  const playerUrl =
+    "https://www.youtube.com/s/player/b7457b7c/player_ias.vflset/en_US/base.js";
+  const observation = parseYouTubePlayerResponse(
+    {
+      playabilityStatus: { status: "OK" },
+      videoDetails: { videoId: "video-1", title: "Cipher example" },
+      streamingData: {
+        adaptiveFormats: [
+          {
+            itag: 137,
+            mimeType: "video/mp4",
+            width: 1920,
+            height: 1080,
+            signatureCipher: cipher(
+              mediaUrl("137", "video/mp4", "&size=1920x1080&n=pending"),
+              "encrypted-video-signature",
+            ),
+          },
+          {
+            itag: 140,
+            mimeType: "audio/mp4",
+            signatureCipher: cipher(
+              mediaUrl("140", "audio/mp4"),
+              "encrypted-audio-signature",
+            ),
+          },
+        ],
+      },
+    },
+    { pageUrl: "https://www.youtube.com/watch?v=video-1", playerUrl },
+  );
+
+  assert.equal(
+    observation.diagnostic.stage,
+    YOUTUBE_PLAYER_STAGES.SIGNATURE_CIPHER_PENDING,
+  );
+  assert.equal(observation.candidates.length, 3);
+  const catalog = createMediaCatalog();
+  for (const candidate of observation.candidates)
+    catalog.add(7, createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, candidate));
+  const [item] = catalog.list(7);
+  assert.equal(item.probeStatus, "ready");
+  assert.equal(item.variants[0].urlResolution, "signature_cipher_pending");
+  assert.equal(item.audioTracks[0].urlResolution, "signature_cipher_pending");
+  assert.match(formatMediaDetails(item), /Helper resolves signature/i);
+  assert.equal(getMediaDownloadAvailability(item).supported, true);
+});
+
+test("a direct YouTube video track merges with signatureCipher audio", () => {
+  const pageUrl = "https://www.youtube.com/watch?v=video-1";
+  const observation = parseYouTubePlayerResponse(
+    {
+      playabilityStatus: { status: "OK" },
+      videoDetails: { videoId: "video-1", title: "Mixed example" },
+      streamingData: {
+        adaptiveFormats: [
+          {
+            itag: 18,
+            mimeType: "video/mp4",
+            width: 640,
+            height: 360,
+            url: "https://r1.googlevideo.com/videoplayback?id=asset-1&itag=18&mime=video%2Fmp4&dur=20&clen=1000&sig=ok",
+          },
+          {
+            itag: 140,
+            mimeType: "audio/mp4",
+            signatureCipher: new URLSearchParams({
+              url: "https://r1.googlevideo.com/videoplayback?id=asset-1&itag=140&mime=audio%2Fmp4&dur=20&clen=200",
+              sp: "sig",
+              s: "encrypted-audio-signature",
+            }).toString(),
+          },
+        ],
+      },
+    },
+    {
+      pageUrl,
+      playerUrl:
+        "https://www.youtube.com/s/player/b7457b7c/player_ias.vflset/en_US/base.js",
+    },
+  );
+  const catalog = createMediaCatalog();
+  for (const candidate of observation.candidates)
+    catalog.add(7, createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, candidate));
+  const [item] = catalog.list(7);
+  assert.equal(item.probeStatus, "ready");
+  assert.equal(item.variants.filter((track) => track.sourceUrl).length, 1);
+  assert.equal(item.audioTracks.filter((track) => track.sourceUrl).length, 1);
+});
+
 test("YouTube Player JS URL is discovered from page configuration or scripts", () => {
   const configured = findYouTubePlayerUrl({
     windowObject: {

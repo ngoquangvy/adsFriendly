@@ -41,16 +41,38 @@ export function parseYouTubePlayerResponse(
   ].slice(0, 100);
   const descriptors = formats.map(normalizeFormatDescriptor).filter(Boolean);
   const directCandidates = [];
-  const nTransformCandidates = [];
+  const playerChallengeCandidates = [];
   let signatureCipherCount = 0;
   let nTransformCount = 0;
 
   for (const format of formats) {
-    if (
-      typeof format?.signatureCipher === "string" ||
-      typeof format?.cipher === "string"
-    )
+    const signatureCipher =
+      typeof format?.signatureCipher === "string"
+        ? format.signatureCipher
+        : typeof format?.cipher === "string"
+          ? format.cipher
+          : null;
+    if (signatureCipher) {
       signatureCipherCount += 1;
+      const cipherTrack = parseSignatureCipherTrack(signatureCipher, {
+        mimeType: format.mimeType,
+      });
+      if (cipherTrack) {
+        const track = {
+          ...enrichResolvedTrack(cipherTrack.track, format),
+          urlResolution: "signature_cipher_pending",
+          signatureCipher: cipherTrack.signatureCipher,
+        };
+        const candidate = createYouTubeAdaptiveCandidate({
+          pageUrl,
+          title: response.videoDetails?.title || title,
+          track,
+          playerUrl,
+        });
+        if (candidate) playerChallengeCandidates.push(candidate);
+      }
+      continue;
+    }
     if (typeof format?.url !== "string") continue;
     let sourceUrl;
     try {
@@ -74,7 +96,7 @@ export function parseYouTubePlayerResponse(
           track,
           playerUrl,
         });
-        if (candidate) nTransformCandidates.push(candidate);
+        if (candidate) playerChallengeCandidates.push(candidate);
       }
       continue;
     }
@@ -147,7 +169,7 @@ export function parseYouTubePlayerResponse(
     candidates: [
       diagnosticCandidate,
       ...directCandidates,
-      ...nTransformCandidates,
+      ...playerChallengeCandidates,
     ],
     diagnostic,
     manifests: Object.freeze({
@@ -155,6 +177,31 @@ export function parseYouTubePlayerResponse(
       dash: dashManifestAvailable ? streamingData.dashManifestUrl : null,
     }),
   });
+}
+
+function parseSignatureCipherTrack(value, { mimeType = null } = {}) {
+  if (typeof value !== "string" || !value || value.length > 12_000) return null;
+  const params = new URLSearchParams(value);
+  const sourceUrl = params.get("url");
+  const signature = params.get("s");
+  const signatureParameter = params.get("sp") || "signature";
+  if (
+    !sourceUrl ||
+    !signature ||
+    signature.length > 4_096 ||
+    !/^[a-zA-Z0-9_.-]{1,40}$/.test(signatureParameter)
+  )
+    return null;
+  const track = parseYouTubePlaybackTrack(sourceUrl, { mimeType });
+  if (!track) return null;
+  return {
+    track,
+    signatureCipher: new URLSearchParams({
+      url: track.sourceUrl,
+      sp: signatureParameter,
+      s: signature,
+    }).toString(),
+  };
 }
 
 function createPlayerDiagnosticCandidate({

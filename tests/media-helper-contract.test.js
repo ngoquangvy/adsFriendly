@@ -465,6 +465,55 @@ test("helper accepts browser-resolved adaptive video and audio tracks", () => {
   assert.equal(payload.output.container, "mp4");
 });
 
+test("helper retains bounded YouTube signature cipher metadata", () => {
+  const sourceUrl =
+    "https://r1.googlevideo.com/videoplayback?id=asset-1&itag=137&mime=video%2Fmp4";
+  const signatureCipher = new URLSearchParams({
+    url: sourceUrl,
+    sp: "sig",
+    s: "encrypted-signature",
+  }).toString();
+  const payload = normalizeHelperDownloadPayload({
+    jobId: "adaptive-signature-1",
+    candidate: {
+      id: "youtube-video-1",
+      kind: "adaptive",
+      pageUrl: "https://www.youtube.com/watch?v=video-1",
+      sourceUrl,
+      provider: "youtube",
+      acquisitionProfile: "youtube_player_js_challenge",
+      playerUrl:
+        "https://www.youtube.com/s/player/b7457b7c/player_ias.vflset/en_US/base.js",
+      variants: [
+        {
+          id: "youtube-video-137",
+          type: "video",
+          sourceUrl,
+          mimeType: "video/mp4",
+          itag: "137",
+          urlResolution: "signature_cipher_pending",
+          signatureCipher,
+        },
+      ],
+      audioTracks: [
+        {
+          id: "youtube-audio-140",
+          type: "audio",
+          sourceUrl:
+            "https://r1.googlevideo.com/videoplayback?id=asset-1&itag=140&mime=audio%2Fmp4&sig=ok",
+          mimeType: "audio/mp4",
+          itag: "140",
+        },
+      ],
+    },
+  });
+  assert.equal(
+    payload.candidate.variants[0].urlResolution,
+    "signature_cipher_pending",
+  );
+  assert.equal(payload.candidate.variants[0].signatureCipher, signatureCipher);
+});
+
 test("native host errors distinguish a missing helper from a broken helper", () => {
   assert.equal(
     classifyNativeMessagingError("Specified native messaging host not found."),

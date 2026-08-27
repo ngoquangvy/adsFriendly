@@ -33,8 +33,8 @@ async function downloadAdaptiveHttp(
     throw new Error("Resolved adaptive video and audio tracks are required.");
   }
   if (
-    video.urlResolution === "n_transform_pending" ||
-    audio.urlResolution === "n_transform_pending"
+    video.urlResolution !== "resolved" ||
+    audio.urlResolution !== "resolved"
   ) {
     context.progress({
       phase: "probing",

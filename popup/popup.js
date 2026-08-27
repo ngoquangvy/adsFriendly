@@ -1703,6 +1703,8 @@ var AdsFriendlyPopup = (() => {
       facts.push(formatDuration2(item.duration));
     if (acquisition?.stage === "n_transform_pending")
       facts.push("Helper resolves n");
+    if (acquisition?.stage === "signature_cipher_pending")
+      facts.push("Helper resolves signature");
     return facts.join(" \xB7 ");
   }
   function youtubeAcquisitionMessage(diagnostic2) {

@@ -74,7 +74,9 @@ export interface AdaptiveHttpTrack {
   width: number | null;
   height: number | null;
   qualityLabel: string | null;
-  urlResolution: "resolved" | "n_transform_pending";
+  urlResolution:
+    "resolved" | "n_transform_pending" | "signature_cipher_pending";
+  signatureCipher: string | null;
 }
 
 export interface DownloadJob {

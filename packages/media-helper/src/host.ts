@@ -20,7 +20,7 @@ import { adaptiveHttpAdapter } from "./adaptive-http-adapter.js";
 import { DownloadJobManager } from "./job-manager.js";
 import { openManagedOutput, revealManagedOutput } from "./output-actions.js";
 
-const HELPER_VERSION = "0.13.0";
+const HELPER_VERSION = "0.14.0";
 const callerOrigin = process.argv[2] || null;
 const reader = new NativeMessageReader();
 const adapters = new DownloadAdapterRegistry([

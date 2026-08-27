@@ -198,3 +198,12 @@ bounded job metadata and receives status/progress events. Media bytes never
 travel through Native Messaging; the helper streams them directly to disk. The
 helper is optional for the `media-tools`
 product and is never a dependency of the `ad-protection` product.
+
+## Planned YouTube audio output
+
+Audio-only download remains a separate output profile rather than a fallback
+that silently discards video. The planned flow selects the highest-quality
+available audio track, preserves its native codec when requested, or explicitly
+transcodes it to OGG through the Media Helper. The popup must show the selected
+track, estimated source size, output codec, and the cost of transcoding before
+the job starts.

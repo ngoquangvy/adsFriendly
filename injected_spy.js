@@ -2842,7 +2842,8 @@ ${body}`;
       resolution: track.resolution,
       qualityLabel: track.qualityLabel,
       observedAt: track.observedAt,
-      urlResolution: track.urlResolution || "resolved"
+      urlResolution: track.urlResolution || "resolved",
+      signatureCipher: track.signatureCipher || null
     };
     return normalizeMediaCandidate({
       id,
@@ -2861,7 +2862,10 @@ ${body}`;
       probeStatus: MEDIA_PROBE_STATES.DISCOVERED,
       streamType: "vod",
       provider: "youtube",
-      acquisitionProfile: track.urlResolution === "n_transform_pending" ? "youtube_player_js_challenge" : "youtube_resolved_tracks",
+      acquisitionProfile: [
+        "n_transform_pending",
+        "signature_cipher_pending"
+      ].includes(track.urlResolution) ? "youtube_player_js_challenge" : "youtube_resolved_tracks",
       playerUrl
     });
   }
@@ -4491,12 +4495,32 @@ ${body}`;
     ].slice(0, 100);
     const descriptors = formats.map(normalizeFormatDescriptor).filter(Boolean);
     const directCandidates = [];
-    const nTransformCandidates = [];
+    const playerChallengeCandidates = [];
     let signatureCipherCount = 0;
     let nTransformCount = 0;
     for (const format of formats) {
-      if (typeof format?.signatureCipher === "string" || typeof format?.cipher === "string")
+      const signatureCipher = typeof format?.signatureCipher === "string" ? format.signatureCipher : typeof format?.cipher === "string" ? format.cipher : null;
+      if (signatureCipher) {
         signatureCipherCount += 1;
+        const cipherTrack = parseSignatureCipherTrack(signatureCipher, {
+          mimeType: format.mimeType
+        });
+        if (cipherTrack) {
+          const track2 = {
+            ...enrichResolvedTrack(cipherTrack.track, format),
+            urlResolution: "signature_cipher_pending",
+            signatureCipher: cipherTrack.signatureCipher
+          };
+          const candidate2 = createYouTubeAdaptiveCandidate({
+            pageUrl,
+            title: response.videoDetails?.title || title,
+            track: track2,
+            playerUrl
+          });
+          if (candidate2) playerChallengeCandidates.push(candidate2);
+        }
+        continue;
+      }
       if (typeof format?.url !== "string") continue;
       let sourceUrl;
       try {
@@ -4520,7 +4544,7 @@ ${body}`;
             track: track2,
             playerUrl
           });
-          if (candidate2) nTransformCandidates.push(candidate2);
+          if (candidate2) playerChallengeCandidates.push(candidate2);
         }
         continue;
       }
@@ -4589,7 +4613,7 @@ ${body}`;
       candidates: [
         diagnosticCandidate,
         ...directCandidates,
-        ...nTransformCandidates
+        ...playerChallengeCandidates
       ],
       diagnostic,
       manifests: Object.freeze({
@@ -4597,6 +4621,25 @@ ${body}`;
         dash: dashManifestAvailable ? streamingData.dashManifestUrl : null
       })
     });
+  }
+  function parseSignatureCipherTrack(value, { mimeType = null } = {}) {
+    if (typeof value !== "string" || !value || value.length > 12e3) return null;
+    const params = new URLSearchParams(value);
+    const sourceUrl = params.get("url");
+    const signature = params.get("s");
+    const signatureParameter = params.get("sp") || "signature";
+    if (!sourceUrl || !signature || signature.length > 4096 || !/^[a-zA-Z0-9_.-]{1,40}$/.test(signatureParameter))
+      return null;
+    const track = parseYouTubePlaybackTrack(sourceUrl, { mimeType });
+    if (!track) return null;
+    return {
+      track,
+      signatureCipher: new URLSearchParams({
+        url: track.sourceUrl,
+        sp: signatureParameter,
+        s: signature
+      }).toString()
+    };
   }
   function createPlayerDiagnosticCandidate({
     pageUrl,

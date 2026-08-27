@@ -16,25 +16,32 @@ export async function resolveYouTubePlayerTrack(
   track: AdaptiveHttpTrack,
   candidate: DownloadCandidate,
 ): Promise<AdaptiveHttpTrack> {
-  if (track.urlResolution !== "n_transform_pending") return track;
+  if (track.urlResolution === "resolved") return track;
   if (candidate.provider !== "youtube" || !candidate.playerUrl)
     throw new Error(
-      "YouTube n transform requires the Player JS URL captured by the extension. Reload the video page and retry.",
+      "YouTube Player JS resolution requires the player URL captured by the extension. Reload the video page and retry.",
     );
   const playerId = youtubePlayerId(candidate.playerUrl);
   if (!playerId)
     throw new Error("The captured YouTube Player JS URL is invalid.");
   const source = validatedGoogleVideoUrl(track.sourceUrl);
-  const originalN = source.searchParams.get("n");
-  if (!originalN) return { ...track, urlResolution: "resolved" };
-
   const player = await getPlayer(playerId);
-  const resolved = validatedGoogleVideoUrl(await player.decipher(source.href));
+  const originalN = source.searchParams.get("n");
+  const signatureParameter =
+    track.urlResolution === "signature_cipher_pending"
+      ? validateSignatureCipher(track.signatureCipher, source)
+      : null;
+  const resolved = validatedGoogleVideoUrl(
+    track.urlResolution === "signature_cipher_pending"
+      ? await player.decipher(undefined, track.signatureCipher || undefined)
+      : await player.decipher(source.href),
+  );
   const resolvedN = resolved.searchParams.get("n");
   if (
-    !resolvedN ||
-    resolvedN === originalN ||
-    resolvedN.startsWith("enhanced_except_")
+    originalN &&
+    (!resolvedN ||
+      resolvedN === originalN ||
+      resolvedN.startsWith("enhanced_except_"))
   )
     throw new Error(
       `YouTube Player ${playerId} did not resolve the n challenge for itag ${track.itag || track.id}.`,
@@ -44,11 +51,36 @@ export async function resolveYouTubePlayerTrack(
     resolved.pathname !== source.pathname
   )
     throw new Error("YouTube Player JS returned an unexpected media endpoint.");
+  if (signatureParameter && !resolved.searchParams.get(signatureParameter))
+    throw new Error(
+      `YouTube Player ${playerId} did not decipher the signature for itag ${track.itag || track.id}.`,
+    );
   return {
     ...track,
     sourceUrl: resolved.href,
     urlResolution: "resolved",
+    signatureCipher: null,
   };
+}
+
+function validateSignatureCipher(
+  value: string | null,
+  expectedSource: URL,
+): string {
+  if (!value) throw new Error("YouTube signature cipher metadata is missing.");
+  const params = new URLSearchParams(value);
+  const source = validatedGoogleVideoUrl(params.get("url") || "");
+  const signature = params.get("s");
+  const signatureParameter = params.get("sp") || "signature";
+  if (
+    !signature ||
+    signature.length > 4_096 ||
+    !/^[a-zA-Z0-9_.-]{1,40}$/.test(signatureParameter) ||
+    source.origin !== expectedSource.origin ||
+    source.pathname !== expectedSource.pathname
+  )
+    throw new Error("YouTube signature cipher metadata is invalid.");
+  return signatureParameter;
 }
 
 export function youtubePlayerId(playerUrl: string): string | null {

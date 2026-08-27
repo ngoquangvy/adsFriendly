@@ -3297,7 +3297,8 @@ var AdsFriendlyContent = (() => {
       resolution: track.resolution,
       qualityLabel: track.qualityLabel,
       observedAt: track.observedAt,
-      urlResolution: track.urlResolution || "resolved"
+      urlResolution: track.urlResolution || "resolved",
+      signatureCipher: track.signatureCipher || null
     };
     return normalizeMediaCandidate({
       id,
@@ -3316,7 +3317,10 @@ var AdsFriendlyContent = (() => {
       probeStatus: MEDIA_PROBE_STATES.DISCOVERED,
       streamType: "vod",
       provider: "youtube",
-      acquisitionProfile: track.urlResolution === "n_transform_pending" ? "youtube_player_js_challenge" : "youtube_resolved_tracks",
+      acquisitionProfile: [
+        "n_transform_pending",
+        "signature_cipher_pending"
+      ].includes(track.urlResolution) ? "youtube_player_js_challenge" : "youtube_resolved_tracks",
       playerUrl
     });
   }
