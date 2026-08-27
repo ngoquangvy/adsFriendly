@@ -6,12 +6,13 @@ import {
   isYouTubeProviderResolvableTrack,
 } from "./adaptive-track-policy.js";
 
-export const MEDIA_HELPER_PROTOCOL_VERSION = 8;
+export const MEDIA_HELPER_PROTOCOL_VERSION = 9;
 export const MEDIA_HELPER_HOST_NAME = "com.adsfriendly.media_helper";
 
 export const MEDIA_HELPER_REQUESTS = Object.freeze({
   HELLO: "helper.hello",
   GET_CAPABILITIES: "helper.capabilities.get",
+  YOUTUBE_QUALITY_PREFLIGHT: "youtube.quality_preflight",
   DOWNLOAD_START: "download.start",
   DOWNLOAD_CANCEL: "download.cancel",
   OUTPUT_OPEN: "output.open",
@@ -21,6 +22,7 @@ export const MEDIA_HELPER_REQUESTS = Object.freeze({
 export const MEDIA_HELPER_EVENTS = Object.freeze({
   READY: "helper.ready",
   CAPABILITIES: "helper.capabilities",
+  YOUTUBE_QUALITY_PREFLIGHT: "youtube.quality_preflight",
   DOWNLOAD_STARTED: "download.started",
   DOWNLOAD_PROGRESS: "download.progress",
   ACCESS_STRATEGY_RESULT: "media.access_strategy_result",
@@ -40,6 +42,7 @@ export const MEDIA_HELPER_CAPABILITIES = Object.freeze({
   ADAPTIVE_HTTP_DOWNLOAD: "download.adaptive_http",
   YOUTUBE_PLAYER_JS_RESOLUTION: "resolve.youtube_player_js",
   YOUTUBE_PROVIDER_FORMAT_RESOLUTION: "resolve.youtube_provider_formats",
+  YOUTUBE_QUALITY_PREFLIGHT: "resolve.youtube_quality_preflight",
   FFMPEG_MUX: "mux.ffmpeg",
   OUTPUT_OPEN: "output.open",
   OUTPUT_REVEAL: "output.reveal",
@@ -211,6 +214,24 @@ export function normalizeHelperDownloadPayload(value = {}) {
           : null,
     },
   };
+}
+
+export function normalizeYouTubeQualityPreflightPayload(value = {}) {
+  const normalized = normalizeHelperDownloadPayload({
+    jobId: "youtube-quality-preflight",
+    connections: 1,
+    output: { profileId: "video-mp4" },
+    candidate: value?.candidate,
+  });
+  if (
+    normalized.candidate.kind !== "adaptive" ||
+    normalized.candidate.provider !== "youtube"
+  ) {
+    throw new Error(
+      "[MediaHelperProtocol] YouTube adaptive candidate required for quality preflight.",
+    );
+  }
+  return { candidate: normalized.candidate };
 }
 
 function normalizeHelperAdaptiveTracks(value, expectedType, candidate) {

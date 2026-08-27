@@ -58,12 +58,19 @@ export function normalizeMediaDownloadOutput(value, candidate = {}) {
       `[MediaDownload] Output profile "${requested}" is not supported for ${candidate.kind || "this media"}.`,
     );
   }
-  return {
+  const normalized = {
     profileId: profile.id,
     container: profile.container,
     extension: profile.extension,
     videoTrackId: normalizeVideoTrackId(value?.videoTrackId, candidate),
   };
+  // Keep the output contract compact for direct/HLS/DASH jobs. Adaptive jobs
+  // may explicitly opt into a provider-equivalent YouTube quality after the
+  // popup preflight and the background re-check.
+  if (candidate.kind === "adaptive") {
+    normalized.allowEquivalentVideo = value?.allowEquivalentVideo === true;
+  }
+  return normalized;
 }
 
 export function getMediaVideoQualityOptions(candidate = {}) {

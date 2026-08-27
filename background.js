@@ -4304,6 +4304,7 @@ var AdsFriendlyBackground = (() => {
   var ACTIONS = Object.freeze({
     MEDIA_DOWNLOAD_CANCEL: "media.download.cancel",
     MEDIA_DOWNLOAD_CREATE: "media.download.create",
+    MEDIA_DOWNLOAD_PREFLIGHT: "media.download.preflight",
     MEDIA_DOWNLOAD_PAUSE: "media.download.pause",
     MEDIA_DOWNLOAD_OPEN: "media.download.open",
     MEDIA_DOWNLOAD_CLEAR_HISTORY: "media.download.clear_history",
@@ -4326,6 +4327,11 @@ var AdsFriendlyBackground = (() => {
     ),
     [A.MEDIA_DOWNLOAD_CREATE]: action(
       A.MEDIA_DOWNLOAD_CREATE,
+      "background.media-download-jobs",
+      C3.MEDIA_NATIVE_DOWNLOAD
+    ),
+    [A.MEDIA_DOWNLOAD_PREFLIGHT]: action(
+      A.MEDIA_DOWNLOAD_PREFLIGHT,
       "background.media-download-jobs",
       C3.MEDIA_NATIVE_DOWNLOAD
     ),
@@ -4590,12 +4596,16 @@ var AdsFriendlyBackground = (() => {
         `[MediaDownload] Output profile "${requested}" is not supported for ${candidate.kind || "this media"}.`
       );
     }
-    return {
+    const normalized = {
       profileId: profile.id,
       container: profile.container,
       extension: profile.extension,
       videoTrackId: normalizeVideoTrackId(value?.videoTrackId, candidate)
     };
+    if (candidate.kind === "adaptive") {
+      normalized.allowEquivalentVideo = value?.allowEquivalentVideo === true;
+    }
+    return normalized;
   }
   function normalizeVideoTrackId(value, candidate) {
     if (candidate.kind !== "adaptive") return null;
@@ -5130,11 +5140,12 @@ var AdsFriendlyBackground = (() => {
   }
 
   // src/media/helper-contract.js
-  var MEDIA_HELPER_PROTOCOL_VERSION = 8;
+  var MEDIA_HELPER_PROTOCOL_VERSION = 9;
   var MEDIA_HELPER_HOST_NAME = "com.adsfriendly.media_helper";
   var MEDIA_HELPER_REQUESTS = Object.freeze({
     HELLO: "helper.hello",
     GET_CAPABILITIES: "helper.capabilities.get",
+    YOUTUBE_QUALITY_PREFLIGHT: "youtube.quality_preflight",
     DOWNLOAD_START: "download.start",
     DOWNLOAD_CANCEL: "download.cancel",
     OUTPUT_OPEN: "output.open",
@@ -5143,6 +5154,7 @@ var AdsFriendlyBackground = (() => {
   var MEDIA_HELPER_EVENTS = Object.freeze({
     READY: "helper.ready",
     CAPABILITIES: "helper.capabilities",
+    YOUTUBE_QUALITY_PREFLIGHT: "youtube.quality_preflight",
     DOWNLOAD_STARTED: "download.started",
     DOWNLOAD_PROGRESS: "download.progress",
     ACCESS_STRATEGY_RESULT: "media.access_strategy_result",
@@ -5161,6 +5173,7 @@ var AdsFriendlyBackground = (() => {
     ADAPTIVE_HTTP_DOWNLOAD: "download.adaptive_http",
     YOUTUBE_PLAYER_JS_RESOLUTION: "resolve.youtube_player_js",
     YOUTUBE_PROVIDER_FORMAT_RESOLUTION: "resolve.youtube_provider_formats",
+    YOUTUBE_QUALITY_PREFLIGHT: "resolve.youtube_quality_preflight",
     FFMPEG_MUX: "mux.ffmpeg",
     OUTPUT_OPEN: "output.open",
     OUTPUT_REVEAL: "output.reveal"
@@ -5306,11 +5319,13 @@ var AdsFriendlyBackground = (() => {
   var DEFAULT_TIMEOUT_MS = 8e3;
   var STATUS_CACHE_MS = 15e3;
   var FAILED_STATUS_CACHE_MS = 2e3;
+  var YOUTUBE_QUALITY_PREFLIGHT_CACHE_MS = 2 * 60 * 1e3;
   var cachedStatus = null;
   var cachedAt = 0;
   var statusPromise = null;
   var activePorts = /* @__PURE__ */ new Map();
   var historyWriteChain = Promise.resolve();
+  var youtubeQualityPreflightCache = /* @__PURE__ */ new Map();
   var MEDIA_HELPER_STATES = Object.freeze({
     PERMISSION_REQUIRED: "permission_required",
     NOT_INSTALLED: "not_installed",
@@ -5382,6 +5397,7 @@ var AdsFriendlyBackground = (() => {
         canDownloadAdaptive: capabilities[MEDIA_HELPER_CAPABILITIES.ADAPTIVE_HTTP_DOWNLOAD] === true,
         canResolveYouTubePlayerJs: capabilities[MEDIA_HELPER_CAPABILITIES.YOUTUBE_PLAYER_JS_RESOLUTION] === true,
         canResolveYouTubeProviderFormats: capabilities[MEDIA_HELPER_CAPABILITIES.YOUTUBE_PROVIDER_FORMAT_RESOLUTION] === true,
+        canResolveYouTubeQualityPreflight: capabilities[MEDIA_HELPER_CAPABILITIES.YOUTUBE_QUALITY_PREFLIGHT] === true,
         canMuxWithFfmpeg: capabilities[MEDIA_HELPER_CAPABILITIES.FFMPEG_MUX] === true
       });
     } catch (error) {
@@ -5464,6 +5480,87 @@ var AdsFriendlyBackground = (() => {
       }
     });
     return { status: "started", jobId: job.id };
+  }
+  async function preflightMediaHelperYouTubeQualities(candidate) {
+    if (candidate?.kind !== "adaptive" || candidate?.provider !== "youtube") {
+      return {
+        status: "not_required",
+        videoOptions: [],
+        reason: null
+      };
+    }
+    const cacheKey = youtubeQualityPreflightKey(candidate);
+    const cached = youtubeQualityPreflightCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return cached.value;
+    const helper = await getMediaHelperStatus();
+    if (helper.status !== MEDIA_HELPER_STATES.READY) {
+      return {
+        status: "helper_unavailable",
+        videoOptions: [],
+        reason: helper.error || "Media Helper is unavailable."
+      };
+    }
+    if (helper.capabilities?.[MEDIA_HELPER_CAPABILITIES.YOUTUBE_QUALITY_PREFLIGHT] !== true) {
+      return {
+        status: "helper_update",
+        videoOptions: [],
+        reason: "Update Media Helper to check YouTube quality compatibility."
+      };
+    }
+    const requestId = randomId4();
+    try {
+      const response = normalizeHelperEvent(
+        await withTimeout(
+          chrome.runtime.sendNativeMessage(MEDIA_HELPER_HOST_NAME, {
+            type: MEDIA_HELPER_REQUESTS.YOUTUBE_QUALITY_PREFLIGHT,
+            requestId,
+            protocolVersion: MEDIA_HELPER_PROTOCOL_VERSION,
+            payload: { candidate }
+          }),
+          2e4
+        )
+      );
+      if (response.requestId !== requestId || response.type !== MEDIA_HELPER_EVENTS.YOUTUBE_QUALITY_PREFLIGHT) {
+        throw new Error(
+          "Media Helper returned an invalid YouTube quality check."
+        );
+      }
+      const value = normalizeYouTubeQualityPreflight(response.payload);
+      youtubeQualityPreflightCache.set(cacheKey, {
+        value,
+        expiresAt: Date.now() + YOUTUBE_QUALITY_PREFLIGHT_CACHE_MS
+      });
+      while (youtubeQualityPreflightCache.size > 30)
+        youtubeQualityPreflightCache.delete(
+          youtubeQualityPreflightCache.keys().next().value
+        );
+      return value;
+    } catch (error) {
+      return {
+        status: "unavailable",
+        videoOptions: [],
+        reason: messageOf(error)
+      };
+    }
+  }
+  function youtubeQualityPreflightKey(candidate) {
+    const video = [...candidate.variants || []].map((track) => `${track?.id || ""}:${track?.itag || ""}`).join(",");
+    const audio = [...candidate.audioTracks || []].map((track) => `${track?.id || ""}:${track?.itag || ""}`).join(",");
+    return `${candidate.id}|${candidate.pageUrl}|${video}|${audio}`;
+  }
+  function normalizeYouTubeQualityPreflight(payload) {
+    const videoOptions = Array.isArray(payload?.videoOptions) ? payload.videoOptions.filter(
+      (item) => item && typeof item.id === "string" && ["exact", "equivalent"].includes(item.availability) && typeof item.sourceLabel === "string"
+    ).slice(0, 24).map((item) => ({
+      id: item.id,
+      availability: item.availability,
+      sourceLabel: item.sourceLabel.slice(0, 120)
+    })) : [];
+    return {
+      status: payload?.status === "ready" ? "ready" : "unavailable",
+      videoOptions,
+      reason: typeof payload?.reason === "string" ? payload.reason.slice(0, 500) : null
+    };
   }
   function withoutSensitiveHandoffs(candidate) {
     const { keyHandoff: _keyHandoff, ...publicCandidate } = candidate;
@@ -5707,6 +5804,7 @@ var AdsFriendlyBackground = (() => {
       canDownloadAdaptive: false,
       canResolveYouTubePlayerJs: false,
       canResolveYouTubeProviderFormats: false,
+      canResolveYouTubeQualityPreflight: false,
       canMuxWithFfmpeg: false,
       helperVersion: null,
       capabilities: {},
@@ -6496,6 +6594,7 @@ ${body}`;
         [ACTIONS.MEDIA_DOWNLOAD_CANCEL]: cancelJob,
         [ACTIONS.MEDIA_DOWNLOAD_CLEAR_HISTORY]: clearJobHistory,
         [ACTIONS.MEDIA_DOWNLOAD_CREATE]: createJob,
+        [ACTIONS.MEDIA_DOWNLOAD_PREFLIGHT]: preflightJob,
         [ACTIONS.MEDIA_DOWNLOAD_PAUSE]: pauseJob,
         [ACTIONS.MEDIA_DOWNLOAD_OPEN]: openJobOutput,
         [ACTIONS.MEDIA_DOWNLOAD_REMOVE_HISTORY]: removeJobHistory,
@@ -6511,6 +6610,10 @@ ${body}`;
   async function requestMediaDownloadJob(payload) {
     if (!broker) return { status: "download_disabled" };
     return broker.execute(ACTIONS.MEDIA_DOWNLOAD_CREATE, payload);
+  }
+  async function requestMediaDownloadQualityPreflight(payload) {
+    if (!broker) return { status: "download_disabled" };
+    return broker.execute(ACTIONS.MEDIA_DOWNLOAD_PREFLIGHT, payload);
   }
   async function requestMediaDownloadCancel(payload) {
     if (!broker) return { status: "download_disabled" };
@@ -6561,7 +6664,13 @@ ${body}`;
     if (!availability.supported)
       return { status: "unsupported", reason: availability.reason };
     const normalizedOutput = normalizeMediaDownloadOutput(output, candidate);
-    const helperFailure = await helperFailureFor(candidate, normalizedOutput);
+    const qualityCheck = await normalizeYouTubeQualityCheck(
+      candidate,
+      normalizedOutput
+    );
+    if (qualityCheck.status !== "ready") return qualityCheck;
+    const checkedOutput = qualityCheck.output;
+    const helperFailure = await helperFailureFor(candidate, checkedOutput);
     if (helperFailure) return helperFailure;
     const handoffResult = await attachManifestHandoff(tabId, candidate);
     if (handoffResult.status !== "ready") return handoffResult;
@@ -6571,7 +6680,7 @@ ${body}`;
       id: randomId5(),
       createdAt: Date.now(),
       sourceTabId: tabId,
-      output: normalizedOutput,
+      output: checkedOutput,
       candidate
     });
     const settings = await loadSettings();
@@ -6580,6 +6689,48 @@ ${body}`;
         connections ?? settings.mediaDownloadConnections
       )
     });
+  }
+  async function preflightJob({ tabId, mediaId } = {}) {
+    if (!Number.isInteger(tabId) || tabId < 0) return { status: "invalid_tab" };
+    if (typeof mediaId !== "string" || !mediaId)
+      return { status: "invalid_media" };
+    const response = await listDiscoveredMedia(tabId);
+    const candidate = response.items.find((item) => item.id === mediaId);
+    if (!candidate) return { status: "media_not_found" };
+    return preflightMediaHelperYouTubeQualities(candidate);
+  }
+  async function normalizeYouTubeQualityCheck(candidate, output) {
+    if (candidate.kind !== "adaptive" || candidate.provider !== "youtube" || !hasYouTubeProviderPendingTracks(candidate))
+      return { status: "ready", output };
+    const result = await preflightMediaHelperYouTubeQualities(candidate);
+    if (result.status !== "ready") {
+      return {
+        status: "quality_unavailable",
+        reason: result.reason || "No compatible YouTube quality is available through the current provider profile."
+      };
+    }
+    if (!output.videoTrackId) {
+      return {
+        status: "ready",
+        output: { ...output, allowEquivalentVideo: true }
+      };
+    }
+    const option = result.videoOptions.find(
+      (item) => item.id === output.videoTrackId
+    );
+    if (!option) {
+      return {
+        status: "quality_unavailable",
+        reason: "The selected YouTube quality is not available through the current provider profile."
+      };
+    }
+    return {
+      status: "ready",
+      output: {
+        ...output,
+        allowEquivalentVideo: option.availability === "equivalent"
+      }
+    };
   }
   async function cancelJob({ jobId } = {}) {
     if (typeof jobId !== "string" || !jobId) return { status: "invalid_job" };
@@ -7166,6 +7317,7 @@ ${body}`;
     GET_MEDIA_DEBUG_MANIFEST: CAPABILITIES.MEDIA_CATALOG,
     SAVE_DECRYPTED_MEDIA_MANIFEST: CAPABILITIES.MEDIA_CATALOG,
     GET_MEDIA_HELPER_STATUS: CAPABILITIES.MEDIA_DOWNLOAD,
+    PREFLIGHT_MEDIA_DOWNLOAD_QUALITIES: CAPABILITIES.MEDIA_DOWNLOAD,
     CREATE_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
     CANCEL_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
     PAUSE_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
@@ -7394,6 +7546,11 @@ ${body}`;
         mediaId: message.mediaId,
         connections: message.connections,
         output: message.output
+      });
+    if (message.type === "PREFLIGHT_MEDIA_DOWNLOAD_QUALITIES")
+      return requestMediaDownloadQualityPreflight({
+        tabId: message.tabId,
+        mediaId: message.mediaId
       });
     if (message.type === "CANCEL_MEDIA_DOWNLOAD_JOB")
       return requestMediaDownloadCancel({ jobId: message.jobId });

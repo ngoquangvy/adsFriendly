@@ -20,6 +20,7 @@ import {
   removeMediaHelperDownloadHistory,
   runMediaHelperOutputAction,
   startMediaHelperDownload,
+  preflightMediaHelperYouTubeQualities,
 } from "./media-helper-bridge.js";
 import { getMediaManifestHandoff } from "./media-manifest-handoff.js";
 import { normalizeMediaDownloadOutput } from "../media/download-options.js";
@@ -36,6 +37,7 @@ export async function startMediaDownloadJobStore(policy) {
       [ACTIONS.MEDIA_DOWNLOAD_CANCEL]: cancelJob,
       [ACTIONS.MEDIA_DOWNLOAD_CLEAR_HISTORY]: clearJobHistory,
       [ACTIONS.MEDIA_DOWNLOAD_CREATE]: createJob,
+      [ACTIONS.MEDIA_DOWNLOAD_PREFLIGHT]: preflightJob,
       [ACTIONS.MEDIA_DOWNLOAD_PAUSE]: pauseJob,
       [ACTIONS.MEDIA_DOWNLOAD_OPEN]: openJobOutput,
       [ACTIONS.MEDIA_DOWNLOAD_REMOVE_HISTORY]: removeJobHistory,
@@ -52,6 +54,11 @@ export async function startMediaDownloadJobStore(policy) {
 export async function requestMediaDownloadJob(payload) {
   if (!broker) return { status: "download_disabled" };
   return broker.execute(ACTIONS.MEDIA_DOWNLOAD_CREATE, payload);
+}
+
+export async function requestMediaDownloadQualityPreflight(payload) {
+  if (!broker) return { status: "download_disabled" };
+  return broker.execute(ACTIONS.MEDIA_DOWNLOAD_PREFLIGHT, payload);
 }
 
 export async function requestMediaDownloadCancel(payload) {
@@ -114,7 +121,13 @@ async function createJob({ tabId, mediaId, connections, output } = {}) {
   if (!availability.supported)
     return { status: "unsupported", reason: availability.reason };
   const normalizedOutput = normalizeMediaDownloadOutput(output, candidate);
-  const helperFailure = await helperFailureFor(candidate, normalizedOutput);
+  const qualityCheck = await normalizeYouTubeQualityCheck(
+    candidate,
+    normalizedOutput,
+  );
+  if (qualityCheck.status !== "ready") return qualityCheck;
+  const checkedOutput = qualityCheck.output;
+  const helperFailure = await helperFailureFor(candidate, checkedOutput);
   if (helperFailure) return helperFailure;
   const handoffResult = await attachManifestHandoff(tabId, candidate);
   if (handoffResult.status !== "ready") return handoffResult;
@@ -124,7 +137,7 @@ async function createJob({ tabId, mediaId, connections, output } = {}) {
     id: randomId(),
     createdAt: Date.now(),
     sourceTabId: tabId,
-    output: normalizedOutput,
+    output: checkedOutput,
     candidate,
   });
   const settings = await loadSettings();
@@ -133,6 +146,57 @@ async function createJob({ tabId, mediaId, connections, output } = {}) {
       connections ?? settings.mediaDownloadConnections,
     ),
   });
+}
+
+async function preflightJob({ tabId, mediaId } = {}) {
+  if (!Number.isInteger(tabId) || tabId < 0) return { status: "invalid_tab" };
+  if (typeof mediaId !== "string" || !mediaId)
+    return { status: "invalid_media" };
+  const response = await listDiscoveredMedia(tabId);
+  const candidate = response.items.find((item) => item.id === mediaId);
+  if (!candidate) return { status: "media_not_found" };
+  return preflightMediaHelperYouTubeQualities(candidate);
+}
+
+async function normalizeYouTubeQualityCheck(candidate, output) {
+  if (
+    candidate.kind !== "adaptive" ||
+    candidate.provider !== "youtube" ||
+    !hasYouTubeProviderPendingTracks(candidate)
+  )
+    return { status: "ready", output };
+  const result = await preflightMediaHelperYouTubeQualities(candidate);
+  if (result.status !== "ready") {
+    return {
+      status: "quality_unavailable",
+      reason:
+        result.reason ||
+        "No compatible YouTube quality is available through the current provider profile.",
+    };
+  }
+  if (!output.videoTrackId) {
+    return {
+      status: "ready",
+      output: { ...output, allowEquivalentVideo: true },
+    };
+  }
+  const option = result.videoOptions.find(
+    (item) => item.id === output.videoTrackId,
+  );
+  if (!option) {
+    return {
+      status: "quality_unavailable",
+      reason:
+        "The selected YouTube quality is not available through the current provider profile.",
+    };
+  }
+  return {
+    status: "ready",
+    output: {
+      ...output,
+      allowEquivalentVideo: option.availability === "equivalent",
+    },
+  };
 }
 
 async function cancelJob({ jobId } = {}) {

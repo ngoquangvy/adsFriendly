@@ -21,11 +21,13 @@ import {
 const DEFAULT_TIMEOUT_MS = 8000;
 const STATUS_CACHE_MS = 15_000;
 const FAILED_STATUS_CACHE_MS = 2_000;
+const YOUTUBE_QUALITY_PREFLIGHT_CACHE_MS = 2 * 60 * 1_000;
 let cachedStatus = null;
 let cachedAt = 0;
 let statusPromise = null;
 const activePorts = new Map();
 let historyWriteChain = Promise.resolve();
+const youtubeQualityPreflightCache = new Map();
 
 export const MEDIA_HELPER_STATES = Object.freeze({
   PERMISSION_REQUIRED: "permission_required",
@@ -118,6 +120,9 @@ async function probeMediaHelperStatus(timeoutMs) {
         capabilities[
           MEDIA_HELPER_CAPABILITIES.YOUTUBE_PROVIDER_FORMAT_RESOLUTION
         ] === true,
+      canResolveYouTubeQualityPreflight:
+        capabilities[MEDIA_HELPER_CAPABILITIES.YOUTUBE_QUALITY_PREFLIGHT] ===
+        true,
       canMuxWithFfmpeg:
         capabilities[MEDIA_HELPER_CAPABILITIES.FFMPEG_MUX] === true,
     });
@@ -209,6 +214,111 @@ export async function startMediaHelperDownload(
     },
   });
   return { status: "started", jobId: job.id };
+}
+
+export async function preflightMediaHelperYouTubeQualities(candidate) {
+  if (candidate?.kind !== "adaptive" || candidate?.provider !== "youtube") {
+    return {
+      status: "not_required",
+      videoOptions: [],
+      reason: null,
+    };
+  }
+  const cacheKey = youtubeQualityPreflightKey(candidate);
+  const cached = youtubeQualityPreflightCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+  const helper = await getMediaHelperStatus();
+  if (helper.status !== MEDIA_HELPER_STATES.READY) {
+    return {
+      status: "helper_unavailable",
+      videoOptions: [],
+      reason: helper.error || "Media Helper is unavailable.",
+    };
+  }
+  if (
+    helper.capabilities?.[
+      MEDIA_HELPER_CAPABILITIES.YOUTUBE_QUALITY_PREFLIGHT
+    ] !== true
+  ) {
+    return {
+      status: "helper_update",
+      videoOptions: [],
+      reason: "Update Media Helper to check YouTube quality compatibility.",
+    };
+  }
+  const requestId = randomId();
+  try {
+    const response = normalizeHelperEvent(
+      await withTimeout(
+        chrome.runtime.sendNativeMessage(MEDIA_HELPER_HOST_NAME, {
+          type: MEDIA_HELPER_REQUESTS.YOUTUBE_QUALITY_PREFLIGHT,
+          requestId,
+          protocolVersion: MEDIA_HELPER_PROTOCOL_VERSION,
+          payload: { candidate },
+        }),
+        20_000,
+      ),
+    );
+    if (
+      response.requestId !== requestId ||
+      response.type !== MEDIA_HELPER_EVENTS.YOUTUBE_QUALITY_PREFLIGHT
+    ) {
+      throw new Error(
+        "Media Helper returned an invalid YouTube quality check.",
+      );
+    }
+    const value = normalizeYouTubeQualityPreflight(response.payload);
+    youtubeQualityPreflightCache.set(cacheKey, {
+      value,
+      expiresAt: Date.now() + YOUTUBE_QUALITY_PREFLIGHT_CACHE_MS,
+    });
+    while (youtubeQualityPreflightCache.size > 30)
+      youtubeQualityPreflightCache.delete(
+        youtubeQualityPreflightCache.keys().next().value,
+      );
+    return value;
+  } catch (error) {
+    return {
+      status: "unavailable",
+      videoOptions: [],
+      reason: messageOf(error),
+    };
+  }
+}
+
+function youtubeQualityPreflightKey(candidate) {
+  const video = [...(candidate.variants || [])]
+    .map((track) => `${track?.id || ""}:${track?.itag || ""}`)
+    .join(",");
+  const audio = [...(candidate.audioTracks || [])]
+    .map((track) => `${track?.id || ""}:${track?.itag || ""}`)
+    .join(",");
+  return `${candidate.id}|${candidate.pageUrl}|${video}|${audio}`;
+}
+
+function normalizeYouTubeQualityPreflight(payload) {
+  const videoOptions = Array.isArray(payload?.videoOptions)
+    ? payload.videoOptions
+        .filter(
+          (item) =>
+            item &&
+            typeof item.id === "string" &&
+            ["exact", "equivalent"].includes(item.availability) &&
+            typeof item.sourceLabel === "string",
+        )
+        .slice(0, 24)
+        .map((item) => ({
+          id: item.id,
+          availability: item.availability,
+          sourceLabel: item.sourceLabel.slice(0, 120),
+        }))
+    : [];
+  return {
+    status: payload?.status === "ready" ? "ready" : "unavailable",
+    videoOptions,
+    reason:
+      typeof payload?.reason === "string" ? payload.reason.slice(0, 500) : null,
+  };
 }
 
 function withoutSensitiveHandoffs(candidate) {
@@ -505,6 +615,7 @@ function helperStatus(status, details = {}) {
     canDownloadAdaptive: false,
     canResolveYouTubePlayerJs: false,
     canResolveYouTubeProviderFormats: false,
+    canResolveYouTubeQualityPreflight: false,
     canMuxWithFfmpeg: false,
     helperVersion: null,
     capabilities: {},

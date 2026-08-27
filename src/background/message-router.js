@@ -40,6 +40,7 @@ import {
   requestMediaDownloadCancel,
   requestMediaDownloadHistoryClear,
   requestMediaDownloadJob,
+  requestMediaDownloadQualityPreflight,
   requestMediaDownloadHistoryRemove,
   requestMediaDownloadOpen,
   requestMediaDownloadPause,
@@ -95,6 +96,7 @@ const MESSAGE_CAPABILITIES = Object.freeze({
   GET_MEDIA_DEBUG_MANIFEST: CAPABILITIES.MEDIA_CATALOG,
   SAVE_DECRYPTED_MEDIA_MANIFEST: CAPABILITIES.MEDIA_CATALOG,
   GET_MEDIA_HELPER_STATUS: CAPABILITIES.MEDIA_DOWNLOAD,
+  PREFLIGHT_MEDIA_DOWNLOAD_QUALITIES: CAPABILITIES.MEDIA_DOWNLOAD,
   CREATE_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
   CANCEL_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
   PAUSE_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
@@ -341,6 +343,11 @@ async function route(message, sender) {
       mediaId: message.mediaId,
       connections: message.connections,
       output: message.output,
+    });
+  if (message.type === "PREFLIGHT_MEDIA_DOWNLOAD_QUALITIES")
+    return requestMediaDownloadQualityPreflight({
+      tabId: message.tabId,
+      mediaId: message.mediaId,
     });
   if (message.type === "CANCEL_MEDIA_DOWNLOAD_JOB")
     return requestMediaDownloadCancel({ jobId: message.jobId });

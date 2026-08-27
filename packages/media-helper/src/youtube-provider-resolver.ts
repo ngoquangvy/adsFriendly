@@ -37,6 +37,16 @@ type ProviderProfile = {
   allowEquivalentVideo: boolean;
 };
 
+export type YouTubeQualityPreflight = {
+  status: "ready" | "unavailable";
+  videoOptions: Array<{
+    id: string;
+    availability: "exact" | "equivalent";
+    sourceLabel: string;
+  }>;
+  reason: string | null;
+};
+
 export async function resolveYouTubeProviderTracks(
   tracks: AdaptiveHttpTrack[],
   candidate: DownloadCandidate,
@@ -79,6 +89,54 @@ export async function resolveYouTubeProviderTracks(
   throw new Error(
     `YouTube could not expose the selected adaptive tracks through bounded provider clients (${failures.join("; ")}).`,
   );
+}
+
+// This intentionally returns only a quality verdict. URLs and PO tokens remain
+// in this process and are regenerated when the user actually starts a job.
+export async function preflightYouTubeProviderQualities(
+  candidate: DownloadCandidate,
+): Promise<YouTubeQualityPreflight> {
+  const videoId = youtubeVideoId(candidate.pageUrl);
+  if (!videoId)
+    return unavailableQualityPreflight("YouTube video ID is unavailable.");
+  const plan = await providerProfiles(videoId, true);
+  const profile = plan.profiles.find((item) => item.poToken);
+  if (!profile)
+    return unavailableQualityPreflight(
+      plan.failures.join("; ") ||
+        "A token-capable YouTube profile is unavailable.",
+    );
+  try {
+    const { formats } = await loadProviderFormats(videoId, profile);
+    const preferredAudio = selectPreferredAudioTrack(candidate.audioTracks);
+    const hasRequiredAudio = !preferredAudio
+      ? true
+      : Boolean(selectProviderFormat(preferredAudio, formats, false));
+    const videoOptions = candidate.variants.flatMap((track) => {
+      if (track.type !== "video") return [];
+      const exact = selectProviderFormat(track, formats, false);
+      const replacement = exact || selectProviderFormat(track, formats, true);
+      if (!replacement || (!track.muxed && !hasRequiredAudio)) return [];
+      return [
+        {
+          id: track.id,
+          availability: exact ? "exact" : "equivalent",
+          sourceLabel: sourceFormatLabel(replacement),
+        },
+      ];
+    });
+    if (!videoOptions.length)
+      return unavailableQualityPreflight(
+        "No selected YouTube quality is available through the token-capable profile.",
+      );
+    return { status: "ready", videoOptions, reason: null };
+  } catch (error) {
+    return unavailableQualityPreflight(messageOf(error));
+  }
+}
+
+function unavailableQualityPreflight(reason: string): YouTubeQualityPreflight {
+  return { status: "unavailable", videoOptions: [], reason };
 }
 
 async function resolveTrackFromFormats(
@@ -155,6 +213,34 @@ function formatCompatibilityScore(
   const targetContainer = cleanMimeType(requested.mimeType)?.split("/", 2)[1];
   const actualContainer = cleanMimeType(format.mime_type)?.split("/", 2)[1];
   return targetContainer && targetContainer === actualContainer ? 1 : 0;
+}
+
+function selectPreferredAudioTrack(tracks: AdaptiveHttpTrack[]) {
+  return [...(tracks || [])]
+    .filter((track) => track.type === "audio")
+    .sort(
+      (left, right) =>
+        mp4AudioScore(right) - mp4AudioScore(left) ||
+        (right.averageBandwidth || right.bandwidth || 0) -
+          (left.averageBandwidth || left.bandwidth || 0),
+    )[0];
+}
+
+function mp4AudioScore(track: AdaptiveHttpTrack) {
+  return /\/(?:mp4|m4a)(?:$|;)/i.test(track.mimeType || "") ? 1 : 0;
+}
+
+function sourceFormatLabel(format: ProviderFormat) {
+  const mime = String(format.mime_type || "").toLowerCase();
+  const container = mime.includes("video/webm") ? "WebM" : "MP4";
+  const codec = mime.includes("av01")
+    ? "AV1"
+    : mime.includes("vp9") || mime.includes("vp09")
+      ? "VP9"
+      : mime.includes("avc1") || mime.includes("avc3")
+        ? "H.264"
+        : null;
+  return [format.quality_label, container, codec].filter(Boolean).join(" · ");
 }
 
 async function loadProviderFormats(videoId: string, profile: ProviderProfile) {

@@ -20,6 +20,7 @@ import {
   normalizeHelperEvent,
   normalizeHelperDownloadPayload,
   normalizeHelperRequest,
+  normalizeYouTubeQualityPreflightPayload,
 } from "../src/media/helper-contract.js";
 import { windowsRevealArguments } from "../packages/media-helper/src/output-action-arguments.js";
 import {
@@ -515,6 +516,36 @@ test("helper accepts YouTube provider-resolvable adaptive descriptors", () => {
   );
   assert.equal(payload.candidate.audioTracks[0].sourceUrl, null);
   assert.equal(payload.output.videoTrackId, "youtube-video-137");
+});
+
+test("YouTube quality preflight accepts only a normalized provider candidate", () => {
+  const payload = normalizeYouTubeQualityPreflightPayload({
+    candidate: {
+      id: "youtube-preflight-1",
+      kind: "adaptive",
+      pageUrl: "https://www.youtube.com/watch?v=preflight-1",
+      sourceUrl: "https://www.youtube.com/watch?v=preflight-1",
+      provider: "youtube",
+      acquisitionProfile: "youtube_player_response",
+      variants: [
+        {
+          id: "video-401",
+          type: "video",
+          sourceUrl: null,
+          mimeType: "video/mp4",
+          itag: "401",
+          urlResolution: "provider_client_pending",
+        },
+      ],
+      audioTracks: [],
+    },
+  });
+  assert.equal(payload.candidate.provider, "youtube");
+  assert.equal(payload.candidate.variants[0].sourceUrl, null);
+  assert.equal(
+    payload.candidate.variants[0].urlResolution,
+    "provider_client_pending",
+  );
 });
 
 test("helper retains bounded YouTube signature cipher metadata", () => {

@@ -96,6 +96,7 @@ export interface DownloadJob {
     container: "source" | "mp4" | "mkv";
     extension: string | null;
     videoTrackId: string | null;
+    allowEquivalentVideo?: boolean;
   };
   candidate: DownloadCandidate;
 }

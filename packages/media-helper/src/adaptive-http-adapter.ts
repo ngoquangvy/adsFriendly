@@ -74,7 +74,10 @@ async function downloadAdaptiveHttp(
     const resolved = await resolveYouTubeProviderTracks(
       [video, ...(audio ? [audio] : [])],
       job.candidate,
-      { allowEquivalentVideo: !job.output.videoTrackId },
+      {
+        allowEquivalentVideo:
+          job.output.allowEquivalentVideo === true || !job.output.videoTrackId,
+      },
     );
     video = resolved[0];
     audio = resolved[1] || null;
@@ -339,6 +342,7 @@ function directTrackJob(
       container: "source",
       extension: null,
       videoTrackId: null,
+      allowEquivalentVideo: false,
     },
     candidate: {
       ...job.candidate,

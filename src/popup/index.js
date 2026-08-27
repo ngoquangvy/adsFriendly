@@ -66,12 +66,14 @@ let mediaHelperStatus = {
   canDownloadAdaptive: false,
   canResolveYouTubePlayerJs: false,
   canResolveYouTubeProviderFormats: false,
+  canResolveYouTubeQualityPreflight: false,
   canSelectContainer: false,
 };
 let activeMediaTabId = null;
 let mediaRenderSignature = null;
 let scheduledMediaRefresh = null;
 let hasMediaDownloadJobs = false;
+const youtubeQualityPreflightCache = new Map();
 initialize().catch((error) =>
   console.error("[AdsFriendly Popup] initialization failed", error),
 );
@@ -548,29 +550,97 @@ function createMediaDownloadControl(item, downloadItem, tab, helper) {
   }
   profileSelect.disabled = !availability.supported || profiles.length < 2;
   const qualityOptions = getMediaVideoQualityOptions(downloadItem);
+  const needsYouTubePreflight =
+    downloadItem.kind === "adaptive" &&
+    downloadItem.provider === "youtube" &&
+    hasYouTubeProviderPendingTracks(downloadItem);
+  const preflightKey = needsYouTubePreflight
+    ? `${tab?.id || ""}|${downloadItem.id}`
+    : null;
+  let qualityVerdict = preflightKey
+    ? youtubeQualityPreflightCache.get(preflightKey) || null
+    : null;
   const qualitySelect = document.createElement("select");
   qualitySelect.className = "media-download-profile";
   qualitySelect.title = "Video quality";
-  const automaticQuality = document.createElement("option");
-  automaticQuality.value = "";
-  automaticQuality.textContent = "Quality · Auto (best)";
-  qualitySelect.append(automaticQuality);
-  const qualityGroups = new Map();
-  for (const quality of qualityOptions) {
-    const option = document.createElement("option");
-    option.value = quality.id;
-    option.textContent = quality.optionLabel || quality.label;
-    const groupLabel = quality.groupLabel || "Source quality";
-    let group = qualityGroups.get(groupLabel);
-    if (!group) {
-      group = document.createElement("optgroup");
-      group.label = groupLabel;
-      qualityGroups.set(groupLabel, group);
-      qualitySelect.append(group);
+  const renderQualityOptions = () => {
+    qualitySelect.replaceChildren();
+    if (
+      needsYouTubePreflight &&
+      (helper.status !== "ready" ||
+        helper.canResolveYouTubeQualityPreflight !== true)
+    ) {
+      const option = document.createElement("option");
+      option.textContent =
+        helper.status === "ready"
+          ? "Quality · update helper to check"
+          : "Quality · helper required";
+      option.title =
+        helper.status === "ready"
+          ? "Update Media Helper to verify downloadable YouTube qualities."
+          : "Connect Media Helper to verify downloadable YouTube qualities.";
+      option.disabled = true;
+      qualitySelect.append(option);
+      qualitySelect.disabled = true;
+      return;
     }
-    group.append(option);
-  }
-  qualitySelect.disabled = !availability.supported || !qualityOptions.length;
+    if (needsYouTubePreflight && !qualityVerdict) {
+      const option = document.createElement("option");
+      option.textContent = "Quality · Checking availability…";
+      option.disabled = true;
+      qualitySelect.append(option);
+      qualitySelect.disabled = true;
+      return;
+    }
+    if (needsYouTubePreflight && qualityVerdict?.status !== "ready") {
+      const option = document.createElement("option");
+      option.textContent = "Quality · unavailable";
+      option.title =
+        qualityVerdict?.reason || "No downloadable quality was found.";
+      option.disabled = true;
+      qualitySelect.append(option);
+      qualitySelect.disabled = true;
+      return;
+    }
+    const automaticQuality = document.createElement("option");
+    automaticQuality.value = "";
+    automaticQuality.textContent = needsYouTubePreflight
+      ? "Quality · Auto (best available)"
+      : "Quality · Auto (best)";
+    qualitySelect.append(automaticQuality);
+    const availableById = new Map(
+      (qualityVerdict?.videoOptions || []).map((option) => [option.id, option]),
+    );
+    const visibleQualities = needsYouTubePreflight
+      ? qualityOptions.filter((quality) => availableById.has(quality.id))
+      : qualityOptions;
+    const qualityGroups = new Map();
+    for (const quality of visibleQualities) {
+      const option = document.createElement("option");
+      option.value = quality.id;
+      const verdict = availableById.get(quality.id);
+      option.textContent =
+        quality.optionLabel || quality.label || "Source quality";
+      if (verdict?.availability === "equivalent") {
+        option.textContent += " · compatible equivalent";
+        option.title = `Provider source: ${verdict.sourceLabel}`;
+      } else if (verdict?.sourceLabel) {
+        option.title = `Provider source: ${verdict.sourceLabel}`;
+      }
+      const groupLabel = quality.groupLabel || "Source quality";
+      let group = qualityGroups.get(groupLabel);
+      if (!group) {
+        group = document.createElement("optgroup");
+        group.label = groupLabel;
+        qualityGroups.set(groupLabel, group);
+        qualitySelect.append(group);
+      }
+      group.append(option);
+    }
+    qualitySelect.disabled =
+      !availability.supported || !visibleQualities.length;
+  };
+  renderQualityOptions();
   const estimateLabel = document.createElement("span");
   estimateLabel.className = "media-download-estimate";
   const updateEstimate = () => {
@@ -580,7 +650,53 @@ function createMediaDownloadControl(item, downloadItem, tab, helper) {
     estimateLabel.textContent = formatDownloadEstimate(estimate);
     estimateLabel.title = formatDownloadEstimateTitle(estimate);
   };
-  qualitySelect.addEventListener("change", updateEstimate);
+  const syncDownloadButton = () => {
+    const presentation = downloadButtonPresentation(
+      availability,
+      helper,
+      downloadItem,
+    );
+    let next = presentation;
+    if (
+      needsYouTubePreflight &&
+      helper.status === "ready" &&
+      helper.canResolveYouTubeQualityPreflight === true
+    ) {
+      if (!qualityVerdict) {
+        next = {
+          disabled: true,
+          label: "Checking…",
+          title: "Checking which YouTube qualities are downloadable.",
+        };
+      } else if (qualityVerdict.status !== "ready") {
+        next = {
+          disabled: true,
+          label: "Unavailable",
+          title:
+            qualityVerdict.reason ||
+            "No YouTube quality is available through the current provider profile.",
+        };
+      } else if (
+        qualitySelect.value &&
+        !qualityVerdict.videoOptions.some(
+          (option) => option.id === qualitySelect.value,
+        )
+      ) {
+        next = {
+          disabled: true,
+          label: "Unavailable",
+          title: "The selected YouTube quality is not downloadable.",
+        };
+      }
+    }
+    button.disabled = next.disabled;
+    button.textContent = next.label;
+    button.title = next.title;
+  };
+  qualitySelect.addEventListener("change", () => {
+    updateEstimate();
+    syncDownloadButton();
+  });
   updateEstimate();
   const button = document.createElement("button");
   button.className = "media-download";
@@ -608,6 +724,11 @@ function createMediaDownloadControl(item, downloadItem, tab, helper) {
         output: {
           profileId: profileSelect.value || profiles[0]?.id,
           videoTrackId: qualitySelect.value || null,
+          allowEquivalentVideo:
+            qualityVerdict?.videoOptions?.find(
+              (option) => option.id === qualitySelect.value,
+            )?.availability === "equivalent" ||
+            (!qualitySelect.value && needsYouTubePreflight),
         },
       });
       if (response?.status !== "started")
@@ -629,7 +750,59 @@ function createMediaDownloadControl(item, downloadItem, tab, helper) {
     control.append(qualitySelect);
   if (availability.supported && profiles.length) control.append(profileSelect);
   control.append(button);
+  if (
+    needsYouTubePreflight &&
+    helper.status === "ready" &&
+    helper.canResolveYouTubeQualityPreflight === true
+  ) {
+    if (!qualityVerdict) {
+      const request = chrome.runtime
+        .sendMessage({
+          type: "PREFLIGHT_MEDIA_DOWNLOAD_QUALITIES",
+          tabId: tab?.id,
+          mediaId: downloadItem.id,
+        })
+        .then((response) => {
+          qualityVerdict = normalizePopupYouTubePreflight(response);
+          if (preflightKey && qualityVerdict)
+            youtubeQualityPreflightCache.set(preflightKey, qualityVerdict);
+          if (!control.isConnected) return;
+          renderQualityOptions();
+          syncDownloadButton();
+        })
+        .catch((error) => {
+          qualityVerdict = {
+            status: "unavailable",
+            videoOptions: [],
+            reason: error?.message || String(error),
+          };
+          if (control.isConnected) {
+            renderQualityOptions();
+            syncDownloadButton();
+          }
+        });
+      void request;
+    }
+    syncDownloadButton();
+  }
   return control;
+}
+
+function normalizePopupYouTubePreflight(response) {
+  const result = response?.result || response;
+  const options = Array.isArray(result?.videoOptions)
+    ? result.videoOptions.filter(
+        (option) =>
+          option &&
+          typeof option.id === "string" &&
+          ["exact", "equivalent"].includes(option.availability),
+      )
+    : [];
+  return {
+    status: result?.status === "ready" ? "ready" : "unavailable",
+    videoOptions: options,
+    reason: typeof result?.reason === "string" ? result.reason : null,
+  };
 }
 
 function formatDownloadEstimate(estimate) {
@@ -759,6 +932,7 @@ async function readMediaHelperStatus(force = false) {
         canDownloadAdaptive: false,
         canResolveYouTubePlayerJs: false,
         canResolveYouTubeProviderFormats: false,
+        canResolveYouTubeQualityPreflight: false,
         canSelectContainer: false,
         error: response?.error || "Could not read Media Helper status.",
       };
