@@ -2843,7 +2843,8 @@ ${body}`;
       qualityLabel: track.qualityLabel,
       observedAt: track.observedAt,
       urlResolution: track.urlResolution || "resolved",
-      signatureCipher: track.signatureCipher || null
+      signatureCipher: track.signatureCipher || null,
+      muxed: track.muxed === true
     };
     return normalizeMediaCandidate({
       id,
@@ -4489,16 +4490,22 @@ ${body}`;
     if (!pageVideoId || responseVideoId && responseVideoId !== pageVideoId)
       return null;
     const streamingData = objectValue(response.streamingData);
-    const formats = [
-      ...arrayValue(streamingData?.formats),
-      ...arrayValue(streamingData?.adaptiveFormats)
+    const formatEntries = [
+      ...arrayValue(streamingData?.formats).map((format) => ({
+        format,
+        muxed: true
+      })),
+      ...arrayValue(streamingData?.adaptiveFormats).map((format) => ({
+        format,
+        muxed: false
+      }))
     ].slice(0, 100);
-    const descriptors = formats.map(normalizeFormatDescriptor).filter(Boolean);
+    const descriptors = formatEntries.map(({ format, muxed }) => normalizeFormatDescriptor(format, { muxed })).filter(Boolean);
     const directCandidates = [];
     const playerChallengeCandidates = [];
     let signatureCipherCount = 0;
     let nTransformCount = 0;
-    for (const format of formats) {
+    for (const { format, muxed } of formatEntries) {
       const signatureCipher = typeof format?.signatureCipher === "string" ? format.signatureCipher : typeof format?.cipher === "string" ? format.cipher : null;
       if (signatureCipher) {
         signatureCipherCount += 1;
@@ -4507,7 +4514,7 @@ ${body}`;
         });
         if (cipherTrack) {
           const track2 = {
-            ...enrichResolvedTrack(cipherTrack.track, format),
+            ...enrichResolvedTrack(cipherTrack.track, format, { muxed }),
             urlResolution: "signature_cipher_pending",
             signatureCipher: cipherTrack.signatureCipher
           };
@@ -4535,7 +4542,7 @@ ${body}`;
         });
         if (parsedTrack2) {
           const track2 = {
-            ...enrichResolvedTrack(parsedTrack2, format),
+            ...enrichResolvedTrack(parsedTrack2, format, { muxed }),
             urlResolution: "n_transform_pending"
           };
           const candidate2 = createYouTubeAdaptiveCandidate({
@@ -4552,7 +4559,7 @@ ${body}`;
         mimeType: format.mimeType
       });
       if (!parsedTrack) continue;
-      const track = enrichResolvedTrack(parsedTrack, format);
+      const track = enrichResolvedTrack(parsedTrack, format, { muxed });
       const candidate = createYouTubeAdaptiveCandidate({
         pageUrl,
         title: response.videoDetails?.title || title,
@@ -4670,7 +4677,7 @@ ${body}`;
       streamType: "vod"
     });
   }
-  function normalizeFormatDescriptor(format) {
+  function normalizeFormatDescriptor(format, { muxed = false } = {}) {
     if (!format || typeof format !== "object") return null;
     const mimeType = cleanMimeType2(format.mimeType);
     const type = mimeType?.startsWith("video/") ? "video" : mimeType?.startsWith("audio/") ? "audio" : null;
@@ -4694,11 +4701,12 @@ ${body}`;
       height,
       resolution: width && height ? { width, height } : null,
       qualityLabel: safeToken2(format.qualityLabel || format.quality, 40),
-      fps: positiveInteger3(format.fps)
+      fps: positiveInteger3(format.fps),
+      muxed: muxed && type === "video"
     };
   }
-  function enrichResolvedTrack(track, format) {
-    const descriptor = normalizeFormatDescriptor(format);
+  function enrichResolvedTrack(track, format, { muxed = false } = {}) {
+    const descriptor = normalizeFormatDescriptor(format, { muxed });
     return {
       ...track,
       contentLength: descriptor?.contentLength || track.contentLength,
@@ -4709,6 +4717,7 @@ ${body}`;
       bandwidth: descriptor?.bandwidth || track.bandwidth,
       averageBandwidth: descriptor?.averageBandwidth || track.averageBandwidth,
       fps: descriptor?.fps || null,
+      muxed: descriptor?.muxed === true,
       duration: positiveNumber2(format.approxDurationMs) / 1e3 || track.duration
     };
   }

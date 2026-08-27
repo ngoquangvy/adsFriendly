@@ -318,6 +318,7 @@ test("helper accepts MKV only for adaptive media", () => {
     profileId: "video-mkv",
     container: "mkv",
     extension: ".mkv",
+    videoTrackId: null,
   });
   assert.throws(
     () =>
@@ -512,6 +513,44 @@ test("helper retains bounded YouTube signature cipher metadata", () => {
     "signature_cipher_pending",
   );
   assert.equal(payload.candidate.variants[0].signatureCipher, signatureCipher);
+});
+
+test("helper accepts a selected muxed YouTube quality without separate audio", () => {
+  const sourceUrl =
+    "https://r1.googlevideo.com/videoplayback?id=asset-1&itag=18&mime=video%2Fmp4&n=pending";
+  const payload = normalizeHelperDownloadPayload({
+    jobId: "youtube-muxed-1",
+    output: {
+      profileId: "video-mp4",
+      videoTrackId: "youtube-video-18",
+    },
+    candidate: {
+      id: "youtube-video-1",
+      kind: "adaptive",
+      pageUrl: "https://www.youtube.com/watch?v=video-1",
+      sourceUrl,
+      provider: "youtube",
+      acquisitionProfile: "youtube_player_js_challenge",
+      playerUrl:
+        "https://www.youtube.com/s/player/b7457b7c/player_ias.vflset/en_US/base.js",
+      variants: [
+        {
+          id: "youtube-video-18",
+          type: "video",
+          sourceUrl,
+          mimeType: "video/mp4",
+          itag: "18",
+          height: 360,
+          muxed: true,
+          urlResolution: "n_transform_pending",
+        },
+      ],
+      audioTracks: [],
+    },
+  });
+  assert.equal(payload.output.videoTrackId, "youtube-video-18");
+  assert.equal(payload.candidate.variants[0].muxed, true);
+  assert.deepEqual(payload.candidate.audioTracks, []);
 });
 
 test("native host errors distinguish a missing helper from a broken helper", () => {

@@ -10,6 +10,7 @@ import {
 import {
   getMediaDownloadEstimate,
   getMediaDownloadProfiles,
+  getMediaVideoQualityOptions,
 } from "../media/download-options.js";
 import {
   formatCompactMediaJobDetails,
@@ -544,11 +545,32 @@ function createMediaDownloadControl(item, downloadItem, tab, helper) {
     profileSelect.append(option);
   }
   profileSelect.disabled = !availability.supported || profiles.length < 2;
-  const estimate = getMediaDownloadEstimate(downloadItem, item);
+  const qualityOptions = getMediaVideoQualityOptions(downloadItem);
+  const qualitySelect = document.createElement("select");
+  qualitySelect.className = "media-download-profile";
+  qualitySelect.title = "Video quality";
+  const automaticQuality = document.createElement("option");
+  automaticQuality.value = "";
+  automaticQuality.textContent = "Quality · Auto (best)";
+  qualitySelect.append(automaticQuality);
+  for (const quality of qualityOptions) {
+    const option = document.createElement("option");
+    option.value = quality.id;
+    option.textContent = quality.label;
+    qualitySelect.append(option);
+  }
+  qualitySelect.disabled = !availability.supported || !qualityOptions.length;
   const estimateLabel = document.createElement("span");
   estimateLabel.className = "media-download-estimate";
-  estimateLabel.textContent = formatDownloadEstimate(estimate);
-  estimateLabel.title = formatDownloadEstimateTitle(estimate);
+  const updateEstimate = () => {
+    const estimate = getMediaDownloadEstimate(downloadItem, item, {
+      videoTrackId: qualitySelect.value || null,
+    });
+    estimateLabel.textContent = formatDownloadEstimate(estimate);
+    estimateLabel.title = formatDownloadEstimateTitle(estimate);
+  };
+  qualitySelect.addEventListener("change", updateEstimate);
+  updateEstimate();
   const button = document.createElement("button");
   button.className = "media-download";
   const presentation = downloadButtonPresentation(
@@ -572,7 +594,10 @@ function createMediaDownloadControl(item, downloadItem, tab, helper) {
         tabId: tab.id,
         mediaId: downloadItem.id,
         connections: settings?.mediaDownloadConnections ?? 8,
-        output: { profileId: profileSelect.value || profiles[0]?.id },
+        output: {
+          profileId: profileSelect.value || profiles[0]?.id,
+          videoTrackId: qualitySelect.value || null,
+        },
       });
       if (response?.status !== "started")
         throw new Error(
@@ -589,6 +614,8 @@ function createMediaDownloadControl(item, downloadItem, tab, helper) {
     }
   });
   if (availability.supported) control.append(estimateLabel);
+  if (availability.supported && downloadItem.kind === "adaptive")
+    control.append(qualitySelect);
   if (availability.supported && profiles.length) control.append(profileSelect);
   control.append(button);
   return control;

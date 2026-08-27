@@ -205,6 +205,9 @@ function mediaDownloadDiagnostic(items, availability) {
     const audioCount = (adaptive.audioTracks || []).filter(
       hasResolvedTrackUrl,
     ).length;
+    const muxedVideoCount = (adaptive.variants || []).filter(
+      (track) => track.muxed === true && hasResolvedTrackUrl(track),
+    ).length;
     if (!videoCount && !audioCount && acquisitionMessage)
       return {
         code: `youtube_${acquisitionDiagnostic.stage}`,
@@ -221,7 +224,7 @@ function mediaDownloadDiagnostic(items, availability) {
         code: "youtube_video_pending",
         message: `YouTube audio captured (${audioCount}) · waiting for a video track.`,
       };
-    if (!audioCount)
+    if (!audioCount && !muxedVideoCount)
       return {
         code: "youtube_audio_pending",
         message: `YouTube video captured (${videoCount}) · waiting for an audio track.`,
@@ -435,6 +438,7 @@ function adaptiveDetails(item) {
   const facts = [item.provider === "youtube" ? "YouTube" : "Adaptive media"];
   const videos = (item.variants || []).filter(hasResolvedTrackUrl);
   const audio = (item.audioTracks || []).filter(hasResolvedTrackUrl);
+  const muxed = videos.some((track) => track.muxed === true);
   const acquisition = item.acquisitionDiagnostic;
   if (!videos.length && !audio.length && acquisition) {
     facts.push(playerAcquisitionLabel(acquisition));
@@ -454,7 +458,11 @@ function adaptiveDetails(item) {
     facts.push("waiting for video track");
   }
   facts.push(
-    audio.length ? `${audio.length} audio` : "waiting for audio track",
+    audio.length
+      ? `${audio.length} audio`
+      : muxed
+        ? "audio included"
+        : "waiting for audio track",
   );
   if (Number.isFinite(item.duration) && item.duration > 0)
     facts.push(formatDuration(item.duration));

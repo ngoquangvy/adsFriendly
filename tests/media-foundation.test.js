@@ -40,6 +40,7 @@ import {
   classifyDirectMediaContainer,
   getMediaDownloadEstimate,
   getMediaDownloadProfiles,
+  getMediaVideoQualityOptions,
 } from "../src/media/download-options.js";
 import {
   createMediaCatalogViewSignature,
@@ -324,6 +325,61 @@ test("YouTube player response merges direct video and audio formats into a ready
   assert.equal(item.probeStatus, "ready");
   assert.equal(item.variants.filter((track) => track.sourceUrl).length, 1);
   assert.equal(item.audioTracks.filter((track) => track.sourceUrl).length, 1);
+});
+
+test("YouTube progressive 360p format is ready because audio is already muxed", () => {
+  const playerUrl =
+    "https://www.youtube.com/s/player/b7457b7c/player_ias.vflset/en_US/base.js";
+  const observation = parseYouTubePlayerResponse(
+    {
+      playabilityStatus: { status: "OK" },
+      videoDetails: {
+        videoId: "video-1",
+        title: "Progressive example",
+        lengthSeconds: "193",
+      },
+      streamingData: {
+        formats: [
+          {
+            itag: 18,
+            mimeType: 'video/mp4; codecs="avc1.42001E, mp4a.40.2"',
+            width: 640,
+            height: 360,
+            qualityLabel: "360p",
+            contentLength: "1234567",
+            url: "https://r1.googlevideo.com/videoplayback?id=asset-1&itag=18&mime=video%2Fmp4&dur=193&clen=1234567&size=640x360&n=unresolved",
+          },
+        ],
+      },
+    },
+    { pageUrl: "https://www.youtube.com/watch?v=video-1", playerUrl },
+  );
+  const catalog = createMediaCatalog();
+  for (const candidate of observation.candidates)
+    catalog.add(7, createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, candidate));
+  const [item] = catalog.list(7);
+
+  assert.equal(item.probeStatus, "ready");
+  assert.equal(item.variants[0].muxed, true);
+  assert.equal(item.audioTracks.length, 0);
+  assert.match(formatMediaDetails(item), /360p · audio included/i);
+  assert.equal(getMediaDownloadAvailability(item).supported, true);
+  assert.match(
+    getMediaVideoQualityOptions(item)[0].label,
+    /360p.*audio included/i,
+  );
+
+  const job = normalizeMediaDownloadJob({
+    id: "youtube-progressive-job",
+    createdAt: Date.now(),
+    sourceTabId: 7,
+    output: { videoTrackId: item.variants[0].id },
+    candidate: item,
+  });
+  assert.equal(job.output.videoTrackId, item.variants[0].id);
+  assert.equal(job.candidate.playerUrl, playerUrl);
+  assert.equal(job.candidate.variants[0].urlResolution, "n_transform_pending");
+  assert.equal(job.candidate.variants[0].muxed, true);
 });
 
 test("YouTube n challenge tracks become Helper-ready when Player JS is known", () => {
@@ -3164,6 +3220,7 @@ test("direct downloads require a valid HTTP source and normalize independently o
     profileId: "source",
     container: "source",
     extension: ".mp4",
+    videoTrackId: null,
   });
 });
 

@@ -113,6 +113,7 @@ export function createYouTubeAdaptiveCandidate({
     observedAt: track.observedAt,
     urlResolution: track.urlResolution || "resolved",
     signatureCipher: track.signatureCipher || null,
+    muxed: track.muxed === true,
   };
   return normalizeMediaCandidate({
     id,

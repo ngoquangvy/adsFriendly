@@ -650,6 +650,10 @@ function mergeAdaptiveTracks(existing, candidate) {
   const bestAudio =
     [...audioTracks].sort(compareAdaptiveTrackQuality)[0] || null;
   const playerUrl = candidate.playerUrl || existing?.playerUrl || null;
+  const muxedReady = variants.some(
+    (track) =>
+      track.muxed === true && hasAcquirableAdaptiveTrack(track, playerUrl),
+  );
   return {
     variants,
     audioTracks,
@@ -670,8 +674,11 @@ function mergeAdaptiveTracks(existing, candidate) {
       existing?.averageBandwidth,
     playerUrl,
     probeStatus:
-      variants.some((track) => hasAcquirableAdaptiveTrack(track, playerUrl)) &&
-      audioTracks.some((track) => hasAcquirableAdaptiveTrack(track, playerUrl))
+      muxedReady ||
+      (variants.some((track) => hasAcquirableAdaptiveTrack(track, playerUrl)) &&
+        audioTracks.some((track) =>
+          hasAcquirableAdaptiveTrack(track, playerUrl),
+        ))
         ? MEDIA_PROBE_STATES.READY
         : MEDIA_PROBE_STATES.DISCOVERED,
     streamType: "vod",
@@ -705,6 +712,7 @@ function mergeTrackList(existing = [], incoming = []) {
       sourceUrl: track.sourceUrl || previous.sourceUrl || null,
       signatureCipher:
         track.signatureCipher || previous.signatureCipher || null,
+      muxed: track.muxed === true || previous.muxed === true,
     });
   }
   return [...tracks.values()];

@@ -977,6 +977,105 @@ test("built helper downloads resolved adaptive tracks in parallel and muxes them
   );
 });
 
+test("built helper downloads a selected muxed adaptive track without separate audio", async (t) => {
+  if (
+    !(await executableAvailable("ffmpeg")) ||
+    !(await executableAvailable("ffprobe"))
+  ) {
+    t.skip("FFmpeg integration tools are not installed.");
+    return;
+  }
+  const fixtureDirectory = await mkdtemp(
+    join(tmpdir(), "adsfriendly-muxed-fixture-"),
+  );
+  const outputDirectory = await mkdtemp(
+    join(tmpdir(), "adsfriendly-muxed-output-"),
+  );
+  t.after(() => rm(fixtureDirectory, { recursive: true, force: true }));
+  t.after(() => rm(outputDirectory, { recursive: true, force: true }));
+  const muxedPath = join(fixtureDirectory, "muxed.mp4");
+  await execFileAsync(
+    "ffmpeg",
+    [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-f",
+      "lavfi",
+      "-i",
+      "testsrc=size=160x90:rate=10",
+      "-f",
+      "lavfi",
+      "-i",
+      "sine=frequency=660:sample_rate=44100",
+      "-t",
+      "1",
+      "-c:v",
+      "libx264",
+      "-pix_fmt",
+      "yuv420p",
+      "-c:a",
+      "aac",
+      "-shortest",
+      muxedPath,
+    ],
+    { windowsHide: true },
+  );
+  const server = createStaticRangeServer(
+    new Map([["/muxed.mp4", await readFile(muxedPath)]]),
+  );
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const address = server.address();
+  const sourceUrl = `http://127.0.0.1:${address.port}/muxed.mp4`;
+  const child = spawnHelper();
+  t.after(() => child.kill());
+  const frames = createFrameReader(child.stdout);
+  child.stdin.write(
+    frame(
+      adaptiveMuxedDownloadRequest(
+        "adaptive-muxed-1",
+        sourceUrl,
+        outputDirectory,
+      ),
+    ),
+  );
+  const completed = await frames.next(
+    (event) =>
+      event.requestId === "adaptive-muxed-1" &&
+      [
+        MEDIA_HELPER_EVENTS.DOWNLOAD_COMPLETED,
+        MEDIA_HELPER_EVENTS.ERROR,
+      ].includes(event.type),
+  );
+  assert.equal(
+    completed.type,
+    MEDIA_HELPER_EVENTS.DOWNLOAD_COMPLETED,
+    completed.payload.message,
+  );
+  const probe = JSON.parse(
+    (
+      await execFileAsync(
+        "ffprobe",
+        [
+          "-v",
+          "error",
+          "-show_entries",
+          "stream=codec_type",
+          "-of",
+          "json",
+          completed.payload.outputPath,
+        ],
+        { windowsHide: true },
+      )
+    ).stdout,
+  );
+  assert.deepEqual(
+    [...new Set(probe.streams.map((stream) => stream.codec_type))].sort(),
+    ["audio", "video"],
+  );
+});
+
 function spawnHelper(extraEnv = {}) {
   const hostPath = fileURLToPath(
     new URL("../packages/media-helper/dist/host.cjs", import.meta.url),
@@ -1130,6 +1229,52 @@ function adaptiveDownloadRequest(jobId, videoUrl, audioUrl, outputDirectory) {
         requestContext: {
           referrer: videoUrl,
           documentUrl: videoUrl,
+          method: "GET",
+          credentials: "omit",
+          requiresBrowserSession: false,
+        },
+      },
+    },
+  };
+}
+
+function adaptiveMuxedDownloadRequest(jobId, sourceUrl, outputDirectory) {
+  return {
+    type: MEDIA_HELPER_REQUESTS.DOWNLOAD_START,
+    requestId: jobId,
+    protocolVersion: MEDIA_HELPER_PROTOCOL_VERSION,
+    payload: {
+      jobId,
+      connections: 4,
+      outputDirectory,
+      output: {
+        profileId: "video-mp4",
+        videoTrackId: "video-18",
+      },
+      candidate: {
+        id: "adaptive-muxed-test",
+        kind: "adaptive",
+        pageUrl: sourceUrl,
+        sourceUrl,
+        title: "fixture-muxed",
+        duration: 1,
+        provider: "test",
+        acquisitionProfile: "progressive_track",
+        variants: [
+          {
+            id: "video-18",
+            type: "video",
+            sourceUrl,
+            mimeType: "video/mp4",
+            width: 160,
+            height: 90,
+            muxed: true,
+          },
+        ],
+        audioTracks: [],
+        requestContext: {
+          referrer: sourceUrl,
+          documentUrl: sourceUrl,
           method: "GET",
           credentials: "omit",
           requiresBrowserSession: false,

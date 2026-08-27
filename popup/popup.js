@@ -523,6 +523,31 @@ var AdsFriendlyPopup = (() => {
     }
     return profiles;
   }
+  function getMediaVideoQualityOptions(candidate = {}) {
+    if (candidate.kind !== "adaptive") return [];
+    const hasSeparateAudio = (candidate.audioTracks || []).some(
+      (track) => track?.sourceUrl
+    );
+    return uniqueObjects(candidate.variants || []).filter(
+      (track) => track?.sourceUrl && (track.muxed === true || hasSeparateAudio)
+    ).sort(compareVideoQuality).map(
+      (track) => Object.freeze({
+        id: track.id,
+        label: videoQualityLabel(track),
+        height: positiveInteger(track.resolution?.height || track.height),
+        muxed: track.muxed === true,
+        estimatedBytes: positiveInteger(track.contentLength)
+      })
+    );
+  }
+  function compareVideoQuality(left, right) {
+    return (right.resolution?.height || right.height || 0) - (left.resolution?.height || left.height || 0) || (right.averageBandwidth || right.bandwidth || 0) - (left.averageBandwidth || left.bandwidth || 0);
+  }
+  function videoQualityLabel(track) {
+    const quality = track.qualityLabel || (track.resolution?.height || track.height ? `${track.resolution?.height || track.height}p` : "Source quality");
+    const format = String(track.mimeType || "").includes("webm") ? "WebM" : String(track.mimeType || "").includes("mp4") ? "MP4" : null;
+    return [quality, format, track.muxed === true ? "audio included" : null].filter(Boolean).join(" \xB7 ");
+  }
   function classifyDirectMediaContainer(candidate = {}) {
     const mime = String(candidate.mimeType || "").split(";", 1)[0].trim().toLowerCase();
     const byMime = {
@@ -543,14 +568,14 @@ var AdsFriendlyPopup = (() => {
       return null;
     }
   }
-  function getMediaDownloadEstimate(candidate = {}, displayItem = null) {
+  function getMediaDownloadEstimate(candidate = {}, displayItem = null, { videoTrackId = null } = {}) {
     const presentation = displayItem || candidate;
     const resolved = presentation.resolvedStream || candidate.resolvedStream;
     const variants = uniqueObjects([
       ...candidate.variants || [],
       ...presentation.variants || []
     ]).sort(compareBandwidth);
-    const selectedVariant = variants[0] || null;
+    const selectedVariant = variants.find((variant) => variant.id === videoTrackId) || variants[0] || null;
     const resolution = resolved?.resolution || candidate.resolution || presentation.resolution || selectedVariant?.resolution || null;
     const duration = firstPositiveNumber(
       resolved?.duration,
@@ -570,7 +595,7 @@ var AdsFriendlyPopup = (() => {
       ).filter(Boolean).sort((left, right) => right - left)[0];
       if (audioBandwidth) bandwidth += audioBandwidth;
     }
-    const estimatedBytes = candidate.kind === "adaptive" ? adaptiveContentLength(candidate) : duration && bandwidth ? Math.round(duration * bandwidth / 8) : null;
+    const estimatedBytes = candidate.kind === "adaptive" ? adaptiveContentLength(candidate, selectedVariant) : duration && bandwidth ? Math.round(duration * bandwidth / 8) : null;
     return Object.freeze({
       resolution: resolution ? {
         width: positiveInteger(resolution.width),
@@ -582,8 +607,12 @@ var AdsFriendlyPopup = (() => {
       basis: estimatedBytes ? candidate.kind === "adaptive" ? "track_content_length" : "manifest_bandwidth" : null
     });
   }
-  function adaptiveContentLength(candidate) {
-    const video = [...candidate.variants || []].sort(compareBandwidth)[0]?.contentLength;
+  function adaptiveContentLength(candidate, selectedVariant = null) {
+    const video = selectedVariant?.contentLength || [...candidate.variants || []].sort(compareBandwidth)[0]?.contentLength;
+    if (selectedVariant?.muxed === true) {
+      const total2 = Number(video) || 0;
+      return Number.isSafeInteger(total2) && total2 > 0 ? total2 : null;
+    }
     const audio = [...candidate.audioTracks || []].sort(compareBandwidth)[0]?.contentLength;
     const total = (Number(video) || 0) + (Number(audio) || 0);
     return Number.isSafeInteger(total) && total > 0 ? total : null;
@@ -691,7 +720,10 @@ var AdsFriendlyPopup = (() => {
           supported: false,
           reason: "Only completed adaptive media is supported."
         };
-      if (!candidate.variants?.length || !candidate.audioTracks?.length)
+      const hasMuxedTrack = candidate.variants?.some(
+        (track) => track?.muxed === true
+      );
+      if (!candidate.variants?.length || !candidate.audioTracks?.length && !hasMuxedTrack)
         return {
           supported: false,
           reason: "Adaptive media needs one resolved video and audio track."
@@ -776,7 +808,13 @@ var AdsFriendlyPopup = (() => {
         width: optionalNonNegativeInteger(track.resolution.width),
         height: optionalNonNegativeInteger(track.resolution.height)
       } : null,
-      qualityLabel: optionalString(track.qualityLabel)
+      qualityLabel: optionalString(track.qualityLabel),
+      urlResolution: [
+        "n_transform_pending",
+        "signature_cipher_pending"
+      ].includes(track.urlResolution) ? track.urlResolution : "resolved",
+      signatureCipher: optionalString(track.signatureCipher),
+      muxed: track.muxed === true
     }));
   }
   function hasCurrentManifestHandoff(candidate) {
@@ -1523,6 +1561,9 @@ var AdsFriendlyPopup = (() => {
       const audioCount = (adaptive.audioTracks || []).filter(
         hasResolvedTrackUrl
       ).length;
+      const muxedVideoCount = (adaptive.variants || []).filter(
+        (track) => track.muxed === true && hasResolvedTrackUrl(track)
+      ).length;
       if (!videoCount && !audioCount && acquisitionMessage)
         return {
           code: `youtube_${acquisitionDiagnostic.stage}`,
@@ -1538,7 +1579,7 @@ var AdsFriendlyPopup = (() => {
           code: "youtube_video_pending",
           message: `YouTube audio captured (${audioCount}) \xB7 waiting for a video track.`
         };
-      if (!audioCount)
+      if (!audioCount && !muxedVideoCount)
         return {
           code: "youtube_audio_pending",
           message: `YouTube video captured (${videoCount}) \xB7 waiting for an audio track.`
@@ -1680,6 +1721,7 @@ var AdsFriendlyPopup = (() => {
     const facts = [item.provider === "youtube" ? "YouTube" : "Adaptive media"];
     const videos = (item.variants || []).filter(hasResolvedTrackUrl);
     const audio = (item.audioTracks || []).filter(hasResolvedTrackUrl);
+    const muxed = videos.some((track) => track.muxed === true);
     const acquisition = item.acquisitionDiagnostic;
     if (!videos.length && !audio.length && acquisition) {
       facts.push(playerAcquisitionLabel(acquisition));
@@ -1697,7 +1739,7 @@ var AdsFriendlyPopup = (() => {
       facts.push("waiting for video track");
     }
     facts.push(
-      audio.length ? `${audio.length} audio` : "waiting for audio track"
+      audio.length ? `${audio.length} audio` : muxed ? "audio included" : "waiting for audio track"
     );
     if (Number.isFinite(item.duration) && item.duration > 0)
       facts.push(formatDuration2(item.duration));
@@ -2541,11 +2583,32 @@ ${blobTitleKey(item.title)}`;
       profileSelect.append(option);
     }
     profileSelect.disabled = !availability.supported || profiles.length < 2;
-    const estimate = getMediaDownloadEstimate(downloadItem, item);
+    const qualityOptions = getMediaVideoQualityOptions(downloadItem);
+    const qualitySelect = document.createElement("select");
+    qualitySelect.className = "media-download-profile";
+    qualitySelect.title = "Video quality";
+    const automaticQuality = document.createElement("option");
+    automaticQuality.value = "";
+    automaticQuality.textContent = "Quality \xB7 Auto (best)";
+    qualitySelect.append(automaticQuality);
+    for (const quality of qualityOptions) {
+      const option = document.createElement("option");
+      option.value = quality.id;
+      option.textContent = quality.label;
+      qualitySelect.append(option);
+    }
+    qualitySelect.disabled = !availability.supported || !qualityOptions.length;
     const estimateLabel = document.createElement("span");
     estimateLabel.className = "media-download-estimate";
-    estimateLabel.textContent = formatDownloadEstimate(estimate);
-    estimateLabel.title = formatDownloadEstimateTitle(estimate);
+    const updateEstimate = () => {
+      const estimate = getMediaDownloadEstimate(downloadItem, item, {
+        videoTrackId: qualitySelect.value || null
+      });
+      estimateLabel.textContent = formatDownloadEstimate(estimate);
+      estimateLabel.title = formatDownloadEstimateTitle(estimate);
+    };
+    qualitySelect.addEventListener("change", updateEstimate);
+    updateEstimate();
     const button = document.createElement("button");
     button.className = "media-download";
     const presentation = downloadButtonPresentation(
@@ -2569,7 +2632,10 @@ ${blobTitleKey(item.title)}`;
           tabId: tab.id,
           mediaId: downloadItem.id,
           connections: settings?.mediaDownloadConnections ?? 8,
-          output: { profileId: profileSelect.value || profiles[0]?.id }
+          output: {
+            profileId: profileSelect.value || profiles[0]?.id,
+            videoTrackId: qualitySelect.value || null
+          }
         });
         if (response?.status !== "started")
           throw new Error(
@@ -2584,6 +2650,8 @@ ${blobTitleKey(item.title)}`;
       }
     });
     if (availability.supported) control.append(estimateLabel);
+    if (availability.supported && downloadItem.kind === "adaptive")
+      control.append(qualitySelect);
     if (availability.supported && profiles.length) control.append(profileSelect);
     control.append(button);
     return control;

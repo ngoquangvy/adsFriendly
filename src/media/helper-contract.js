@@ -2,7 +2,7 @@ import { normalizeMediaDownloadOutput } from "./download-options.js";
 import { isRegisteredMediaAccessStrategy } from "./access-strategy-catalog.js";
 import { normalizeAesKeyHandoffDiagnostic } from "./key-handoff-diagnostics.js";
 
-export const MEDIA_HELPER_PROTOCOL_VERSION = 6;
+export const MEDIA_HELPER_PROTOCOL_VERSION = 7;
 export const MEDIA_HELPER_HOST_NAME = "com.adsfriendly.media_helper";
 
 export const MEDIA_HELPER_REQUESTS = Object.freeze({
@@ -202,6 +202,7 @@ export function normalizeHelperDownloadPayload(value = {}) {
 
 function normalizeHelperAdaptiveTracks(value, expectedType) {
   if (!Array.isArray(value) || !value.length) {
+    if (expectedType === "audio") return [];
     throw new Error(
       `[MediaHelperProtocol] Adaptive ${expectedType} track is required.`,
     );
@@ -233,6 +234,7 @@ function normalizeHelperAdaptiveTracks(value, expectedType) {
       track?.urlResolution === "signature_cipher_pending"
         ? normalizeYouTubeSignatureCipher(track?.signatureCipher)
         : null,
+    muxed: expectedType === "video" && track?.muxed === true,
   }));
 }
 

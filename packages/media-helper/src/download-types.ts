@@ -77,6 +77,7 @@ export interface AdaptiveHttpTrack {
   urlResolution:
     "resolved" | "n_transform_pending" | "signature_cipher_pending";
   signatureCipher: string | null;
+  muxed: boolean;
 }
 
 export interface DownloadJob {
@@ -89,6 +90,7 @@ export interface DownloadJob {
     profileId: "source" | "video-mp4" | "video-mkv";
     container: "source" | "mp4" | "mkv";
     extension: string | null;
+    videoTrackId: string | null;
   };
   candidate: DownloadCandidate;
 }

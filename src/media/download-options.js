@@ -60,7 +60,69 @@ export function normalizeMediaDownloadOutput(value, candidate = {}) {
     profileId: profile.id,
     container: profile.container,
     extension: profile.extension,
+    videoTrackId: normalizeVideoTrackId(value?.videoTrackId, candidate),
   };
+}
+
+export function getMediaVideoQualityOptions(candidate = {}) {
+  if (candidate.kind !== "adaptive") return [];
+  const hasSeparateAudio = (candidate.audioTracks || []).some(
+    (track) => track?.sourceUrl,
+  );
+  return uniqueObjects(candidate.variants || [])
+    .filter(
+      (track) => track?.sourceUrl && (track.muxed === true || hasSeparateAudio),
+    )
+    .sort(compareVideoQuality)
+    .map((track) =>
+      Object.freeze({
+        id: track.id,
+        label: videoQualityLabel(track),
+        height: positiveInteger(track.resolution?.height || track.height),
+        muxed: track.muxed === true,
+        estimatedBytes: positiveInteger(track.contentLength),
+      }),
+    );
+}
+
+function normalizeVideoTrackId(value, candidate) {
+  if (candidate.kind !== "adaptive") return null;
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value !== "string")
+    throw new Error("[MediaDownload] Invalid video quality selection.");
+  const track = (candidate.variants || []).find(
+    (item) => item?.id === value && item?.sourceUrl,
+  );
+  if (!track || (track.muxed !== true && !(candidate.audioTracks || []).length))
+    throw new Error(
+      "[MediaDownload] Selected video quality is no longer downloadable.",
+    );
+  return value;
+}
+
+function compareVideoQuality(left, right) {
+  return (
+    (right.resolution?.height || right.height || 0) -
+      (left.resolution?.height || left.height || 0) ||
+    (right.averageBandwidth || right.bandwidth || 0) -
+      (left.averageBandwidth || left.bandwidth || 0)
+  );
+}
+
+function videoQualityLabel(track) {
+  const quality =
+    track.qualityLabel ||
+    (track.resolution?.height || track.height
+      ? `${track.resolution?.height || track.height}p`
+      : "Source quality");
+  const format = String(track.mimeType || "").includes("webm")
+    ? "WebM"
+    : String(track.mimeType || "").includes("mp4")
+      ? "MP4"
+      : null;
+  return [quality, format, track.muxed === true ? "audio included" : null]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 export function classifyDirectMediaContainer(candidate = {}) {
@@ -87,14 +149,21 @@ export function classifyDirectMediaContainer(candidate = {}) {
   }
 }
 
-export function getMediaDownloadEstimate(candidate = {}, displayItem = null) {
+export function getMediaDownloadEstimate(
+  candidate = {},
+  displayItem = null,
+  { videoTrackId = null } = {},
+) {
   const presentation = displayItem || candidate;
   const resolved = presentation.resolvedStream || candidate.resolvedStream;
   const variants = uniqueObjects([
     ...(candidate.variants || []),
     ...(presentation.variants || []),
   ]).sort(compareBandwidth);
-  const selectedVariant = variants[0] || null;
+  const selectedVariant =
+    variants.find((variant) => variant.id === videoTrackId) ||
+    variants[0] ||
+    null;
   const resolution =
     resolved?.resolution ||
     candidate.resolution ||
@@ -124,7 +193,7 @@ export function getMediaDownloadEstimate(candidate = {}, displayItem = null) {
   }
   const estimatedBytes =
     candidate.kind === "adaptive"
-      ? adaptiveContentLength(candidate)
+      ? adaptiveContentLength(candidate, selectedVariant)
       : duration && bandwidth
         ? Math.round((duration * bandwidth) / 8)
         : null;
@@ -146,9 +215,14 @@ export function getMediaDownloadEstimate(candidate = {}, displayItem = null) {
   });
 }
 
-function adaptiveContentLength(candidate) {
-  const video = [...(candidate.variants || [])].sort(compareBandwidth)[0]
-    ?.contentLength;
+function adaptiveContentLength(candidate, selectedVariant = null) {
+  const video =
+    selectedVariant?.contentLength ||
+    [...(candidate.variants || [])].sort(compareBandwidth)[0]?.contentLength;
+  if (selectedVariant?.muxed === true) {
+    const total = Number(video) || 0;
+    return Number.isSafeInteger(total) && total > 0 ? total : null;
+  }
   const audio = [...(candidate.audioTracks || [])].sort(compareBandwidth)[0]
     ?.contentLength;
   const total = (Number(video) || 0) + (Number(audio) || 0);

@@ -55,6 +55,7 @@ export function normalizeMediaDownloadJob(value = {}) {
               ),
               provider: optionalString(candidate.provider),
               acquisitionProfile: optionalString(candidate.acquisitionProfile),
+              playerUrl: optionalString(candidate.playerUrl),
               probeStatus: candidate.probeStatus,
               streamType: candidate.streamType,
               variants: normalizeAdaptiveTracks(candidate.variants, "video"),
@@ -213,7 +214,13 @@ export function getMediaDownloadAvailability(candidate = {}) {
         supported: false,
         reason: "Only completed adaptive media is supported.",
       };
-    if (!candidate.variants?.length || !candidate.audioTracks?.length)
+    const hasMuxedTrack = candidate.variants?.some(
+      (track) => track?.muxed === true,
+    );
+    if (
+      !candidate.variants?.length ||
+      (!candidate.audioTracks?.length && !hasMuxedTrack)
+    )
       return {
         supported: false,
         reason: "Adaptive media needs one resolved video and audio track.",
@@ -321,6 +328,14 @@ function normalizeAdaptiveTracks(value, expectedType) {
             }
           : null,
       qualityLabel: optionalString(track.qualityLabel),
+      urlResolution: [
+        "n_transform_pending",
+        "signature_cipher_pending",
+      ].includes(track.urlResolution)
+        ? track.urlResolution
+        : "resolved",
+      signatureCipher: optionalString(track.signatureCipher),
+      muxed: track.muxed === true,
     }));
 }
 

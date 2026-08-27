@@ -35,17 +35,25 @@ export function parseYouTubePlayerResponse(
     return null;
 
   const streamingData = objectValue(response.streamingData);
-  const formats = [
-    ...arrayValue(streamingData?.formats),
-    ...arrayValue(streamingData?.adaptiveFormats),
+  const formatEntries = [
+    ...arrayValue(streamingData?.formats).map((format) => ({
+      format,
+      muxed: true,
+    })),
+    ...arrayValue(streamingData?.adaptiveFormats).map((format) => ({
+      format,
+      muxed: false,
+    })),
   ].slice(0, 100);
-  const descriptors = formats.map(normalizeFormatDescriptor).filter(Boolean);
+  const descriptors = formatEntries
+    .map(({ format, muxed }) => normalizeFormatDescriptor(format, { muxed }))
+    .filter(Boolean);
   const directCandidates = [];
   const playerChallengeCandidates = [];
   let signatureCipherCount = 0;
   let nTransformCount = 0;
 
-  for (const format of formats) {
+  for (const { format, muxed } of formatEntries) {
     const signatureCipher =
       typeof format?.signatureCipher === "string"
         ? format.signatureCipher
@@ -59,7 +67,7 @@ export function parseYouTubePlayerResponse(
       });
       if (cipherTrack) {
         const track = {
-          ...enrichResolvedTrack(cipherTrack.track, format),
+          ...enrichResolvedTrack(cipherTrack.track, format, { muxed }),
           urlResolution: "signature_cipher_pending",
           signatureCipher: cipherTrack.signatureCipher,
         };
@@ -87,7 +95,7 @@ export function parseYouTubePlayerResponse(
       });
       if (parsedTrack) {
         const track = {
-          ...enrichResolvedTrack(parsedTrack, format),
+          ...enrichResolvedTrack(parsedTrack, format, { muxed }),
           urlResolution: "n_transform_pending",
         };
         const candidate = createYouTubeAdaptiveCandidate({
@@ -104,7 +112,7 @@ export function parseYouTubePlayerResponse(
       mimeType: format.mimeType,
     });
     if (!parsedTrack) continue;
-    const track = enrichResolvedTrack(parsedTrack, format);
+    const track = enrichResolvedTrack(parsedTrack, format, { muxed });
     const candidate = createYouTubeAdaptiveCandidate({
       pageUrl,
       title: response.videoDetails?.title || title,
@@ -234,7 +242,7 @@ function createPlayerDiagnosticCandidate({
   });
 }
 
-function normalizeFormatDescriptor(format) {
+function normalizeFormatDescriptor(format, { muxed = false } = {}) {
   if (!format || typeof format !== "object") return null;
   const mimeType = cleanMimeType(format.mimeType);
   const type = mimeType?.startsWith("video/")
@@ -263,11 +271,12 @@ function normalizeFormatDescriptor(format) {
     resolution: width && height ? { width, height } : null,
     qualityLabel: safeToken(format.qualityLabel || format.quality, 40),
     fps: positiveInteger(format.fps),
+    muxed: muxed && type === "video",
   };
 }
 
-function enrichResolvedTrack(track, format) {
-  const descriptor = normalizeFormatDescriptor(format);
+function enrichResolvedTrack(track, format, { muxed = false } = {}) {
+  const descriptor = normalizeFormatDescriptor(format, { muxed });
   return {
     ...track,
     contentLength: descriptor?.contentLength || track.contentLength,
@@ -278,6 +287,7 @@ function enrichResolvedTrack(track, format) {
     bandwidth: descriptor?.bandwidth || track.bandwidth,
     averageBandwidth: descriptor?.averageBandwidth || track.averageBandwidth,
     fps: descriptor?.fps || null,
+    muxed: descriptor?.muxed === true,
     duration: positiveNumber(format.approxDurationMs) / 1000 || track.duration,
   };
 }

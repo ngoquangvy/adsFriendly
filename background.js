@@ -3930,6 +3930,9 @@ var AdsFriendlyBackground = (() => {
     const bestVideo = [...variants].sort(compareAdaptiveTrackQuality)[0] || null;
     const bestAudio = [...audioTracks].sort(compareAdaptiveTrackQuality)[0] || null;
     const playerUrl = candidate.playerUrl || existing?.playerUrl || null;
+    const muxedReady = variants.some(
+      (track) => track.muxed === true && hasAcquirableAdaptiveTrack(track, playerUrl)
+    );
     return {
       variants,
       audioTracks,
@@ -3939,7 +3942,9 @@ var AdsFriendlyBackground = (() => {
       bandwidth: bestVideo?.bandwidth || candidate.bandwidth || existing?.bandwidth,
       averageBandwidth: bestVideo?.averageBandwidth || candidate.averageBandwidth || existing?.averageBandwidth,
       playerUrl,
-      probeStatus: variants.some((track) => hasAcquirableAdaptiveTrack(track, playerUrl)) && audioTracks.some((track) => hasAcquirableAdaptiveTrack(track, playerUrl)) ? MEDIA_PROBE_STATES.READY : MEDIA_PROBE_STATES.DISCOVERED,
+      probeStatus: muxedReady || variants.some((track) => hasAcquirableAdaptiveTrack(track, playerUrl)) && audioTracks.some(
+        (track) => hasAcquirableAdaptiveTrack(track, playerUrl)
+      ) ? MEDIA_PROBE_STATES.READY : MEDIA_PROBE_STATES.DISCOVERED,
       streamType: "vod"
     };
   }
@@ -3964,7 +3969,8 @@ var AdsFriendlyBackground = (() => {
         ...previous,
         ...track,
         sourceUrl: track.sourceUrl || previous.sourceUrl || null,
-        signatureCipher: track.signatureCipher || previous.signatureCipher || null
+        signatureCipher: track.signatureCipher || previous.signatureCipher || null,
+        muxed: track.muxed === true || previous.muxed === true
       });
     }
     return [...tracks.values()];
@@ -4559,8 +4565,23 @@ var AdsFriendlyBackground = (() => {
     return {
       profileId: profile.id,
       container: profile.container,
-      extension: profile.extension
+      extension: profile.extension,
+      videoTrackId: normalizeVideoTrackId(value?.videoTrackId, candidate)
     };
+  }
+  function normalizeVideoTrackId(value, candidate) {
+    if (candidate.kind !== "adaptive") return null;
+    if (value === null || value === void 0 || value === "") return null;
+    if (typeof value !== "string")
+      throw new Error("[MediaDownload] Invalid video quality selection.");
+    const track = (candidate.variants || []).find(
+      (item) => item?.id === value && item?.sourceUrl
+    );
+    if (!track || track.muxed !== true && !(candidate.audioTracks || []).length)
+      throw new Error(
+        "[MediaDownload] Selected video quality is no longer downloadable."
+      );
+    return value;
   }
   function classifyDirectMediaContainer(candidate = {}) {
     const mime = String(candidate.mimeType || "").split(";", 1)[0].trim().toLowerCase();
@@ -4720,6 +4741,7 @@ var AdsFriendlyBackground = (() => {
         ),
         provider: optionalString2(candidate.provider),
         acquisitionProfile: optionalString2(candidate.acquisitionProfile),
+        playerUrl: optionalString2(candidate.playerUrl),
         probeStatus: candidate.probeStatus,
         streamType: candidate.streamType,
         variants: normalizeAdaptiveTracks(candidate.variants, "video"),
@@ -4858,7 +4880,10 @@ var AdsFriendlyBackground = (() => {
           supported: false,
           reason: "Only completed adaptive media is supported."
         };
-      if (!candidate.variants?.length || !candidate.audioTracks?.length)
+      const hasMuxedTrack = candidate.variants?.some(
+        (track) => track?.muxed === true
+      );
+      if (!candidate.variants?.length || !candidate.audioTracks?.length && !hasMuxedTrack)
         return {
           supported: false,
           reason: "Adaptive media needs one resolved video and audio track."
@@ -4943,7 +4968,13 @@ var AdsFriendlyBackground = (() => {
         width: optionalNonNegativeInteger2(track.resolution.width),
         height: optionalNonNegativeInteger2(track.resolution.height)
       } : null,
-      qualityLabel: optionalString2(track.qualityLabel)
+      qualityLabel: optionalString2(track.qualityLabel),
+      urlResolution: [
+        "n_transform_pending",
+        "signature_cipher_pending"
+      ].includes(track.urlResolution) ? track.urlResolution : "resolved",
+      signatureCipher: optionalString2(track.signatureCipher),
+      muxed: track.muxed === true
     }));
   }
   function hasCurrentManifestHandoff(candidate) {
@@ -5057,7 +5088,7 @@ var AdsFriendlyBackground = (() => {
   }
 
   // src/media/helper-contract.js
-  var MEDIA_HELPER_PROTOCOL_VERSION = 6;
+  var MEDIA_HELPER_PROTOCOL_VERSION = 7;
   var MEDIA_HELPER_HOST_NAME = "com.adsfriendly.media_helper";
   var MEDIA_HELPER_REQUESTS = Object.freeze({
     HELLO: "helper.hello",
@@ -8066,7 +8097,8 @@ ${body}`;
       qualityLabel: track.qualityLabel,
       observedAt: track.observedAt,
       urlResolution: track.urlResolution || "resolved",
-      signatureCipher: track.signatureCipher || null
+      signatureCipher: track.signatureCipher || null,
+      muxed: track.muxed === true
     };
     return normalizeMediaCandidate({
       id,
