@@ -11,6 +11,11 @@ await build({
   platform: "node",
   format: "cjs",
   target: ["node20"],
+  // jsdom probes for its optional synchronous-XHR worker with require.resolve.
+  // A single-file Node SEA cannot expose that source path; the helper only uses
+  // asynchronous network APIs, so disabling that optional probe keeps the
+  // bundled executable self-contained.
+  define: { "require.resolve": "undefined" },
   sourcemap: checkOnly ? false : "linked",
   legalComments: "none",
   logLevel: "info",

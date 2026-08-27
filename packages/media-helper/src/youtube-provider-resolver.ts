@@ -1,7 +1,11 @@
 import { Innertube } from "youtubei.js";
 import type { AdaptiveHttpTrack, DownloadCandidate } from "./download-types.js";
+import {
+  YOUTUBE_WEB_PO_USER_AGENT,
+  attachYouTubeWebPoToken,
+  resolveYouTubeWebPoToken,
+} from "./youtube-po-token-resolver.js";
 
-const PROVIDER_CLIENTS = ["IOS", "ANDROID"] as const;
 const RESPONSE_CACHE_MS = 5 * 60 * 1000;
 const MAX_CACHE_ITEMS = 20;
 const responseCache = new Map<
@@ -22,11 +26,21 @@ type ProviderFormat = {
   width?: number;
   height?: number;
   quality_label?: string;
+  decipher?: (player: unknown) => Promise<string>;
+};
+
+type ProviderProfile = {
+  id: string;
+  client: "YTMUSIC" | "IOS" | "ANDROID";
+  poToken: string | null;
+  requestUserAgent: string | null;
+  allowEquivalentVideo: boolean;
 };
 
 export async function resolveYouTubeProviderTracks(
   tracks: AdaptiveHttpTrack[],
   candidate: DownloadCandidate,
+  { allowEquivalentVideo = false } = {},
 ): Promise<AdaptiveHttpTrack[]> {
   if (candidate.provider !== "youtube") return tracks;
   const pending = tracks.filter(
@@ -38,13 +52,18 @@ export async function resolveYouTubeProviderTracks(
     throw new Error("YouTube provider resolution requires a valid video ID.");
 
   const failures: string[] = [];
-  for (const client of PROVIDER_CLIENTS) {
+  const profilePlan = await providerProfiles(videoId, allowEquivalentVideo);
+  failures.push(...profilePlan.failures);
+  const profiles = profilePlan.profiles;
+  for (const profile of profiles) {
     try {
-      const formats = await loadProviderFormats(videoId, client);
-      const resolved = tracks.map((track) =>
-        track.urlResolution === "provider_client_pending"
-          ? resolveTrackFromFormats(track, formats)
-          : track,
+      const { formats, session } = await loadProviderFormats(videoId, profile);
+      const resolved = await Promise.all(
+        tracks.map((track) =>
+          track.urlResolution === "provider_client_pending"
+            ? resolveTrackFromFormats(track, formats, session, profile)
+            : track,
+        ),
       );
       if (
         resolved.every(
@@ -52,9 +71,9 @@ export async function resolveYouTubeProviderTracks(
         )
       )
         return resolved;
-      failures.push(`${client}: selected itag unavailable`);
+      failures.push(`${profile.id}: selected format unavailable`);
     } catch (error) {
-      failures.push(`${client}: ${messageOf(error)}`);
+      failures.push(`${profile.id}: ${messageOf(error)}`);
     }
   }
   throw new Error(
@@ -62,19 +81,28 @@ export async function resolveYouTubeProviderTracks(
   );
 }
 
-function resolveTrackFromFormats(
+async function resolveTrackFromFormats(
   track: AdaptiveHttpTrack,
   formats: ProviderFormat[],
-): AdaptiveHttpTrack {
-  const itag = Number(track.itag);
-  const format = formats.find(
-    (item) =>
-      item.itag === itag &&
-      (track.type === "video" ? item.has_video : item.has_audio) &&
-      typeof item.url === "string",
+  session: Innertube,
+  profile: ProviderProfile,
+): Promise<AdaptiveHttpTrack> {
+  const format = selectProviderFormat(
+    track,
+    formats,
+    profile.allowEquivalentVideo,
   );
-  if (!format?.url) return track;
-  const sourceUrl = validatedGoogleVideoUrl(format.url);
+  if (!format) return track;
+  const rawUrl =
+    typeof format.url === "string"
+      ? format.url
+      : typeof format.decipher === "function"
+        ? await format.decipher(session.session.player)
+        : null;
+  if (!rawUrl) return track;
+  const sourceUrl = profile.poToken
+    ? attachYouTubeWebPoToken(rawUrl, profile.poToken)
+    : validatedGoogleVideoUrl(rawUrl);
   return {
     ...track,
     sourceUrl,
@@ -89,18 +117,56 @@ function resolveTrackFromFormats(
     qualityLabel: format.quality_label || track.qualityLabel,
     urlResolution: "resolved",
     signatureCipher: null,
+    requestUserAgent: profile.requestUserAgent,
+    providerClient: profile.client,
   };
 }
 
-async function loadProviderFormats(
-  videoId: string,
-  client: (typeof PROVIDER_CLIENTS)[number],
-): Promise<ProviderFormat[]> {
-  const key = `${client}:${videoId}`;
+function selectProviderFormat(
+  track: AdaptiveHttpTrack,
+  formats: ProviderFormat[],
+  allowEquivalentVideo: boolean,
+) {
+  const correctType = (item: ProviderFormat) =>
+    track.type === "video" ? item.has_video : item.has_audio;
+  const exact = formats.find(
+    (item) => item.itag === Number(track.itag) && correctType(item),
+  );
+  if (exact || track.type !== "video" || !allowEquivalentVideo) return exact;
+  const equivalents = formats.filter(
+    (item) =>
+      correctType(item) &&
+      ((track.qualityLabel && item.quality_label === track.qualityLabel) ||
+        (track.height && item.height === track.height)),
+  );
+  return equivalents.sort(
+    (left, right) =>
+      formatCompatibilityScore(right, track) -
+        formatCompatibilityScore(left, track) ||
+      (right.average_bitrate || right.bitrate || 0) -
+        (left.average_bitrate || left.bitrate || 0),
+  )[0];
+}
+
+function formatCompatibilityScore(
+  format: ProviderFormat,
+  requested: AdaptiveHttpTrack,
+) {
+  const targetContainer = cleanMimeType(requested.mimeType)?.split("/", 2)[1];
+  const actualContainer = cleanMimeType(format.mime_type)?.split("/", 2)[1];
+  return targetContainer && targetContainer === actualContainer ? 1 : 0;
+}
+
+async function loadProviderFormats(videoId: string, profile: ProviderProfile) {
+  const key = `${profile.client}:${videoId}`;
   const cached = responseCache.get(key);
-  if (cached && cached.expiresAt > Date.now()) return cached.formats;
   const session = await getSession();
-  const info = await session.getBasicInfo(videoId, { client });
+  if (cached && cached.expiresAt > Date.now())
+    return { formats: cached.formats, session };
+  const info = await session.getBasicInfo(videoId, {
+    client: profile.client,
+    ...(profile.poToken ? { po_token: profile.poToken } : {}),
+  });
   if (info.playability_status?.status !== "OK")
     throw new Error(
       `playability ${info.playability_status?.status || "unknown"}`,
@@ -116,7 +182,43 @@ async function loadProviderFormats(
   });
   while (responseCache.size > MAX_CACHE_ITEMS)
     responseCache.delete(responseCache.keys().next().value as string);
-  return formats;
+  return { formats, session };
+}
+
+async function providerProfiles(
+  videoId: string,
+  allowEquivalentVideo: boolean,
+): Promise<{ profiles: ProviderProfile[]; failures: string[] }> {
+  const profiles: ProviderProfile[] = [];
+  const failures: string[] = [];
+  try {
+    profiles.push({
+      id: "web_remix_po",
+      client: "YTMUSIC",
+      poToken: await resolveYouTubeWebPoToken(videoId),
+      requestUserAgent: YOUTUBE_WEB_PO_USER_AGENT,
+      allowEquivalentVideo,
+    });
+  } catch (error) {
+    failures.push(`web_remix_po: ${messageOf(error)}`);
+  }
+  profiles.push(
+    {
+      id: "ios_direct",
+      client: "IOS",
+      poToken: null,
+      requestUserAgent: null,
+      allowEquivalentVideo: false,
+    },
+    {
+      id: "android_direct",
+      client: "ANDROID",
+      poToken: null,
+      requestUserAgent: null,
+      allowEquivalentVideo: false,
+    },
+  );
+  return { profiles, failures };
 }
 
 function getSession() {

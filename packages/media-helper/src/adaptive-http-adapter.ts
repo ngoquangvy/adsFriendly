@@ -74,6 +74,7 @@ async function downloadAdaptiveHttp(
     const resolved = await resolveYouTubeProviderTracks(
       [video, ...(audio ? [audio] : [])],
       job.candidate,
+      { allowEquivalentVideo: !job.output.videoTrackId },
     );
     video = resolved[0];
     audio = resolved[1] || null;
@@ -329,6 +330,7 @@ function directTrackJob(
     throw new Error("Adaptive provider resolution did not return a media URL.");
   return {
     ...job,
+    browserUserAgent: track.requestUserAgent || job.browserUserAgent,
     jobId: `${job.jobId}-${track.type}`,
     connections,
     outputDirectory,

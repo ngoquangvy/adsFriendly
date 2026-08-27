@@ -81,6 +81,8 @@ export interface AdaptiveHttpTrack {
     | "provider_client_pending";
   signatureCipher: string | null;
   muxed: boolean;
+  requestUserAgent?: string | null;
+  providerClient?: string | null;
 }
 
 export interface DownloadJob {
