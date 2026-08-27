@@ -156,16 +156,22 @@ export function getMediaDownloadEstimate(
 ) {
   const presentation = displayItem || candidate;
   const resolved = presentation.resolvedStream || candidate.resolvedStream;
-  const variants = uniqueObjects([
+  const allVariants = uniqueObjects([
     ...(candidate.variants || []),
     ...(presentation.variants || []),
-  ]).sort(compareBandwidth);
+  ]);
+  const variants = (
+    candidate.kind === "adaptive"
+      ? allVariants.filter(hasUsableAdaptiveUrl)
+      : allVariants
+  ).sort(compareBandwidth);
   const selectedVariant =
     variants.find((variant) => variant.id === videoTrackId) ||
     variants[0] ||
     null;
   const resolution =
     resolved?.resolution ||
+    (candidate.kind === "adaptive" ? selectedVariant?.resolution : null) ||
     candidate.resolution ||
     presentation.resolution ||
     selectedVariant?.resolution ||
@@ -177,13 +183,22 @@ export function getMediaDownloadEstimate(
   );
   let bandwidth = firstPositiveNumber(
     resolved?.bandwidth,
+    candidate.kind === "adaptive" ? selectedVariant?.averageBandwidth : null,
+    candidate.kind === "adaptive" ? selectedVariant?.bandwidth : null,
     candidate.averageBandwidth,
     candidate.bandwidth,
     selectedVariant?.averageBandwidth,
     selectedVariant?.bandwidth,
   );
-  if (["dash", "adaptive"].includes(candidate.kind) && bandwidth) {
+  if (
+    ["dash", "adaptive"].includes(candidate.kind) &&
+    bandwidth &&
+    selectedVariant?.muxed !== true
+  ) {
     const audioBandwidth = [...(candidate.audioTracks || [])]
+      .filter((track) =>
+        candidate.kind === "adaptive" ? hasUsableAdaptiveUrl(track) : true,
+      )
       .map((track) =>
         firstPositiveNumber(track.averageBandwidth, track.bandwidth),
       )
@@ -191,12 +206,13 @@ export function getMediaDownloadEstimate(
       .sort((left, right) => right - left)[0];
     if (audioBandwidth) bandwidth += audioBandwidth;
   }
-  const estimatedBytes =
+  const adaptiveBytes =
     candidate.kind === "adaptive"
       ? adaptiveContentLength(candidate, selectedVariant)
-      : duration && bandwidth
-        ? Math.round((duration * bandwidth) / 8)
-        : null;
+      : null;
+  const estimatedBytes =
+    adaptiveBytes ||
+    (duration && bandwidth ? Math.round((duration * bandwidth) / 8) : null);
   return Object.freeze({
     resolution: resolution
       ? {
@@ -209,7 +225,9 @@ export function getMediaDownloadEstimate(
     estimatedBytes,
     basis: estimatedBytes
       ? candidate.kind === "adaptive"
-        ? "track_content_length"
+        ? adaptiveBytes
+          ? "track_content_length"
+          : "track_bitrate"
         : "manifest_bandwidth"
       : null,
   });
@@ -223,10 +241,21 @@ function adaptiveContentLength(candidate, selectedVariant = null) {
     const total = Number(video) || 0;
     return Number.isSafeInteger(total) && total > 0 ? total : null;
   }
-  const audio = [...(candidate.audioTracks || [])].sort(compareBandwidth)[0]
-    ?.contentLength;
+  const audio = [...(candidate.audioTracks || [])]
+    .filter(hasUsableAdaptiveUrl)
+    .sort(compareBandwidth)[0]?.contentLength;
   const total = (Number(video) || 0) + (Number(audio) || 0);
   return Number.isSafeInteger(total) && total > 0 ? total : null;
+}
+
+function hasUsableAdaptiveUrl(track) {
+  try {
+    return ["http:", "https:"].includes(
+      new URL(track?.sourceUrl || track?.url).protocol,
+    );
+  } catch {
+    return false;
+  }
 }
 
 function compareBandwidth(left, right) {

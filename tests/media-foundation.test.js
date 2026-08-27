@@ -418,6 +418,7 @@ test("YouTube unresolved quality descriptors do not invalidate a muxed track", (
             width: 1920,
             height: 1080,
             qualityLabel: "1080p",
+            contentLength: "953000000",
           },
           {
             itag: 140,
@@ -445,6 +446,9 @@ test("YouTube unresolved quality descriptors do not invalidate a muxed track", (
     getMediaVideoQualityOptions(item).map((quality) => quality.label),
     ["360p · MP4 · audio included"],
   );
+  const estimate = getMediaDownloadEstimate(item);
+  assert.deepEqual(estimate.resolution, { width: 640, height: 360 });
+  assert.equal(estimate.estimatedBytes, 1_234_567);
 
   const job = normalizeMediaDownloadJob({
     id: "youtube-partial-descriptor-job",
