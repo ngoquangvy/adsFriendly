@@ -451,6 +451,16 @@ test("YouTube quality descriptors coexist with a muxed fallback track", () => {
     getMediaVideoQualityOptions(item).map((quality) => quality.label),
     ["1080p · MP4 · H.264", "360p · MP4 · audio included"],
   );
+  assert.deepEqual(
+    getMediaVideoQualityOptions(item).map((quality) => [
+      quality.groupLabel,
+      quality.optionLabel,
+    ]),
+    [
+      ["1080p", "MP4 · H.264"],
+      ["360p", "MP4 · audio included"],
+    ],
+  );
   const estimate = getMediaDownloadEstimate(item, null, {
     videoTrackId: "youtube-video-18",
   });
@@ -471,6 +481,66 @@ test("YouTube quality descriptors coexist with a muxed fallback track", () => {
     "provider_client_pending",
   );
   assert.equal(job.candidate.audioTracks.length, 1);
+});
+
+test("YouTube quality choices group by resolution and prefer compatible codecs", () => {
+  const candidate = {
+    kind: "adaptive",
+    provider: "youtube",
+    audioTracks: [
+      {
+        id: "audio-140",
+        type: "audio",
+        itag: "140",
+        urlResolution: "provider_client_pending",
+      },
+    ],
+    variants: [
+      {
+        id: "video-vp9",
+        type: "video",
+        itag: "248",
+        qualityLabel: "1080p",
+        height: 1080,
+        mimeType: "video/webm",
+        codecs: "vp9",
+        urlResolution: "provider_client_pending",
+      },
+      {
+        id: "video-av1",
+        type: "video",
+        itag: "399",
+        qualityLabel: "1080p",
+        height: 1080,
+        mimeType: "video/mp4",
+        codecs: "av01.0.08M.08",
+        urlResolution: "provider_client_pending",
+      },
+      {
+        id: "video-h264",
+        type: "video",
+        itag: "137",
+        qualityLabel: "1080p",
+        height: 1080,
+        mimeType: "video/mp4",
+        codecs: "avc1.640028",
+        urlResolution: "provider_client_pending",
+      },
+    ],
+  };
+
+  assert.deepEqual(
+    getMediaVideoQualityOptions(candidate).map((quality) => ({
+      id: quality.id,
+      group: quality.groupLabel,
+      option: quality.optionLabel,
+    })),
+    [
+      { id: "video-h264", group: "1080p", option: "MP4 · H.264" },
+      { id: "video-av1", group: "1080p", option: "MP4 · AV1" },
+      { id: "video-vp9", group: "1080p", option: "WebM · VP9" },
+    ],
+  );
 });
 
 test("YouTube n challenge tracks become Helper-ready when Player JS is known", () => {

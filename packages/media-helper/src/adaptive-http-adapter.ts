@@ -191,32 +191,44 @@ async function downloadAdaptiveHttp(
       return { outputPath, totalBytes: output.size, resumedBytes: 0 };
     }
     if (!audio) throw new Error("Resolved adaptive audio track is required.");
+    const transferController = linkedAbortController(context.signal);
+    const transferContext = (key: string) =>
+      childContext({ ...context, signal: transferController.signal }, (value) =>
+        update(key, value),
+      );
     const downloadVideo = () =>
-      downloadDirectHttp(
-        directTrackJob(
-          job,
-          video,
-          "video-track",
-          cacheDirectory,
-          videoConnections,
-        ),
-        childContext(context, (value) => update("video", value)),
+      downloadAdaptiveTrack(
+        job,
+        video,
+        "video-track",
+        cacheDirectory,
+        videoConnections,
+        transferContext("video"),
       );
     const downloadAudio = () =>
-      downloadDirectHttp(
-        directTrackJob(
-          job,
-          audio,
-          "audio-track",
-          cacheDirectory,
-          audioConnections,
-        ),
-        childContext(context, (value) => update("audio", value)),
+      downloadAdaptiveTrack(
+        job,
+        audio,
+        "audio-track",
+        cacheDirectory,
+        audioConnections,
+        transferContext("audio"),
       );
-    const [videoResult, audioResult] =
-      job.connections === 1
-        ? [await downloadVideo(), await downloadAudio()]
-        : await Promise.all([downloadVideo(), downloadAudio()]);
+    let videoResult;
+    let audioResult;
+    if (job.connections === 1) {
+      videoResult = await downloadVideo();
+      audioResult = await downloadAudio();
+    } else {
+      const transfers = [downloadVideo(), downloadAudio()] as const;
+      try {
+        [videoResult, audioResult] = await Promise.all(transfers);
+      } catch (error) {
+        transferController.abort(error);
+        await Promise.allSettled(transfers);
+        throw error;
+      }
+    }
     context.progress({
       phase: "finalizing",
       stage: "local_processing",
@@ -245,6 +257,39 @@ async function downloadAdaptiveHttp(
     await unlink(partialPath).catch(() => {});
     await rm(cacheDirectory, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+async function downloadAdaptiveTrack(
+  job: DownloadJob,
+  track: AdaptiveHttpTrack,
+  title: string,
+  outputDirectory: string,
+  connections: number,
+  context: DownloadContext,
+) {
+  try {
+    return await downloadDirectHttp(
+      directTrackJob(job, track, title, outputDirectory, connections),
+      context,
+    );
+  } catch (error) {
+    const provider = job.candidate.provider === "youtube" ? "YouTube " : "";
+    throw new Error(
+      `${provider}${track.type} track (${adaptiveTrackLabel(track)}) failed: ${messageOf(error)}`,
+    );
+  }
+}
+
+function adaptiveTrackLabel(track: AdaptiveHttpTrack) {
+  const values = [
+    track.qualityLabel,
+    track.itag ? `itag ${track.itag}` : null,
+  ].filter(Boolean);
+  return values.join(" · ") || "unknown format";
+}
+
+function messageOf(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function selectTrack(
@@ -311,6 +356,16 @@ function childContext(
   progress: (value: DownloadProgress) => void,
 ): DownloadContext {
   return { signal: parent.signal, progress, strategy: parent.strategy };
+}
+
+function linkedAbortController(parent: AbortSignal) {
+  const controller = new AbortController();
+  if (parent.aborted) controller.abort(parent.reason);
+  else
+    parent.addEventListener("abort", () => controller.abort(parent.reason), {
+      once: true,
+    });
+  return controller;
 }
 
 function remuxTrack(

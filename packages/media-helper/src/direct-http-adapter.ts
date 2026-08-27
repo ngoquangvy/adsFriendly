@@ -273,7 +273,7 @@ async function downloadRangeWithRetry({
         signal: context.signal,
       });
       if (response.status !== 206 || !response.body) {
-        throw new Error(`Range request returned HTTP ${response.status}.`);
+        throw new Error(rangeFailureMessage(probe.url, response.status, range));
       }
       const handle = await open(partialPath, "r+");
       try {
@@ -310,6 +310,27 @@ async function downloadRangeWithRetry({
     }
   }
   throw lastError;
+}
+
+function rangeFailureMessage(url: string, status: number, range: ByteRange) {
+  if (status === 403 && isGoogleVideoUrl(url)) {
+    return (
+      `GoogleVideo rejected bytes ${range.start}-${range.end} after accepting the initial probe (HTTP 403). ` +
+      "This stream requires a valid GVS Proof-of-Origin token or a fresh provider URL."
+    );
+  }
+  return `Range request for bytes ${range.start}-${range.end} returned HTTP ${status}.`;
+}
+
+function isGoogleVideoUrl(value: string) {
+  try {
+    const hostname = new URL(value).hostname;
+    return (
+      hostname === "googlevideo.com" || hostname.endsWith(".googlevideo.com")
+    );
+  } catch {
+    return false;
+  }
 }
 
 async function downloadSequential({

@@ -555,11 +555,20 @@ function createMediaDownloadControl(item, downloadItem, tab, helper) {
   automaticQuality.value = "";
   automaticQuality.textContent = "Quality · Auto (best)";
   qualitySelect.append(automaticQuality);
+  const qualityGroups = new Map();
   for (const quality of qualityOptions) {
     const option = document.createElement("option");
     option.value = quality.id;
-    option.textContent = quality.label;
-    qualitySelect.append(option);
+    option.textContent = quality.optionLabel || quality.label;
+    const groupLabel = quality.groupLabel || "Source quality";
+    let group = qualityGroups.get(groupLabel);
+    if (!group) {
+      group = document.createElement("optgroup");
+      group.label = groupLabel;
+      qualityGroups.set(groupLabel, group);
+      qualitySelect.append(group);
+    }
+    group.append(option);
   }
   qualitySelect.disabled = !availability.supported || !qualityOptions.length;
   const estimateLabel = document.createElement("span");

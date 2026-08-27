@@ -82,6 +82,8 @@ export function getMediaVideoQualityOptions(candidate = {}) {
       Object.freeze({
         id: track.id,
         label: videoQualityLabel(track),
+        groupLabel: videoQualityGroupLabel(track),
+        optionLabel: videoQualityOptionLabel(track),
         height: positiveInteger(track.resolution?.height || track.height),
         muxed: track.muxed === true,
         estimatedBytes: positiveInteger(track.contentLength),
@@ -108,26 +110,65 @@ function compareVideoQuality(left, right) {
   return (
     (right.resolution?.height || right.height || 0) -
       (left.resolution?.height || left.height || 0) ||
+    qualityFps(right) - qualityFps(left) ||
+    videoCompatibilityScore(right) - videoCompatibilityScore(left) ||
     (right.averageBandwidth || right.bandwidth || 0) -
       (left.averageBandwidth || left.bandwidth || 0)
   );
 }
 
 function videoQualityLabel(track) {
+  return [videoQualityGroupLabel(track), videoQualityOptionLabel(track)]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function videoQualityGroupLabel(track) {
   const quality =
     track.qualityLabel ||
     (track.resolution?.height || track.height
       ? `${track.resolution?.height || track.height}p`
       : "Source quality");
+  return quality;
+}
+
+function videoQualityOptionLabel(track) {
   const format = String(track.mimeType || "").includes("webm")
     ? "WebM"
     : String(track.mimeType || "").includes("mp4")
       ? "MP4"
       : null;
   const codec = codecLabel(track.codecs);
-  return [quality, format, track.muxed === true ? "audio included" : codec]
+  return [format, codec, track.muxed === true ? "audio included" : null]
     .filter(Boolean)
     .join(" · ");
+}
+
+function qualityFps(track) {
+  const explicit = positiveInteger(track.fps);
+  if (explicit) return explicit;
+  return (
+    positiveInteger(String(track.qualityLabel || "").match(/p(\d+)$/i)?.[1]) ||
+    0
+  );
+}
+
+function videoCompatibilityScore(track) {
+  const mime = String(track.mimeType || "").toLowerCase();
+  const codec = String(track.codecs || "").toLowerCase();
+  if (
+    mime.includes("mp4") &&
+    (codec.includes("avc1") || codec.includes("avc3"))
+  )
+    return 40;
+  if (mime.includes("mp4") && codec.includes("av01")) return 30;
+  if (
+    mime.includes("webm") &&
+    (codec.includes("vp9") || codec.includes("vp09"))
+  )
+    return 20;
+  if (mime.includes("mp4")) return 10;
+  return 0;
 }
 
 function codecLabel(value) {
