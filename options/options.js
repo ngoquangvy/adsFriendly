@@ -814,6 +814,14 @@ var AdsFriendlyOptions = (() => {
     });
   }
 
+  // src/media/adaptive-track-policy.js
+  var ADAPTIVE_TRACK_RESOLUTION = Object.freeze({
+    RESOLVED: "resolved",
+    N_TRANSFORM_PENDING: "n_transform_pending",
+    SIGNATURE_CIPHER_PENDING: "signature_cipher_pending",
+    PROVIDER_CLIENT_PENDING: "provider_client_pending"
+  });
+
   // src/media/download-options.js
   var MEDIA_OUTPUT_CONTAINERS = Object.freeze({
     SOURCE: "source",
@@ -966,6 +974,7 @@ var AdsFriendlyOptions = (() => {
       output_prepare: "Preparing output file\u2026",
       ffmpeg_start: "Starting FFmpeg\u2026",
       compatibility_check: "Testing key and sample segment\u2026",
+      provider_resolution: "Resolving selected YouTube quality\u2026",
       segment_download: "Downloading HLS segments\u2026",
       local_assembly: "Preparing local HLS manifest\u2026",
       local_processing: "Processing downloaded media\u2026"

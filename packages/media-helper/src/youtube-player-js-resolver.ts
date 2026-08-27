@@ -21,6 +21,8 @@ export async function resolveYouTubePlayerTrack(
     throw new Error(
       "YouTube Player JS resolution requires the player URL captured by the extension. Reload the video page and retry.",
     );
+  if (!track.sourceUrl)
+    throw new Error("YouTube Player JS resolution requires a media URL.");
   const playerId = youtubePlayerId(candidate.playerUrl);
   if (!playerId)
     throw new Error("The captured YouTube Player JS URL is invalid.");

@@ -64,7 +64,7 @@ export interface DownloadCandidate {
 export interface AdaptiveHttpTrack {
   id: string;
   type: "video" | "audio";
-  sourceUrl: string;
+  sourceUrl: string | null;
   mimeType: string | null;
   codecs: string | null;
   itag: string | null;
@@ -75,7 +75,10 @@ export interface AdaptiveHttpTrack {
   height: number | null;
   qualityLabel: string | null;
   urlResolution:
-    "resolved" | "n_transform_pending" | "signature_cipher_pending";
+    | "resolved"
+    | "n_transform_pending"
+    | "signature_cipher_pending"
+    | "provider_client_pending";
   signatureCipher: string | null;
   muxed: boolean;
 }
@@ -103,6 +106,7 @@ export interface DownloadProgress {
     | "output_prepare"
     | "ffmpeg_start"
     | "compatibility_check"
+    | "provider_resolution"
     | "segment_download"
     | "local_assembly"
     | "local_processing";

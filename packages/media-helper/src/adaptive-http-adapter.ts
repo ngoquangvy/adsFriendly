@@ -16,6 +16,7 @@ import type {
   DownloadResult,
 } from "./download-types.js";
 import { resolveYouTubePlayerTrack } from "./youtube-player-js-resolver.js";
+import { resolveYouTubeProviderTracks } from "./youtube-provider-resolver.js";
 
 export const adaptiveHttpAdapter: DownloadAdapter = Object.freeze({
   id: "adaptive-http",
@@ -56,6 +57,27 @@ async function downloadAdaptiveHttp(
     throw new Error(
       "The selected video quality requires a separate audio track that is not available.",
     );
+  if (
+    video.urlResolution === "provider_client_pending" ||
+    audio?.urlResolution === "provider_client_pending"
+  ) {
+    context.progress({
+      phase: "probing",
+      stage: "provider_resolution",
+      downloadedBytes: 0,
+      totalBytes: null,
+      bytesPerSecond: 0,
+      resumable: false,
+      resumedBytes: 0,
+      duration: job.candidate.duration,
+    });
+    const resolved = await resolveYouTubeProviderTracks(
+      [video, ...(audio ? [audio] : [])],
+      job.candidate,
+    );
+    video = resolved[0];
+    audio = resolved[1] || null;
+  }
   if (
     video.urlResolution !== "resolved" ||
     (audio && audio.urlResolution !== "resolved")
@@ -232,7 +254,11 @@ function selectTrack(
 ) {
   const preferMp4 = job.output.container !== "mkv";
   return [...(tracks || [])]
-    .filter((track) => track.type === type && track.sourceUrl)
+    .filter(
+      (track) =>
+        track.type === type &&
+        (track.sourceUrl || track.urlResolution === "provider_client_pending"),
+    )
     .sort(
       (left, right) =>
         (preferMp4 ? mp4Score(right) - mp4Score(left) : 0) ||
@@ -254,6 +280,8 @@ function directTrackJob(
   outputDirectory: string,
   connections: number,
 ): DownloadJob {
+  if (!track.sourceUrl)
+    throw new Error("Adaptive provider resolution did not return a media URL.");
   return {
     ...job,
     jobId: `${job.jobId}-${track.type}`,

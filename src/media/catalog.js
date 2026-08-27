@@ -8,6 +8,7 @@ import {
 } from "./contracts.js";
 import { isLikelyMediaSegment } from "./detection.js";
 import { resolveHlsSources } from "./hls-resolver.js";
+import { isAcquirableAdaptiveTrack } from "./adaptive-track-policy.js";
 
 export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
   const tabs = new Map();
@@ -650,9 +651,11 @@ function mergeAdaptiveTracks(existing, candidate) {
   const bestAudio =
     [...audioTracks].sort(compareAdaptiveTrackQuality)[0] || null;
   const playerUrl = candidate.playerUrl || existing?.playerUrl || null;
+  const acquisitionCandidate = { ...candidate, playerUrl };
   const muxedReady = variants.some(
     (track) =>
-      track.muxed === true && hasAcquirableAdaptiveTrack(track, playerUrl),
+      track.muxed === true &&
+      isAcquirableAdaptiveTrack(acquisitionCandidate, track),
   );
   return {
     variants,
@@ -675,28 +678,16 @@ function mergeAdaptiveTracks(existing, candidate) {
     playerUrl,
     probeStatus:
       muxedReady ||
-      (variants.some((track) => hasAcquirableAdaptiveTrack(track, playerUrl)) &&
+      (variants.some((track) =>
+        isAcquirableAdaptiveTrack(acquisitionCandidate, track),
+      ) &&
         audioTracks.some((track) =>
-          hasAcquirableAdaptiveTrack(track, playerUrl),
+          isAcquirableAdaptiveTrack(acquisitionCandidate, track),
         ))
         ? MEDIA_PROBE_STATES.READY
         : MEDIA_PROBE_STATES.DISCOVERED,
     streamType: "vod",
   };
-}
-
-function hasAcquirableAdaptiveTrack(track, playerUrl) {
-  try {
-    const url = new URL(track?.sourceUrl);
-    if (!["http:", "https:"].includes(url.protocol)) return false;
-    return !["n_transform_pending", "signature_cipher_pending"].includes(
-      track.urlResolution,
-    )
-      ? true
-      : Boolean(playerUrl);
-  } catch {
-    return false;
-  }
 }
 
 function mergeTrackList(existing = [], incoming = []) {

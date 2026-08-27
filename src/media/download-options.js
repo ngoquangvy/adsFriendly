@@ -1,3 +1,5 @@
+import { isAcquirableAdaptiveTrack } from "./adaptive-track-policy.js";
+
 export const MEDIA_OUTPUT_CONTAINERS = Object.freeze({
   SOURCE: "source",
   MP4: "mp4",
@@ -66,12 +68,14 @@ export function normalizeMediaDownloadOutput(value, candidate = {}) {
 
 export function getMediaVideoQualityOptions(candidate = {}) {
   if (candidate.kind !== "adaptive") return [];
-  const hasSeparateAudio = (candidate.audioTracks || []).some(
-    (track) => track?.sourceUrl,
+  const hasSeparateAudio = (candidate.audioTracks || []).some((track) =>
+    isAcquirableAdaptiveTrack(candidate, track),
   );
   return uniqueObjects(candidate.variants || [])
     .filter(
-      (track) => track?.sourceUrl && (track.muxed === true || hasSeparateAudio),
+      (track) =>
+        isAcquirableAdaptiveTrack(candidate, track) &&
+        (track.muxed === true || hasSeparateAudio),
     )
     .sort(compareVideoQuality)
     .map((track) =>
@@ -91,7 +95,7 @@ function normalizeVideoTrackId(value, candidate) {
   if (typeof value !== "string")
     throw new Error("[MediaDownload] Invalid video quality selection.");
   const track = (candidate.variants || []).find(
-    (item) => item?.id === value && item?.sourceUrl,
+    (item) => item?.id === value && isAcquirableAdaptiveTrack(candidate, item),
   );
   if (!track || (track.muxed !== true && !(candidate.audioTracks || []).length))
     throw new Error(
@@ -120,9 +124,19 @@ function videoQualityLabel(track) {
     : String(track.mimeType || "").includes("mp4")
       ? "MP4"
       : null;
-  return [quality, format, track.muxed === true ? "audio included" : null]
+  const codec = codecLabel(track.codecs);
+  return [quality, format, track.muxed === true ? "audio included" : codec]
     .filter(Boolean)
     .join(" · ");
+}
+
+function codecLabel(value) {
+  const codec = String(value || "").toLowerCase();
+  if (codec.includes("avc1") || codec.includes("avc3")) return "H.264";
+  if (codec.includes("av01")) return "AV1";
+  if (codec.includes("vp9") || codec.includes("vp09")) return "VP9";
+  if (codec.includes("hev1") || codec.includes("hvc1")) return "HEVC";
+  return null;
 }
 
 export function classifyDirectMediaContainer(candidate = {}) {
@@ -162,7 +176,9 @@ export function getMediaDownloadEstimate(
   ]);
   const variants = (
     candidate.kind === "adaptive"
-      ? allVariants.filter(hasUsableAdaptiveUrl)
+      ? allVariants.filter((track) =>
+          isAcquirableAdaptiveTrack(candidate, track),
+        )
       : allVariants
   ).sort(compareBandwidth);
   const selectedVariant =
@@ -197,7 +213,9 @@ export function getMediaDownloadEstimate(
   ) {
     const audioBandwidth = [...(candidate.audioTracks || [])]
       .filter((track) =>
-        candidate.kind === "adaptive" ? hasUsableAdaptiveUrl(track) : true,
+        candidate.kind === "adaptive"
+          ? isAcquirableAdaptiveTrack(candidate, track)
+          : true,
       )
       .map((track) =>
         firstPositiveNumber(track.averageBandwidth, track.bandwidth),
@@ -242,20 +260,10 @@ function adaptiveContentLength(candidate, selectedVariant = null) {
     return Number.isSafeInteger(total) && total > 0 ? total : null;
   }
   const audio = [...(candidate.audioTracks || [])]
-    .filter(hasUsableAdaptiveUrl)
+    .filter((track) => isAcquirableAdaptiveTrack(candidate, track))
     .sort(compareBandwidth)[0]?.contentLength;
   const total = (Number(video) || 0) + (Number(audio) || 0);
   return Number.isSafeInteger(total) && total > 0 ? total : null;
-}
-
-function hasUsableAdaptiveUrl(track) {
-  try {
-    return ["http:", "https:"].includes(
-      new URL(track?.sourceUrl || track?.url).protocol,
-    );
-  } catch {
-    return false;
-  }
 }
 
 function compareBandwidth(left, right) {

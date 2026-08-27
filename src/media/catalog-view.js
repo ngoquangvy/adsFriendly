@@ -6,6 +6,10 @@ import {
   isWeakSampleAesSignal,
 } from "./protection-policy.js";
 import { diagnoseMediaResolution } from "./resolution-diagnostics.js";
+import {
+  hasYouTubeProviderPendingTracks,
+  isAcquirableAdaptiveTrack,
+} from "./adaptive-track-policy.js";
 
 export function createMediaCatalogViewSignature({
   tabId = null,
@@ -26,6 +30,9 @@ export function createMediaCatalogViewSignature({
           canSelectContainer: helper.canSelectContainer,
           canDownloadDash: helper.canDownloadDash,
           canDownloadAdaptive: helper.canDownloadAdaptive,
+          canResolveYouTubePlayerJs: helper.canResolveYouTubePlayerJs,
+          canResolveYouTubeProviderFormats:
+            helper.canResolveYouTubeProviderFormats,
           error: helper.error,
         }
       : null,
@@ -199,14 +206,15 @@ function mediaDownloadDiagnostic(items, availability) {
   if (adaptive) {
     const acquisitionDiagnostic = adaptive.acquisitionDiagnostic;
     const acquisitionMessage = youtubeAcquisitionMessage(acquisitionDiagnostic);
-    const videoCount = (adaptive.variants || []).filter(
-      hasResolvedTrackUrl,
+    const videoCount = (adaptive.variants || []).filter((track) =>
+      isAcquirableAdaptiveTrack(adaptive, track),
     ).length;
-    const audioCount = (adaptive.audioTracks || []).filter(
-      hasResolvedTrackUrl,
+    const audioCount = (adaptive.audioTracks || []).filter((track) =>
+      isAcquirableAdaptiveTrack(adaptive, track),
     ).length;
     const muxedVideoCount = (adaptive.variants || []).filter(
-      (track) => track.muxed === true && hasResolvedTrackUrl(track),
+      (track) =>
+        track.muxed === true && isAcquirableAdaptiveTrack(adaptive, track),
     ).length;
     if (
       muxedVideoCount &&
@@ -448,8 +456,12 @@ function dashDetails(item) {
 
 function adaptiveDetails(item) {
   const facts = [item.provider === "youtube" ? "YouTube" : "Adaptive media"];
-  const videos = (item.variants || []).filter(hasResolvedTrackUrl);
-  const audio = (item.audioTracks || []).filter(hasResolvedTrackUrl);
+  const videos = (item.variants || []).filter((track) =>
+    isAcquirableAdaptiveTrack(item, track),
+  );
+  const audio = (item.audioTracks || []).filter((track) =>
+    isAcquirableAdaptiveTrack(item, track),
+  );
   const muxed = videos.some((track) => track.muxed === true);
   const acquisition = item.acquisitionDiagnostic;
   if (!videos.length && !audio.length && acquisition) {
@@ -482,6 +494,8 @@ function adaptiveDetails(item) {
     facts.push("Helper resolves n");
   if (acquisition?.stage === "signature_cipher_pending")
     facts.push("Helper resolves signature");
+  if (hasYouTubeProviderPendingTracks(item))
+    facts.push("Helper resolves qualities");
   return facts.join(" · ");
 }
 
@@ -520,14 +534,6 @@ function playerAcquisitionLabel(diagnostic) {
       return `Playback ${diagnostic.playabilityStatus || "blocked"}`;
     default:
       return "Player response";
-  }
-}
-
-function hasResolvedTrackUrl(track) {
-  try {
-    return ["http:", "https:"].includes(new URL(track?.sourceUrl).protocol);
-  } catch {
-    return false;
   }
 }
 

@@ -32,6 +32,7 @@ import {
 } from "../media/catalog-view.js";
 import { mediaCatalogSessionKey } from "../media/storage-keys.js";
 import { evaluateMediaDeepInspection } from "../media/deep-inspection.js";
+import { hasYouTubeProviderPendingTracks } from "../media/adaptive-track-policy.js";
 import {
   stageMediaDeepInspectionProfile,
   verifyMediaDeepInspectionProfiles,
@@ -64,6 +65,7 @@ let mediaHelperStatus = {
   canDownloadDash: false,
   canDownloadAdaptive: false,
   canResolveYouTubePlayerJs: false,
+  canResolveYouTubeProviderFormats: false,
   canSelectContainer: false,
 };
 let activeMediaTabId = null;
@@ -693,7 +695,9 @@ function helperCanDownload(item, helper) {
     return (
       helper.canDownloadAdaptive === true &&
       (item.acquisitionProfile !== "youtube_player_js_challenge" ||
-        helper.canResolveYouTubePlayerJs === true)
+        helper.canResolveYouTubePlayerJs === true) &&
+      (!hasYouTubeProviderPendingTracks(item) ||
+        helper.canResolveYouTubeProviderFormats === true)
     );
   return helper.canDownloadDash === true;
 }
@@ -745,6 +749,7 @@ async function readMediaHelperStatus(force = false) {
         canDownloadDash: false,
         canDownloadAdaptive: false,
         canResolveYouTubePlayerJs: false,
+        canResolveYouTubeProviderFormats: false,
         canSelectContainer: false,
         error: response?.error || "Could not read Media Helper status.",
       };

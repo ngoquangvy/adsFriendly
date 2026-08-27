@@ -23,6 +23,7 @@ import {
 } from "./media-helper-bridge.js";
 import { getMediaManifestHandoff } from "./media-manifest-handoff.js";
 import { normalizeMediaDownloadOutput } from "../media/download-options.js";
+import { hasYouTubeProviderPendingTracks } from "../media/adaptive-track-policy.js";
 
 let broker = null;
 
@@ -479,6 +480,18 @@ async function helperFailureFor(candidate, output) {
       helper,
       reason:
         "This Media Helper build cannot resolve YouTube Player JS challenges yet.",
+    };
+  }
+  if (
+    candidate.kind === "adaptive" &&
+    hasYouTubeProviderPendingTracks(candidate) &&
+    !helper.canResolveYouTubeProviderFormats
+  ) {
+    return {
+      status: "helper_not_ready",
+      helper,
+      reason:
+        "This Media Helper build cannot resolve YouTube adaptive quality tracks yet.",
     };
   }
   const capabilityReady =

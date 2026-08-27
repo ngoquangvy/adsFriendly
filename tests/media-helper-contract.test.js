@@ -466,6 +466,57 @@ test("helper accepts browser-resolved adaptive video and audio tracks", () => {
   assert.equal(payload.output.container, "mp4");
 });
 
+test("helper accepts YouTube provider-resolvable adaptive descriptors", () => {
+  const payload = normalizeHelperDownloadPayload({
+    jobId: "youtube-provider-1",
+    output: {
+      profileId: "video-mp4",
+      videoTrackId: "youtube-video-137",
+    },
+    candidate: {
+      id: "youtube-video-1",
+      kind: "adaptive",
+      pageUrl: "https://www.youtube.com/watch?v=video-1",
+      sourceUrl: "https://www.youtube.com/watch?v=video-1",
+      provider: "youtube",
+      acquisitionProfile: "youtube_player_response",
+      variants: [
+        {
+          id: "youtube-video-137",
+          type: "video",
+          sourceUrl: null,
+          mimeType: "video/mp4",
+          codecs: "avc1.640028",
+          itag: "137",
+          height: 1080,
+          contentLength: 80_000_000,
+          urlResolution: "provider_client_pending",
+        },
+      ],
+      audioTracks: [
+        {
+          id: "youtube-audio-140",
+          type: "audio",
+          sourceUrl: null,
+          mimeType: "audio/mp4",
+          codecs: "mp4a.40.2",
+          itag: "140",
+          contentLength: 4_000_000,
+          urlResolution: "provider_client_pending",
+        },
+      ],
+    },
+  });
+
+  assert.equal(payload.candidate.variants[0].sourceUrl, null);
+  assert.equal(
+    payload.candidate.variants[0].urlResolution,
+    "provider_client_pending",
+  );
+  assert.equal(payload.candidate.audioTracks[0].sourceUrl, null);
+  assert.equal(payload.output.videoTrackId, "youtube-video-137");
+});
+
 test("helper retains bounded YouTube signature cipher metadata", () => {
   const sourceUrl =
     "https://r1.googlevideo.com/videoplayback?id=asset-1&itag=137&mime=video%2Fmp4";
@@ -601,6 +652,7 @@ test("helper status exposes only declared download capabilities", async () => {
             "download.dash_vod": true,
             "mux.ffmpeg": true,
             [MEDIA_HELPER_CAPABILITIES.YOUTUBE_PLAYER_JS_RESOLUTION]: true,
+            [MEDIA_HELPER_CAPABILITIES.YOUTUBE_PROVIDER_FORMAT_RESOLUTION]: true,
             ignored: { nested: true },
           },
         }),
@@ -616,6 +668,7 @@ test("helper status exposes only declared download capabilities", async () => {
     assert.equal(status.canDownloadDash, true);
     assert.equal(status.canMuxWithFfmpeg, true);
     assert.equal(status.canResolveYouTubePlayerJs, true);
+    assert.equal(status.canResolveYouTubeProviderFormats, true);
     assert.deepEqual(status.capabilities, {
       "download.direct_http": true,
       "download.hls_vod": false,
@@ -624,6 +677,7 @@ test("helper status exposes only declared download capabilities", async () => {
       "download.dash_vod": true,
       "mux.ffmpeg": true,
       "resolve.youtube_player_js": true,
+      "resolve.youtube_provider_formats": true,
     });
   } finally {
     globalThis.chrome = previousChrome;

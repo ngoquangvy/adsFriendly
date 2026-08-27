@@ -4471,6 +4471,14 @@ ${body}`;
     }
   }
 
+  // src/media/adaptive-track-policy.js
+  var ADAPTIVE_TRACK_RESOLUTION = Object.freeze({
+    RESOLVED: "resolved",
+    N_TRANSFORM_PENDING: "n_transform_pending",
+    SIGNATURE_CIPHER_PENDING: "signature_cipher_pending",
+    PROVIDER_CLIENT_PENDING: "provider_client_pending"
+  });
+
   // src/media/youtube-player-response.js
   var YOUTUBE_PLAYER_STAGES = Object.freeze({
     RESOLVED_TRACKS: "resolved_tracks",
@@ -4692,6 +4700,7 @@ ${body}`;
       type,
       itag,
       sourceUrl: null,
+      urlResolution: ADAPTIVE_TRACK_RESOLUTION.PROVIDER_CLIENT_PENDING,
       mimeType,
       codecs: parseCodecs2(format.mimeType),
       bandwidth: bitrate,

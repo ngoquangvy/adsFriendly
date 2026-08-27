@@ -161,6 +161,14 @@ async function verifyExecutable(path) {
       "Packaged helper omitted its YouTube Player JS resolver capability.",
     );
   }
+  if (
+    response.payload?.capabilities?.["resolve.youtube_provider_formats"] !==
+    true
+  ) {
+    throw new Error(
+      "Packaged helper omitted its YouTube provider format resolver capability.",
+    );
+  }
   process.stdout.write(
     `Verified packaged helper ${response.payload.helperVersion}; HLS ${
       response.payload.capabilities["download.hls_vod"]

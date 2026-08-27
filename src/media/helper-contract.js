@@ -1,8 +1,12 @@
 import { normalizeMediaDownloadOutput } from "./download-options.js";
 import { isRegisteredMediaAccessStrategy } from "./access-strategy-catalog.js";
 import { normalizeAesKeyHandoffDiagnostic } from "./key-handoff-diagnostics.js";
+import {
+  ADAPTIVE_TRACK_RESOLUTION,
+  isYouTubeProviderResolvableTrack,
+} from "./adaptive-track-policy.js";
 
-export const MEDIA_HELPER_PROTOCOL_VERSION = 7;
+export const MEDIA_HELPER_PROTOCOL_VERSION = 8;
 export const MEDIA_HELPER_HOST_NAME = "com.adsfriendly.media_helper";
 
 export const MEDIA_HELPER_REQUESTS = Object.freeze({
@@ -35,6 +39,7 @@ export const MEDIA_HELPER_CAPABILITIES = Object.freeze({
   DASH_VOD_DOWNLOAD: "download.dash_vod",
   ADAPTIVE_HTTP_DOWNLOAD: "download.adaptive_http",
   YOUTUBE_PLAYER_JS_RESOLUTION: "resolve.youtube_player_js",
+  YOUTUBE_PROVIDER_FORMAT_RESOLUTION: "resolve.youtube_provider_formats",
   FFMPEG_MUX: "mux.ffmpeg",
   OUTPUT_OPEN: "output.open",
   OUTPUT_REVEAL: "output.reveal",
@@ -171,11 +176,19 @@ export function normalizeHelperDownloadPayload(value = {}) {
           : null,
       variants:
         kind === "adaptive"
-          ? normalizeHelperAdaptiveTracks(candidate.variants, "video")
+          ? normalizeHelperAdaptiveTracks(
+              candidate.variants,
+              "video",
+              candidate,
+            )
           : [],
       audioTracks:
         kind === "adaptive"
-          ? normalizeHelperAdaptiveTracks(candidate.audioTracks, "audio")
+          ? normalizeHelperAdaptiveTracks(
+              candidate.audioTracks,
+              "audio",
+              candidate,
+            )
           : [],
       segmentCount:
         kind === "hls"
@@ -200,7 +213,7 @@ export function normalizeHelperDownloadPayload(value = {}) {
   };
 }
 
-function normalizeHelperAdaptiveTracks(value, expectedType) {
+function normalizeHelperAdaptiveTracks(value, expectedType, candidate) {
   if (!Array.isArray(value) || !value.length) {
     if (expectedType === "audio") return [];
     throw new Error(
@@ -210,10 +223,12 @@ function normalizeHelperAdaptiveTracks(value, expectedType) {
   return value.slice(0, 24).map((track, index) => ({
     id: optionalString(track?.id) || `${expectedType}-${index + 1}`,
     type: expectedType,
-    sourceUrl: requiredHttpUrl(
-      track?.sourceUrl || track?.url,
-      `candidate.${expectedType}Tracks[${index}].sourceUrl`,
-    ),
+    sourceUrl: isYouTubeProviderResolvableTrack(candidate, track)
+      ? null
+      : requiredHttpUrl(
+          track?.sourceUrl || track?.url,
+          `candidate.${expectedType}Tracks[${index}].sourceUrl`,
+        ),
     mimeType: optionalString(track?.mimeType),
     codecs: optionalString(track?.codecs),
     itag: optionalString(track?.itag),
@@ -225,7 +240,7 @@ function normalizeHelperAdaptiveTracks(value, expectedType) {
       track?.height || track?.resolution?.height,
     ),
     qualityLabel: optionalString(track?.qualityLabel),
-    urlResolution: ["n_transform_pending", "signature_cipher_pending"].includes(
+    urlResolution: Object.values(ADAPTIVE_TRACK_RESOLUTION).includes(
       track?.urlResolution,
     )
       ? track.urlResolution

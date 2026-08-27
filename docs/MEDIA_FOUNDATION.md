@@ -63,11 +63,17 @@ YouTube is handled by a bounded acquisition profile rather than pretending its
 `blob:` player source is a DASH manifest. Successful `googlevideo/videoplayback`
 responses are classified as already browser-resolved tracks; playback byte
 windows are deduplicated by video/itag and grouped into one adaptive candidate.
-The profile waits for both video and audio, retains the signed track URLs only
-in the per-tab/session job state, and never evaluates YouTube player code or
-derives a signature. The Helper prefers an MP4/M4A pair for MP4 output, downloads
-the two files through the shared parallel Range engine, then invokes FFmpeg only
-for local muxing.
+The profile waits for both video and audio and retains signed track URLs only
+in the per-tab/session job state. When the WEB response exposes a progressive
+track through signature/n challenges, the Helper resolves the captured Player
+JS with a bounded sandbox. When higher qualities are present only as SABR
+descriptors, the extension keeps their `itag`/codec/size metadata and marks them
+`provider_client_pending`; the Helper requests an anonymous IOS provider
+profile, matches only the selected video and audio `itag`, and accepts only
+validated `googlevideo/videoplayback` URLs. IOS is tried before a bounded
+ANDROID fallback and results live only in a short in-memory cache. The Helper
+prefers an MP4/M4A pair for MP4 output, downloads the two files through the
+shared parallel Range engine, then invokes FFmpeg only for local muxing.
 
 The HLS resolver keeps multiple observations of a tokenized endpoint and does
 not let a later empty envelope replace an already usable media playlist. It
@@ -164,8 +170,9 @@ are transient diagnostics—not training labels or video-ad classifications.
 contract shared by the extension and `packages/media-helper/`. The helper has
 an adapter registry, a Direct HTTP MP4/WebM adapter with parallel byte-range
 requests, progress, cancellation, and resume metadata, plus FFmpeg-backed HLS
-and DASH VOD adapters. A resolved-adaptive adapter reuses the Direct HTTP engine
-for separate video/audio tracks and performs a local FFmpeg mux. HLS AES-128 identity keys are supported when their HTTP(S)
+and DASH VOD adapters. An adaptive adapter resolves browser-observed or
+provider-selected YouTube tracks, reuses the Direct HTTP engine for separate
+video/audio files, and performs a local FFmpeg mux. HLS AES-128 identity keys are supported when their HTTP(S)
 key URI is reachable; SAMPLE-AES and DRM key formats remain playback-only.
 Adaptive preflight rejects live/DRM streams, bounds
 manifest input, validates referenced network resources, and supports HLS

@@ -6,6 +6,11 @@ import {
   isWeakSampleAesSignal,
 } from "./protection-policy.js";
 import { normalizeAesKeyHandoffDiagnostic } from "./key-handoff-diagnostics.js";
+import {
+  ADAPTIVE_TRACK_RESOLUTION,
+  isAcquirableAdaptiveTrack,
+  isYouTubeProviderResolvableTrack,
+} from "./adaptive-track-policy.js";
 
 export const DOWNLOAD_JOB_PREFIX = "adsfriendly.mediaDownloadJob.";
 export const DOWNLOAD_HISTORY_KEY = "mediaDownloadHistory";
@@ -58,10 +63,15 @@ export function normalizeMediaDownloadJob(value = {}) {
               playerUrl: optionalString(candidate.playerUrl),
               probeStatus: candidate.probeStatus,
               streamType: candidate.streamType,
-              variants: normalizeAdaptiveTracks(candidate.variants, "video"),
+              variants: normalizeAdaptiveTracks(
+                candidate.variants,
+                "video",
+                candidate,
+              ),
               audioTracks: normalizeAdaptiveTracks(
                 candidate.audioTracks,
                 "audio",
+                candidate,
               ),
               duration: optionalFiniteNumber(candidate.duration),
               requestContext: normalizeDownloadRequestContext(
@@ -217,8 +227,16 @@ export function getMediaDownloadAvailability(candidate = {}) {
     let variants;
     let audioTracks;
     try {
-      variants = normalizeAdaptiveTracks(candidate.variants, "video");
-      audioTracks = normalizeAdaptiveTracks(candidate.audioTracks, "audio");
+      variants = normalizeAdaptiveTracks(
+        candidate.variants,
+        "video",
+        candidate,
+      );
+      audioTracks = normalizeAdaptiveTracks(
+        candidate.audioTracks,
+        "audio",
+        candidate,
+      );
     } catch {
       return {
         supported: false,
@@ -295,24 +313,25 @@ export function getMediaDownloadAvailability(candidate = {}) {
   return { supported: true, reason: null };
 }
 
-function normalizeAdaptiveTracks(value, expectedType) {
+function normalizeAdaptiveTracks(value, expectedType, candidate) {
   if (!Array.isArray(value)) return [];
   return value
     .filter(
       (track) =>
         track &&
         typeof track === "object" &&
-        typeof (track.sourceUrl || track.url) === "string" &&
-        (track.sourceUrl || track.url).trim(),
+        isAcquirableAdaptiveTrack(candidate, track),
     )
     .slice(0, 24)
     .map((track, index) => ({
       id: optionalString(track.id) || `${expectedType}-${index + 1}`,
       type: expectedType,
-      sourceUrl: requiredHttpUrl(
-        track.sourceUrl || track.url,
-        `candidate.${expectedType}Tracks[${index}].sourceUrl`,
-      ),
+      sourceUrl: isYouTubeProviderResolvableTrack(candidate, track)
+        ? null
+        : requiredHttpUrl(
+            track.sourceUrl || track.url,
+            `candidate.${expectedType}Tracks[${index}].sourceUrl`,
+          ),
       mimeType: optionalString(track.mimeType),
       codecs: optionalString(track.codecs),
       itag: optionalString(track.itag),
@@ -331,10 +350,9 @@ function normalizeAdaptiveTracks(value, expectedType) {
             }
           : null,
       qualityLabel: optionalString(track.qualityLabel),
-      urlResolution: [
-        "n_transform_pending",
-        "signature_cipher_pending",
-      ].includes(track.urlResolution)
+      urlResolution: Object.values(ADAPTIVE_TRACK_RESOLUTION).includes(
+        track.urlResolution,
+      )
         ? track.urlResolution
         : "resolved",
       signatureCipher: optionalString(track.signatureCipher),

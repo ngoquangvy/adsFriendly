@@ -3364,6 +3364,42 @@ var AdsFriendlyBackground = (() => {
     }
   }
 
+  // src/media/adaptive-track-policy.js
+  var ADAPTIVE_TRACK_RESOLUTION = Object.freeze({
+    RESOLVED: "resolved",
+    N_TRANSFORM_PENDING: "n_transform_pending",
+    SIGNATURE_CIPHER_PENDING: "signature_cipher_pending",
+    PROVIDER_CLIENT_PENDING: "provider_client_pending"
+  });
+  function hasHttpAdaptiveTrackUrl(track) {
+    try {
+      return ["http:", "https:"].includes(
+        new URL(track?.sourceUrl || track?.url).protocol
+      );
+    } catch {
+      return false;
+    }
+  }
+  function isYouTubeProviderResolvableTrack(candidate, track) {
+    return candidate?.provider === "youtube" && track?.urlResolution === ADAPTIVE_TRACK_RESOLUTION.PROVIDER_CLIENT_PENDING && /^\d{1,6}$/.test(String(track?.itag || ""));
+  }
+  function isAcquirableAdaptiveTrack(candidate, track) {
+    if (isYouTubeProviderResolvableTrack(candidate, track)) return true;
+    if (!hasHttpAdaptiveTrackUrl(track)) return false;
+    if ([
+      ADAPTIVE_TRACK_RESOLUTION.N_TRANSFORM_PENDING,
+      ADAPTIVE_TRACK_RESOLUTION.SIGNATURE_CIPHER_PENDING
+    ].includes(track?.urlResolution))
+      return Boolean(candidate?.playerUrl);
+    return true;
+  }
+  function hasYouTubeProviderPendingTracks(candidate) {
+    return [
+      ...candidate?.variants || [],
+      ...candidate?.audioTracks || []
+    ].some((track) => isYouTubeProviderResolvableTrack(candidate, track));
+  }
+
   // src/media/catalog.js
   function createMediaCatalog({ maximumPerTab = 50 } = {}) {
     const tabs = /* @__PURE__ */ new Map();
@@ -3930,8 +3966,9 @@ var AdsFriendlyBackground = (() => {
     const bestVideo = [...variants].sort(compareAdaptiveTrackQuality)[0] || null;
     const bestAudio = [...audioTracks].sort(compareAdaptiveTrackQuality)[0] || null;
     const playerUrl = candidate.playerUrl || existing?.playerUrl || null;
+    const acquisitionCandidate = { ...candidate, playerUrl };
     const muxedReady = variants.some(
-      (track) => track.muxed === true && hasAcquirableAdaptiveTrack(track, playerUrl)
+      (track) => track.muxed === true && isAcquirableAdaptiveTrack(acquisitionCandidate, track)
     );
     return {
       variants,
@@ -3942,22 +3979,13 @@ var AdsFriendlyBackground = (() => {
       bandwidth: bestVideo?.bandwidth || candidate.bandwidth || existing?.bandwidth,
       averageBandwidth: bestVideo?.averageBandwidth || candidate.averageBandwidth || existing?.averageBandwidth,
       playerUrl,
-      probeStatus: muxedReady || variants.some((track) => hasAcquirableAdaptiveTrack(track, playerUrl)) && audioTracks.some(
-        (track) => hasAcquirableAdaptiveTrack(track, playerUrl)
+      probeStatus: muxedReady || variants.some(
+        (track) => isAcquirableAdaptiveTrack(acquisitionCandidate, track)
+      ) && audioTracks.some(
+        (track) => isAcquirableAdaptiveTrack(acquisitionCandidate, track)
       ) ? MEDIA_PROBE_STATES.READY : MEDIA_PROBE_STATES.DISCOVERED,
       streamType: "vod"
     };
-  }
-  function hasAcquirableAdaptiveTrack(track, playerUrl) {
-    try {
-      const url = new URL(track?.sourceUrl);
-      if (!["http:", "https:"].includes(url.protocol)) return false;
-      return !["n_transform_pending", "signature_cipher_pending"].includes(
-        track.urlResolution
-      ) ? true : Boolean(playerUrl);
-    } catch {
-      return false;
-    }
   }
   function mergeTrackList(existing = [], incoming = []) {
     const tracks = /* @__PURE__ */ new Map();
@@ -4575,7 +4603,7 @@ var AdsFriendlyBackground = (() => {
     if (typeof value !== "string")
       throw new Error("[MediaDownload] Invalid video quality selection.");
     const track = (candidate.variants || []).find(
-      (item) => item?.id === value && item?.sourceUrl
+      (item) => item?.id === value && isAcquirableAdaptiveTrack(candidate, item)
     );
     if (!track || track.muxed !== true && !(candidate.audioTracks || []).length)
       throw new Error(
@@ -4744,10 +4772,15 @@ var AdsFriendlyBackground = (() => {
         playerUrl: optionalString2(candidate.playerUrl),
         probeStatus: candidate.probeStatus,
         streamType: candidate.streamType,
-        variants: normalizeAdaptiveTracks(candidate.variants, "video"),
+        variants: normalizeAdaptiveTracks(
+          candidate.variants,
+          "video",
+          candidate
+        ),
         audioTracks: normalizeAdaptiveTracks(
           candidate.audioTracks,
-          "audio"
+          "audio",
+          candidate
         ),
         duration: optionalFiniteNumber2(candidate.duration),
         requestContext: normalizeDownloadRequestContext(
@@ -4883,8 +4916,16 @@ var AdsFriendlyBackground = (() => {
       let variants;
       let audioTracks;
       try {
-        variants = normalizeAdaptiveTracks(candidate.variants, "video");
-        audioTracks = normalizeAdaptiveTracks(candidate.audioTracks, "audio");
+        variants = normalizeAdaptiveTracks(
+          candidate.variants,
+          "video",
+          candidate
+        );
+        audioTracks = normalizeAdaptiveTracks(
+          candidate.audioTracks,
+          "audio",
+          candidate
+        );
       } catch {
         return {
           supported: false,
@@ -4945,14 +4986,14 @@ var AdsFriendlyBackground = (() => {
       return { supported: false, reason: "Unknown HLS playlist type." };
     return { supported: true, reason: null };
   }
-  function normalizeAdaptiveTracks(value, expectedType) {
+  function normalizeAdaptiveTracks(value, expectedType, candidate) {
     if (!Array.isArray(value)) return [];
     return value.filter(
-      (track) => track && typeof track === "object" && typeof (track.sourceUrl || track.url) === "string" && (track.sourceUrl || track.url).trim()
+      (track) => track && typeof track === "object" && isAcquirableAdaptiveTrack(candidate, track)
     ).slice(0, 24).map((track, index) => ({
       id: optionalString2(track.id) || `${expectedType}-${index + 1}`,
       type: expectedType,
-      sourceUrl: requiredHttpUrl(
+      sourceUrl: isYouTubeProviderResolvableTrack(candidate, track) ? null : requiredHttpUrl(
         track.sourceUrl || track.url,
         `candidate.${expectedType}Tracks[${index}].sourceUrl`
       ),
@@ -4971,10 +5012,9 @@ var AdsFriendlyBackground = (() => {
         height: optionalNonNegativeInteger2(track.resolution.height)
       } : null,
       qualityLabel: optionalString2(track.qualityLabel),
-      urlResolution: [
-        "n_transform_pending",
-        "signature_cipher_pending"
-      ].includes(track.urlResolution) ? track.urlResolution : "resolved",
+      urlResolution: Object.values(ADAPTIVE_TRACK_RESOLUTION).includes(
+        track.urlResolution
+      ) ? track.urlResolution : "resolved",
       signatureCipher: optionalString2(track.signatureCipher),
       muxed: track.muxed === true
     }));
@@ -5090,7 +5130,7 @@ var AdsFriendlyBackground = (() => {
   }
 
   // src/media/helper-contract.js
-  var MEDIA_HELPER_PROTOCOL_VERSION = 7;
+  var MEDIA_HELPER_PROTOCOL_VERSION = 8;
   var MEDIA_HELPER_HOST_NAME = "com.adsfriendly.media_helper";
   var MEDIA_HELPER_REQUESTS = Object.freeze({
     HELLO: "helper.hello",
@@ -5120,6 +5160,7 @@ var AdsFriendlyBackground = (() => {
     DASH_VOD_DOWNLOAD: "download.dash_vod",
     ADAPTIVE_HTTP_DOWNLOAD: "download.adaptive_http",
     YOUTUBE_PLAYER_JS_RESOLUTION: "resolve.youtube_player_js",
+    YOUTUBE_PROVIDER_FORMAT_RESOLUTION: "resolve.youtube_provider_formats",
     FFMPEG_MUX: "mux.ffmpeg",
     OUTPUT_OPEN: "output.open",
     OUTPUT_REVEAL: "output.reveal"
@@ -5340,6 +5381,7 @@ var AdsFriendlyBackground = (() => {
         canDownloadDash: capabilities[MEDIA_HELPER_CAPABILITIES.DASH_VOD_DOWNLOAD] === true,
         canDownloadAdaptive: capabilities[MEDIA_HELPER_CAPABILITIES.ADAPTIVE_HTTP_DOWNLOAD] === true,
         canResolveYouTubePlayerJs: capabilities[MEDIA_HELPER_CAPABILITIES.YOUTUBE_PLAYER_JS_RESOLUTION] === true,
+        canResolveYouTubeProviderFormats: capabilities[MEDIA_HELPER_CAPABILITIES.YOUTUBE_PROVIDER_FORMAT_RESOLUTION] === true,
         canMuxWithFfmpeg: capabilities[MEDIA_HELPER_CAPABILITIES.FFMPEG_MUX] === true
       });
     } catch (error) {
@@ -5664,6 +5706,7 @@ var AdsFriendlyBackground = (() => {
       canDownloadDash: false,
       canDownloadAdaptive: false,
       canResolveYouTubePlayerJs: false,
+      canResolveYouTubeProviderFormats: false,
       canMuxWithFfmpeg: false,
       helperVersion: null,
       capabilities: {},
@@ -6829,6 +6872,13 @@ ${body}`;
         status: "helper_not_ready",
         helper,
         reason: "This Media Helper build cannot resolve YouTube Player JS challenges yet."
+      };
+    }
+    if (candidate.kind === "adaptive" && hasYouTubeProviderPendingTracks(candidate) && !helper.canResolveYouTubeProviderFormats) {
+      return {
+        status: "helper_not_ready",
+        helper,
+        reason: "This Media Helper build cannot resolve YouTube adaptive quality tracks yet."
       };
     }
     const capabilityReady = candidate.kind === "direct" ? helper.canDownloadDirect : candidate.kind === "hls" ? candidate.probeSource === "decrypted_blob" ? helper.canDownloadHls && helper.canDownloadDecryptedHls : helper.canDownloadHls : candidate.kind === "dash" ? helper.canDownloadDash : helper.canDownloadAdaptive;

@@ -20,7 +20,7 @@ import { adaptiveHttpAdapter } from "./adaptive-http-adapter.js";
 import { DownloadJobManager } from "./job-manager.js";
 import { openManagedOutput, revealManagedOutput } from "./output-actions.js";
 
-const HELPER_VERSION = "0.15.0";
+const HELPER_VERSION = "0.16.0";
 const callerOrigin = process.argv[2] || null;
 const reader = new NativeMessageReader();
 const adapters = new DownloadAdapterRegistry([
@@ -146,6 +146,7 @@ async function inspectCapabilities() {
     [MEDIA_HELPER_CAPABILITIES.DASH_VOD_DOWNLOAD]: ffmpeg.available,
     [MEDIA_HELPER_CAPABILITIES.ADAPTIVE_HTTP_DOWNLOAD]: ffmpeg.available,
     [MEDIA_HELPER_CAPABILITIES.YOUTUBE_PLAYER_JS_RESOLUTION]: true,
+    [MEDIA_HELPER_CAPABILITIES.YOUTUBE_PROVIDER_FORMAT_RESOLUTION]: true,
     [MEDIA_HELPER_CAPABILITIES.FFMPEG_MUX]: ffmpeg.available,
     [MEDIA_HELPER_CAPABILITIES.OUTPUT_OPEN]: true,
     [MEDIA_HELPER_CAPABILITIES.OUTPUT_REVEAL]: true,

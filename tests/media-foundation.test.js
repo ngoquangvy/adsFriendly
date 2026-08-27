@@ -233,7 +233,7 @@ test("media observer reports separate YouTube video and audio tracks before cata
   assert.match(audioKey, /audio=youtube-audio-140/);
 });
 
-test("YouTube player response exposes SABR as an explicit unresolved acquisition stage", () => {
+test("YouTube SABR descriptors become provider-resolvable adaptive tracks", () => {
   const observation = parseYouTubePlayerResponse(
     {
       playabilityStatus: { status: "OK" },
@@ -276,17 +276,22 @@ test("YouTube player response exposes SABR as an explicit unresolved acquisition
   assert.equal(observation.candidates.length, 1);
   assert.equal(observation.candidates[0].probeStatus, "discovered");
   assert.equal(observation.candidates[0].variants[0].sourceUrl, null);
+  assert.equal(
+    observation.candidates[0].variants[0].urlResolution,
+    "provider_client_pending",
+  );
   const catalog = createMediaCatalog();
   catalog.add(
     7,
     createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, observation.candidates[0]),
   );
   const [item] = catalog.list(7);
-  assert.equal(item.probeStatus, "discovered");
+  assert.equal(item.probeStatus, "ready");
+  assert.equal(getMediaDownloadAvailability(item).supported, true);
   const state = getMediaCatalogDownloadState([item]);
-  assert.equal(state.diagnosticCode, "youtube_sabr_resolver_pending");
-  assert.match(state.diagnosticMessage, /SABR endpoint observed/i);
-  assert.match(formatMediaDetails(item), /34|2 format descriptors/i);
+  assert.equal(state.downloadableCount, 1);
+  assert.match(formatMediaDetails(item), /1080p.*1 audio/i);
+  assert.match(formatMediaDetails(item), /Helper resolves qualities/i);
 });
 
 test("YouTube player response merges direct video and audio formats into a ready asset", () => {
@@ -385,7 +390,7 @@ test("YouTube progressive 360p format is ready because audio is already muxed", 
   assert.equal(job.candidate.variants[0].muxed, true);
 });
 
-test("YouTube unresolved quality descriptors do not invalidate a muxed track", () => {
+test("YouTube quality descriptors coexist with a muxed fallback track", () => {
   const mediaUrl =
     "https://r1.googlevideo.com/videoplayback?id=asset-1&itag=18&mime=video%2Fmp4&dur=193&clen=1234567&size=640x360";
   const observation = parseYouTubePlayerResponse(
@@ -444,9 +449,11 @@ test("YouTube unresolved quality descriptors do not invalidate a muxed track", (
   assert.equal(getMediaDownloadAvailability(item).supported, true);
   assert.deepEqual(
     getMediaVideoQualityOptions(item).map((quality) => quality.label),
-    ["360p · MP4 · audio included"],
+    ["1080p · MP4 · H.264", "360p · MP4 · audio included"],
   );
-  const estimate = getMediaDownloadEstimate(item);
+  const estimate = getMediaDownloadEstimate(item, null, {
+    videoTrackId: "youtube-video-18",
+  });
   assert.deepEqual(estimate.resolution, { width: 640, height: 360 });
   assert.equal(estimate.estimatedBytes, 1_234_567);
 
@@ -457,9 +464,13 @@ test("YouTube unresolved quality descriptors do not invalidate a muxed track", (
     output: {},
     candidate: item,
   });
-  assert.equal(job.candidate.variants.length, 1);
-  assert.equal(job.candidate.variants[0].id, "youtube-video-18");
-  assert.equal(job.candidate.audioTracks.length, 0);
+  assert.equal(job.candidate.variants.length, 2);
+  assert.equal(
+    job.candidate.variants.find((track) => track.id === "youtube-video-137")
+      .urlResolution,
+    "provider_client_pending",
+  );
+  assert.equal(job.candidate.audioTracks.length, 1);
 });
 
 test("YouTube n challenge tracks become Helper-ready when Player JS is known", () => {

@@ -154,6 +154,7 @@ export function formatMediaJobStage(job = {}) {
     output_prepare: "Preparing output file…",
     ffmpeg_start: "Starting FFmpeg…",
     compatibility_check: "Testing key and sample segment…",
+    provider_resolution: "Resolving selected YouTube quality…",
     segment_download: "Downloading HLS segments…",
     local_assembly: "Preparing local HLS manifest…",
     local_processing: "Processing downloaded media…",

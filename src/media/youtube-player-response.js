@@ -11,6 +11,7 @@ import {
   parseYouTubePlaybackTrack,
   youtubeVideoId,
 } from "./youtube-track-profile.js";
+import { ADAPTIVE_TRACK_RESOLUTION } from "./adaptive-track-policy.js";
 
 export const YOUTUBE_PLAYER_STAGES = Object.freeze({
   RESOLVED_TRACKS: "resolved_tracks",
@@ -261,6 +262,7 @@ function normalizeFormatDescriptor(format, { muxed = false } = {}) {
     type,
     itag,
     sourceUrl: null,
+    urlResolution: ADAPTIVE_TRACK_RESOLUTION.PROVIDER_CLIENT_PENDING,
     mimeType,
     codecs: parseCodecs(format.mimeType),
     bandwidth: bitrate,
