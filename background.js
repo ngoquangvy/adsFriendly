@@ -4880,23 +4880,23 @@ var AdsFriendlyBackground = (() => {
           supported: false,
           reason: "Only completed adaptive media is supported."
         };
-      const hasMuxedTrack = candidate.variants?.some(
-        (track) => track?.muxed === true
-      );
-      if (!candidate.variants?.length || !candidate.audioTracks?.length && !hasMuxedTrack)
+      let variants;
+      let audioTracks;
+      try {
+        variants = normalizeAdaptiveTracks(candidate.variants, "video");
+        audioTracks = normalizeAdaptiveTracks(candidate.audioTracks, "audio");
+      } catch {
+        return {
+          supported: false,
+          reason: "An adaptive track URL is invalid or no longer usable."
+        };
+      }
+      const hasMuxedTrack = variants.some((track) => track.muxed === true);
+      if (!variants.length || !audioTracks.length && !hasMuxedTrack)
         return {
           supported: false,
           reason: "Adaptive media needs one resolved video and audio track."
         };
-      try {
-        normalizeAdaptiveTracks(candidate.variants, "video");
-        normalizeAdaptiveTracks(candidate.audioTracks, "audio");
-      } catch {
-        return {
-          supported: false,
-          reason: "Adaptive track URLs are no longer available. Reload the page."
-        };
-      }
       return { supported: true, reason: null };
     }
     if (candidate.kind !== "hls")
@@ -4947,7 +4947,9 @@ var AdsFriendlyBackground = (() => {
   }
   function normalizeAdaptiveTracks(value, expectedType) {
     if (!Array.isArray(value)) return [];
-    return value.filter((track) => track && typeof track === "object").slice(0, 24).map((track, index) => ({
+    return value.filter(
+      (track) => track && typeof track === "object" && typeof (track.sourceUrl || track.url) === "string" && (track.sourceUrl || track.url).trim()
+    ).slice(0, 24).map((track, index) => ({
       id: optionalString2(track.id) || `${expectedType}-${index + 1}`,
       type: expectedType,
       sourceUrl: requiredHttpUrl(

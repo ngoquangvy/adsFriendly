@@ -385,6 +385,79 @@ test("YouTube progressive 360p format is ready because audio is already muxed", 
   assert.equal(job.candidate.variants[0].muxed, true);
 });
 
+test("YouTube unresolved quality descriptors do not invalidate a muxed track", () => {
+  const mediaUrl =
+    "https://r1.googlevideo.com/videoplayback?id=asset-1&itag=18&mime=video%2Fmp4&dur=193&clen=1234567&size=640x360";
+  const observation = parseYouTubePlayerResponse(
+    {
+      playabilityStatus: { status: "OK" },
+      videoDetails: {
+        videoId: "video-1",
+        title: "Partially exposed formats",
+        lengthSeconds: "193",
+      },
+      streamingData: {
+        formats: [
+          {
+            itag: 18,
+            mimeType: 'video/mp4; codecs="avc1.42001E, mp4a.40.2"',
+            width: 640,
+            height: 360,
+            qualityLabel: "360p",
+            signatureCipher: new URLSearchParams({
+              url: mediaUrl,
+              sp: "sig",
+              s: "encrypted-progressive-signature",
+            }).toString(),
+          },
+        ],
+        adaptiveFormats: [
+          {
+            itag: 137,
+            mimeType: 'video/mp4; codecs="avc1.640028"',
+            width: 1920,
+            height: 1080,
+            qualityLabel: "1080p",
+          },
+          {
+            itag: 140,
+            mimeType: 'audio/mp4; codecs="mp4a.40.2"',
+          },
+        ],
+      },
+    },
+    {
+      pageUrl: "https://www.youtube.com/watch?v=video-1",
+      playerUrl:
+        "https://www.youtube.com/s/player/b7457b7c/player_ias.vflset/en_US/base.js",
+    },
+  );
+  const catalog = createMediaCatalog();
+  for (const candidate of observation.candidates)
+    catalog.add(7, createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, candidate));
+  const [item] = catalog.list(7);
+
+  assert.equal(item.probeStatus, "ready");
+  assert.equal(item.variants.length, 2);
+  assert.equal(item.audioTracks.length, 1);
+  assert.equal(getMediaDownloadAvailability(item).supported, true);
+  assert.deepEqual(
+    getMediaVideoQualityOptions(item).map((quality) => quality.label),
+    ["360p · MP4 · audio included"],
+  );
+
+  const job = normalizeMediaDownloadJob({
+    id: "youtube-partial-descriptor-job",
+    createdAt: Date.now(),
+    sourceTabId: 7,
+    output: {},
+    candidate: item,
+  });
+  assert.equal(job.candidate.variants.length, 1);
+  assert.equal(job.candidate.variants[0].id, "youtube-video-18");
+  assert.equal(job.candidate.audioTracks.length, 0);
+});
+
 test("YouTube n challenge tracks become Helper-ready when Player JS is known", () => {
   const mediaUrl = (itag, mimeType, extra = "") =>
     `https://r1.googlevideo.com/videoplayback?id=asset-1&itag=${itag}&mime=${encodeURIComponent(mimeType)}&dur=20&clen=1000&sig=ok&n=unresolved${extra}`;
