@@ -4803,7 +4803,7 @@ ${body}`;
         pageUrl: location.href,
         title: document.title || null,
         input,
-        playerUrl: findYouTubePlayerUrl()
+        playerUrl: findYouTubePlayerUrl({ responseObject: response })
       });
       if (!observation) return null;
       const fingerprint = observationFingerprint(observation);
@@ -4856,23 +4856,43 @@ ${body}`;
   }
   function findYouTubePlayerUrl({
     windowObject = window,
-    documentObject = document
+    documentObject = document,
+    responseObject = null
   } = {}) {
-    const candidates = [];
+    const candidates = [
+      responseObject?.assets?.js,
+      responseObject?.playerConfig?.assets?.js,
+      responseObject?.web_player_context_config?.jsUrl
+    ];
     try {
-      if (typeof windowObject.ytcfg?.get === "function")
+      if (typeof windowObject.ytcfg?.get === "function") {
         candidates.push(windowObject.ytcfg.get("PLAYER_JS_URL"));
+        const contexts = windowObject.ytcfg.get("WEB_PLAYER_CONTEXT_CONFIGS");
+        if (contexts && typeof contexts === "object")
+          candidates.push(
+            ...Object.values(contexts).slice(0, 12).flatMap((context) => [context?.jsUrl, context?.js])
+          );
+      }
     } catch {
     }
     candidates.push(
+      windowObject.yt?.config_?.PLAYER_JS_URL,
       windowObject.ytplayer?.config?.assets?.js,
       windowObject.ytplayer?.web_player_context_config?.jsUrl
     );
     try {
       candidates.push(
-        ...[...documentObject.querySelectorAll('script[src*="/s/player/"]')].map(
-          (script2) => script2.src
-        )
+        ...[
+          ...documentObject.querySelectorAll(
+            'script[src*="/s/player/"], link[href*="/s/player/"]'
+          )
+        ].flatMap((element) => [element.src, element.href])
+      );
+    } catch {
+    }
+    try {
+      candidates.push(
+        ...windowObject.performance.getEntriesByType("resource").slice(-500).map((entry) => entry.name)
       );
     } catch {
     }
@@ -4960,6 +4980,8 @@ ${body}`;
       diagnostic.directAudioCount,
       diagnostic.signatureCipherCount,
       diagnostic.nTransformCount,
+      diagnostic.playerUrlAvailable,
+      observation.candidates.find((candidate) => candidate.playerUrl)?.playerUrl || "",
       sources
     ].join(":");
   }

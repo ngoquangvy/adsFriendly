@@ -98,7 +98,10 @@ import {
   YOUTUBE_PLAYER_STAGES,
   parseYouTubePlayerResponse,
 } from "../src/media/youtube-player-response.js";
-import { findYouTubePlayerUrl } from "../src/main-world/youtube-player-response-adapter.js";
+import {
+  findYouTubePlayerUrl,
+  observationFingerprint,
+} from "../src/main-world/youtube-player-response-adapter.js";
 import {
   beginHlsManifestInspection,
   captureFetchAesKey,
@@ -554,6 +557,47 @@ test("YouTube Player JS URL is discovered from page configuration or scripts", (
     },
   });
   assert.match(scripted, /\/s\/player\/1234abcd\//);
+
+  const fromResponse = findYouTubePlayerUrl({
+    windowObject: {},
+    documentObject: { querySelectorAll: () => [] },
+    responseObject: {
+      assets: {
+        js: "/s/player/response1/player_ias.vflset/en_US/base.js",
+      },
+    },
+  });
+  assert.match(fromResponse, /\/s\/player\/response1\//);
+});
+
+test("YouTube observation fingerprint permits a later Player JS upgrade", () => {
+  const response = {
+    playabilityStatus: { status: "OK" },
+    videoDetails: { videoId: "video-1", title: "Example" },
+    streamingData: {
+      formats: [
+        {
+          itag: 18,
+          mimeType: "video/mp4",
+          width: 640,
+          height: 360,
+          url: "https://r1.googlevideo.com/videoplayback?id=asset-1&itag=18&mime=video%2Fmp4&n=pending",
+        },
+      ],
+    },
+  };
+  const withoutPlayer = parseYouTubePlayerResponse(response, {
+    pageUrl: "https://www.youtube.com/watch?v=video-1",
+  });
+  const withPlayer = parseYouTubePlayerResponse(response, {
+    pageUrl: "https://www.youtube.com/watch?v=video-1",
+    playerUrl:
+      "https://www.youtube.com/s/player/b7457b7c/player_ias.vflset/en_US/base.js",
+  });
+  assert.notEqual(
+    observationFingerprint(withoutPlayer),
+    observationFingerprint(withPlayer),
+  );
 });
 
 test("YouTube format descriptors cannot erase a resolved network track", () => {

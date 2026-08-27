@@ -208,6 +208,18 @@ function mediaDownloadDiagnostic(items, availability) {
     const muxedVideoCount = (adaptive.variants || []).filter(
       (track) => track.muxed === true && hasResolvedTrackUrl(track),
     ).length;
+    if (
+      muxedVideoCount &&
+      ["n_transform_pending", "signature_cipher_pending"].includes(
+        acquisitionDiagnostic?.stage,
+      ) &&
+      !adaptive.playerUrl
+    )
+      return {
+        code: "youtube_player_js_url_missing",
+        message:
+          "YouTube muxed track found · waiting for the Player JS URL required to resolve it.",
+      };
     if (!videoCount && !audioCount && acquisitionMessage)
       return {
         code: `youtube_${acquisitionDiagnostic.stage}`,
