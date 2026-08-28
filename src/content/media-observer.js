@@ -32,6 +32,7 @@ export function startMediaObserver() {
   const aesKeyHandoffRequests = new Map();
   const youtubeMediaHandoffRequests = new Map();
   const playerOutputCanaryRequests = new Map();
+  const playerOutputCaptureStartRequests = new Map();
   const mutationObserver = new MutationObserver((mutations) => {
     for (const mutation of mutations) {
       if (mutation.type === "attributes") scanElement(mutation.target);
@@ -48,6 +49,55 @@ export function startMediaObserver() {
   });
 
   const onMainWorldMessage = (messageEvent) => {
+    if (
+      messageEvent.source === window &&
+      messageEvent.data?.source === "adsfriendly-spy" &&
+      messageEvent.data?.type === "PLAYER_OUTPUT_CAPTURE_START_RESPONSE"
+    ) {
+      const pendingRequest = playerOutputCaptureStartRequests.get(
+        messageEvent.data.requestId,
+      );
+      if (!pendingRequest) return;
+      playerOutputCaptureStartRequests.delete(messageEvent.data.requestId);
+      clearTimeout(pendingRequest.timeoutId);
+      pendingRequest.resolve(messageEvent.data.result || { status: "error" });
+      return;
+    }
+    if (
+      messageEvent.source === window &&
+      messageEvent.data?.source === "adsfriendly-spy" &&
+      messageEvent.data?.type === "PLAYER_OUTPUT_CAPTURE_CHUNK"
+    ) {
+      forwardPlayerOutputChunk(messageEvent.data);
+      return;
+    }
+    if (
+      messageEvent.source === window &&
+      messageEvent.data?.source === "adsfriendly-spy" &&
+      messageEvent.data?.type === "PLAYER_OUTPUT_CAPTURE_FINISH"
+    ) {
+      chrome.runtime
+        .sendMessage({
+          type: "PLAYER_OUTPUT_CAPTURE_FINISH",
+          captureId: messageEvent.data.captureId,
+        })
+        .catch(() => {});
+      return;
+    }
+    if (
+      messageEvent.source === window &&
+      messageEvent.data?.source === "adsfriendly-spy" &&
+      messageEvent.data?.type === "PLAYER_OUTPUT_CAPTURE_FAILED"
+    ) {
+      chrome.runtime
+        .sendMessage({
+          type: "PLAYER_OUTPUT_CAPTURE_FAILED",
+          captureId: messageEvent.data.captureId,
+          error: messageEvent.data.error,
+        })
+        .catch(() => {});
+      return;
+    }
     if (
       messageEvent.source === window &&
       messageEvent.data?.source === "adsfriendly-spy" &&
@@ -171,6 +221,22 @@ export function startMediaObserver() {
       requestPlayerOutputCanary().then(sendResponse);
       return true;
     }
+    if (message?.type === "START_PLAYER_OUTPUT_CAPTURE") {
+      requestPlayerOutputCaptureStart(message.captureId).then(sendResponse);
+      return true;
+    }
+    if (message?.type === "STOP_PLAYER_OUTPUT_CAPTURE") {
+      window.postMessage(
+        {
+          source: "adsfriendly-content",
+          type: "STOP_PLAYER_OUTPUT_CAPTURE",
+          captureId: message.captureId,
+        },
+        "*",
+      );
+      sendResponse({ status: "stopped" });
+      return false;
+    }
     if (message?.type !== "PROBE_OBSERVED_MEDIA") return undefined;
     try {
       scheduleManifestProbe(normalizeMediaCandidate(message.candidate));
@@ -229,6 +295,11 @@ export function startMediaObserver() {
       pendingRequest.resolve({ status: "stopped", canary: null });
     }
     playerOutputCanaryRequests.clear();
+    for (const pendingRequest of playerOutputCaptureStartRequests.values()) {
+      clearTimeout(pendingRequest.timeoutId);
+      pendingRequest.resolve({ status: "stopped" });
+    }
+    playerOutputCaptureStartRequests.clear();
   };
 
   function requestAesKeyHandoff(requestedManifestUrl, manifestUrls) {
@@ -300,6 +371,67 @@ export function startMediaObserver() {
         "*",
       );
     });
+  }
+
+  function requestPlayerOutputCaptureStart(captureId) {
+    const requestId =
+      globalThis.crypto?.randomUUID?.() ||
+      `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    return new Promise((resolve) => {
+      const timeoutId = setTimeout(() => {
+        playerOutputCaptureStartRequests.delete(requestId);
+        resolve({ status: "timeout" });
+      }, 5000);
+      playerOutputCaptureStartRequests.set(requestId, { resolve, timeoutId });
+      window.postMessage(
+        {
+          source: "adsfriendly-content",
+          type: "START_PLAYER_OUTPUT_CAPTURE",
+          requestId,
+          captureId,
+        },
+        "*",
+      );
+    });
+  }
+
+  function forwardPlayerOutputChunk(message) {
+    chrome.runtime
+      .sendMessage({
+        type: "PLAYER_OUTPUT_CAPTURE_CHUNK",
+        captureId: message.captureId,
+        trackId: message.trackId,
+        sequence: message.sequence,
+        mimeType: message.mimeType,
+        appendFormat: message.appendFormat,
+        processedSeconds: message.processedSeconds,
+        duration: message.duration,
+        data: message.data,
+      })
+      .then((response) => {
+        window.postMessage(
+          {
+            source: "adsfriendly-content",
+            type: "PLAYER_OUTPUT_CAPTURE_ACK",
+            requestId: message.requestId,
+            status: response?.status,
+            error: response?.error || response?.reason || null,
+          },
+          "*",
+        );
+      })
+      .catch((error) => {
+        window.postMessage(
+          {
+            source: "adsfriendly-content",
+            type: "PLAYER_OUTPUT_CAPTURE_ACK",
+            requestId: message.requestId,
+            status: "error",
+            error: error?.message || String(error),
+          },
+          "*",
+        );
+      });
   }
 
   function scanElement(element) {

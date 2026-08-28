@@ -125,6 +125,8 @@ async function probeMediaHelperStatus(timeoutMs) {
         true,
       canValidatePlayerOutput:
         capabilities[MEDIA_HELPER_CAPABILITIES.PLAYER_OUTPUT_CANARY] === true,
+      canCapturePlayerOutput:
+        capabilities[MEDIA_HELPER_CAPABILITIES.PLAYER_OUTPUT_CAPTURE] === true,
       canMuxWithFfmpeg:
         capabilities[MEDIA_HELPER_CAPABILITIES.FFMPEG_MUX] === true,
     });
@@ -318,6 +320,187 @@ export async function startMediaHelperDownload(
     },
   });
   return { status: "started", jobId: job.id };
+}
+
+export async function startMediaHelperPlayerOutputCapture({
+  jobId,
+  mediaId,
+  title,
+  duration,
+  sourceTabId,
+  sourceFrameId,
+  outputDirectory = null,
+}) {
+  if (!(await hasNativeMessagingPermission())) {
+    throw new Error("Native Messaging permission is required.");
+  }
+  const previousConnection = activePorts.get(jobId);
+  if (previousConnection && !previousConnection.terminal)
+    throw new Error("Player output capture is already active.");
+  const requestId = randomId();
+  const port = chrome.runtime.connectNative(MEDIA_HELPER_HOST_NAME);
+  const state = {
+    id: jobId,
+    mediaId,
+    kind: "player_output",
+    title: title || "Player output video",
+    output: { profileId: "video-mp4", container: "mp4" },
+    sourceTabId,
+    sourceFrameId,
+    candidate: { id: mediaId, kind: "player_output" },
+    connections: 1,
+    attempt: 1,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    status: "starting",
+    progress: {
+      phase: "starting",
+      stage: "player_output_capture",
+      downloadedBytes: 0,
+      totalBytes: null,
+      bytesPerSecond: 0,
+      processedSeconds: 0,
+      duration: Number.isFinite(Number(duration)) ? Number(duration) : null,
+      resumable: false,
+    },
+    outputPath: null,
+    error: null,
+  };
+  await removeHistoryEntry(jobId);
+  const connection = {
+    port,
+    requestId,
+    terminal: false,
+    terminalStatus: "cancelled",
+    queue: Promise.resolve(),
+    capture: true,
+    sourceTabId,
+    sourceFrameId,
+    pendingChunkAcks: new Map(),
+  };
+  activePorts.set(jobId, connection);
+  await persistJobState(state);
+  port.onMessage.addListener((rawEvent) => {
+    if (activePorts.get(jobId) !== connection) return;
+    connection.queue = connection.queue.then(() =>
+      handleJobEvent(jobId, requestId, rawEvent),
+    );
+  });
+  port.onDisconnect.addListener(() => {
+    if (activePorts.get(jobId) !== connection) return;
+    const message =
+      chrome.runtime.lastError?.message || "Media Helper disconnected.";
+    rejectPendingCaptureAcks(connection, new Error(message));
+    void connection.queue
+      .finally(async () => {
+        activePorts.delete(jobId);
+        if (!connection.terminal)
+          await updateJobState(jobId, { status: "failed", error: message });
+      })
+      .catch(() => {});
+  });
+  port.postMessage({
+    type: MEDIA_HELPER_REQUESTS.PLAYER_OUTPUT_CAPTURE_START,
+    requestId,
+    protocolVersion: MEDIA_HELPER_PROTOCOL_VERSION,
+    payload: { jobId, mediaId, title, duration, outputDirectory },
+  });
+  return { status: "started", jobId };
+}
+
+export async function appendMediaHelperPlayerOutputChunk(
+  jobId,
+  chunk,
+  sourceTabId,
+  sourceFrameId,
+) {
+  const connection = activePorts.get(jobId);
+  if (!connection?.capture || connection.terminal)
+    return { status: "capture_not_running" };
+  if (connection.sourceTabId !== sourceTabId)
+    return { status: "source_tab_mismatch" };
+  if (connection.sourceFrameId !== sourceFrameId)
+    return { status: "source_frame_mismatch" };
+  const ackKey = `${chunk.trackId}:${chunk.sequence}`;
+  if (connection.pendingChunkAcks.has(ackKey))
+    return { status: "duplicate_chunk" };
+  const ack = new Promise((resolve, reject) => {
+    connection.pendingChunkAcks.set(ackKey, { resolve, reject });
+  });
+  connection.port.postMessage({
+    type: MEDIA_HELPER_REQUESTS.PLAYER_OUTPUT_CAPTURE_CHUNK,
+    requestId: connection.requestId,
+    protocolVersion: MEDIA_HELPER_PROTOCOL_VERSION,
+    payload: { jobId, ...chunk },
+  });
+  try {
+    await withTimeout(ack, 20_000);
+    return {
+      status: "accepted",
+      trackId: chunk.trackId,
+      sequence: chunk.sequence,
+    };
+  } catch (error) {
+    connection.pendingChunkAcks.delete(ackKey);
+    throw error;
+  }
+}
+
+export async function finishMediaHelperPlayerOutputCapture(
+  jobId,
+  sourceTabId,
+  sourceFrameId,
+) {
+  const connection = activePorts.get(jobId);
+  if (!connection?.capture || connection.terminal)
+    return { status: "capture_not_running" };
+  if (connection.sourceTabId !== sourceTabId)
+    return { status: "source_tab_mismatch" };
+  if (connection.sourceFrameId !== sourceFrameId)
+    return { status: "source_frame_mismatch" };
+  connection.port.postMessage({
+    type: MEDIA_HELPER_REQUESTS.PLAYER_OUTPUT_CAPTURE_FINISH,
+    requestId: connection.requestId,
+    protocolVersion: MEDIA_HELPER_PROTOCOL_VERSION,
+    payload: { jobId },
+  });
+  await updateJobState(jobId, {
+    status: "finalizing",
+    progress: {
+      ...(await readStoredProgress(jobId)),
+      phase: "finalizing",
+      stage: "player_output_probe",
+    },
+  });
+  return { status: "finalizing", jobId };
+}
+
+export async function failMediaHelperPlayerOutputCapture(
+  jobId,
+  error,
+  sourceTabId,
+  sourceFrameId,
+) {
+  const connection = activePorts.get(jobId);
+  if (!connection?.capture) return { status: "capture_not_running" };
+  if (connection.sourceTabId !== sourceTabId)
+    return { status: "source_tab_mismatch" };
+  if (connection.sourceFrameId !== sourceFrameId)
+    return { status: "source_frame_mismatch" };
+  connection.terminal = true;
+  connection.terminalStatus = "failed";
+  rejectPendingCaptureAcks(connection, new Error(error || "Capture failed."));
+  connection.port.postMessage({
+    type: MEDIA_HELPER_REQUESTS.PLAYER_OUTPUT_CAPTURE_CANCEL,
+    requestId: connection.requestId,
+    protocolVersion: MEDIA_HELPER_PROTOCOL_VERSION,
+    payload: { jobId },
+  });
+  await updateJobState(jobId, {
+    status: "failed",
+    error: error || "Player output capture failed.",
+  });
+  return { status: "failed", jobId };
 }
 
 export async function preflightMediaHelperYouTubeQualities(candidate) {
@@ -523,7 +706,9 @@ export async function cancelMediaHelperDownload(
   connection.terminalStatus =
     terminalStatus === "paused" ? "paused" : "cancelled";
   connection.port.postMessage({
-    type: MEDIA_HELPER_REQUESTS.DOWNLOAD_CANCEL,
+    type: connection.capture
+      ? MEDIA_HELPER_REQUESTS.PLAYER_OUTPUT_CAPTURE_CANCEL
+      : MEDIA_HELPER_REQUESTS.DOWNLOAD_CANCEL,
     requestId: connection.requestId,
     protocolVersion: MEDIA_HELPER_PROTOCOL_VERSION,
     payload: { jobId },
@@ -632,6 +817,20 @@ async function handleJobEvent(jobId, requestId, rawEvent) {
       await updateJobState(jobId, { status: "probing" });
       return;
     }
+    if (event.type === MEDIA_HELPER_EVENTS.PLAYER_OUTPUT_CHUNK_ACCEPTED) {
+      const connection = activePorts.get(jobId);
+      const ackKey = `${event.payload.trackId}:${event.payload.sequence}`;
+      const pending = connection?.pendingChunkAcks?.get(ackKey);
+      if (pending) {
+        connection.pendingChunkAcks.delete(ackKey);
+        pending.resolve(event.payload);
+      }
+      await updateJobState(jobId, {
+        status: "downloading",
+        progress: { ...event.payload },
+      });
+      return;
+    }
     if (event.type === MEDIA_HELPER_EVENTS.DOWNLOAD_PROGRESS) {
       await updateJobState(jobId, {
         status: event.payload.phase || "downloading",
@@ -654,6 +853,11 @@ async function handleJobEvent(jobId, requestId, rawEvent) {
       return;
     }
     if (event.type === MEDIA_HELPER_EVENTS.DOWNLOAD_CANCELLED) {
+      if (activePorts.get(jobId)?.terminalStatus === "failed") {
+        markTerminal(jobId);
+        activePorts.get(jobId)?.port.disconnect();
+        return;
+      }
       const terminalStatus =
         activePorts.get(jobId)?.terminalStatus === "paused"
           ? "paused"
@@ -664,6 +868,10 @@ async function handleJobEvent(jobId, requestId, rawEvent) {
       return;
     }
     if (event.type === MEDIA_HELPER_EVENTS.ERROR) {
+      rejectPendingCaptureAcks(
+        activePorts.get(jobId),
+        new Error(event.payload.message || "Media Helper capture failed."),
+      );
       markTerminal(jobId);
       const message = await appendStoredKeyCaptureDiagnostic(
         jobId,
@@ -680,6 +888,18 @@ async function handleJobEvent(jobId, requestId, rawEvent) {
     await updateJobState(jobId, { status: "failed", error: messageOf(error) });
     activePorts.get(jobId)?.port.disconnect();
   }
+}
+
+function rejectPendingCaptureAcks(connection, error) {
+  if (!connection?.pendingChunkAcks) return;
+  for (const pending of connection.pendingChunkAcks.values())
+    pending.reject(error);
+  connection.pendingChunkAcks.clear();
+}
+
+async function readStoredProgress(jobId) {
+  const key = downloadJobKey(jobId);
+  return (await chrome.storage.session.get(key))[key]?.progress || {};
 }
 
 async function appendStoredKeyCaptureDiagnostic(jobId, message) {
@@ -725,6 +945,7 @@ async function persistHistoryEntry(state) {
     kind: state.kind,
     title: state.title,
     sourceTabId: state.sourceTabId,
+    sourceFrameId: state.sourceFrameId,
     createdAt: state.createdAt,
     updatedAt: state.updatedAt,
     status: state.status,

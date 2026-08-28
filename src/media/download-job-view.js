@@ -69,6 +69,14 @@ export function getMediaJobPauseAvailability(job = {}) {
       reason: `${job.kind.toUpperCase()} downloads run through FFmpeg and cannot resume partial output yet.`,
     };
   }
+  if (job.kind === "player_output") {
+    return {
+      supported: false,
+      label: "Pause unavailable",
+      reason:
+        "Player output capture must remain continuous; cancel and reload the page to restart.",
+    };
+  }
   if (job.kind === "direct" && job.progress) {
     return {
       supported: false,
@@ -142,7 +150,7 @@ export function formatMediaJobDetails(job = {}) {
   facts.push(speedFact);
   if (progress.resumedBytes > 0)
     facts.push(`resumed ${formatBytes(progress.resumedBytes)}`);
-  facts.push(connectionFact);
+  if (job.kind !== "player_output") facts.push(connectionFact);
   if (facts.length === 1) facts.unshift(capitalize(job.status || "starting"));
   return facts.join(" · ");
 }
@@ -158,6 +166,9 @@ export function formatMediaJobStage(job = {}) {
     segment_download: "Downloading HLS segments…",
     local_assembly: "Preparing local HLS manifest…",
     local_processing: "Processing downloaded media…",
+    player_output_capture: "Capturing decoded player output…",
+    player_output_probe: "Validating captured video and audio…",
+    player_output_remux: "Remuxing captured tracks to MP4…",
   };
   return stages[job.progress?.stage] || "Checking media source…";
 }

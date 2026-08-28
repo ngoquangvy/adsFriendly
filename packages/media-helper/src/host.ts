@@ -8,6 +8,9 @@ import {
   createHelperEvent,
   normalizeHelperRequest,
   normalizePlayerOutputCanaryPayload,
+  normalizePlayerOutputCaptureChunkPayload,
+  normalizePlayerOutputCaptureControlPayload,
+  normalizePlayerOutputCaptureStartPayload,
   normalizeYouTubeQualityPreflightPayload,
 } from "../../../src/media/helper-contract.js";
 import {
@@ -23,8 +26,9 @@ import { DownloadJobManager } from "./job-manager.js";
 import { openManagedOutput, revealManagedOutput } from "./output-actions.js";
 import { preflightYouTubeProviderQualities } from "./youtube-provider-resolver.js";
 import { validatePlayerOutputCanary } from "./player-output-canary.js";
+import { PlayerOutputCaptureManager } from "./player-output-capture-manager.js";
 
-const HELPER_VERSION = "0.23.0";
+const HELPER_VERSION = "0.24.0";
 const callerOrigin = process.argv[2] || null;
 const reader = new NativeMessageReader();
 const adapters = new DownloadAdapterRegistry([
@@ -34,8 +38,12 @@ const adapters = new DownloadAdapterRegistry([
   adaptiveHttpAdapter,
 ]);
 const jobs = new DownloadJobManager(adapters);
+const playerOutputCaptures = new PlayerOutputCaptureManager();
 
-process.stdin.on("end", () => jobs.cancelAll());
+process.stdin.on("end", () => {
+  jobs.cancelAll();
+  void playerOutputCaptures.cancelAll();
+});
 
 process.stdin.on("data", (chunk: Buffer) => {
   try {
@@ -109,6 +117,38 @@ async function handleMessage(rawMessage: unknown): Promise<void> {
       );
       return;
     }
+    if (request.type === MEDIA_HELPER_REQUESTS.PLAYER_OUTPUT_CAPTURE_START) {
+      const payload = normalizePlayerOutputCaptureStartPayload(request.payload);
+      await playerOutputCaptures.start(payload, (type, eventPayload) => {
+        writeMessage(createHelperEvent(type, requestId, eventPayload));
+      });
+      return;
+    }
+    if (request.type === MEDIA_HELPER_REQUESTS.PLAYER_OUTPUT_CAPTURE_CHUNK) {
+      const payload = normalizePlayerOutputCaptureChunkPayload(request.payload);
+      await playerOutputCaptures.append(payload);
+      return;
+    }
+    if (request.type === MEDIA_HELPER_REQUESTS.PLAYER_OUTPUT_CAPTURE_FINISH) {
+      const payload = normalizePlayerOutputCaptureControlPayload(
+        request.payload,
+      );
+      await playerOutputCaptures.finish(payload.jobId);
+      return;
+    }
+    if (request.type === MEDIA_HELPER_REQUESTS.PLAYER_OUTPUT_CAPTURE_CANCEL) {
+      const payload = normalizePlayerOutputCaptureControlPayload(
+        request.payload,
+      );
+      if (!(await playerOutputCaptures.cancel(payload.jobId))) {
+        writeError(
+          requestId,
+          "job_not_found",
+          new Error("Player output capture not found."),
+        );
+      }
+      return;
+    }
     if (request.type === MEDIA_HELPER_REQUESTS.DOWNLOAD_START) {
       await jobs.start(request.payload, (type, payload) => {
         writeMessage(createHelperEvent(type, requestId, payload));
@@ -176,6 +216,8 @@ async function inspectCapabilities() {
     [MEDIA_HELPER_CAPABILITIES.YOUTUBE_PROVIDER_FORMAT_RESOLUTION]: true,
     [MEDIA_HELPER_CAPABILITIES.YOUTUBE_QUALITY_PREFLIGHT]: true,
     [MEDIA_HELPER_CAPABILITIES.PLAYER_OUTPUT_CANARY]: ffprobe.available,
+    [MEDIA_HELPER_CAPABILITIES.PLAYER_OUTPUT_CAPTURE]:
+      ffmpeg.available && ffprobe.available,
     [MEDIA_HELPER_CAPABILITIES.FFMPEG_MUX]: ffmpeg.available,
     [MEDIA_HELPER_CAPABILITIES.OUTPUT_OPEN]: true,
     [MEDIA_HELPER_CAPABILITIES.OUTPUT_REVEAL]: true,

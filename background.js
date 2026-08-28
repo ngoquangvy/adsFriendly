@@ -4374,6 +4374,7 @@ var AdsFriendlyBackground = (() => {
     MEDIA_DOWNLOAD_CREATE: "media.download.create",
     MEDIA_DOWNLOAD_PREFLIGHT: "media.download.preflight",
     MEDIA_OUTPUT_CANARY: "media.output.canary",
+    MEDIA_OUTPUT_CAPTURE_START: "media.output.capture.start",
     MEDIA_DOWNLOAD_PAUSE: "media.download.pause",
     MEDIA_DOWNLOAD_OPEN: "media.download.open",
     MEDIA_DOWNLOAD_CLEAR_HISTORY: "media.download.clear_history",
@@ -4406,6 +4407,11 @@ var AdsFriendlyBackground = (() => {
     ),
     [A.MEDIA_OUTPUT_CANARY]: action(
       A.MEDIA_OUTPUT_CANARY,
+      "background.media-download-jobs",
+      C3.MEDIA_NATIVE_DOWNLOAD
+    ),
+    [A.MEDIA_OUTPUT_CAPTURE_START]: action(
+      A.MEDIA_OUTPUT_CAPTURE_START,
       "background.media-download-jobs",
       C3.MEDIA_NATIVE_DOWNLOAD
     ),
@@ -5307,13 +5313,17 @@ var AdsFriendlyBackground = (() => {
   }
 
   // src/media/helper-contract.js
-  var MEDIA_HELPER_PROTOCOL_VERSION = 11;
+  var MEDIA_HELPER_PROTOCOL_VERSION = 12;
   var MEDIA_HELPER_HOST_NAME = "com.adsfriendly.media_helper";
   var MEDIA_HELPER_REQUESTS = Object.freeze({
     HELLO: "helper.hello",
     GET_CAPABILITIES: "helper.capabilities.get",
     YOUTUBE_QUALITY_PREFLIGHT: "youtube.quality_preflight",
     PLAYER_OUTPUT_CANARY: "player_output.canary",
+    PLAYER_OUTPUT_CAPTURE_START: "player_output.capture.start",
+    PLAYER_OUTPUT_CAPTURE_CHUNK: "player_output.capture.chunk",
+    PLAYER_OUTPUT_CAPTURE_FINISH: "player_output.capture.finish",
+    PLAYER_OUTPUT_CAPTURE_CANCEL: "player_output.capture.cancel",
     DOWNLOAD_START: "download.start",
     DOWNLOAD_CANCEL: "download.cancel",
     OUTPUT_OPEN: "output.open",
@@ -5324,6 +5334,7 @@ var AdsFriendlyBackground = (() => {
     CAPABILITIES: "helper.capabilities",
     YOUTUBE_QUALITY_PREFLIGHT: "youtube.quality_preflight",
     PLAYER_OUTPUT_CANARY: "player_output.canary",
+    PLAYER_OUTPUT_CHUNK_ACCEPTED: "player_output.chunk.accepted",
     DOWNLOAD_STARTED: "download.started",
     DOWNLOAD_PROGRESS: "download.progress",
     ACCESS_STRATEGY_RESULT: "media.access_strategy_result",
@@ -5344,6 +5355,7 @@ var AdsFriendlyBackground = (() => {
     YOUTUBE_PROVIDER_FORMAT_RESOLUTION: "resolve.youtube_provider_formats",
     YOUTUBE_QUALITY_PREFLIGHT: "resolve.youtube_quality_preflight",
     PLAYER_OUTPUT_CANARY: "validate.player_output_canary",
+    PLAYER_OUTPUT_CAPTURE: "capture.player_output",
     FFMPEG_MUX: "mux.ffmpeg",
     OUTPUT_OPEN: "output.open",
     OUTPUT_REVEAL: "output.reveal"
@@ -5569,6 +5581,7 @@ var AdsFriendlyBackground = (() => {
         canResolveYouTubeProviderFormats: capabilities[MEDIA_HELPER_CAPABILITIES.YOUTUBE_PROVIDER_FORMAT_RESOLUTION] === true,
         canResolveYouTubeQualityPreflight: capabilities[MEDIA_HELPER_CAPABILITIES.YOUTUBE_QUALITY_PREFLIGHT] === true,
         canValidatePlayerOutput: capabilities[MEDIA_HELPER_CAPABILITIES.PLAYER_OUTPUT_CANARY] === true,
+        canCapturePlayerOutput: capabilities[MEDIA_HELPER_CAPABILITIES.PLAYER_OUTPUT_CAPTURE] === true,
         canMuxWithFfmpeg: capabilities[MEDIA_HELPER_CAPABILITIES.FFMPEG_MUX] === true
       });
     } catch (error) {
@@ -5724,6 +5737,167 @@ var AdsFriendlyBackground = (() => {
     });
     return { status: "started", jobId: job.id };
   }
+  async function startMediaHelperPlayerOutputCapture({
+    jobId,
+    mediaId,
+    title,
+    duration,
+    sourceTabId,
+    sourceFrameId,
+    outputDirectory = null
+  }) {
+    if (!await hasNativeMessagingPermission()) {
+      throw new Error("Native Messaging permission is required.");
+    }
+    const previousConnection = activePorts.get(jobId);
+    if (previousConnection && !previousConnection.terminal)
+      throw new Error("Player output capture is already active.");
+    const requestId = randomId4();
+    const port = chrome.runtime.connectNative(MEDIA_HELPER_HOST_NAME);
+    const state = {
+      id: jobId,
+      mediaId,
+      kind: "player_output",
+      title: title || "Player output video",
+      output: { profileId: "video-mp4", container: "mp4" },
+      sourceTabId,
+      sourceFrameId,
+      candidate: { id: mediaId, kind: "player_output" },
+      connections: 1,
+      attempt: 1,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      status: "starting",
+      progress: {
+        phase: "starting",
+        stage: "player_output_capture",
+        downloadedBytes: 0,
+        totalBytes: null,
+        bytesPerSecond: 0,
+        processedSeconds: 0,
+        duration: Number.isFinite(Number(duration)) ? Number(duration) : null,
+        resumable: false
+      },
+      outputPath: null,
+      error: null
+    };
+    await removeHistoryEntry(jobId);
+    const connection = {
+      port,
+      requestId,
+      terminal: false,
+      terminalStatus: "cancelled",
+      queue: Promise.resolve(),
+      capture: true,
+      sourceTabId,
+      sourceFrameId,
+      pendingChunkAcks: /* @__PURE__ */ new Map()
+    };
+    activePorts.set(jobId, connection);
+    await persistJobState(state);
+    port.onMessage.addListener((rawEvent) => {
+      if (activePorts.get(jobId) !== connection) return;
+      connection.queue = connection.queue.then(
+        () => handleJobEvent(jobId, requestId, rawEvent)
+      );
+    });
+    port.onDisconnect.addListener(() => {
+      if (activePorts.get(jobId) !== connection) return;
+      const message = chrome.runtime.lastError?.message || "Media Helper disconnected.";
+      rejectPendingCaptureAcks(connection, new Error(message));
+      void connection.queue.finally(async () => {
+        activePorts.delete(jobId);
+        if (!connection.terminal)
+          await updateJobState(jobId, { status: "failed", error: message });
+      }).catch(() => {
+      });
+    });
+    port.postMessage({
+      type: MEDIA_HELPER_REQUESTS.PLAYER_OUTPUT_CAPTURE_START,
+      requestId,
+      protocolVersion: MEDIA_HELPER_PROTOCOL_VERSION,
+      payload: { jobId, mediaId, title, duration, outputDirectory }
+    });
+    return { status: "started", jobId };
+  }
+  async function appendMediaHelperPlayerOutputChunk(jobId, chunk, sourceTabId, sourceFrameId) {
+    const connection = activePorts.get(jobId);
+    if (!connection?.capture || connection.terminal)
+      return { status: "capture_not_running" };
+    if (connection.sourceTabId !== sourceTabId)
+      return { status: "source_tab_mismatch" };
+    if (connection.sourceFrameId !== sourceFrameId)
+      return { status: "source_frame_mismatch" };
+    const ackKey = `${chunk.trackId}:${chunk.sequence}`;
+    if (connection.pendingChunkAcks.has(ackKey))
+      return { status: "duplicate_chunk" };
+    const ack = new Promise((resolve, reject) => {
+      connection.pendingChunkAcks.set(ackKey, { resolve, reject });
+    });
+    connection.port.postMessage({
+      type: MEDIA_HELPER_REQUESTS.PLAYER_OUTPUT_CAPTURE_CHUNK,
+      requestId: connection.requestId,
+      protocolVersion: MEDIA_HELPER_PROTOCOL_VERSION,
+      payload: { jobId, ...chunk }
+    });
+    try {
+      await withTimeout(ack, 2e4);
+      return {
+        status: "accepted",
+        trackId: chunk.trackId,
+        sequence: chunk.sequence
+      };
+    } catch (error) {
+      connection.pendingChunkAcks.delete(ackKey);
+      throw error;
+    }
+  }
+  async function finishMediaHelperPlayerOutputCapture(jobId, sourceTabId, sourceFrameId) {
+    const connection = activePorts.get(jobId);
+    if (!connection?.capture || connection.terminal)
+      return { status: "capture_not_running" };
+    if (connection.sourceTabId !== sourceTabId)
+      return { status: "source_tab_mismatch" };
+    if (connection.sourceFrameId !== sourceFrameId)
+      return { status: "source_frame_mismatch" };
+    connection.port.postMessage({
+      type: MEDIA_HELPER_REQUESTS.PLAYER_OUTPUT_CAPTURE_FINISH,
+      requestId: connection.requestId,
+      protocolVersion: MEDIA_HELPER_PROTOCOL_VERSION,
+      payload: { jobId }
+    });
+    await updateJobState(jobId, {
+      status: "finalizing",
+      progress: {
+        ...await readStoredProgress(jobId),
+        phase: "finalizing",
+        stage: "player_output_probe"
+      }
+    });
+    return { status: "finalizing", jobId };
+  }
+  async function failMediaHelperPlayerOutputCapture(jobId, error, sourceTabId, sourceFrameId) {
+    const connection = activePorts.get(jobId);
+    if (!connection?.capture) return { status: "capture_not_running" };
+    if (connection.sourceTabId !== sourceTabId)
+      return { status: "source_tab_mismatch" };
+    if (connection.sourceFrameId !== sourceFrameId)
+      return { status: "source_frame_mismatch" };
+    connection.terminal = true;
+    connection.terminalStatus = "failed";
+    rejectPendingCaptureAcks(connection, new Error(error || "Capture failed."));
+    connection.port.postMessage({
+      type: MEDIA_HELPER_REQUESTS.PLAYER_OUTPUT_CAPTURE_CANCEL,
+      requestId: connection.requestId,
+      protocolVersion: MEDIA_HELPER_PROTOCOL_VERSION,
+      payload: { jobId }
+    });
+    await updateJobState(jobId, {
+      status: "failed",
+      error: error || "Player output capture failed."
+    });
+    return { status: "failed", jobId };
+  }
   async function preflightMediaHelperYouTubeQualities(candidate) {
     if (candidate?.kind !== "adaptive" || candidate?.provider !== "youtube") {
       return {
@@ -5869,7 +6043,7 @@ var AdsFriendlyBackground = (() => {
     if (!connection) return { status: "not_running" };
     connection.terminalStatus = terminalStatus === "paused" ? "paused" : "cancelled";
     connection.port.postMessage({
-      type: MEDIA_HELPER_REQUESTS.DOWNLOAD_CANCEL,
+      type: connection.capture ? MEDIA_HELPER_REQUESTS.PLAYER_OUTPUT_CAPTURE_CANCEL : MEDIA_HELPER_REQUESTS.DOWNLOAD_CANCEL,
       requestId: connection.requestId,
       protocolVersion: MEDIA_HELPER_PROTOCOL_VERSION,
       payload: { jobId }
@@ -5953,6 +6127,20 @@ var AdsFriendlyBackground = (() => {
         await updateJobState(jobId, { status: "probing" });
         return;
       }
+      if (event2.type === MEDIA_HELPER_EVENTS.PLAYER_OUTPUT_CHUNK_ACCEPTED) {
+        const connection = activePorts.get(jobId);
+        const ackKey = `${event2.payload.trackId}:${event2.payload.sequence}`;
+        const pending = connection?.pendingChunkAcks?.get(ackKey);
+        if (pending) {
+          connection.pendingChunkAcks.delete(ackKey);
+          pending.resolve(event2.payload);
+        }
+        await updateJobState(jobId, {
+          status: "downloading",
+          progress: { ...event2.payload }
+        });
+        return;
+      }
       if (event2.type === MEDIA_HELPER_EVENTS.DOWNLOAD_PROGRESS) {
         await updateJobState(jobId, {
           status: event2.payload.phase || "downloading",
@@ -5975,6 +6163,11 @@ var AdsFriendlyBackground = (() => {
         return;
       }
       if (event2.type === MEDIA_HELPER_EVENTS.DOWNLOAD_CANCELLED) {
+        if (activePorts.get(jobId)?.terminalStatus === "failed") {
+          markTerminal(jobId);
+          activePorts.get(jobId)?.port.disconnect();
+          return;
+        }
         const terminalStatus = activePorts.get(jobId)?.terminalStatus === "paused" ? "paused" : "cancelled";
         markTerminal(jobId);
         await updateJobState(jobId, { status: terminalStatus });
@@ -5982,6 +6175,10 @@ var AdsFriendlyBackground = (() => {
         return;
       }
       if (event2.type === MEDIA_HELPER_EVENTS.ERROR) {
+        rejectPendingCaptureAcks(
+          activePorts.get(jobId),
+          new Error(event2.payload.message || "Media Helper capture failed.")
+        );
         markTerminal(jobId);
         const message = await appendStoredKeyCaptureDiagnostic(
           jobId,
@@ -5998,6 +6195,16 @@ var AdsFriendlyBackground = (() => {
       await updateJobState(jobId, { status: "failed", error: messageOf(error) });
       activePorts.get(jobId)?.port.disconnect();
     }
+  }
+  function rejectPendingCaptureAcks(connection, error) {
+    if (!connection?.pendingChunkAcks) return;
+    for (const pending of connection.pendingChunkAcks.values())
+      pending.reject(error);
+    connection.pendingChunkAcks.clear();
+  }
+  async function readStoredProgress(jobId) {
+    const key = downloadJobKey(jobId);
+    return (await chrome.storage.session.get(key))[key]?.progress || {};
   }
   async function appendStoredKeyCaptureDiagnostic(jobId, message) {
     if (!/no captured browser key was available/i.test(message) || /Browser capture:/i.test(message)) {
@@ -6033,6 +6240,7 @@ var AdsFriendlyBackground = (() => {
       kind: state.kind,
       title: state.title,
       sourceTabId: state.sourceTabId,
+      sourceFrameId: state.sourceFrameId,
       createdAt: state.createdAt,
       updatedAt: state.updatedAt,
       status: state.status,
@@ -7619,6 +7827,7 @@ ${blobTitleKey(item.title)}`;
         [ACTIONS.MEDIA_DOWNLOAD_CREATE]: createJob,
         [ACTIONS.MEDIA_DOWNLOAD_PREFLIGHT]: preflightJob,
         [ACTIONS.MEDIA_OUTPUT_CANARY]: validatePlayerOutput,
+        [ACTIONS.MEDIA_OUTPUT_CAPTURE_START]: startPlayerOutputCapture,
         [ACTIONS.MEDIA_DOWNLOAD_PAUSE]: pauseJob,
         [ACTIONS.MEDIA_DOWNLOAD_OPEN]: openJobOutput,
         [ACTIONS.MEDIA_DOWNLOAD_REMOVE_HISTORY]: removeJobHistory,
@@ -7642,6 +7851,50 @@ ${blobTitleKey(item.title)}`;
   async function requestPlayerOutputCanary(payload) {
     if (!broker) return { status: "download_disabled" };
     return broker.execute(ACTIONS.MEDIA_OUTPUT_CANARY, payload);
+  }
+  async function requestPlayerOutputCapture(payload) {
+    if (!broker) return { status: "download_disabled" };
+    return broker.execute(ACTIONS.MEDIA_OUTPUT_CAPTURE_START, payload);
+  }
+  async function receivePlayerOutputCaptureChunk(payload, sender = {}) {
+    const tabId = sender.tab?.id;
+    const frameId = sender.frameId ?? 0;
+    if (!Number.isInteger(tabId)) return { status: "invalid_tab" };
+    return appendMediaHelperPlayerOutputChunk(
+      payload.captureId,
+      {
+        trackId: payload.trackId,
+        sequence: payload.sequence,
+        mimeType: payload.mimeType,
+        appendFormat: payload.appendFormat,
+        processedSeconds: payload.processedSeconds,
+        duration: payload.duration,
+        data: payload.data
+      },
+      tabId,
+      frameId
+    );
+  }
+  async function receivePlayerOutputCaptureFinish(payload, sender = {}) {
+    const tabId = sender.tab?.id;
+    const frameId = sender.frameId ?? 0;
+    if (!Number.isInteger(tabId)) return { status: "invalid_tab" };
+    return finishMediaHelperPlayerOutputCapture(
+      payload.captureId,
+      tabId,
+      frameId
+    );
+  }
+  async function receivePlayerOutputCaptureFailure(payload, sender = {}) {
+    const tabId = sender.tab?.id;
+    const frameId = sender.frameId ?? 0;
+    if (!Number.isInteger(tabId)) return { status: "invalid_tab" };
+    return failMediaHelperPlayerOutputCapture(
+      payload.captureId,
+      typeof payload.error === "string" ? payload.error.slice(0, 1e3) : null,
+      tabId,
+      frameId
+    );
   }
   async function requestMediaDownloadCancel(payload) {
     if (!broker) return { status: "download_disabled" };
@@ -7721,6 +7974,94 @@ ${blobTitleKey(item.title)}`;
       };
     }
     return validateMediaHelperPlayerOutputCanary(canary);
+  }
+  async function startPlayerOutputCapture({ tabId, mediaId } = {}) {
+    if (!Number.isInteger(tabId) || tabId < 0) return { status: "invalid_tab" };
+    if (typeof mediaId !== "string" || !mediaId)
+      return { status: "invalid_media" };
+    const catalog2 = await listDiscoveredMedia(tabId);
+    const candidate = findDownloadCandidate(catalog2.items || [], mediaId);
+    if (!candidate || !isPlayerOutputCanaryEligible(candidate)) {
+      return {
+        status: "not_eligible",
+        reason: "No validated custom player output is available."
+      };
+    }
+    const helper = await getMediaHelperStatus({ force: true });
+    if (helper.status !== "ready" || !helper.canCapturePlayerOutput) {
+      return {
+        status: "helper_update",
+        reason: "Media Helper 0.24.0 or newer is required for player capture."
+      };
+    }
+    let frames = [{ frameId: 0 }];
+    try {
+      frames = await chrome.webNavigation?.getAllFrames?.({ tabId }) || frames;
+    } catch {
+    }
+    const preferredFrameId = Number.isInteger(candidate.frameId) ? candidate.frameId : null;
+    const frameIds = [...new Set(frames.map((frame) => frame.frameId))].sort(
+      (left, right) => Number(right === preferredFrameId) - Number(left === preferredFrameId)
+    );
+    let sourceFrameId = null;
+    for (const frameId of frameIds.slice(0, 24)) {
+      try {
+        const response = frameId === 0 ? await chrome.tabs.sendMessage(tabId, {
+          type: "GET_PLAYER_OUTPUT_CANARY"
+        }) : await chrome.tabs.sendMessage(
+          tabId,
+          { type: "GET_PLAYER_OUTPUT_CANARY" },
+          { frameId }
+        );
+        if (response?.canary?.status === "ready" && response.canary.tracks?.length) {
+          sourceFrameId = frameId;
+          break;
+        }
+      } catch {
+      }
+    }
+    if (!Number.isInteger(sourceFrameId)) {
+      return {
+        status: "reload_required",
+        reason: "No continuous player-output start buffer is available. Reload the page and play briefly before capture."
+      };
+    }
+    const jobId = randomId5();
+    const stream = candidate.resolvedStream || candidate;
+    const title = candidate.title || stream.title || "Player output video";
+    await startMediaHelperPlayerOutputCapture({
+      jobId,
+      mediaId: candidate.id,
+      title,
+      duration: stream.duration,
+      sourceTabId: tabId,
+      sourceFrameId
+    });
+    let result = null;
+    try {
+      result = sourceFrameId === 0 ? await chrome.tabs.sendMessage(tabId, {
+        type: "START_PLAYER_OUTPUT_CAPTURE",
+        captureId: jobId
+      }) : await chrome.tabs.sendMessage(
+        tabId,
+        { type: "START_PLAYER_OUTPUT_CAPTURE", captureId: jobId },
+        { frameId: sourceFrameId }
+      );
+    } catch {
+    }
+    if (result?.status !== "started") {
+      await failMediaHelperPlayerOutputCapture(
+        jobId,
+        result?.reason || "Player output capture could not start in the media frame.",
+        tabId,
+        sourceFrameId
+      );
+      return result || {
+        status: "capture_unavailable",
+        reason: "The player frame did not expose a continuous start buffer."
+      };
+    }
+    return { ...result, jobId, status: "started" };
   }
   function isPlayerOutputCanaryEligible(candidate) {
     if (candidate?.kind !== "blob") return false;
@@ -7851,6 +8192,17 @@ ${blobTitleKey(item.title)}`;
   }
   async function cancelJob({ jobId } = {}) {
     if (typeof jobId !== "string" || !jobId) return { status: "invalid_job" };
+    const state = await readJob(jobId);
+    if (state?.kind === "player_output") {
+      try {
+        await chrome.tabs.sendMessage(
+          state.sourceTabId,
+          { type: "STOP_PLAYER_OUTPUT_CAPTURE", captureId: jobId },
+          Number.isInteger(state.sourceFrameId) ? { frameId: state.sourceFrameId } : void 0
+        );
+      } catch {
+      }
+    }
     return cancelMediaHelperDownload(jobId);
   }
   async function pauseJob({ jobId } = {}) {
@@ -7877,6 +8229,12 @@ ${blobTitleKey(item.title)}`;
       return {
         status: "retry_unavailable",
         reason: "Only a cancelled or failed job can be retried."
+      };
+    }
+    if (state.kind === "player_output") {
+      return {
+        status: "reload_required",
+        reason: "Reload the video page and start a new player output capture."
       };
     }
     return restartJob(state, payload.connections);
@@ -8501,6 +8859,10 @@ ${blobTitleKey(item.title)}`;
     GET_MEDIA_HELPER_STATUS: CAPABILITIES.MEDIA_DOWNLOAD,
     PREFLIGHT_MEDIA_DOWNLOAD_QUALITIES: CAPABILITIES.MEDIA_DOWNLOAD,
     VALIDATE_PLAYER_OUTPUT_CANARY: CAPABILITIES.MEDIA_DOWNLOAD,
+    START_PLAYER_OUTPUT_CAPTURE: CAPABILITIES.MEDIA_DOWNLOAD,
+    PLAYER_OUTPUT_CAPTURE_CHUNK: CAPABILITIES.MEDIA_DOWNLOAD,
+    PLAYER_OUTPUT_CAPTURE_FINISH: CAPABILITIES.MEDIA_DOWNLOAD,
+    PLAYER_OUTPUT_CAPTURE_FAILED: CAPABILITIES.MEDIA_DOWNLOAD,
     CREATE_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
     CANCEL_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
     PAUSE_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
@@ -8740,6 +9102,17 @@ ${blobTitleKey(item.title)}`;
         tabId: message.tabId,
         mediaId: message.mediaId
       });
+    if (message.type === "START_PLAYER_OUTPUT_CAPTURE")
+      return requestPlayerOutputCapture({
+        tabId: message.tabId,
+        mediaId: message.mediaId
+      });
+    if (message.type === "PLAYER_OUTPUT_CAPTURE_CHUNK")
+      return receivePlayerOutputCaptureChunk(message, sender);
+    if (message.type === "PLAYER_OUTPUT_CAPTURE_FINISH")
+      return receivePlayerOutputCaptureFinish(message, sender);
+    if (message.type === "PLAYER_OUTPUT_CAPTURE_FAILED")
+      return receivePlayerOutputCaptureFailure(message, sender);
     if (message.type === "CANCEL_MEDIA_DOWNLOAD_JOB")
       return requestMediaDownloadCancel({ jobId: message.jobId });
     if (message.type === "PAUSE_MEDIA_DOWNLOAD_JOB")

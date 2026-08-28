@@ -1238,6 +1238,13 @@ var AdsFriendlyPopup = (() => {
         reason: `${job.kind.toUpperCase()} downloads run through FFmpeg and cannot resume partial output yet.`
       };
     }
+    if (job.kind === "player_output") {
+      return {
+        supported: false,
+        label: "Pause unavailable",
+        reason: "Player output capture must remain continuous; cancel and reload the page to restart."
+      };
+    }
     if (job.kind === "direct" && job.progress) {
       return {
         supported: false,
@@ -1298,7 +1305,7 @@ var AdsFriendlyPopup = (() => {
     facts.push(speedFact);
     if (progress.resumedBytes > 0)
       facts.push(`resumed ${formatBytes(progress.resumedBytes)}`);
-    facts.push(connectionFact);
+    if (job.kind !== "player_output") facts.push(connectionFact);
     if (facts.length === 1) facts.unshift(capitalize(job.status || "starting"));
     return facts.join(" \xB7 ");
   }
@@ -1312,7 +1319,10 @@ var AdsFriendlyPopup = (() => {
       provider_resolution: "Resolving selected YouTube quality\u2026",
       segment_download: "Downloading HLS segments\u2026",
       local_assembly: "Preparing local HLS manifest\u2026",
-      local_processing: "Processing downloaded media\u2026"
+      local_processing: "Processing downloaded media\u2026",
+      player_output_capture: "Capturing decoded player output\u2026",
+      player_output_probe: "Validating captured video and audio\u2026",
+      player_output_remux: "Remuxing captured tracks to MP4\u2026"
     };
     return stages[job.progress?.stage] || "Checking media source\u2026";
   }
@@ -3549,14 +3559,15 @@ ${blobTitleKey(item.title)}`;
   function createPlayerOutputCanaryControl(item, tab, helper, control) {
     const button = document.createElement("button");
     button.className = "media-download";
+    let canaryReady = false;
     if (helper.status !== "ready") {
       button.disabled = false;
       button.textContent = helper.status === "permission_required" ? "Set up" : "Retry helper";
       button.title = helper.error || "Media Helper is required to validate player output.";
-    } else if (helper.canValidatePlayerOutput !== true) {
+    } else if (helper.canValidatePlayerOutput !== true || helper.canCapturePlayerOutput !== true) {
       button.disabled = true;
       button.textContent = "Update helper";
-      button.title = "Media Helper 0.23.0 or newer is required.";
+      button.title = "Media Helper 0.24.0 or newer is required.";
     } else {
       button.disabled = false;
       button.textContent = "Test output";
@@ -3569,8 +3580,24 @@ ${blobTitleKey(item.title)}`;
         return;
       }
       button.disabled = true;
-      button.textContent = "Testing\u2026";
+      button.textContent = canaryReady ? "Starting\u2026" : "Testing\u2026";
       try {
+        if (canaryReady) {
+          const response2 = await chrome.runtime.sendMessage({
+            type: "START_PLAYER_OUTPUT_CAPTURE",
+            tabId: tab.id,
+            mediaId: item.id
+          });
+          if (response2?.status !== "started") {
+            throw new Error(
+              response2?.reason || response2?.error || "Player output capture could not start."
+            );
+          }
+          button.textContent = "Capturing";
+          button.title = "Keep the player running. The Download Manager will finalize the MP4 when playback output ends.";
+          await updateMediaJobs();
+          return;
+        }
         const response = await chrome.runtime.sendMessage({
           type: "VALIDATE_PLAYER_OUTPUT_CANARY",
           tabId: tab.id,
@@ -3581,11 +3608,23 @@ ${blobTitleKey(item.title)}`;
             response?.reason || response?.error || "Player output could not be validated."
           );
         }
-        button.textContent = "Output ready";
+        if (!response.hasVideo || !response.hasAudio) {
+          throw new Error(
+            `Player output is incomplete: ${response.hasVideo ? "audio" : response.hasAudio ? "video" : "video and audio"} track missing.`
+          );
+        }
+        if (response.timeline?.status === "misaligned") {
+          throw new Error(
+            `Player output timestamps differ by ${response.timeline.deltaSeconds?.toFixed?.(3) || "unknown"} seconds.`
+          );
+        }
+        canaryReady = true;
+        button.disabled = false;
+        button.textContent = "Capture";
         button.title = formatPlayerOutputCanaryResult(response);
       } catch (error) {
         button.disabled = false;
-        button.textContent = "Test again";
+        button.textContent = canaryReady ? "Start again" : "Test again";
         button.title = error?.message || String(error);
       }
     });

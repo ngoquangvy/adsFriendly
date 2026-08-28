@@ -3,7 +3,10 @@ import { installNetworkCapture } from "./network-capture.js";
 import { installPlayerSourceObserver } from "./player-source-observer.js";
 import {
   installBlobSourceTracer,
+  acknowledgePlayerOutputCapture,
   readPlayerOutputCanary,
+  startPlayerOutputCapture,
+  stopPlayerOutputCapture,
 } from "./blob-source-tracer.js";
 import { installDecryptedManifestObserver } from "./decrypted-manifest-observer.js";
 import { installEmeObserver } from "./eme-observer.js";
@@ -81,6 +84,19 @@ onContentMessage((message) => {
       requestId: message.requestId,
       canary: readPlayerOutputCanary(),
     });
+  }
+  if (message.type === "START_PLAYER_OUTPUT_CAPTURE") {
+    notifyContentScript({
+      type: "PLAYER_OUTPUT_CAPTURE_START_RESPONSE",
+      requestId: message.requestId,
+      result: startPlayerOutputCapture({ captureId: message.captureId }),
+    });
+  }
+  if (message.type === "PLAYER_OUTPUT_CAPTURE_ACK") {
+    acknowledgePlayerOutputCapture(message);
+  }
+  if (message.type === "STOP_PLAYER_OUTPUT_CAPTURE") {
+    stopPlayerOutputCapture(message.captureId);
   }
 });
 

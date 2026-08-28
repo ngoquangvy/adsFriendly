@@ -22,6 +22,10 @@ import {
   startMediaHelperDownload,
   preflightMediaHelperYouTubeQualities,
   validateMediaHelperPlayerOutputCanary,
+  appendMediaHelperPlayerOutputChunk,
+  failMediaHelperPlayerOutputCapture,
+  finishMediaHelperPlayerOutputCapture,
+  startMediaHelperPlayerOutputCapture,
 } from "./media-helper-bridge.js";
 import { getMediaManifestHandoff } from "./media-manifest-handoff.js";
 import { normalizeMediaDownloadOutput } from "../media/download-options.js";
@@ -41,6 +45,7 @@ export async function startMediaDownloadJobStore(policy) {
       [ACTIONS.MEDIA_DOWNLOAD_CREATE]: createJob,
       [ACTIONS.MEDIA_DOWNLOAD_PREFLIGHT]: preflightJob,
       [ACTIONS.MEDIA_OUTPUT_CANARY]: validatePlayerOutput,
+      [ACTIONS.MEDIA_OUTPUT_CAPTURE_START]: startPlayerOutputCapture,
       [ACTIONS.MEDIA_DOWNLOAD_PAUSE]: pauseJob,
       [ACTIONS.MEDIA_DOWNLOAD_OPEN]: openJobOutput,
       [ACTIONS.MEDIA_DOWNLOAD_REMOVE_HISTORY]: removeJobHistory,
@@ -67,6 +72,54 @@ export async function requestMediaDownloadQualityPreflight(payload) {
 export async function requestPlayerOutputCanary(payload) {
   if (!broker) return { status: "download_disabled" };
   return broker.execute(ACTIONS.MEDIA_OUTPUT_CANARY, payload);
+}
+
+export async function requestPlayerOutputCapture(payload) {
+  if (!broker) return { status: "download_disabled" };
+  return broker.execute(ACTIONS.MEDIA_OUTPUT_CAPTURE_START, payload);
+}
+
+export async function receivePlayerOutputCaptureChunk(payload, sender = {}) {
+  const tabId = sender.tab?.id;
+  const frameId = sender.frameId ?? 0;
+  if (!Number.isInteger(tabId)) return { status: "invalid_tab" };
+  return appendMediaHelperPlayerOutputChunk(
+    payload.captureId,
+    {
+      trackId: payload.trackId,
+      sequence: payload.sequence,
+      mimeType: payload.mimeType,
+      appendFormat: payload.appendFormat,
+      processedSeconds: payload.processedSeconds,
+      duration: payload.duration,
+      data: payload.data,
+    },
+    tabId,
+    frameId,
+  );
+}
+
+export async function receivePlayerOutputCaptureFinish(payload, sender = {}) {
+  const tabId = sender.tab?.id;
+  const frameId = sender.frameId ?? 0;
+  if (!Number.isInteger(tabId)) return { status: "invalid_tab" };
+  return finishMediaHelperPlayerOutputCapture(
+    payload.captureId,
+    tabId,
+    frameId,
+  );
+}
+
+export async function receivePlayerOutputCaptureFailure(payload, sender = {}) {
+  const tabId = sender.tab?.id;
+  const frameId = sender.frameId ?? 0;
+  if (!Number.isInteger(tabId)) return { status: "invalid_tab" };
+  return failMediaHelperPlayerOutputCapture(
+    payload.captureId,
+    typeof payload.error === "string" ? payload.error.slice(0, 1000) : null,
+    tabId,
+    frameId,
+  );
 }
 
 export async function requestMediaDownloadCancel(payload) {
@@ -162,6 +215,108 @@ async function validatePlayerOutput({ tabId, mediaId } = {}) {
     };
   }
   return validateMediaHelperPlayerOutputCanary(canary);
+}
+
+async function startPlayerOutputCapture({ tabId, mediaId } = {}) {
+  if (!Number.isInteger(tabId) || tabId < 0) return { status: "invalid_tab" };
+  if (typeof mediaId !== "string" || !mediaId)
+    return { status: "invalid_media" };
+  const catalog = await listDiscoveredMedia(tabId);
+  const candidate = findDownloadCandidate(catalog.items || [], mediaId);
+  if (!candidate || !isPlayerOutputCanaryEligible(candidate)) {
+    return {
+      status: "not_eligible",
+      reason: "No validated custom player output is available.",
+    };
+  }
+  const helper = await getMediaHelperStatus({ force: true });
+  if (helper.status !== "ready" || !helper.canCapturePlayerOutput) {
+    return {
+      status: "helper_update",
+      reason: "Media Helper 0.24.0 or newer is required for player capture.",
+    };
+  }
+  let frames = [{ frameId: 0 }];
+  try {
+    frames = (await chrome.webNavigation?.getAllFrames?.({ tabId })) || frames;
+  } catch {}
+  const preferredFrameId = Number.isInteger(candidate.frameId)
+    ? candidate.frameId
+    : null;
+  const frameIds = [...new Set(frames.map((frame) => frame.frameId))].sort(
+    (left, right) =>
+      Number(right === preferredFrameId) - Number(left === preferredFrameId),
+  );
+  let sourceFrameId = null;
+  for (const frameId of frameIds.slice(0, 24)) {
+    try {
+      const response =
+        frameId === 0
+          ? await chrome.tabs.sendMessage(tabId, {
+              type: "GET_PLAYER_OUTPUT_CANARY",
+            })
+          : await chrome.tabs.sendMessage(
+              tabId,
+              { type: "GET_PLAYER_OUTPUT_CANARY" },
+              { frameId },
+            );
+      if (
+        response?.canary?.status === "ready" &&
+        response.canary.tracks?.length
+      ) {
+        sourceFrameId = frameId;
+        break;
+      }
+    } catch {}
+  }
+  if (!Number.isInteger(sourceFrameId)) {
+    return {
+      status: "reload_required",
+      reason:
+        "No continuous player-output start buffer is available. Reload the page and play briefly before capture.",
+    };
+  }
+  const jobId = randomId();
+  const stream = candidate.resolvedStream || candidate;
+  const title = candidate.title || stream.title || "Player output video";
+  await startMediaHelperPlayerOutputCapture({
+    jobId,
+    mediaId: candidate.id,
+    title,
+    duration: stream.duration,
+    sourceTabId: tabId,
+    sourceFrameId,
+  });
+  let result = null;
+  try {
+    result =
+      sourceFrameId === 0
+        ? await chrome.tabs.sendMessage(tabId, {
+            type: "START_PLAYER_OUTPUT_CAPTURE",
+            captureId: jobId,
+          })
+        : await chrome.tabs.sendMessage(
+            tabId,
+            { type: "START_PLAYER_OUTPUT_CAPTURE", captureId: jobId },
+            { frameId: sourceFrameId },
+          );
+  } catch {}
+  if (result?.status !== "started") {
+    await failMediaHelperPlayerOutputCapture(
+      jobId,
+      result?.reason ||
+        "Player output capture could not start in the media frame.",
+      tabId,
+      sourceFrameId,
+    );
+    return (
+      result || {
+        status: "capture_unavailable",
+        reason: "The player frame did not expose a continuous start buffer.",
+      }
+    );
+  }
+  return { ...result, jobId, status: "started" };
 }
 
 function isPlayerOutputCanaryEligible(candidate) {
@@ -320,6 +475,18 @@ async function normalizeYouTubeQualityCheck(candidate, output) {
 
 async function cancelJob({ jobId } = {}) {
   if (typeof jobId !== "string" || !jobId) return { status: "invalid_job" };
+  const state = await readJob(jobId);
+  if (state?.kind === "player_output") {
+    try {
+      await chrome.tabs.sendMessage(
+        state.sourceTabId,
+        { type: "STOP_PLAYER_OUTPUT_CAPTURE", captureId: jobId },
+        Number.isInteger(state.sourceFrameId)
+          ? { frameId: state.sourceFrameId }
+          : undefined,
+      );
+    } catch {}
+  }
   return cancelMediaHelperDownload(jobId);
 }
 
@@ -349,6 +516,12 @@ async function retryJob(payload = {}) {
     return {
       status: "retry_unavailable",
       reason: "Only a cancelled or failed job can be retried.",
+    };
+  }
+  if (state.kind === "player_output") {
+    return {
+      status: "reload_required",
+      reason: "Reload the video page and start a new player output capture.",
     };
   }
   return restartJob(state, payload.connections);

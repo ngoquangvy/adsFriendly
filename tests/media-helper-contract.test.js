@@ -21,6 +21,9 @@ import {
   normalizeHelperDownloadPayload,
   normalizeHelperRequest,
   normalizePlayerOutputCanaryPayload,
+  normalizePlayerOutputCaptureChunkPayload,
+  normalizePlayerOutputCaptureControlPayload,
+  normalizePlayerOutputCaptureStartPayload,
   normalizeYouTubeQualityPreflightPayload,
 } from "../src/media/helper-contract.js";
 import { windowsRevealArguments } from "../packages/media-helper/src/output-action-arguments.js";
@@ -164,6 +167,43 @@ test("player output canary accepts only bounded content-only track bytes", () =>
         tracks: [{ chunks: ["not base64!"], appendFormats: ["unknown"] }],
       }),
     /Invalid player output chunk/,
+  );
+});
+
+test("player output capture protocol preserves sequence and bounded chunks", () => {
+  const start = normalizePlayerOutputCaptureStartPayload({
+    jobId: "capture-1",
+    mediaId: "blob-1",
+    title: "Example",
+    duration: 60,
+  });
+  assert.equal(start.duration, 60);
+  const chunk = normalizePlayerOutputCaptureChunkPayload({
+    jobId: "capture-1",
+    trackId: "video-1",
+    sequence: 3,
+    mimeType: "video/mp4",
+    appendFormat: "iso-bmff",
+    processedSeconds: 12.5,
+    duration: 60,
+    data: btoa("fragment"),
+  });
+  assert.equal(chunk.sequence, 3);
+  assert.equal(chunk.bytes, 8);
+  assert.equal(chunk.appendFormat, "iso-bmff");
+  assert.deepEqual(
+    normalizePlayerOutputCaptureControlPayload({ jobId: "capture-1" }),
+    {
+      jobId: "capture-1",
+    },
+  );
+  assert.throws(
+    () =>
+      normalizePlayerOutputCaptureChunkPayload({
+        ...chunk,
+        sequence: -1,
+      }),
+    /non-negative integer/,
   );
 });
 

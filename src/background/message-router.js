@@ -42,6 +42,10 @@ import {
   requestMediaDownloadJob,
   requestMediaDownloadQualityPreflight,
   requestPlayerOutputCanary,
+  receivePlayerOutputCaptureChunk,
+  receivePlayerOutputCaptureFailure,
+  receivePlayerOutputCaptureFinish,
+  requestPlayerOutputCapture,
   requestMediaDownloadHistoryRemove,
   requestMediaDownloadOpen,
   requestMediaDownloadPause,
@@ -99,6 +103,10 @@ const MESSAGE_CAPABILITIES = Object.freeze({
   GET_MEDIA_HELPER_STATUS: CAPABILITIES.MEDIA_DOWNLOAD,
   PREFLIGHT_MEDIA_DOWNLOAD_QUALITIES: CAPABILITIES.MEDIA_DOWNLOAD,
   VALIDATE_PLAYER_OUTPUT_CANARY: CAPABILITIES.MEDIA_DOWNLOAD,
+  START_PLAYER_OUTPUT_CAPTURE: CAPABILITIES.MEDIA_DOWNLOAD,
+  PLAYER_OUTPUT_CAPTURE_CHUNK: CAPABILITIES.MEDIA_DOWNLOAD,
+  PLAYER_OUTPUT_CAPTURE_FINISH: CAPABILITIES.MEDIA_DOWNLOAD,
+  PLAYER_OUTPUT_CAPTURE_FAILED: CAPABILITIES.MEDIA_DOWNLOAD,
   CREATE_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
   CANCEL_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
   PAUSE_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
@@ -356,6 +364,17 @@ async function route(message, sender) {
       tabId: message.tabId,
       mediaId: message.mediaId,
     });
+  if (message.type === "START_PLAYER_OUTPUT_CAPTURE")
+    return requestPlayerOutputCapture({
+      tabId: message.tabId,
+      mediaId: message.mediaId,
+    });
+  if (message.type === "PLAYER_OUTPUT_CAPTURE_CHUNK")
+    return receivePlayerOutputCaptureChunk(message, sender);
+  if (message.type === "PLAYER_OUTPUT_CAPTURE_FINISH")
+    return receivePlayerOutputCaptureFinish(message, sender);
+  if (message.type === "PLAYER_OUTPUT_CAPTURE_FAILED")
+    return receivePlayerOutputCaptureFailure(message, sender);
   if (message.type === "CANCEL_MEDIA_DOWNLOAD_JOB")
     return requestMediaDownloadCancel({ jobId: message.jobId });
   if (message.type === "PAUSE_MEDIA_DOWNLOAD_JOB")

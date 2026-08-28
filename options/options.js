@@ -921,6 +921,13 @@ var AdsFriendlyOptions = (() => {
         reason: `${job.kind.toUpperCase()} downloads run through FFmpeg and cannot resume partial output yet.`
       };
     }
+    if (job.kind === "player_output") {
+      return {
+        supported: false,
+        label: "Pause unavailable",
+        reason: "Player output capture must remain continuous; cancel and reload the page to restart."
+      };
+    }
     if (job.kind === "direct" && job.progress) {
       return {
         supported: false,
@@ -981,7 +988,7 @@ var AdsFriendlyOptions = (() => {
     facts.push(speedFact);
     if (progress.resumedBytes > 0)
       facts.push(`resumed ${formatBytes(progress.resumedBytes)}`);
-    facts.push(connectionFact);
+    if (job.kind !== "player_output") facts.push(connectionFact);
     if (facts.length === 1) facts.unshift(capitalize(job.status || "starting"));
     return facts.join(" \xB7 ");
   }
@@ -995,7 +1002,10 @@ var AdsFriendlyOptions = (() => {
       provider_resolution: "Resolving selected YouTube quality\u2026",
       segment_download: "Downloading HLS segments\u2026",
       local_assembly: "Preparing local HLS manifest\u2026",
-      local_processing: "Processing downloaded media\u2026"
+      local_processing: "Processing downloaded media\u2026",
+      player_output_capture: "Capturing decoded player output\u2026",
+      player_output_probe: "Validating captured video and audio\u2026",
+      player_output_remux: "Remuxing captured tracks to MP4\u2026"
     };
     return stages[job.progress?.stage] || "Checking media source\u2026";
   }

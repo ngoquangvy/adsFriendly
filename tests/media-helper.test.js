@@ -58,7 +58,7 @@ test("built helper completes a framed Native Messaging handshake", async () => {
   );
 });
 
-test("built helper validates a bounded fMP4 player-output canary", async (t) => {
+test("built helper validates and remuxes captured fMP4 player output", async (t) => {
   if (
     !(await executableAvailable("ffmpeg")) ||
     !(await executableAvailable("ffprobe"))
@@ -135,6 +135,85 @@ test("built helper validates a bounded fMP4 player-output canary", async (t) => 
     "audio",
     "video",
   ]);
+  child.stdin.write(
+    frame({
+      type: MEDIA_HELPER_REQUESTS.PLAYER_OUTPUT_CAPTURE_START,
+      requestId: "player-capture-1",
+      protocolVersion: MEDIA_HELPER_PROTOCOL_VERSION,
+      payload: {
+        jobId: "player-capture-1",
+        mediaId: "blob-1",
+        title: "Captured player output",
+        duration: 0.5,
+        outputDirectory: fixtureDirectory,
+      },
+    }),
+  );
+  await frames.next(
+    (event) =>
+      event.type === MEDIA_HELPER_EVENTS.DOWNLOAD_STARTED &&
+      event.requestId === "player-capture-1",
+  );
+  const chunkSize = Math.ceil(bytes.length / 3);
+  let sequence = 0;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    child.stdin.write(
+      frame({
+        type: MEDIA_HELPER_REQUESTS.PLAYER_OUTPUT_CAPTURE_CHUNK,
+        requestId: "player-capture-1",
+        protocolVersion: MEDIA_HELPER_PROTOCOL_VERSION,
+        payload: {
+          jobId: "player-capture-1",
+          trackId: "source-buffer-1",
+          sequence,
+          mimeType: "video/mp4",
+          appendFormat: "iso-bmff",
+          processedSeconds: 0.5,
+          duration: 0.5,
+          data: bytes.subarray(offset, offset + chunkSize).toString("base64"),
+        },
+      }),
+    );
+    await frames.next(
+      (event) =>
+        event.type === MEDIA_HELPER_EVENTS.PLAYER_OUTPUT_CHUNK_ACCEPTED &&
+        event.payload.sequence === sequence,
+    );
+    sequence += 1;
+  }
+  child.stdin.write(
+    frame({
+      type: MEDIA_HELPER_REQUESTS.PLAYER_OUTPUT_CAPTURE_FINISH,
+      requestId: "player-capture-1",
+      protocolVersion: MEDIA_HELPER_PROTOCOL_VERSION,
+      payload: { jobId: "player-capture-1" },
+    }),
+  );
+  const completed = await frames.next(
+    (event) =>
+      event.type === MEDIA_HELPER_EVENTS.DOWNLOAD_COMPLETED &&
+      event.requestId === "player-capture-1",
+  );
+  const remuxed = JSON.parse(
+    (
+      await execFileAsync(
+        "ffprobe",
+        [
+          "-v",
+          "error",
+          "-show_streams",
+          "-of",
+          "json",
+          completed.payload.outputPath,
+        ],
+        { windowsHide: true },
+      )
+    ).stdout,
+  );
+  assert.deepEqual(
+    [...new Set(remuxed.streams.map((stream) => stream.codec_type))].sort(),
+    ["audio", "video"],
+  );
 });
 
 test("built helper times out a stalled HLS preflight with a precise stage", async (t) => {

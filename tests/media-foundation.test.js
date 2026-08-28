@@ -71,10 +71,12 @@ import {
 } from "../src/media/deep-inspection-profiles.js";
 import {
   armPlayerOutputCanary,
+  acknowledgePlayerOutputCapture,
   classifyAppendedMediaBuffer,
   clearPlayerOutputCanary,
   installBlobSourceTracer,
   readPlayerOutputCanary,
+  startPlayerOutputCapture,
 } from "../src/main-world/blob-source-tracer.js";
 import {
   classifyEncryptedManifestEnvelope,
@@ -1943,6 +1945,7 @@ test("blob source tracing links an appended network buffer to an adaptive manife
     addSourceBuffer() {
       return new FakeSourceBuffer();
     }
+    endOfStream() {}
   }
   globalThis.Response = FakeResponse;
   globalThis.XMLHttpRequest = FakeXhr;
@@ -2004,6 +2007,39 @@ test("blob source tracing links an appended network buffer to an adaptive manife
     assert.equal(canary.tracks.length, 1);
     assert.deepEqual(canary.tracks[0].appendFormats, ["iso-bmff"]);
     assert.equal(atob(canary.tracks[0].chunks[0]).length, 128);
+    const captureStart = startPlayerOutputCapture({ captureId: "capture-1" });
+    assert.equal(captureStart.status, "started");
+    const firstChunk = messages.find(
+      (message) => message.type === "PLAYER_OUTPUT_CAPTURE_CHUNK",
+    );
+    assert.equal(firstChunk.captureId, "capture-1");
+    assert.equal(firstChunk.sequence, 0);
+    assert.equal(atob(firstChunk.data).length, 128);
+    acknowledgePlayerOutputCapture({
+      requestId: firstChunk.requestId,
+      status: "accepted",
+    });
+    const nextBytes = new ArrayBuffer(64);
+    new Uint8Array(nextBytes).set([0, 0, 0, 24, 0x6d, 0x6f, 0x6f, 0x66]);
+    sourceBuffer.appendBuffer(nextBytes);
+    mediaSource.endOfStream();
+    const captureChunks = messages.filter(
+      (message) => message.type === "PLAYER_OUTPUT_CAPTURE_CHUNK",
+    );
+    assert.equal(captureChunks.length, 2);
+    assert.equal(captureChunks[1].sequence, 1);
+    acknowledgePlayerOutputCapture({
+      requestId: captureChunks[1].requestId,
+      status: "accepted",
+    });
+    assert.equal(
+      messages.some(
+        (message) =>
+          message.type === "PLAYER_OUTPUT_CAPTURE_FINISH" &&
+          message.captureId === "capture-1",
+      ),
+      true,
+    );
   } finally {
     clearPlayerOutputCanary();
     stop();

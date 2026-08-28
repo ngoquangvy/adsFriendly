@@ -2981,8 +2981,11 @@ ${body}`;
   var REPORT_DELAY_MS = 200;
   var CANARY_ARM_MS = 10 * 60 * 1e3;
   var MAX_CANARY_TRACKS = 4;
-  var MAX_CANARY_BYTES_PER_TRACK = 1536 * 1024;
-  var MAX_CANARY_BYTES_TOTAL = 3 * 1024 * 1024;
+  var MAX_CANARY_HANDOFF_BYTES_PER_TRACK = 1536 * 1024;
+  var MAX_CANARY_BYTES_PER_TRACK = 8 * 1024 * 1024;
+  var MAX_CANARY_BYTES_TOTAL = 16 * 1024 * 1024;
+  var MAX_CAPTURE_MESSAGE_BYTES = 1024 * 1024;
+  var MAX_CAPTURE_QUEUE_BYTES = 32 * 1024 * 1024;
   var canaryStores = /* @__PURE__ */ new Set();
   var pendingCanaryEvidence = null;
   function armPlayerOutputCanary(evidence = {}) {
@@ -3001,13 +3004,20 @@ ${body}`;
     for (const store of stores) {
       for (const track of store.tracks.values()) {
         if (!track.chunks.length || tracks.length >= MAX_CANARY_TRACKS) continue;
+        const chunks = boundedChunks(
+          track.chunks,
+          MAX_CANARY_HANDOFF_BYTES_PER_TRACK
+        );
         tracks.push({
           id: track.id,
           mimeType: track.mimeType,
           appendFormats: [...track.appendFormats],
           appendCount: track.appendCount,
-          capturedBytes: track.capturedBytes,
-          chunks: track.chunks.map(bytesToBase642)
+          capturedBytes: chunks.reduce(
+            (total, chunk) => total + chunk.byteLength,
+            0
+          ),
+          chunks: chunks.map(bytesToBase642)
         });
       }
     }
@@ -3027,12 +3037,88 @@ ${body}`;
       )
     };
   }
+  function startPlayerOutputCapture({ captureId } = {}) {
+    if (typeof captureId !== "string" || !captureId)
+      return { status: "invalid_capture" };
+    const store = [...canaryStores].filter(
+      (candidate) => candidate.evidence?.expiresAt > Date.now() && candidate.tracks.size
+    ).sort((left, right) => right.totalBytes - left.totalBytes)[0];
+    if (!store) {
+      return {
+        status: "reload_required",
+        reason: "No player output is buffered. Reload the page and start capture shortly after playback begins."
+      };
+    }
+    if (store.saturated || [...store.tracks.values()].some((track) => track.truncated)) {
+      return {
+        status: "reload_required",
+        reason: "The bounded start buffer is no longer continuous. Reload the page and start capture earlier."
+      };
+    }
+    if (store.fullCapture) return { status: "capture_already_running" };
+    const capture = {
+      id: captureId,
+      queue: [],
+      queuedBytes: 0,
+      pending: null,
+      sequenceByTrack: /* @__PURE__ */ new Map(),
+      finishing: false,
+      finishSent: false
+    };
+    store.fullCapture = capture;
+    for (const track of store.tracks.values()) {
+      for (const chunk of track.chunks) {
+        enqueueCaptureBytes(store, track, chunk, track.appendFormats[0] || null);
+      }
+    }
+    pumpCaptureQueue(store);
+    return {
+      status: "started",
+      captureId,
+      seededBytes: capture.queuedBytes,
+      trackCount: store.tracks.size
+    };
+  }
+  function acknowledgePlayerOutputCapture(message = {}) {
+    for (const store of canaryStores) {
+      const capture = store.fullCapture;
+      if (!capture?.pending || capture.pending.requestId !== message.requestId)
+        continue;
+      const item = capture.pending;
+      capture.pending = null;
+      capture.queuedBytes = Math.max(
+        0,
+        capture.queuedBytes - item.bytes.byteLength
+      );
+      if (message.status !== "accepted") {
+        failFullCapture(
+          store,
+          message.error || `Helper rejected ${item.trackId} sequence ${item.sequence}.`
+        );
+        return true;
+      }
+      pumpCaptureQueue(store);
+      return true;
+    }
+    return false;
+  }
+  function stopPlayerOutputCapture(captureId) {
+    for (const store of canaryStores) {
+      if (store.fullCapture?.id !== captureId) continue;
+      store.fullCapture.queue.length = 0;
+      store.fullCapture = null;
+      return { status: "stopped", captureId };
+    }
+    return { status: "not_running", captureId };
+  }
   function clearPlayerOutputCanary() {
     pendingCanaryEvidence = null;
     for (const store of canaryStores) {
       store.evidence = null;
       store.tracks.clear();
       store.totalBytes = 0;
+      store.saturated = false;
+      store.fullCapture = null;
     }
   }
   function installBlobSourceTracer(policy, {
@@ -3049,7 +3135,9 @@ ${body}`;
       evidence: pendingCanaryEvidence?.expiresAt > Date.now() ? pendingCanaryEvidence : null,
       tracks: /* @__PURE__ */ new Map(),
       totalBytes: 0,
-      nextTrackId: 1
+      nextTrackId: 1,
+      saturated: false,
+      fullCapture: null
     };
     canaryStores.add(canaryStore);
     patchResponseArrayBuffer();
@@ -3058,6 +3146,16 @@ ${body}`;
     patchXhrResponse();
     patchMediaSource();
     patchObjectUrls();
+    const onVideoEnded = (event2) => {
+      if (event2.target?.tagName === "VIDEO")
+        requestFullCaptureFinish(canaryStore);
+    };
+    if (globalThis.document?.addEventListener) {
+      document.addEventListener("ended", onVideoEnded, true);
+      cleanups.push(
+        () => document.removeEventListener("ended", onVideoEnded, true)
+      );
+    }
     return () => {
       for (const cleanup of cleanups.reverse()) cleanup();
       for (const state of objectUrlStates.values()) clearTimeout(state.timerId);
@@ -3138,6 +3236,7 @@ ${body}`;
       const sourceBufferPrototype = globalThis.SourceBuffer?.prototype;
       const originalAdd = mediaSourcePrototype?.addSourceBuffer;
       const originalAppend = sourceBufferPrototype?.appendBuffer;
+      const originalEndOfStream = mediaSourcePrototype?.endOfStream;
       if (typeof originalAdd === "function") {
         const addWrapper = function(mimeType) {
           const sourceBuffer = originalAdd.call(this, mimeType);
@@ -3181,6 +3280,12 @@ ${body}`;
               value,
               appendFormat
             );
+            captureFullOutputChunk(
+              canaryStore,
+              sourceBufferState,
+              value,
+              appendFormat
+            );
             if (source?.url) {
               rememberBounded(state.sourceUrls, source.url, MAX_SOURCE_URLS);
               if (source.mimeType)
@@ -3194,6 +3299,17 @@ ${body}`;
         cleanups.push(() => {
           if (sourceBufferPrototype.appendBuffer === appendWrapper)
             sourceBufferPrototype.appendBuffer = originalAppend;
+        });
+      }
+      if (typeof originalEndOfStream === "function") {
+        const endWrapper = function(...args) {
+          requestFullCaptureFinish(canaryStore);
+          return originalEndOfStream.apply(this, args);
+        };
+        mediaSourcePrototype.endOfStream = endWrapper;
+        cleanups.push(() => {
+          if (mediaSourcePrototype.endOfStream === endWrapper)
+            mediaSourcePrototype.endOfStream = originalEndOfStream;
         });
       }
     }
@@ -3305,7 +3421,10 @@ ${body}`;
   }
   function captureCanaryChunk(store, sourceBufferState, value, appendFormat) {
     if (!store.evidence || store.evidence.expiresAt <= Date.now()) return;
-    if (store.totalBytes >= MAX_CANARY_BYTES_TOTAL) return;
+    if (store.totalBytes >= MAX_CANARY_BYTES_TOTAL) {
+      store.saturated = true;
+      return;
+    }
     let bytes;
     if (value instanceof ArrayBuffer) bytes = new Uint8Array(value);
     else if (ArrayBuffer.isView(value))
@@ -3320,7 +3439,8 @@ ${body}`;
         appendFormats: [],
         appendCount: 0,
         capturedBytes: 0,
-        chunks: []
+        chunks: [],
+        truncated: false
       };
       store.tracks.set(track.id, track);
     }
@@ -3330,11 +3450,133 @@ ${body}`;
       MAX_CANARY_BYTES_PER_TRACK - track.capturedBytes,
       MAX_CANARY_BYTES_TOTAL - store.totalBytes
     );
-    if (remaining <= 0) return;
+    if (remaining <= 0) {
+      track.truncated = true;
+      store.saturated = true;
+      return;
+    }
     const copy = bytes.slice(0, Math.min(bytes.byteLength, remaining));
+    if (copy.byteLength < bytes.byteLength) {
+      track.truncated = true;
+      store.saturated = true;
+    }
     track.chunks.push(copy);
     track.capturedBytes += copy.byteLength;
     store.totalBytes += copy.byteLength;
+  }
+  function captureFullOutputChunk(store, sourceBufferState, value, appendFormat) {
+    if (!store.fullCapture || store.fullCapture.finishing) return;
+    const bytes = mediaBytes(value);
+    if (!bytes) return;
+    const track = store.tracks.get(sourceBufferState.canaryTrackId) || {
+      id: sourceBufferState.canaryTrackId,
+      mimeType: sourceBufferState.mimeType,
+      appendFormats: appendFormat ? [appendFormat] : []
+    };
+    enqueueCaptureBytes(store, track, bytes, appendFormat);
+    pumpCaptureQueue(store);
+  }
+  function enqueueCaptureBytes(store, track, bytes, appendFormat) {
+    const capture = store.fullCapture;
+    if (!capture || capture.finishing) return;
+    for (let offset = 0; offset < bytes.byteLength; offset += MAX_CAPTURE_MESSAGE_BYTES) {
+      const copy = bytes.slice(
+        offset,
+        Math.min(bytes.byteLength, offset + MAX_CAPTURE_MESSAGE_BYTES)
+      );
+      if (capture.queuedBytes + copy.byteLength > MAX_CAPTURE_QUEUE_BYTES) {
+        failFullCapture(
+          store,
+          "Player output queue exceeded 32 MB while waiting for the Helper."
+        );
+        return;
+      }
+      const sequence = capture.sequenceByTrack.get(track.id) || 0;
+      capture.sequenceByTrack.set(track.id, sequence + 1);
+      capture.queue.push({
+        trackId: track.id,
+        sequence,
+        mimeType: track.mimeType || null,
+        appendFormat: appendFormat || track.appendFormats?.[0] || null,
+        bytes: copy
+      });
+      capture.queuedBytes += copy.byteLength;
+    }
+  }
+  function pumpCaptureQueue(store) {
+    const capture = store.fullCapture;
+    if (!capture || capture.pending) return;
+    const item = capture.queue.shift();
+    if (!item) {
+      if (capture.finishing && !capture.finishSent) {
+        capture.finishSent = true;
+        notifyContentScript({
+          type: "PLAYER_OUTPUT_CAPTURE_FINISH",
+          captureId: capture.id
+        });
+      }
+      return;
+    }
+    item.requestId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    capture.pending = item;
+    const playback = currentPlaybackState();
+    notifyContentScript({
+      type: "PLAYER_OUTPUT_CAPTURE_CHUNK",
+      requestId: item.requestId,
+      captureId: capture.id,
+      trackId: item.trackId,
+      sequence: item.sequence,
+      mimeType: item.mimeType,
+      appendFormat: item.appendFormat,
+      processedSeconds: playback.currentTime,
+      duration: playback.duration,
+      data: bytesToBase642(item.bytes)
+    });
+  }
+  function requestFullCaptureFinish(store) {
+    const capture = store.fullCapture;
+    if (!capture || capture.finishing) return;
+    capture.finishing = true;
+    pumpCaptureQueue(store);
+  }
+  function failFullCapture(store, error) {
+    const capture = store.fullCapture;
+    if (!capture) return;
+    store.fullCapture = null;
+    notifyContentScript({
+      type: "PLAYER_OUTPUT_CAPTURE_FAILED",
+      captureId: capture.id,
+      error
+    });
+  }
+  function currentPlaybackState() {
+    const videos = [...globalThis.document?.querySelectorAll?.("video") || []];
+    const currentTime = Math.max(
+      0,
+      ...videos.map((video) => Number(video.currentTime) || 0)
+    );
+    const durations = videos.map((video) => Number(video.duration)).filter((value) => Number.isFinite(value) && value > 0);
+    return {
+      currentTime,
+      duration: durations.length ? Math.max(...durations) : null
+    };
+  }
+  function mediaBytes(value) {
+    if (value instanceof ArrayBuffer) return new Uint8Array(value);
+    if (ArrayBuffer.isView(value))
+      return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    return null;
+  }
+  function boundedChunks(chunks, maximumBytes) {
+    const result = [];
+    let remaining = maximumBytes;
+    for (const chunk of chunks) {
+      if (remaining <= 0) break;
+      const copy = chunk.slice(0, Math.min(chunk.byteLength, remaining));
+      result.push(copy);
+      remaining -= copy.byteLength;
+    }
+    return result;
   }
   function bytesToBase642(bytes) {
     let binary = "";
@@ -5401,6 +5643,19 @@ ${body}`;
         requestId: message.requestId,
         canary: readPlayerOutputCanary()
       });
+    }
+    if (message.type === "START_PLAYER_OUTPUT_CAPTURE") {
+      notifyContentScript({
+        type: "PLAYER_OUTPUT_CAPTURE_START_RESPONSE",
+        requestId: message.requestId,
+        result: startPlayerOutputCapture({ captureId: message.captureId })
+      });
+    }
+    if (message.type === "PLAYER_OUTPUT_CAPTURE_ACK") {
+      acknowledgePlayerOutputCapture(message);
+    }
+    if (message.type === "STOP_PLAYER_OUTPUT_CAPTURE") {
+      stopPlayerOutputCapture(message.captureId);
     }
   });
   console.log("[AdsFriendly Spy] Injected and controlled by MainController.");

@@ -903,16 +903,20 @@ function createMediaDownloadControl(item, downloadItem, tab, helper) {
 function createPlayerOutputCanaryControl(item, tab, helper, control) {
   const button = document.createElement("button");
   button.className = "media-download";
+  let canaryReady = false;
   if (helper.status !== "ready") {
     button.disabled = false;
     button.textContent =
       helper.status === "permission_required" ? "Set up" : "Retry helper";
     button.title =
       helper.error || "Media Helper is required to validate player output.";
-  } else if (helper.canValidatePlayerOutput !== true) {
+  } else if (
+    helper.canValidatePlayerOutput !== true ||
+    helper.canCapturePlayerOutput !== true
+  ) {
     button.disabled = true;
     button.textContent = "Update helper";
-    button.title = "Media Helper 0.23.0 or newer is required.";
+    button.title = "Media Helper 0.24.0 or newer is required.";
   } else {
     button.disabled = false;
     button.textContent = "Test output";
@@ -926,8 +930,27 @@ function createPlayerOutputCanaryControl(item, tab, helper, control) {
       return;
     }
     button.disabled = true;
-    button.textContent = "Testing…";
+    button.textContent = canaryReady ? "Starting…" : "Testing…";
     try {
+      if (canaryReady) {
+        const response = await chrome.runtime.sendMessage({
+          type: "START_PLAYER_OUTPUT_CAPTURE",
+          tabId: tab.id,
+          mediaId: item.id,
+        });
+        if (response?.status !== "started") {
+          throw new Error(
+            response?.reason ||
+              response?.error ||
+              "Player output capture could not start.",
+          );
+        }
+        button.textContent = "Capturing";
+        button.title =
+          "Keep the player running. The Download Manager will finalize the MP4 when playback output ends.";
+        await updateMediaJobs();
+        return;
+      }
       const response = await chrome.runtime.sendMessage({
         type: "VALIDATE_PLAYER_OUTPUT_CANARY",
         tabId: tab.id,
@@ -940,11 +963,23 @@ function createPlayerOutputCanaryControl(item, tab, helper, control) {
             "Player output could not be validated.",
         );
       }
-      button.textContent = "Output ready";
+      if (!response.hasVideo || !response.hasAudio) {
+        throw new Error(
+          `Player output is incomplete: ${response.hasVideo ? "audio" : response.hasAudio ? "video" : "video and audio"} track missing.`,
+        );
+      }
+      if (response.timeline?.status === "misaligned") {
+        throw new Error(
+          `Player output timestamps differ by ${response.timeline.deltaSeconds?.toFixed?.(3) || "unknown"} seconds.`,
+        );
+      }
+      canaryReady = true;
+      button.disabled = false;
+      button.textContent = "Capture";
       button.title = formatPlayerOutputCanaryResult(response);
     } catch (error) {
       button.disabled = false;
-      button.textContent = "Test again";
+      button.textContent = canaryReady ? "Start again" : "Test again";
       button.title = error?.message || String(error);
     }
   });

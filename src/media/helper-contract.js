@@ -6,7 +6,7 @@ import {
   isYouTubeProviderResolvableTrack,
 } from "./adaptive-track-policy.js";
 
-export const MEDIA_HELPER_PROTOCOL_VERSION = 11;
+export const MEDIA_HELPER_PROTOCOL_VERSION = 12;
 export const MEDIA_HELPER_HOST_NAME = "com.adsfriendly.media_helper";
 
 export const MEDIA_HELPER_REQUESTS = Object.freeze({
@@ -14,6 +14,10 @@ export const MEDIA_HELPER_REQUESTS = Object.freeze({
   GET_CAPABILITIES: "helper.capabilities.get",
   YOUTUBE_QUALITY_PREFLIGHT: "youtube.quality_preflight",
   PLAYER_OUTPUT_CANARY: "player_output.canary",
+  PLAYER_OUTPUT_CAPTURE_START: "player_output.capture.start",
+  PLAYER_OUTPUT_CAPTURE_CHUNK: "player_output.capture.chunk",
+  PLAYER_OUTPUT_CAPTURE_FINISH: "player_output.capture.finish",
+  PLAYER_OUTPUT_CAPTURE_CANCEL: "player_output.capture.cancel",
   DOWNLOAD_START: "download.start",
   DOWNLOAD_CANCEL: "download.cancel",
   OUTPUT_OPEN: "output.open",
@@ -25,6 +29,7 @@ export const MEDIA_HELPER_EVENTS = Object.freeze({
   CAPABILITIES: "helper.capabilities",
   YOUTUBE_QUALITY_PREFLIGHT: "youtube.quality_preflight",
   PLAYER_OUTPUT_CANARY: "player_output.canary",
+  PLAYER_OUTPUT_CHUNK_ACCEPTED: "player_output.chunk.accepted",
   DOWNLOAD_STARTED: "download.started",
   DOWNLOAD_PROGRESS: "download.progress",
   ACCESS_STRATEGY_RESULT: "media.access_strategy_result",
@@ -46,6 +51,7 @@ export const MEDIA_HELPER_CAPABILITIES = Object.freeze({
   YOUTUBE_PROVIDER_FORMAT_RESOLUTION: "resolve.youtube_provider_formats",
   YOUTUBE_QUALITY_PREFLIGHT: "resolve.youtube_quality_preflight",
   PLAYER_OUTPUT_CANARY: "validate.player_output_canary",
+  PLAYER_OUTPUT_CAPTURE: "capture.player_output",
   FFMPEG_MUX: "mux.ffmpeg",
   OUTPUT_OPEN: "output.open",
   OUTPUT_REVEAL: "output.reveal",
@@ -254,6 +260,53 @@ export function normalizePlayerOutputCanaryPayload(value = {}) {
     );
   }
   return { tracks, capturedBytes };
+}
+
+export function normalizePlayerOutputCaptureStartPayload(value = {}) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("[MediaHelperProtocol] Player output capture is required.");
+  }
+  return {
+    jobId: requiredString(value.jobId, "jobId"),
+    mediaId: requiredString(value.mediaId, "mediaId"),
+    title: optionalString(value.title) || "player-output-video",
+    duration: optionalNonNegativeNumber(value.duration),
+    outputDirectory: optionalString(value.outputDirectory),
+  };
+}
+
+export function normalizePlayerOutputCaptureChunkPayload(value = {}) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("[MediaHelperProtocol] Player output chunk is required.");
+  }
+  const data = normalizeCanaryChunk(value.data);
+  let bytes;
+  try {
+    bytes = atob(data).length;
+  } catch {
+    throw new Error("[MediaHelperProtocol] Invalid player output bytes.");
+  }
+  if (bytes <= 0 || bytes > 1536 * 1024) {
+    throw new Error("[MediaHelperProtocol] Player output chunk is too large.");
+  }
+  return {
+    jobId: requiredString(value.jobId, "jobId"),
+    trackId: requiredString(value.trackId, "trackId").slice(0, 100),
+    sequence: requiredNonNegativeInteger(value.sequence, "sequence"),
+    mimeType: optionalString(value.mimeType),
+    appendFormat: normalizeCanaryFormats([value.appendFormat])[0] || null,
+    processedSeconds: optionalNonNegativeNumber(value.processedSeconds),
+    duration: optionalNonNegativeNumber(value.duration),
+    data,
+    bytes,
+  };
+}
+
+export function normalizePlayerOutputCaptureControlPayload(value = {}) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("[MediaHelperProtocol] Player output control is required.");
+  }
+  return { jobId: requiredString(value.jobId, "jobId") };
 }
 
 function normalizePlayerOutputCanaryTrack(value, index) {
@@ -550,6 +603,16 @@ function optionalNonNegativeInteger(value) {
   if (number === null) return null;
   if (!Number.isInteger(number)) {
     throw new Error("[MediaHelperProtocol] Expected a non-negative integer.");
+  }
+  return number;
+}
+
+function requiredNonNegativeInteger(value, field) {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < 0) {
+    throw new Error(
+      `[MediaHelperProtocol] ${field} must be a non-negative integer.`,
+    );
   }
   return number;
 }
