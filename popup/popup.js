@@ -1784,6 +1784,8 @@ var AdsFriendlyPopup = (() => {
         canDownloadAdaptive: helper.canDownloadAdaptive,
         canResolveYouTubePlayerJs: helper.canResolveYouTubePlayerJs,
         canResolveYouTubeProviderFormats: helper.canResolveYouTubeProviderFormats,
+        canValidatePlayerOutput: helper.canValidatePlayerOutput,
+        canCapturePlayerOutput: helper.canCapturePlayerOutput,
         error: helper.error
       } : null,
       items: items.map(mediaRenderFacts)
@@ -2645,7 +2647,7 @@ ${blobTitleKey(item.title)}`;
       selectedMediaId: item.selectedMediaId,
       resolvedStream: item.resolvedStream,
       resolvedKind: item.resolvedKind,
-      blobTrace: item.blobTrace,
+      blobTrace: mediaRenderBlobTrace(item.blobTrace),
       requiresBrowserSession: item.resolvedRequestContext?.requiresBrowserSession === true,
       drm: item.drm,
       drmSystem: item.drmSystem,
@@ -2663,6 +2665,19 @@ ${blobTitleKey(item.title)}`;
         playing: item.playback.playing === true,
         visible: item.playback.visible === true
       } : null
+    };
+  }
+  function mediaRenderBlobTrace(trace) {
+    if (!trace) return null;
+    return {
+      blobUrl: trace.blobUrl,
+      sourceUrls: trace.sourceUrls,
+      candidateIds: trace.candidateIds,
+      mimeTypes: trace.mimeTypes,
+      appendFormats: trace.appendFormats,
+      hasAppendedOutput: Number(trace.appendCount) > 0,
+      hasUnclassifiedOutput: Number(trace.unclassifiedAppendCount) > 0,
+      observerDocumentState: trace.observerDocumentState
     };
   }
   function samePlaybackFrame(left, right) {
@@ -2882,6 +2897,7 @@ ${blobTitleKey(item.title)}`;
   var scheduledMediaRefresh = null;
   var hasMediaDownloadJobs = false;
   var youtubeQualityPreflightCache = /* @__PURE__ */ new Map();
+  var playerOutputCanaryStates = /* @__PURE__ */ new Map();
   initialize().catch(
     (error) => console.error("[AdsFriendly Popup] initialization failed", error)
   );
@@ -3559,7 +3575,50 @@ ${blobTitleKey(item.title)}`;
   function createPlayerOutputCanaryControl(item, tab, helper, control) {
     const button = document.createElement("button");
     button.className = "media-download";
-    let canaryReady = false;
+    const diagnostic2 = document.createElement("span");
+    diagnostic2.className = "media-download-estimate";
+    const stateKey = `${tab.id}:${item.id}`;
+    let state = playerOutputCanaryStates.get(stateKey) || {
+      status: "idle",
+      detail: null
+    };
+    const renderState = () => {
+      const canaryReady = state.status === "ready";
+      if (state.status === "testing") {
+        button.disabled = true;
+        button.textContent = "Testing\u2026";
+      } else if (state.status === "starting") {
+        button.disabled = true;
+        button.textContent = "Starting\u2026";
+      } else if (state.status === "capturing") {
+        button.disabled = true;
+        button.textContent = "Capturing";
+      } else if (canaryReady) {
+        button.disabled = false;
+        button.textContent = "Capture";
+      } else if (state.status === "reload_required") {
+        button.disabled = false;
+        button.textContent = "Reload & test";
+      } else if (state.status === "failed") {
+        button.disabled = false;
+        button.textContent = "Test again";
+      } else {
+        button.disabled = false;
+        button.textContent = "Test output";
+      }
+      button.title = state.detail || "";
+      diagnostic2.textContent = state.detail || "";
+      diagnostic2.hidden = !state.detail;
+    };
+    const commitState = (nextState) => {
+      state = nextState;
+      playerOutputCanaryStates.set(stateKey, state);
+      renderState();
+      if (!button.isConnected) {
+        mediaRenderSignature = null;
+        setTimeout(() => void updateMediaCatalog(), 0);
+      }
+    };
     if (helper.status !== "ready") {
       button.disabled = false;
       button.textContent = helper.status === "permission_required" ? "Set up" : "Retry helper";
@@ -3569,9 +3628,11 @@ ${blobTitleKey(item.title)}`;
       button.textContent = "Update helper";
       button.title = "Media Helper 0.24.0 or newer is required.";
     } else {
-      button.disabled = false;
-      button.textContent = "Test output";
-      button.title = "Validate a bounded in-memory player-output sample with FFprobe.";
+      if (state.status === "idle") {
+        state = { status: "idle", detail: null };
+        playerOutputCanaryStates.set(stateKey, state);
+      }
+      renderState();
     }
     button.addEventListener("click", async () => {
       if (helper.status !== "ready") {
@@ -3579,8 +3640,11 @@ ${blobTitleKey(item.title)}`;
         await setupMediaHelper(button, helper);
         return;
       }
-      button.disabled = true;
-      button.textContent = canaryReady ? "Starting\u2026" : "Testing\u2026";
+      const canaryReady = state.status === "ready";
+      commitState({
+        status: canaryReady ? "starting" : "testing",
+        detail: canaryReady ? "Starting continuous player-output capture\u2026" : "FFprobe is checking the bounded player-output sample\u2026"
+      });
       try {
         if (canaryReady) {
           const response2 = await chrome.runtime.sendMessage({
@@ -3593,8 +3657,10 @@ ${blobTitleKey(item.title)}`;
               response2?.reason || response2?.error || "Player output capture could not start."
             );
           }
-          button.textContent = "Capturing";
-          button.title = "Keep the player running. The Download Manager will finalize the MP4 when playback output ends.";
+          commitState({
+            status: "capturing",
+            detail: "Keep the player running. Download Manager will finalize the MP4 when playback ends."
+          });
           await updateMediaJobs();
           return;
         }
@@ -3618,17 +3684,21 @@ ${blobTitleKey(item.title)}`;
             `Player output timestamps differ by ${response.timeline.deltaSeconds?.toFixed?.(3) || "unknown"} seconds.`
           );
         }
-        canaryReady = true;
-        button.disabled = false;
-        button.textContent = "Capture";
-        button.title = formatPlayerOutputCanaryResult(response);
+        commitState({
+          status: "ready",
+          detail: formatPlayerOutputCanaryResult(response)
+        });
       } catch (error) {
-        button.disabled = false;
-        button.textContent = canaryReady ? "Start again" : "Test again";
-        button.title = error?.message || String(error);
+        const detail = error?.message || String(error);
+        commitState({
+          status: /reload/i.test(detail) ? "reload_required" : "failed",
+          detail
+        });
       }
     });
     control.append(button);
+    diagnostic2.classList.add("media-player-output-diagnostic");
+    control.append(diagnostic2);
     return control;
   }
   function isPlayerOutputCanaryEligible(item) {

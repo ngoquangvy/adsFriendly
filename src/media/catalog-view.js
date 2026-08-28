@@ -34,6 +34,8 @@ export function createMediaCatalogViewSignature({
           canResolveYouTubePlayerJs: helper.canResolveYouTubePlayerJs,
           canResolveYouTubeProviderFormats:
             helper.canResolveYouTubeProviderFormats,
+          canValidatePlayerOutput: helper.canValidatePlayerOutput,
+          canCapturePlayerOutput: helper.canCapturePlayerOutput,
           error: helper.error,
         }
       : null,
@@ -1119,7 +1121,7 @@ function mediaRenderFacts(item) {
     selectedMediaId: item.selectedMediaId,
     resolvedStream: item.resolvedStream,
     resolvedKind: item.resolvedKind,
-    blobTrace: item.blobTrace,
+    blobTrace: mediaRenderBlobTrace(item.blobTrace),
     requiresBrowserSession:
       item.resolvedRequestContext?.requiresBrowserSession === true,
     drm: item.drm,
@@ -1140,6 +1142,20 @@ function mediaRenderFacts(item) {
           visible: item.playback.visible === true,
         }
       : null,
+  };
+}
+
+function mediaRenderBlobTrace(trace) {
+  if (!trace) return null;
+  return {
+    blobUrl: trace.blobUrl,
+    sourceUrls: trace.sourceUrls,
+    candidateIds: trace.candidateIds,
+    mimeTypes: trace.mimeTypes,
+    appendFormats: trace.appendFormats,
+    hasAppendedOutput: Number(trace.appendCount) > 0,
+    hasUnclassifiedOutput: Number(trace.unclassifiedAppendCount) > 0,
+    observerDocumentState: trace.observerDocumentState,
   };
 }
 

@@ -3894,6 +3894,62 @@ test("media popup signature ignores heartbeat timestamps but detects visible cha
     }),
     initial,
   );
+  const blobBase = {
+    tabId: 4,
+    status: "Media Helper ready.",
+    helper: {
+      status: "ready",
+      helperVersion: "0.24.0",
+      canValidatePlayerOutput: true,
+      canCapturePlayerOutput: true,
+    },
+    items: [
+      {
+        id: "blob-player",
+        kind: "blob",
+        blobTrace: {
+          blobUrl: "blob:https://player.example/media",
+          appendFormats: ["iso-bmff"],
+          appendCount: 1,
+          totalAppendedBytes: 1024,
+          observedAt: 1,
+        },
+      },
+    ],
+  };
+  const blobInitial = createMediaCatalogViewSignature(blobBase);
+  assert.equal(
+    createMediaCatalogViewSignature({
+      ...blobBase,
+      items: [
+        {
+          ...blobBase.items[0],
+          blobTrace: {
+            ...blobBase.items[0].blobTrace,
+            appendCount: 200,
+            totalAppendedBytes: 50_000_000,
+            observedAt: 999,
+          },
+        },
+      ],
+    }),
+    blobInitial,
+  );
+  assert.notEqual(
+    createMediaCatalogViewSignature({
+      ...blobBase,
+      items: [
+        {
+          ...blobBase.items[0],
+          blobTrace: {
+            ...blobBase.items[0].blobTrace,
+            appendFormats: ["iso-bmff", "webm"],
+          },
+        },
+      ],
+    }),
+    blobInitial,
+  );
 });
 
 test("media popup keeps rows stable when heartbeat order changes", () => {
