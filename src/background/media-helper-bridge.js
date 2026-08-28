@@ -373,9 +373,41 @@ function normalizeYouTubeQualityPreflight(payload) {
 
 function withoutSensitiveHandoffs(candidate) {
   const { keyHandoff: _keyHandoff, ...publicCandidate } = candidate;
-  if (!publicCandidate.manifestHandoff) return publicCandidate;
-  const { body: _body, ...manifestHandoff } = publicCandidate.manifestHandoff;
-  return { ...publicCandidate, manifestHandoff };
+  const sanitizedCandidate =
+    publicCandidate.provider === "youtube"
+      ? {
+          ...publicCandidate,
+          variants: (publicCandidate.variants || []).map(
+            withoutYouTubeSessionData,
+          ),
+          audioTracks: (publicCandidate.audioTracks || []).map(
+            withoutYouTubeSessionData,
+          ),
+        }
+      : publicCandidate;
+  if (!sanitizedCandidate.manifestHandoff) return sanitizedCandidate;
+  const { body: _body, ...manifestHandoff } =
+    sanitizedCandidate.manifestHandoff;
+  return { ...sanitizedCandidate, manifestHandoff };
+}
+
+function withoutYouTubeSessionData(track) {
+  const {
+    sourceUrl: _sourceUrl,
+    requestCpn: _requestCpn,
+    signatureCipher: _signatureCipher,
+    ...publicTrack
+  } = track;
+  return {
+    ...publicTrack,
+    sourceUrl: null,
+    requestCpn: null,
+    signatureCipher: null,
+    urlResolution:
+      track.urlResolution === "resolved"
+        ? "provider_client_pending"
+        : track.urlResolution,
+  };
 }
 
 export async function cancelMediaHelperDownload(

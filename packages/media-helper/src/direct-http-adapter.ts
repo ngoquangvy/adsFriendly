@@ -12,6 +12,7 @@ import {
 import { homedir } from "node:os";
 import { basename, extname, isAbsolute, join } from "node:path";
 import type {
+  AdaptiveHttpTrack,
   DownloadAdapter,
   DownloadContext,
   DownloadJob,
@@ -23,6 +24,10 @@ const MIN_RANGE_BYTES = 4 * 1024 * 1024;
 const MAX_RANGE_BYTES = 32 * 1024 * 1024;
 const PROGRESS_INTERVAL_MS = 180;
 const MAX_RETRIES = 2;
+const GOOGLEVIDEO_CONTINUATION_OFFSET = 1024 * 1024;
+const YOUTUBE_BROWSER_USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+  "(KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36";
 
 interface SourceProbe {
   url: string;
@@ -196,7 +201,10 @@ async function probeGoogleVideoContinuation(
   headers: Record<string, string>,
   signal: AbortSignal,
 ) {
-  const offset = Math.min(1024 * 1024, Math.max(0, totalBytes - 1));
+  const offset = Math.min(
+    GOOGLEVIDEO_CONTINUATION_OFFSET,
+    Math.max(0, totalBytes - 1),
+  );
   if (offset <= 0) return;
   const queryRange = youtubeQueryRangeUrl(
     sourceUrl,
@@ -224,6 +232,82 @@ async function probeGoogleVideoContinuation(
     );
   }
   await response.body?.cancel().catch(() => {});
+}
+
+/**
+ * Verifies a resolved GoogleVideo track without downloading media. Both
+ * positions must return a byte range so a cold-start URL cannot be presented
+ * as downloadable after only accepting the first probe.
+ */
+export async function preflightGoogleVideoTrack(
+  track: AdaptiveHttpTrack,
+  signal: AbortSignal,
+) {
+  if (!track.sourceUrl || !isGoogleVideoUrl(track.sourceUrl))
+    throw new Error("Resolved GoogleVideo URL is unavailable.");
+  await assertSafeRemoteUrl(track.sourceUrl);
+  const headers = {
+    Accept: "*/*",
+    Origin: "https://www.youtube.com",
+    Referer: "https://www.youtube.com",
+    "User-Agent": track.requestUserAgent || YOUTUBE_BROWSER_USER_AGENT,
+    DNT: "?1",
+  };
+  const firstUrl = youtubeQueryRangeUrl(
+    track.sourceUrl,
+    track.requestCpn,
+    0,
+    0,
+    track.requestMode === "youtube_query_range",
+  );
+  const first = await fetchRemote(firstUrl || track.sourceUrl, {
+    headers: firstUrl ? headers : { ...headers, Range: "bytes=0-0" },
+    signal,
+  });
+  const contentRange = first.headers.get("content-range");
+  const rangeTotal = contentRange?.match(/\/(\d+)$/)?.[1] || null;
+  const declaredUrlSize = positiveInteger(
+    new URL(track.sourceUrl).searchParams.get("clen"),
+  );
+  const totalBytes =
+    positiveInteger(rangeTotal) ||
+    positiveInteger(track.contentLength) ||
+    declaredUrlSize;
+  const firstAccepted = first.ok && (first.status === 206 || totalBytes === 1);
+  await first.body?.cancel().catch(() => {});
+  if (!firstAccepted)
+    throw new Error(`GoogleVideo rejected the first-byte preflight (HTTP ${first.status}).`);
+  if (!totalBytes)
+    throw new Error("GoogleVideo preflight did not declare a track size.");
+  const offset = Math.min(
+    GOOGLEVIDEO_CONTINUATION_OFFSET,
+    Math.max(0, totalBytes - 1),
+  );
+  if (offset > 0) {
+    const continuationUrl = youtubeQueryRangeUrl(
+      track.sourceUrl,
+      track.requestCpn,
+      offset,
+      offset,
+      track.requestMode === "youtube_query_range",
+    );
+    const continuation = await fetchRemote(
+      continuationUrl || track.sourceUrl,
+      {
+        headers: continuationUrl
+          ? headers
+          : { ...headers, Range: `bytes=${offset}-${offset}` },
+        signal,
+      },
+    );
+    const accepted = continuation.ok && continuation.status === 206;
+    await continuation.body?.cancel().catch(() => {});
+    if (!accepted)
+      throw new Error(
+        `GoogleVideo rejected the continuation preflight at byte ${offset} (HTTP ${continuation.status}).`,
+      );
+  }
+  return { totalBytes };
 }
 
 function mediaProbeFailure(url: string, status: number, mode: string) {

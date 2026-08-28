@@ -10,12 +10,20 @@ import {
   resolveYouTubeWebPoToken,
 } from "./youtube-po-token-resolver.js";
 import { resolveYouTubeExternalTracks } from "./youtube-external-provider.js";
+import { preflightGoogleVideoTrack } from "./direct-http-adapter.js";
 
 const RESPONSE_CACHE_MS = 5 * 60 * 1000;
 const MAX_CACHE_ITEMS = 20;
+const SOURCE_PREFLIGHT_CACHE_MS = 2 * 60 * 1000;
+const SOURCE_PREFLIGHT_TIMEOUT_MS = 12_000;
+const SOURCE_PREFLIGHT_CONCURRENCY = 4;
 const responseCache = new Map<
   string,
   { expiresAt: number; formats: ProviderFormat[]; cpn: string }
+>();
+const sourcePreflightCache = new Map<
+  string,
+  { expiresAt: number; available: boolean }
 >();
 let sessionPromise: Promise<Innertube> | null = null;
 
@@ -58,6 +66,7 @@ type ProviderProfile = {
   allowEquivalentVideo: boolean;
   strategyId: string;
   baseScore: number;
+  playerRevisionId: string;
 };
 
 type ProviderResolutionOptions = {
@@ -293,21 +302,46 @@ export async function preflightYouTubeProviderQualities(
   const failures = [...plan.failures];
   for (const profile of plan.profiles) {
     try {
-      const { formats } = await loadProviderFormats(videoId, profile);
-      const verdict = inspectProviderQualityOptions(candidate, formats);
+      const { formats, session, cpn } = await loadProviderFormats(
+        videoId,
+        profile,
+      );
+      const verdict = await inspectProviderQualityOptions(
+        candidate,
+        formats,
+        session,
+        profile,
+        cpn,
+        videoId,
+      );
       if (verdict.status === "ready") return verdict;
       failures.push(`${profile.id}: ${verdict.reason}`);
     } catch (error) {
       failures.push(`${profile.id}: ${messageOf(error)}`);
     }
   }
+  const browserTracks = resolveFromBrowserCandidate(
+    [...candidate.variants, ...candidate.audioTracks],
+    candidate,
+  );
+  const browserVerdict = await inspectResolvedQualityOptions(
+    browserTracks,
+    videoId,
+    "browser",
+  );
+  if (browserVerdict.status === "ready") return browserVerdict;
+  failures.push(`browser: ${browserVerdict.reason}`);
   try {
     const external = await resolveYouTubeExternalTracks(
       [...candidate.variants, ...candidate.audioTracks],
       candidate,
       { allowEquivalentVideo: true },
     );
-    const verdict = inspectResolvedQualityOptions(external);
+    const verdict = await inspectResolvedQualityOptions(
+      external,
+      videoId,
+      "yt_dlp",
+    );
     if (verdict.status === "ready") return verdict;
     failures.push(`yt_dlp: ${verdict.reason}`);
   } catch (error) {
@@ -319,12 +353,31 @@ export async function preflightYouTubeProviderQualities(
   );
 }
 
-function inspectResolvedQualityOptions(
+async function inspectResolvedQualityOptions(
   tracks: AdaptiveHttpTrack[],
-): YouTubeQualityPreflight {
-  const resolved = tracks.filter(
+  videoId: string,
+  sourceId: string,
+): Promise<YouTubeQualityPreflight> {
+  const preflightSignal = AbortSignal.timeout(SOURCE_PREFLIGHT_TIMEOUT_MS);
+  const resolvedCandidates = tracks.filter(
     (track) => track.sourceUrl && track.urlResolution === "resolved",
   );
+  const checked = await boundedMap(
+    resolvedCandidates,
+    SOURCE_PREFLIGHT_CONCURRENCY,
+    async (track) => ({
+      track,
+      available: await preflightResolvedTrack(
+        track,
+        videoId,
+        sourceId,
+        preflightSignal,
+      ),
+    }),
+  );
+  const resolved = checked
+    .filter((item) => item.available)
+    .map((item) => item.track);
   const audioTracks = resolved
     .filter((track) => track.type === "audio")
     .sort(compareAudioTracks);
@@ -373,36 +426,109 @@ function inspectResolvedQualityOptions(
   };
 }
 
-function inspectProviderQualityOptions(
+async function preflightResolvedTrack(
+  track: AdaptiveHttpTrack,
+  videoId: string,
+  sourceId: string,
+  signal: AbortSignal,
+) {
+  const cacheKey = [
+    videoId,
+    sourceId,
+    track.itag || track.id,
+    track.audioTrackId || "default",
+  ].join(":");
+  const cached = sourcePreflightCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.available;
+  try {
+    await preflightGoogleVideoTrack(track, signal);
+    rememberSourcePreflight(cacheKey, true);
+    return true;
+  } catch {
+    rememberSourcePreflight(cacheKey, false);
+    return false;
+  }
+}
+
+async function inspectProviderQualityOptions(
   candidate: DownloadCandidate,
   formats: ProviderFormat[],
-): YouTubeQualityPreflight {
+  session: Innertube,
+  profile: ProviderProfile,
+  cpn: string,
+  videoId: string,
+): Promise<YouTubeQualityPreflight> {
   try {
-    const audioOptions = (candidate.audioTracks || [])
+    const preflightSignal = AbortSignal.timeout(
+      SOURCE_PREFLIGHT_TIMEOUT_MS,
+    );
+    const audioCandidates = (candidate.audioTracks || [])
       .filter((track) => track.type === "audio")
       .map((track) => ({
         track,
         format: selectProviderFormat(track, formats, false),
       }))
       .filter((item) => item.format);
+    const videoCandidates = candidate.variants.flatMap((track) => {
+      if (track.type !== "video") return [];
+      const exact = selectProviderFormat(track, formats, false);
+      const replacement = exact || selectProviderFormat(track, formats, true);
+      return replacement
+        ? [{ track, format: replacement, exact: Boolean(exact) }]
+        : [];
+    });
+    const checkedAudio = await boundedMap(
+      audioCandidates,
+      SOURCE_PREFLIGHT_CONCURRENCY,
+      async (item) => ({
+        ...item,
+        resolved: await resolveAndPreflightProviderTrack(
+          item.track,
+          formats,
+          session,
+          profile,
+          cpn,
+          videoId,
+          preflightSignal,
+        ),
+      }),
+    );
+    const audioOptions = checkedAudio.filter((item) => item.resolved);
     audioOptions.sort((left, right) =>
       compareAudioTracks(left.track, right.track),
     );
     const preferredAudio = audioOptions[0];
     const hasRequiredAudio = audioOptions.length > 0;
-    const videoOptions = candidate.variants.flatMap((track) => {
-      if (track.type !== "video") return [];
-      const exact = selectProviderFormat(track, formats, false);
-      const replacement = exact || selectProviderFormat(track, formats, true);
-      if (!replacement || (!track.muxed && !hasRequiredAudio)) return [];
-      return [
-        {
-          id: track.id,
-          availability: exact ? "exact" : "equivalent",
-          sourceLabel: sourceFormatLabel(replacement),
-        },
-      ];
-    });
+    const checkedVideo = await boundedMap(
+      videoCandidates,
+      SOURCE_PREFLIGHT_CONCURRENCY,
+      async (item) => ({
+        ...item,
+        resolved: await resolveAndPreflightProviderTrack(
+          item.track,
+          formats,
+          session,
+          profile,
+          cpn,
+          videoId,
+          preflightSignal,
+        ),
+      }),
+    );
+    const videoOptions = checkedVideo.flatMap(
+      ({ track, format, exact, resolved }) =>
+        resolved && (track.muxed || hasRequiredAudio)
+          ? [
+              {
+                id: track.id,
+                availability: exact
+                  ? ("exact" as const)
+                  : ("equivalent" as const),
+                sourceLabel: sourceFormatLabel(format),
+              },
+            ]
+          : [],
+    );
     if (!videoOptions.length && !preferredAudio)
       return unavailableQualityPreflight(
         "No selected YouTube video or audio track is available through this provider profile.",
@@ -433,6 +559,77 @@ function inspectProviderQualityOptions(
   } catch (error) {
     return unavailableQualityPreflight(messageOf(error));
   }
+}
+
+async function resolveAndPreflightProviderTrack(
+  track: AdaptiveHttpTrack,
+  formats: ProviderFormat[],
+  session: Innertube,
+  profile: ProviderProfile,
+  cpn: string,
+  videoId: string,
+  signal: AbortSignal,
+) {
+  const format = selectProviderFormat(
+    track,
+    formats,
+    profile.allowEquivalentVideo,
+  );
+  if (!format) return null;
+  const cacheKey = [
+    videoId,
+    profile.id,
+    profile.playerRevisionId,
+    format.itag,
+    format.audio_track?.id || "default",
+  ].join(":");
+  const cached = sourcePreflightCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now())
+    return cached.available ? track : null;
+  try {
+    const resolved = await resolveTrackFromFormats(
+      track,
+      formats,
+      session,
+      profile,
+      cpn,
+    );
+    if (!resolved.sourceUrl || resolved.urlResolution !== "resolved")
+      throw new Error("Provider format URL is unresolved.");
+    await preflightGoogleVideoTrack(resolved, signal);
+    rememberSourcePreflight(cacheKey, true);
+    return resolved;
+  } catch {
+    rememberSourcePreflight(cacheKey, false);
+    return null;
+  }
+}
+
+function rememberSourcePreflight(key: string, available: boolean) {
+  sourcePreflightCache.set(key, {
+    expiresAt: Date.now() + SOURCE_PREFLIGHT_CACHE_MS,
+    available,
+  });
+  while (sourcePreflightCache.size > 100)
+    sourcePreflightCache.delete(sourcePreflightCache.keys().next().value!);
+}
+
+async function boundedMap<T, R>(
+  values: T[],
+  concurrency: number,
+  mapper: (value: T) => Promise<R>,
+) {
+  const results = new Array<R>(values.length);
+  let cursor = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, values.length) }, async () => {
+      while (cursor < values.length) {
+        const index = cursor++;
+        results[index] = await mapper(values[index]);
+      }
+    }),
+  );
+  return results;
 }
 
 function unavailableQualityPreflight(reason: string): YouTubeQualityPreflight {
@@ -674,7 +871,7 @@ async function loadProviderFormats(
   // reuse a URL/CPN pair obtained from the non-PO Web fallback, otherwise the
   // URL receives a token from a different provider context and GVS can return
   // 403 after the initial probe.
-  const key = `${profile.id}:${profile.client}:${videoId}`;
+  const key = `${profile.id}:${profile.client}:${profile.playerRevisionId}:${videoId}`;
   const cached = responseCache.get(key);
   const session = await getSession();
   if (!force && cached && cached.expiresAt > Date.now())
@@ -709,53 +906,44 @@ async function providerProfiles(
 ): Promise<{ profiles: ProviderProfile[]; failures: string[] }> {
   const profiles: ProviderProfile[] = [];
   const failures: string[] = [];
-  try {
-    const mwebPoToken = await resolveYouTubeWebPoToken(videoId, {
-      profileId: "mweb_po",
-      playerRevision: playerRevisionId,
-    });
-    profiles.push({
+  const poPlans = [
+    {
       id: "mweb_po",
-      client: "MWEB",
-      poToken: mwebPoToken,
-      // Keep the media request fingerprint identical to the environment that
-      // minted the Web proof. The MWEB client name is carried by the provider
-      // URL; using an unrelated iPad UA invalidates the proof at GVS.
-      requestUserAgent: YOUTUBE_WEB_PO_USER_AGENT,
-      requestMode: "http_range",
-      allowEquivalentVideo,
+      client: "MWEB" as const,
       strategyId: "youtube_mweb_po",
       baseScore: 1,
-    });
-    const webPoToken = await resolveYouTubeWebPoToken(videoId, {
-      profileId: "web_po",
-      playerRevision: playerRevisionId,
-    });
-    profiles.push({
+    },
+    {
       id: "web_po",
-      client: "WEB",
-      poToken: webPoToken,
-      requestUserAgent: YOUTUBE_WEB_PO_USER_AGENT,
-      requestMode: "http_range",
-      allowEquivalentVideo,
+      client: "WEB" as const,
       strategyId: "youtube_web_po",
       baseScore: 0.95,
-    });
-    profiles.push({
+    },
+    {
       id: "web_remix_po",
-      client: "YTMUSIC",
-      poToken: await resolveYouTubeWebPoToken(videoId, {
-        profileId: "web_remix_po",
-        playerRevision: playerRevisionId,
-      }),
-      requestUserAgent: YOUTUBE_WEB_PO_USER_AGENT,
-      requestMode: "http_range",
-      allowEquivalentVideo,
+      client: "YTMUSIC" as const,
       strategyId: "youtube_ytmusic_po",
       baseScore: 0.8,
-    });
-  } catch (error) {
-    failures.push(`web_remix_po: ${messageOf(error)}`);
+    },
+  ];
+  for (const plan of poPlans) {
+    try {
+      profiles.push({
+        ...plan,
+        poToken: await resolveYouTubeWebPoToken(videoId, {
+          profileId: plan.id,
+          playerRevision: playerRevisionId,
+        }),
+        // Keep the request fingerprint identical to the environment that
+        // minted the proof; mixing an iPad UA with a Web proof is rejected.
+        requestUserAgent: YOUTUBE_WEB_PO_USER_AGENT,
+        requestMode: "http_range",
+        allowEquivalentVideo,
+        playerRevisionId,
+      });
+    } catch (error) {
+      failures.push(`${plan.id}: ${messageOf(error)}`);
+    }
   }
   profiles.push(
     {
@@ -767,6 +955,7 @@ async function providerProfiles(
       allowEquivalentVideo: false,
       strategyId: "youtube_mobile_direct",
       baseScore: 0.65,
+      playerRevisionId,
     },
     {
       id: "android_direct",
@@ -777,6 +966,7 @@ async function providerProfiles(
       allowEquivalentVideo: false,
       strategyId: "youtube_mobile_direct",
       baseScore: 0.64,
+      playerRevisionId,
     },
     {
       // The regular Web client is a deliberately bounded last resort. Some
@@ -792,6 +982,7 @@ async function providerProfiles(
       allowEquivalentVideo,
       strategyId: "youtube_web_direct",
       baseScore: 0.55,
+      playerRevisionId,
     },
   );
   return { profiles, failures };

@@ -10,6 +10,8 @@ import { rememberMediaObservation } from "./media-observation-ledger.js";
 const PLAYER_API_PATH = "/youtubei/v1/player";
 const PLAYER_SCAN_INTERVAL_MS = 1_500;
 const MAXIMUM_FINGERPRINTS = 50;
+let activeReporter = null;
+let latestObservation = null;
 
 export function installYouTubePlayerResponseAdapter(policy) {
   if (!isYouTubePage(location.href)) return () => {};
@@ -23,6 +25,7 @@ export function installYouTubePlayerResponseAdapter(policy) {
       playerUrl: findYouTubePlayerUrl({ responseObject: response }),
     });
     if (!observation) return null;
+    latestObservation = observation;
     const fingerprint = observationFingerprint(observation);
     if (fingerprints.has(fingerprint)) return observation;
     fingerprints.add(fingerprint);
@@ -33,6 +36,7 @@ export function installYouTubePlayerResponseAdapter(policy) {
     reportManifest(observation.manifests.dash, "application/dash+xml");
     return observation;
   };
+  activeReporter = report;
 
   const stopFetch = installPlayerFetchCapture(report);
   const stopXhr = installPlayerXhrCapture(report);
@@ -56,6 +60,19 @@ export function installYouTubePlayerResponseAdapter(policy) {
       window.removeEventListener(eventName, scan, true),
     );
     fingerprints.clear();
+    if (activeReporter === report) activeReporter = null;
+  };
+}
+
+export function recoverYouTubeMediaHandoff() {
+  if (activeReporter) scanPlayerState(activeReporter);
+  const candidates = latestObservation?.candidates?.filter(
+    (candidate) =>
+      candidate?.kind === "adaptive" && candidate?.provider === "youtube",
+  );
+  return {
+    pageUrl: location.href,
+    candidates: Array.isArray(candidates) ? candidates.slice(0, 4) : [],
   };
 }
 

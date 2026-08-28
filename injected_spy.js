@@ -4907,6 +4907,8 @@ ${body}`;
   var PLAYER_API_PATH = "/youtubei/v1/player";
   var PLAYER_SCAN_INTERVAL_MS = 1500;
   var MAXIMUM_FINGERPRINTS = 50;
+  var activeReporter = null;
+  var latestObservation = null;
   function installYouTubePlayerResponseAdapter(policy) {
     if (!isYouTubePage(location.href)) return () => {
     };
@@ -4920,6 +4922,7 @@ ${body}`;
         playerUrl: findYouTubePlayerUrl({ responseObject: response })
       });
       if (!observation) return null;
+      latestObservation = observation;
       const fingerprint = observationFingerprint(observation);
       if (fingerprints.has(fingerprint)) return observation;
       fingerprints.add(fingerprint);
@@ -4930,6 +4933,7 @@ ${body}`;
       reportManifest(observation.manifests.dash, "application/dash+xml");
       return observation;
     };
+    activeReporter = report;
     const stopFetch = installPlayerFetchCapture(report);
     const stopXhr = installPlayerXhrCapture(report);
     const scan = () => scanPlayerState(report);
@@ -4951,6 +4955,17 @@ ${body}`;
         (eventName) => window.removeEventListener(eventName, scan, true)
       );
       fingerprints.clear();
+      if (activeReporter === report) activeReporter = null;
+    };
+  }
+  function recoverYouTubeMediaHandoff() {
+    if (activeReporter) scanPlayerState(activeReporter);
+    const candidates = latestObservation?.candidates?.filter(
+      (candidate) => candidate?.kind === "adaptive" && candidate?.provider === "youtube"
+    );
+    return {
+      pageUrl: location.href,
+      candidates: Array.isArray(candidates) ? candidates.slice(0, 4) : []
     };
   }
   function scanPlayerState(report) {
@@ -5185,6 +5200,14 @@ ${body}`;
           keys: [],
           diagnostic: { pageFetchErrorCount: 1 }
         });
+      });
+    }
+    if (message.type === "GET_YOUTUBE_MEDIA_HANDOFF") {
+      const handoff = recoverYouTubeMediaHandoff();
+      notifyContentScript({
+        type: "YOUTUBE_MEDIA_HANDOFF_RESPONSE",
+        requestId: message.requestId,
+        handoff
       });
     }
   });

@@ -22,6 +22,7 @@ export function startMediaObserver() {
   const contextualProbeRetries = new Set();
   const videoListeners = new Map();
   const aesKeyHandoffRequests = new Map();
+  const youtubeMediaHandoffRequests = new Map();
   const mutationObserver = new MutationObserver((mutations) => {
     for (const mutation of mutations) {
       if (mutation.type === "attributes") scanElement(mutation.target);
@@ -38,6 +39,23 @@ export function startMediaObserver() {
   });
 
   const onMainWorldMessage = (messageEvent) => {
+    if (
+      messageEvent.source === window &&
+      messageEvent.data?.source === "adsfriendly-spy" &&
+      messageEvent.data?.type === "YOUTUBE_MEDIA_HANDOFF_RESPONSE"
+    ) {
+      const pendingRequest = youtubeMediaHandoffRequests.get(
+        messageEvent.data.requestId,
+      );
+      if (!pendingRequest) return;
+      youtubeMediaHandoffRequests.delete(messageEvent.data.requestId);
+      clearTimeout(pendingRequest.timeoutId);
+      pendingRequest.resolve({
+        status: "ready",
+        handoff: messageEvent.data.handoff || null,
+      });
+      return;
+    }
     if (
       messageEvent.source === window &&
       messageEvent.data?.source === "adsfriendly-spy" &&
@@ -119,6 +137,10 @@ export function startMediaObserver() {
       ).then(sendResponse);
       return true;
     }
+    if (message?.type === "GET_YOUTUBE_MEDIA_HANDOFF") {
+      requestYouTubeMediaHandoff().then(sendResponse);
+      return true;
+    }
     if (message?.type !== "PROBE_OBSERVED_MEDIA") return undefined;
     try {
       scheduleManifestProbe(normalizeMediaCandidate(message.candidate));
@@ -164,6 +186,11 @@ export function startMediaObserver() {
       pendingRequest.resolve({ status: "stopped", keys: [] });
     }
     aesKeyHandoffRequests.clear();
+    for (const pendingRequest of youtubeMediaHandoffRequests.values()) {
+      clearTimeout(pendingRequest.timeoutId);
+      pendingRequest.resolve({ status: "stopped", handoff: null });
+    }
+    youtubeMediaHandoffRequests.clear();
   };
 
   function requestAesKeyHandoff(requestedManifestUrl, manifestUrls) {
@@ -189,6 +216,27 @@ export function startMediaObserver() {
           requestId,
           requestedManifestUrl,
           manifestUrls,
+        },
+        "*",
+      );
+    });
+  }
+
+  function requestYouTubeMediaHandoff() {
+    const requestId =
+      globalThis.crypto?.randomUUID?.() ||
+      `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    return new Promise((resolve) => {
+      const timeoutId = setTimeout(() => {
+        youtubeMediaHandoffRequests.delete(requestId);
+        resolve({ status: "timeout", handoff: null });
+      }, 3000);
+      youtubeMediaHandoffRequests.set(requestId, { resolve, timeoutId });
+      window.postMessage(
+        {
+          source: "adsfriendly-content",
+          type: "GET_YOUTUBE_MEDIA_HANDOFF",
+          requestId,
         },
         "*",
       );

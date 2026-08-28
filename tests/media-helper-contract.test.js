@@ -277,6 +277,9 @@ test("media access strategy memory learns per host without retaining secrets", a
       outcome: "success",
       headers: { Cookie: "secret" },
       keyUrl: "https://cdn.example/key.bin",
+      poToken: "sensitive-po-token",
+      visitorData: "sensitive-visitor-data",
+      signedUrl: "https://rr1.googlevideo.com/videoplayback?sig=sensitive",
     });
     await recordMediaAccessStrategyResult({
       resourceHost: "cdn.example",
@@ -287,7 +290,10 @@ test("media access strategy memory learns per host without retaining secrets", a
     const preferences = await getMediaAccessStrategyPreferences();
     assert.equal(preferences["cdn.example"].captured_referer_origin, 2);
     assert.equal(preferences["cdn.example"].captured_referer, -0.5);
-    assert.doesNotMatch(JSON.stringify(local), /secret|key\.bin|Cookie/);
+    assert.doesNotMatch(
+      JSON.stringify(local),
+      /secret|key\.bin|Cookie|po-token|visitor-data|googlevideo|videoplayback/i,
+    );
   } finally {
     globalThis.chrome = previousChrome;
   }

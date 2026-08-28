@@ -6,7 +6,7 @@ own navigation protection, DOM protection, and shared media discovery. All
 user-initiated video downloads require this helper; there is no second browser
 download backend to keep in sync.
 
-The helper is the only video download backend. Version 0.21 implements Direct
+The helper is the only video download backend. Version 0.22 implements Direct
 HTTP MP4/WebM downloads with bounded parallel Range requests, progress,
 cancellation, and resumable `.part` metadata, plus completed unencrypted or
 AES-128 identity-key HLS VOD
@@ -15,12 +15,16 @@ browser-resolved, unencrypted adaptive HTTP video/audio pairs (initially
 YouTube playback tracks), downloads both with the existing bounded parallel
 Range engine, and muxes them locally. For YouTube, it resolves bounded Player
 JS signature/n challenges and prefers a MWEB profile with a short-lived
-Proof-of-Origin token. It verifies both the first byte and a byte after 1 MiB
-before starting parallel transfer, keeps audio languages and roles distinct,
+Proof-of-Origin token. The quality preflight and the download path both verify
+the first byte and a byte after 1 MiB before a format is presented as usable or
+parallel transfer starts. It keeps audio languages and roles distinct,
 and defaults to the original audio track when YouTube identifies one. Tokens
 are cached only by video, provider profile, player revision, and attestation
 revision; signed URLs and token values are never written to history or strategy
-memory. Browser-observed URLs are a bounded fallback. If `yt-dlp` is installed,
+memory. Immediately before preflight/start/retry, the extension asks the active
+player frame for a fresh browser observation; those URLs remain a bounded
+fallback after built-in profiles fail and are removed from persisted job
+history. If `yt-dlp` is installed,
 it can be used only as an optional provider-URL fallback after the built-in
 profiles fail. Set `ADSFRIENDLY_YTDLP_PATH` to an explicit executable path when
 it is not on PATH. The helper invokes it with `--no-config`, never as the ad

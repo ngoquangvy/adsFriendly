@@ -3425,6 +3425,7 @@ var AdsFriendlyContent = (() => {
     const contextualProbeRetries = /* @__PURE__ */ new Set();
     const videoListeners = /* @__PURE__ */ new Map();
     const aesKeyHandoffRequests = /* @__PURE__ */ new Map();
+    const youtubeMediaHandoffRequests = /* @__PURE__ */ new Map();
     const mutationObserver = new MutationObserver((mutations) => {
       for (const mutation of mutations) {
         if (mutation.type === "attributes") scanElement(mutation.target);
@@ -3440,6 +3441,19 @@ var AdsFriendlyContent = (() => {
       subtree: true
     });
     const onMainWorldMessage = (messageEvent) => {
+      if (messageEvent.source === window && messageEvent.data?.source === "adsfriendly-spy" && messageEvent.data?.type === "YOUTUBE_MEDIA_HANDOFF_RESPONSE") {
+        const pendingRequest = youtubeMediaHandoffRequests.get(
+          messageEvent.data.requestId
+        );
+        if (!pendingRequest) return;
+        youtubeMediaHandoffRequests.delete(messageEvent.data.requestId);
+        clearTimeout(pendingRequest.timeoutId);
+        pendingRequest.resolve({
+          status: "ready",
+          handoff: messageEvent.data.handoff || null
+        });
+        return;
+      }
       if (messageEvent.source === window && messageEvent.data?.source === "adsfriendly-spy" && messageEvent.data?.type === "MEDIA_AES_KEY_HANDOFF_RESPONSE") {
         const pendingRequest = aesKeyHandoffRequests.get(
           messageEvent.data.requestId
@@ -3493,6 +3507,10 @@ var AdsFriendlyContent = (() => {
         ).then(sendResponse);
         return true;
       }
+      if (message?.type === "GET_YOUTUBE_MEDIA_HANDOFF") {
+        requestYouTubeMediaHandoff().then(sendResponse);
+        return true;
+      }
       if (message?.type !== "PROBE_OBSERVED_MEDIA") return void 0;
       try {
         scheduleManifestProbe(normalizeMediaCandidate(message.candidate));
@@ -3533,6 +3551,11 @@ var AdsFriendlyContent = (() => {
         pendingRequest.resolve({ status: "stopped", keys: [] });
       }
       aesKeyHandoffRequests.clear();
+      for (const pendingRequest of youtubeMediaHandoffRequests.values()) {
+        clearTimeout(pendingRequest.timeoutId);
+        pendingRequest.resolve({ status: "stopped", handoff: null });
+      }
+      youtubeMediaHandoffRequests.clear();
     };
     function requestAesKeyHandoff(requestedManifestUrl, manifestUrls) {
       if (typeof requestedManifestUrl !== "string" || !/^https?:/i.test(requestedManifestUrl)) {
@@ -3552,6 +3575,24 @@ var AdsFriendlyContent = (() => {
             requestId,
             requestedManifestUrl,
             manifestUrls
+          },
+          "*"
+        );
+      });
+    }
+    function requestYouTubeMediaHandoff() {
+      const requestId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      return new Promise((resolve) => {
+        const timeoutId = setTimeout(() => {
+          youtubeMediaHandoffRequests.delete(requestId);
+          resolve({ status: "timeout", handoff: null });
+        }, 3e3);
+        youtubeMediaHandoffRequests.set(requestId, { resolve, timeoutId });
+        window.postMessage(
+          {
+            source: "adsfriendly-content",
+            type: "GET_YOUTUBE_MEDIA_HANDOFF",
+            requestId
           },
           "*"
         );

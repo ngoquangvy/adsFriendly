@@ -7,7 +7,10 @@ import { installEmeObserver } from "./eme-observer.js";
 import { installTimerControl, setAdMode } from "./timer-control.js";
 import { createMainController } from "../runtime/main-controller.js";
 import { recoverAesKeyHandoffs } from "./aes-key-handoff.js";
-import { installYouTubePlayerResponseAdapter } from "./youtube-player-response-adapter.js";
+import {
+  installYouTubePlayerResponseAdapter,
+  recoverYouTubeMediaHandoff,
+} from "./youtube-player-response-adapter.js";
 
 const script = document.currentScript;
 const initialSettings = {
@@ -60,6 +63,14 @@ onContentMessage((message) => {
           diagnostic: { pageFetchErrorCount: 1 },
         });
       });
+  }
+  if (message.type === "GET_YOUTUBE_MEDIA_HANDOFF") {
+    const handoff = recoverYouTubeMediaHandoff();
+    notifyContentScript({
+      type: "YOUTUBE_MEDIA_HANDOFF_RESPONSE",
+      requestId: message.requestId,
+      handoff,
+    });
   }
 });
 

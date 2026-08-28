@@ -5669,9 +5669,33 @@ var AdsFriendlyBackground = (() => {
   }
   function withoutSensitiveHandoffs(candidate) {
     const { keyHandoff: _keyHandoff, ...publicCandidate } = candidate;
-    if (!publicCandidate.manifestHandoff) return publicCandidate;
-    const { body: _body, ...manifestHandoff } = publicCandidate.manifestHandoff;
-    return { ...publicCandidate, manifestHandoff };
+    const sanitizedCandidate = publicCandidate.provider === "youtube" ? {
+      ...publicCandidate,
+      variants: (publicCandidate.variants || []).map(
+        withoutYouTubeSessionData
+      ),
+      audioTracks: (publicCandidate.audioTracks || []).map(
+        withoutYouTubeSessionData
+      )
+    } : publicCandidate;
+    if (!sanitizedCandidate.manifestHandoff) return sanitizedCandidate;
+    const { body: _body, ...manifestHandoff } = sanitizedCandidate.manifestHandoff;
+    return { ...sanitizedCandidate, manifestHandoff };
+  }
+  function withoutYouTubeSessionData(track) {
+    const {
+      sourceUrl: _sourceUrl,
+      requestCpn: _requestCpn,
+      signatureCipher: _signatureCipher,
+      ...publicTrack
+    } = track;
+    return {
+      ...publicTrack,
+      sourceUrl: null,
+      requestCpn: null,
+      signatureCipher: null,
+      urlResolution: track.urlResolution === "resolved" ? "provider_client_pending" : track.urlResolution
+    };
   }
   async function cancelMediaHelperDownload(jobId, { terminalStatus = "cancelled" } = {}) {
     const connection = activePorts.get(jobId);
@@ -6765,6 +6789,7 @@ ${body}`;
     if (candidate.kind === "hls" && candidate.selectedMediaId) {
       candidate = response.items.find((item) => item.id === candidate.selectedMediaId) || candidate;
     }
+    candidate = await attachFreshYouTubeBrowserHandoff(tabId, candidate);
     const availability = getMediaDownloadAvailability(candidate);
     if (!availability.supported)
       return { status: "unsupported", reason: availability.reason };
@@ -6800,8 +6825,9 @@ ${body}`;
     if (typeof mediaId !== "string" || !mediaId)
       return { status: "invalid_media" };
     const response = await listDiscoveredMedia(tabId);
-    const candidate = response.items.find((item) => item.id === mediaId);
+    let candidate = response.items.find((item) => item.id === mediaId);
     if (!candidate) return { status: "media_not_found" };
+    candidate = await attachFreshYouTubeBrowserHandoff(tabId, candidate);
     return preflightMediaHelperYouTubeQualities(candidate);
   }
   async function normalizeYouTubeQualityCheck(candidate, output) {
@@ -6947,6 +6973,10 @@ ${body}`;
         reason: "The original media source is no longer available. Reopen its video page."
       };
     }
+    candidate = await attachFreshYouTubeBrowserHandoff(
+      state.sourceTabId,
+      candidate
+    );
     const handoffResult = await attachManifestHandoff(
       state.sourceTabId,
       candidate
@@ -6970,6 +7000,62 @@ ${body}`;
       ),
       attempt: Math.max(1, Number(state.attempt) || 1) + 1
     });
+  }
+  async function attachFreshYouTubeBrowserHandoff(tabId, candidate) {
+    if (candidate?.kind !== "adaptive" || candidate?.provider !== "youtube" || !Number.isInteger(tabId))
+      return candidate;
+    let frames = [{ frameId: 0 }];
+    try {
+      frames = await chrome.webNavigation?.getAllFrames?.({ tabId }) || frames;
+    } catch {
+    }
+    const responses = await Promise.all(
+      frames.slice(0, 24).map(async ({ frameId }) => {
+        try {
+          return frameId === 0 ? await chrome.tabs.sendMessage(tabId, {
+            type: "GET_YOUTUBE_MEDIA_HANDOFF"
+          }) : await chrome.tabs.sendMessage(
+            tabId,
+            { type: "GET_YOUTUBE_MEDIA_HANDOFF" },
+            { frameId }
+          );
+        } catch {
+          return null;
+        }
+      })
+    );
+    const targetVideoId = youtubeVideoId(candidate.pageUrl);
+    const fresh = responses.flatMap((response) => response?.handoff?.candidates || []).find(
+      (item) => item?.kind === "adaptive" && item?.provider === "youtube" && (!targetVideoId || youtubeVideoId(item.pageUrl) === targetVideoId)
+    );
+    if (!fresh) return candidate;
+    return {
+      ...candidate,
+      playerUrl: fresh.playerUrl || candidate.playerUrl,
+      variants: mergeFreshTracks(candidate.variants, fresh.variants),
+      audioTracks: mergeFreshTracks(candidate.audioTracks, fresh.audioTracks),
+      acquisitionDiagnostic: fresh.acquisitionDiagnostic || candidate.acquisitionDiagnostic
+    };
+  }
+  function mergeFreshTracks(existing = [], fresh = []) {
+    const freshById = new Map(fresh.map((track) => [track.id, track]));
+    const merged = existing.map((track) => ({
+      ...track,
+      ...freshById.get(track.id) || {}
+    }));
+    const known = new Set(merged.map((track) => track.id));
+    merged.push(...fresh.filter((track) => !known.has(track.id)));
+    return merged;
+  }
+  function youtubeVideoId(value) {
+    try {
+      const url = new URL(value || "");
+      if (url.hostname === "youtu.be") return url.pathname.slice(1) || null;
+      if (/(^|\.)youtube\.com$/i.test(url.hostname))
+        return url.searchParams.get("v") || url.pathname.match(/^\/shorts\/([^/]+)/)?.[1] || null;
+    } catch {
+    }
+    return null;
   }
   async function attachManifestHandoff(tabId, candidate) {
     if (candidate.probeSource !== "decrypted_blob")
@@ -8424,7 +8510,7 @@ ${body}`;
     playerUrl = null
   }) {
     if (!track || track.provider !== "youtube") return null;
-    const videoId = youtubeVideoId(pageUrl);
+    const videoId = youtubeVideoId2(pageUrl);
     if (!videoId || !isYouTubePage(pageUrl)) return null;
     const id = stableMediaId(MEDIA_KINDS.ADAPTIVE, `youtube:${videoId}`);
     const normalizedTrack = {
@@ -8487,7 +8573,7 @@ ${body}`;
       return false;
     }
   }
-  function youtubeVideoId(value) {
+  function youtubeVideoId2(value) {
     try {
       const url = new URL(value);
       if (!isYouTubePage(url.href)) return null;
