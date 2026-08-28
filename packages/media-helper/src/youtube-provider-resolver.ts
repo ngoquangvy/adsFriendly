@@ -31,7 +31,7 @@ type ProviderFormat = {
 
 type ProviderProfile = {
   id: string;
-  client: "YTMUSIC" | "IOS" | "ANDROID";
+  client: "YTMUSIC" | "IOS" | "ANDROID" | "WEB";
   poToken: string | null;
   requestUserAgent: string | null;
   allowEquivalentVideo: boolean;
@@ -104,14 +104,32 @@ export async function preflightYouTubeProviderQualities(
   if (!videoId)
     return unavailableQualityPreflight("YouTube video ID is unavailable.");
   const plan = await providerProfiles(videoId, true);
-  const profile = plan.profiles.find((item) => item.poToken);
-  if (!profile)
+  if (!plan.profiles.length)
     return unavailableQualityPreflight(
-      plan.failures.join("; ") ||
-        "A token-capable YouTube profile is unavailable.",
+      plan.failures.join("; ") || "No YouTube provider profile is available.",
     );
+  const failures = [...plan.failures];
+  for (const profile of plan.profiles) {
+    try {
+      const { formats } = await loadProviderFormats(videoId, profile);
+      const verdict = inspectProviderQualityOptions(candidate, formats);
+      if (verdict.status === "ready") return verdict;
+      failures.push(`${profile.id}: ${verdict.reason}`);
+    } catch (error) {
+      failures.push(`${profile.id}: ${messageOf(error)}`);
+    }
+  }
+  return unavailableQualityPreflight(
+    failures.join("; ") ||
+      "No selected YouTube video or audio track is available through the provider profiles.",
+  );
+}
+
+function inspectProviderQualityOptions(
+  candidate: DownloadCandidate,
+  formats: ProviderFormat[],
+): YouTubeQualityPreflight {
   try {
-    const { formats } = await loadProviderFormats(videoId, profile);
     const audioOptions = (candidate.audioTracks || [])
       .filter((track) => track.type === "audio")
       .map((track) => ({
@@ -141,7 +159,7 @@ export async function preflightYouTubeProviderQualities(
     });
     if (!videoOptions.length && !preferredAudio)
       return unavailableQualityPreflight(
-        "No selected YouTube video or audio track is available through the token-capable profile.",
+        "No selected YouTube video or audio track is available through this provider profile.",
       );
     return {
       status: "ready",
@@ -323,6 +341,18 @@ async function providerProfiles(
       poToken: null,
       requestUserAgent: null,
       allowEquivalentVideo: false,
+    },
+    {
+      // The regular Web client is a deliberately bounded last resort. Some
+      // channels expose a format set that is absent from the mobile clients;
+      // youtubei still gives us a decipher callback for these URLs, while the
+      // earlier profiles remain preferred because they are less challenge-
+      // sensitive and do not need a page Player JS handoff.
+      id: "web_direct",
+      client: "WEB",
+      poToken: null,
+      requestUserAgent: YOUTUBE_WEB_PO_USER_AGENT,
+      allowEquivalentVideo,
     },
   );
   return { profiles, failures };
