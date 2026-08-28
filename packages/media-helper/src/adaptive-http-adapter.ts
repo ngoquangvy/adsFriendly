@@ -380,12 +380,13 @@ async function downloadAdaptiveTrack(
       isGoogleVideoRangeFailure(error) &&
       track.itag
     ) {
+      let freshTrack: AdaptiveHttpTrack | null = null;
       try {
         // GoogleVideo URLs can accept the first probe and reject later byte
         // windows when their proof-of-origin binding is stale. Refresh the
         // provider response once, then retry only this track. This keeps the
         // normal multi-connection downloader unchanged and bounds retries.
-        const [freshTrack] = await resolveYouTubeProviderTracks(
+        [freshTrack] = await resolveYouTubeProviderTracks(
           [track],
           job.candidate,
           { allowEquivalentVideo, force: true },
@@ -404,7 +405,7 @@ async function downloadAdaptiveTrack(
         }
       } catch (refreshError) {
         error = new Error(
-          `${messageOf(error)}; fresh provider URL retry failed: ${messageOf(refreshError)}`,
+          `${messageOf(error)}; initial ${providerTrackDiagnostic(track)}; fresh ${providerTrackDiagnostic(freshTrack)} retry failed: ${messageOf(refreshError)}`,
         );
       }
     }
@@ -413,6 +414,14 @@ async function downloadAdaptiveTrack(
       `${provider}${track.type} track (${adaptiveTrackLabel(track)}) failed: ${messageOf(error)}`,
     );
   }
+}
+
+function providerTrackDiagnostic(track: AdaptiveHttpTrack | null | undefined) {
+  return [
+    `client=${track?.providerClient || "unknown"}`,
+    `ua=${track?.requestUserAgent ? "provider" : "browser/default"}`,
+    `itag=${track?.itag || "unknown"}`,
+  ].join(", ");
 }
 
 function isGoogleVideoRangeFailure(error: unknown) {

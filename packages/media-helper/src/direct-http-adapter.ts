@@ -316,10 +316,34 @@ function rangeFailureMessage(url: string, status: number, range: ByteRange) {
   if (status === 403 && isGoogleVideoUrl(url)) {
     return (
       `GoogleVideo rejected bytes ${range.start}-${range.end} after accepting the initial probe (HTTP 403). ` +
-      "This stream requires a valid GVS Proof-of-Origin token or a fresh provider URL."
+      "This stream requires a valid GVS Proof-of-Origin token or a fresh provider URL. " +
+      `Diagnostics: ${googleVideoDiagnostics(url, range)}.`
     );
   }
   return `Range request for bytes ${range.start}-${range.end} returned HTTP ${status}.`;
+}
+
+function googleVideoDiagnostics(value: string, range: ByteRange) {
+  try {
+    const url = new URL(value);
+    const expire = positiveInteger(url.searchParams.get("expire"));
+    const secondsUntilExpiry = expire
+      ? Math.round(expire - Date.now() / 1000)
+      : null;
+    const values = [
+      `host=${url.hostname}`,
+      `itag=${url.searchParams.get("itag") || "unknown"}`,
+      `client=${url.searchParams.get("c") || "unknown"}`,
+      `po=${url.searchParams.has("pot") ? "present" : "absent"}`,
+      `signature=${url.searchParams.has("sig") || url.searchParams.has("lsig") ? "present" : "absent"}`,
+      `expiry=${secondsUntilExpiry === null ? "unknown" : `${secondsUntilExpiry}s`}`,
+      `declaredSize=${url.searchParams.get("clen") || "unknown"}`,
+      `rangeSize=${range.length}`,
+    ];
+    return values.join(", ");
+  } catch {
+    return `rangeSize=${range.length}, url=invalid`;
+  }
 }
 
 function isGoogleVideoUrl(value: string) {
