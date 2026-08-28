@@ -31,7 +31,7 @@ type ProviderFormat = {
 
 type ProviderProfile = {
   id: string;
-  client: "YTMUSIC" | "IOS" | "ANDROID" | "WEB";
+  client: "YTMUSIC" | "MWEB" | "IOS" | "ANDROID" | "WEB";
   poToken: string | null;
   requestUserAgent: string | null;
   allowEquivalentVideo: boolean;
@@ -327,10 +327,26 @@ async function providerProfiles(
   const profiles: ProviderProfile[] = [];
   const failures: string[] = [];
   try {
+    const poToken = await resolveYouTubeWebPoToken(videoId);
+    profiles.push({
+      id: "web_po",
+      client: "WEB",
+      poToken,
+      requestUserAgent: YOUTUBE_WEB_PO_USER_AGENT,
+      allowEquivalentVideo,
+    });
+    profiles.push({
+      id: "mweb_po",
+      client: "MWEB",
+      poToken,
+      requestUserAgent:
+        "Mozilla/5.0 (iPad; CPU OS 16_7_10 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+      allowEquivalentVideo,
+    });
     profiles.push({
       id: "web_remix_po",
       client: "YTMUSIC",
-      poToken: await resolveYouTubeWebPoToken(videoId),
+      poToken,
       requestUserAgent: YOUTUBE_WEB_PO_USER_AGENT,
       allowEquivalentVideo,
     });
