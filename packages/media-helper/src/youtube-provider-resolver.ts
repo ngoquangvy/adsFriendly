@@ -121,9 +121,9 @@ export async function preflightYouTubeProviderQualities(
       .filter((item) => item.format);
     const preferredAudio = audioOptions.sort(
       (left, right) =>
-        mp4AudioScore(right.track) - mp4AudioScore(left.track) ||
         (right.track.averageBandwidth || right.track.bandwidth || 0) -
-          (left.track.averageBandwidth || left.track.bandwidth || 0),
+          (left.track.averageBandwidth || left.track.bandwidth || 0) ||
+        mp4AudioScore(right.track) - mp4AudioScore(left.track),
     )[0];
     const hasRequiredAudio = audioOptions.length > 0;
     const videoOptions = candidate.variants.flatMap((track) => {
