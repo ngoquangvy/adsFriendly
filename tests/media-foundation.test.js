@@ -3884,7 +3884,7 @@ test("media popup groups Facebook representations into one quality asset", () =>
   const representation = (path, assetId, tag, id, playback = null) => ({
     ...createMediaCandidateFromSource({
       pageUrl: "https://www.facebook.com/",
-      sourceUrl: `https://scontent.fsgn5-21.fna.fbcdn.net/${path}.mp4?efg=${efg(assetId, tag)}`,
+      sourceUrl: `https://scontent.fsgn5-21.fna.fbcdn.net/${path}.mp4?efg=${efg(assetId, tag)}&bytestart=0&byteend=340000`,
       mimeType: "video/mp4",
       title: "Facebook",
       playback,
@@ -3914,7 +3914,34 @@ test("media popup groups Facebook representations into one quality asset", () =>
     grouped.variants.map((track) => track.qualityLabel),
     ["1080p", "480p"],
   );
+  assert.equal(grouped.variants.every((track) => !/byte(?:start|end)=/.test(track.sourceUrl)), true);
   assert.equal(getMediaDownloadAvailability(grouped).supported, true);
+});
+
+test("Facebook byte fragments do not become duplicate quality tracks", () => {
+  const efg = Buffer.from(
+    JSON.stringify({ xpv_asset_id: "asset-fragmented", vencode_tag: "dash_720p" }),
+  ).toString("base64url");
+  const fragments = Array.from({ length: 26 }, (_, index) => ({
+    ...createMediaCandidateFromSource({
+      pageUrl: "https://www.facebook.com/",
+      sourceUrl: `https://scontent.fsgn5-21.fna.fbcdn.net/video.mp4?efg=${efg}&bytestart=${index * 340000}&byteend=${(index + 1) * 340000 - 1}&token=${index}`,
+      mimeType: "video/mp4",
+      title: "Facebook",
+    }),
+    id: `fragment-${index}`,
+    firstSeenAt: index,
+    lastSeenAt: index,
+  }));
+  const visible = selectVisibleMediaItems(fragments);
+  assert.equal(visible.length, 1);
+  assert.equal(visible[0].provider, "facebook");
+  assert.equal(visible[0].relatedCount, 26);
+  assert.equal(visible[0].variants.length, 1);
+  assert.equal(visible[0].variants[0].qualityLabel, "720p");
+  assert.equal(visible[0].variants[0].contentLength, null);
+  assert.equal(new URL(visible[0].variants[0].sourceUrl).searchParams.has("bytestart"), false);
+  assert.equal(new URL(visible[0].variants[0].sourceUrl).searchParams.has("byteend"), false);
 });
 
 test("media popup keeps only the Facebook asset that is currently playing", () => {

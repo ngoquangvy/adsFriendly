@@ -7226,20 +7226,21 @@ ${body}`;
     }
   }
   function createFacebookAdaptiveGroup(key, items) {
-    const sorted = [...items].sort(
+    const representations = collapseFacebookRepresentations(items);
+    const sorted = [...representations].sort(
       (left, right) => facebookQualityScore(right) - facebookQualityScore(left) || (right.contentLength || 0) - (left.contentLength || 0) || (right.lastSeenAt || 0) - (left.lastSeenAt || 0)
     );
     const primary = sorted[0];
     const variants = sorted.map((item, index) => ({
       id: item.id,
       type: "video",
-      sourceUrl: item.sourceUrl,
+      sourceUrl: facebookFullMediaUrl(item.sourceUrl),
       mimeType: item.mimeType || "video/mp4",
       codecs: null,
       itag: null,
       bandwidth: item.bandwidth || null,
       averageBandwidth: item.averageBandwidth || null,
-      contentLength: item.contentLength || null,
+      contentLength: facebookUrlHasByteLimit(item.sourceUrl) ? null : item.contentLength || null,
       width: item.resolution?.width || null,
       height: item.resolution?.height || null,
       qualityLabel: facebookQualityLabel(item) || `Source ${index + 1}`,
@@ -7253,7 +7254,8 @@ ${body}`;
       kind: "adaptive",
       provider: "facebook",
       title: primary.title && !/^(?:\(\d+\+?\)\s*)?facebook$/i.test(primary.title.trim()) ? primary.title : "Facebook video",
-      sourceUrl: primary.sourceUrl,
+      sourceUrl: facebookFullMediaUrl(primary.sourceUrl),
+      contentLength: facebookUrlHasByteLimit(primary.sourceUrl) ? null : primary.contentLength || null,
       mimeType: "video/mp4",
       variants,
       audioTracks: [],
@@ -7266,6 +7268,40 @@ ${body}`;
       firstSeenAt: Math.min(...items.map((item) => item.firstSeenAt || 0)),
       lastSeenAt: Math.max(...items.map((item) => item.lastSeenAt || 0))
     };
+  }
+  function collapseFacebookRepresentations(items) {
+    const representations = /* @__PURE__ */ new Map();
+    for (const item of items) {
+      const quality = facebookQualityLabel(item);
+      const key = quality?.toLowerCase() || "source";
+      const existing = representations.get(key);
+      if (!existing || facebookObservationTime(item) >= facebookObservationTime(existing))
+        representations.set(key, item);
+    }
+    return [...representations.values()];
+  }
+  function facebookObservationTime(item) {
+    return item.playback?.observedAt || item.lastSeenAt || item.firstSeenAt || 0;
+  }
+  function facebookFullMediaUrl(value) {
+    try {
+      const url = new URL(value || "");
+      for (const name of ["range", "bytestart", "byteend"])
+        url.searchParams.delete(name);
+      return url.href;
+    } catch {
+      return value;
+    }
+  }
+  function facebookUrlHasByteLimit(value) {
+    try {
+      const url = new URL(value || "");
+      return ["range", "bytestart", "byteend"].some(
+        (name) => url.searchParams.has(name)
+      );
+    } catch {
+      return false;
+    }
   }
   function newestPlaybackState(items) {
     const states = items.map((item) => item.playback).filter(Boolean).sort((left, right) => (right.observedAt || 0) - (left.observedAt || 0));
