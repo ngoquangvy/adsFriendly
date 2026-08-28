@@ -20,6 +20,8 @@ type ExternalFormat = {
   filesize_approx?: number;
   format_note?: string;
   language?: string;
+  audio_channels?: number;
+  asr?: number;
   http_headers?: Record<string, string>;
 };
 
@@ -50,6 +52,10 @@ export async function resolveYouTubeExternalTracks(
       height: positiveInteger(format.height) || track.height,
       qualityLabel: format.format_note || track.qualityLabel,
       language: format.language || track.language || null,
+      audioChannels:
+        positiveInteger(format.audio_channels) || track.audioChannels || null,
+      audioSampleRate:
+        positiveInteger(format.asr) || track.audioSampleRate || null,
       requestUserAgent: format.http_headers?.["User-Agent"] || null,
       providerClient: "YT_DLP",
       requestMode: "http_range" as const,

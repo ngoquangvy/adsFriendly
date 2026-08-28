@@ -644,6 +644,9 @@ var AdsFriendlyPopup = (() => {
     if (codec.includes("av01")) return "AV1";
     if (codec.includes("vp9") || codec.includes("vp09")) return "VP9";
     if (codec.includes("hev1") || codec.includes("hvc1")) return "HEVC";
+    if (codec.includes("mp4a") || codec.includes("aac")) return "AAC";
+    if (codec.includes("opus")) return "Opus";
+    if (codec.includes("vorbis")) return "Vorbis";
     return null;
   }
   function classifyDirectMediaContainer(candidate = {}) {
@@ -744,7 +747,7 @@ var AdsFriendlyPopup = (() => {
     return Number.isSafeInteger(total) && total > 0 ? total : null;
   }
   function compareAudioPreference(left, right) {
-    return audioRoleScore(right) - audioRoleScore(left) || Number(right.audioIsDefault === true) - Number(left.audioIsDefault === true) || Number(left.isDrc === true) - Number(right.isDrc === true) || mp4AudioScore(right) - mp4AudioScore(left) || compareBandwidth(left, right);
+    return audioRoleScore(right) - audioRoleScore(left) || Number(right.audioIsDefault === true) - Number(left.audioIsDefault === true) || Number(left.isDrc === true) - Number(right.isDrc === true) || compareBandwidth(left, right) || mp4AudioScore(right) - mp4AudioScore(left);
   }
   function audioRoleScore(track) {
     return {
@@ -765,22 +768,44 @@ var AdsFriendlyPopup = (() => {
     }[track.audioRole];
     const language = track.audioTrackName || languageDisplayName(track.language);
     const codec = codecLabel(track.codecs);
+    const bitrate = audioBitrateLabel(
+      firstPositiveNumber(track.averageBandwidth, track.bandwidth)
+    );
     return [
       role || (track.audioIsDefault ? "Default audio" : "Audio"),
       language,
-      track.isDrc ? "DRC" : null,
-      codec
+      bitrate,
+      codec,
+      audioChannelsLabel(track.audioChannels),
+      audioSampleRateLabel(track.audioSampleRate),
+      track.isDrc ? "DRC" : null
     ].filter(Boolean).join(" \xB7 ");
   }
   function languageDisplayName(value) {
     if (!value) return null;
     try {
-      return new Intl.DisplayNames([navigator.language || "en"], {
+      return new Intl.DisplayNames([globalThis.navigator?.language || "en"], {
         type: "language"
       }).of(value);
     } catch {
       return String(value).toUpperCase();
     }
+  }
+  function audioBitrateLabel(value) {
+    const bitrate = positiveInteger(value);
+    return bitrate ? `${Math.round(bitrate / 1e3)} kbps` : null;
+  }
+  function audioChannelsLabel(value) {
+    const channels = positiveInteger(value);
+    if (channels === 1) return "Mono";
+    if (channels === 2) return "Stereo";
+    return channels ? `${channels} channels` : null;
+  }
+  function audioSampleRateLabel(value) {
+    const rate = positiveInteger(value);
+    if (!rate) return null;
+    const khz = rate / 1e3;
+    return `${Number.isInteger(khz) ? khz : khz.toFixed(1)} kHz`;
   }
   function mp4AudioScore(track) {
     return /\/(?:mp4|m4a)(?:$|;)/i.test(track.mimeType || "") ? 1 : 0;
@@ -1010,7 +1035,10 @@ var AdsFriendlyPopup = (() => {
         `candidate.${expectedType}Tracks[${index}].audioRole`
       ),
       audioIsDefault: track.audioIsDefault === true,
-      isDrc: track.isDrc === true
+      isDrc: track.isDrc === true,
+      audioSampleRate: optionalNonNegativeInteger(track.audioSampleRate),
+      audioChannels: optionalNonNegativeInteger(track.audioChannels),
+      audioQuality: optionalString(track.audioQuality)
     }));
   }
   function hasCurrentManifestHandoff(candidate) {

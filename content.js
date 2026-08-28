@@ -3305,7 +3305,10 @@ var AdsFriendlyContent = (() => {
       audioTrackName: track.audioTrackName || null,
       audioRole: track.audioRole || null,
       audioIsDefault: track.audioIsDefault === true,
-      isDrc: track.isDrc === true
+      isDrc: track.isDrc === true,
+      audioSampleRate: track.audioSampleRate || null,
+      audioChannels: track.audioChannels || null,
+      audioQuality: track.audioQuality || null
     };
     return normalizeMediaCandidate({
       id,

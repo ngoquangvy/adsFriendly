@@ -258,6 +258,9 @@ test("YouTube SABR descriptors become provider-resolvable adaptive tracks", () =
           {
             itag: 140,
             mimeType: 'audio/mp4; codecs="mp4a.40.2"',
+            bitrate: 128000,
+            audioSampleRate: "44100",
+            audioChannels: 2,
             contentLength: "1730021",
           },
         ],
@@ -369,6 +372,9 @@ test("YouTube keeps same-itag language tracks distinct and prefers original audi
           {
             itag: 140,
             mimeType: 'audio/mp4; codecs="mp4a.40.2"',
+            bitrate: 128000,
+            audioSampleRate: "44100",
+            audioChannels: 2,
             audioTrack: {
               id: "en.dubbed",
               displayName: "English",
@@ -377,8 +383,11 @@ test("YouTube keeps same-itag language tracks distinct and prefers original audi
             xtags: xtags({ lang: "en", acont: "dubbed" }),
           },
           {
-            itag: 140,
-            mimeType: 'audio/mp4; codecs="mp4a.40.2"',
+            itag: 251,
+            mimeType: 'audio/webm; codecs="opus"',
+            bitrate: 160000,
+            audioSampleRate: "48000",
+            audioChannels: 2,
             audioTrack: {
               id: "vi.original",
               displayName: "Vietnamese (original)",
@@ -397,7 +406,10 @@ test("YouTube keeps same-itag language tracks distinct and prefers original audi
   const options = getMediaAudioTrackOptions(candidate);
   assert.equal(options[0].role, "original");
   assert.equal(options[0].language, "vi");
-  assert.match(options[0].label, /Original audio.*Vietnamese/i);
+  assert.match(
+    options[0].label,
+    /Original audio.*Vietnamese.*160 kbps.*Opus.*Stereo.*48 kHz/i,
+  );
 
   const job = normalizeMediaDownloadJob({
     id: "youtube-original-audio-job",
@@ -411,6 +423,8 @@ test("YouTube keeps same-itag language tracks distinct and prefers original audi
   });
   assert.equal(job.output.audioTrackId, options[0].id);
   assert.equal(job.candidate.audioTracks[1].audioRole, "original");
+  assert.equal(job.candidate.audioTracks[1].audioSampleRate, 48000);
+  assert.equal(job.candidate.audioTracks[1].audioChannels, 2);
 });
 
 test("YouTube progressive 360p format is ready because audio is already muxed", () => {

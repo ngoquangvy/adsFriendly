@@ -386,6 +386,9 @@ function normalizeAdaptiveTracks(value, expectedType, candidate) {
       ),
       audioIsDefault: track.audioIsDefault === true,
       isDrc: track.isDrc === true,
+      audioSampleRate: optionalNonNegativeInteger(track.audioSampleRate),
+      audioChannels: optionalNonNegativeInteger(track.audioChannels),
+      audioQuality: optionalString(track.audioQuality),
     }));
 }
 

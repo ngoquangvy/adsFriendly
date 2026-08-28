@@ -304,6 +304,10 @@ function enrichResolvedTrack(track, format, { muxed = false } = {}) {
     audioIsDefault:
       descriptor?.audioIsDefault === true || track.audioIsDefault === true,
     isDrc: descriptor?.isDrc === true || track.isDrc === true,
+    audioSampleRate:
+      descriptor?.audioSampleRate || track.audioSampleRate || null,
+    audioChannels: descriptor?.audioChannels || track.audioChannels || null,
+    audioQuality: descriptor?.audioQuality || track.audioQuality || null,
     duration: positiveNumber(format.approxDurationMs) / 1000 || track.duration,
   };
 }
@@ -335,6 +339,9 @@ function normalizeYouTubeAudioMetadata(format) {
     isDrc:
       format.isDrc === true ||
       (xtags.get("drc") === "1" && audioRole !== "original"),
+    audioSampleRate: positiveInteger(format.audioSampleRate),
+    audioChannels: positiveInteger(format.audioChannels),
+    audioQuality: safeToken(format.audioQuality, 60),
   };
 }
 

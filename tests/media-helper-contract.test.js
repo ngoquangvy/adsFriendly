@@ -526,6 +526,9 @@ test("helper accepts YouTube provider-resolvable adaptive descriptors", () => {
           audioTrackName: "Vietnamese (original)",
           audioRole: "original",
           audioIsDefault: false,
+          audioSampleRate: 48000,
+          audioChannels: 2,
+          audioQuality: "AUDIO_QUALITY_MEDIUM",
         },
       ],
     },
@@ -544,6 +547,8 @@ test("helper accepts YouTube provider-resolvable adaptive descriptors", () => {
   assert.equal(payload.candidate.audioTracks[0].sourceUrl, null);
   assert.equal(payload.candidate.audioTracks[0].language, "vi");
   assert.equal(payload.candidate.audioTracks[0].audioRole, "original");
+  assert.equal(payload.candidate.audioTracks[0].audioSampleRate, 48000);
+  assert.equal(payload.candidate.audioTracks[0].audioChannels, 2);
   assert.equal(payload.output.videoTrackId, "youtube-video-137");
 });
 

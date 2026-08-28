@@ -70,6 +70,9 @@ export interface DownloadCandidate {
     "original" | "dubbed" | "auto_dubbed" | "descriptive" | "secondary" | null;
   audioIsDefault?: boolean;
   isDrc?: boolean;
+  audioSampleRate?: number | null;
+  audioChannels?: number | null;
+  audioQuality?: string | null;
 }
 
 export interface AdaptiveHttpTrack {

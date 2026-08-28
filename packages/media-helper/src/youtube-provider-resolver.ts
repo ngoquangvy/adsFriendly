@@ -44,6 +44,9 @@ type ProviderFormat = {
   is_descriptive?: boolean;
   is_secondary?: boolean;
   is_original?: boolean;
+  audio_sample_rate?: number;
+  audio_channels?: number;
+  audio_quality?: string;
 };
 
 type ProviderProfile = {
@@ -492,6 +495,13 @@ async function resolveTrackFromFormats(
       format.audio_track?.audio_is_default === true ||
       track.audioIsDefault === true,
     isDrc: format.is_drc === true || track.isDrc === true,
+    audioSampleRate:
+      positiveInteger(format.audio_sample_rate) ||
+      track.audioSampleRate ||
+      null,
+    audioChannels:
+      positiveInteger(format.audio_channels) || track.audioChannels || null,
+    audioQuality: format.audio_quality || track.audioQuality || null,
   };
 }
 
@@ -559,9 +569,9 @@ function providerAudioRole(
 function compareAudioTracks(left: AdaptiveHttpTrack, right: AdaptiveHttpTrack) {
   return (
     audioPreferenceScore(right) - audioPreferenceScore(left) ||
-    mp4AudioScore(right) - mp4AudioScore(left) ||
     (right.averageBandwidth || right.bandwidth || 0) -
-      (left.averageBandwidth || left.bandwidth || 0)
+      (left.averageBandwidth || left.bandwidth || 0) ||
+    mp4AudioScore(right) - mp4AudioScore(left)
   );
 }
 
@@ -588,10 +598,37 @@ function audioSourceLabel(track: AdaptiveHttpTrack, format: ProviderFormat) {
   return [
     role,
     track.audioTrackName || format.audio_track?.display_name,
+    audioBitrateLabel(
+      format.average_bitrate ||
+        format.bitrate ||
+        track.averageBandwidth ||
+        track.bandwidth,
+    ),
     sourceFormatLabel(format),
+    audioChannelsLabel(format.audio_channels || track.audioChannels),
+    audioSampleRateLabel(format.audio_sample_rate || track.audioSampleRate),
   ]
     .filter(Boolean)
     .join(" · ");
+}
+
+function audioBitrateLabel(value: number | null | undefined) {
+  const bitrate = positiveInteger(value);
+  return bitrate ? `${Math.round(bitrate / 1000)} kbps` : null;
+}
+
+function audioChannelsLabel(value: number | null | undefined) {
+  const channels = positiveInteger(value);
+  if (channels === 1) return "Mono";
+  if (channels === 2) return "Stereo";
+  return channels ? `${channels} channels` : null;
+}
+
+function audioSampleRateLabel(value: number | null | undefined) {
+  const rate = positiveInteger(value);
+  if (!rate) return null;
+  const khz = rate / 1000;
+  return `${Number.isInteger(khz) ? khz : khz.toFixed(1)} kHz`;
 }
 
 function formatCompatibilityScore(

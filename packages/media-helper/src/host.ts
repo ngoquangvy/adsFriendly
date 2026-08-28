@@ -22,7 +22,7 @@ import { DownloadJobManager } from "./job-manager.js";
 import { openManagedOutput, revealManagedOutput } from "./output-actions.js";
 import { preflightYouTubeProviderQualities } from "./youtube-provider-resolver.js";
 
-const HELPER_VERSION = "0.21.0";
+const HELPER_VERSION = "0.21.1";
 const callerOrigin = process.argv[2] || null;
 const reader = new NativeMessageReader();
 const adapters = new DownloadAdapterRegistry([

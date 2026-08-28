@@ -542,6 +542,10 @@ function selectTrack(
         (type === "audio"
           ? audioPreferenceScore(right) - audioPreferenceScore(left)
           : 0) ||
+        (type === "audio"
+          ? (right.averageBandwidth || right.bandwidth || 0) -
+            (left.averageBandwidth || left.bandwidth || 0)
+          : 0) ||
         (preferMp4 ? mp4Score(right) - mp4Score(left) : 0) ||
         (right.height || 0) - (left.height || 0) ||
         (right.averageBandwidth || right.bandwidth || 0) -

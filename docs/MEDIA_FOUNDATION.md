@@ -212,5 +212,7 @@ Audio-only download is a separate output profile rather than a fallback that
 silently discards video. Tracks with the same itag remain distinct by YouTube
 audio-track identity, language, and role. The popup labels original, dubbed,
 auto-dubbed, descriptive, secondary, default, and DRC audio where YouTube
-provides those facts. Original audio is the default, but the same explicit
-selection is honored for both video muxing and OGG output.
+provides those facts. It also exposes bitrate, codec, channel layout, and sample
+rate so same-name tracks remain comparable; higher bitrate is preferred only
+after language/role safety. Original audio is the default, but the same
+explicit selection is honored for both video muxing and OGG output.

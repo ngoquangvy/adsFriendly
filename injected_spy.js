@@ -2850,7 +2850,10 @@ ${body}`;
       audioTrackName: track.audioTrackName || null,
       audioRole: track.audioRole || null,
       audioIsDefault: track.audioIsDefault === true,
-      isDrc: track.isDrc === true
+      isDrc: track.isDrc === true,
+      audioSampleRate: track.audioSampleRate || null,
+      audioChannels: track.audioChannels || null,
+      audioQuality: track.audioQuality || null
     };
     return normalizeMediaCandidate({
       id,
@@ -4742,6 +4745,9 @@ ${body}`;
       audioRole: descriptor?.audioRole || track.audioRole || null,
       audioIsDefault: descriptor?.audioIsDefault === true || track.audioIsDefault === true,
       isDrc: descriptor?.isDrc === true || track.isDrc === true,
+      audioSampleRate: descriptor?.audioSampleRate || track.audioSampleRate || null,
+      audioChannels: descriptor?.audioChannels || track.audioChannels || null,
+      audioQuality: descriptor?.audioQuality || track.audioQuality || null,
       duration: positiveNumber2(format.approxDurationMs) / 1e3 || track.duration
     };
   }
@@ -4756,7 +4762,10 @@ ${body}`;
       audioTrackName: safeToken2(audioTrack?.displayName, 160),
       audioRole,
       audioIsDefault: audioTrack?.audioIsDefault === true,
-      isDrc: format.isDrc === true || xtags.get("drc") === "1" && audioRole !== "original"
+      isDrc: format.isDrc === true || xtags.get("drc") === "1" && audioRole !== "original",
+      audioSampleRate: positiveInteger3(format.audioSampleRate),
+      audioChannels: positiveInteger3(format.audioChannels),
+      audioQuality: safeToken2(format.audioQuality, 60)
     };
   }
   function decodeYouTubeXtags(value) {

@@ -244,6 +244,9 @@ function codecLabel(value) {
   if (codec.includes("av01")) return "AV1";
   if (codec.includes("vp9") || codec.includes("vp09")) return "VP9";
   if (codec.includes("hev1") || codec.includes("hvc1")) return "HEVC";
+  if (codec.includes("mp4a") || codec.includes("aac")) return "AAC";
+  if (codec.includes("opus")) return "Opus";
+  if (codec.includes("vorbis")) return "Vorbis";
   return null;
 }
 
@@ -415,8 +418,8 @@ function compareAudioPreference(left, right) {
     Number(right.audioIsDefault === true) -
       Number(left.audioIsDefault === true) ||
     Number(left.isDrc === true) - Number(right.isDrc === true) ||
-    mp4AudioScore(right) - mp4AudioScore(left) ||
-    compareBandwidth(left, right)
+    compareBandwidth(left, right) ||
+    mp4AudioScore(right) - mp4AudioScore(left)
   );
 }
 
@@ -442,11 +445,17 @@ function audioTrackLabel(track) {
   }[track.audioRole];
   const language = track.audioTrackName || languageDisplayName(track.language);
   const codec = codecLabel(track.codecs);
+  const bitrate = audioBitrateLabel(
+    firstPositiveNumber(track.averageBandwidth, track.bandwidth),
+  );
   return [
     role || (track.audioIsDefault ? "Default audio" : "Audio"),
     language,
-    track.isDrc ? "DRC" : null,
+    bitrate,
     codec,
+    audioChannelsLabel(track.audioChannels),
+    audioSampleRateLabel(track.audioSampleRate),
+    track.isDrc ? "DRC" : null,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -455,12 +464,31 @@ function audioTrackLabel(track) {
 function languageDisplayName(value) {
   if (!value) return null;
   try {
-    return new Intl.DisplayNames([navigator.language || "en"], {
+    return new Intl.DisplayNames([globalThis.navigator?.language || "en"], {
       type: "language",
     }).of(value);
   } catch {
     return String(value).toUpperCase();
   }
+}
+
+function audioBitrateLabel(value) {
+  const bitrate = positiveInteger(value);
+  return bitrate ? `${Math.round(bitrate / 1000)} kbps` : null;
+}
+
+function audioChannelsLabel(value) {
+  const channels = positiveInteger(value);
+  if (channels === 1) return "Mono";
+  if (channels === 2) return "Stereo";
+  return channels ? `${channels} channels` : null;
+}
+
+function audioSampleRateLabel(value) {
+  const rate = positiveInteger(value);
+  if (!rate) return null;
+  const khz = rate / 1000;
+  return `${Number.isInteger(khz) ? khz : khz.toFixed(1)} kHz`;
 }
 
 function mp4AudioScore(track) {
