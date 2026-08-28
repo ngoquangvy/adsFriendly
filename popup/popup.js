@@ -2823,6 +2823,12 @@ ${blobTitleKey(item.title)}`;
             label: "Unavailable",
             title: qualityVerdict.reason || "No YouTube quality is available through the current provider profile."
           };
+        } else if (profileSelect.value !== "audio-ogg" && qualityVerdict.videoOptions.length === 0) {
+          next = {
+            disabled: true,
+            label: "Unavailable",
+            title: "No downloadable YouTube video quality is available."
+          };
         } else if (profileSelect.value !== "audio-ogg" && qualitySelect.value && !qualityVerdict.videoOptions.some(
           (option) => option.id === qualitySelect.value
         )) {

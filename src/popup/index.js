@@ -710,6 +710,15 @@ function createMediaDownloadControl(item, downloadItem, tab, helper) {
         };
       } else if (
         profileSelect.value !== "audio-ogg" &&
+        qualityVerdict.videoOptions.length === 0
+      ) {
+        next = {
+          disabled: true,
+          label: "Unavailable",
+          title: "No downloadable YouTube video quality is available.",
+        };
+      } else if (
+        profileSelect.value !== "audio-ogg" &&
         qualitySelect.value &&
         !qualityVerdict.videoOptions.some(
           (option) => option.id === qualitySelect.value,

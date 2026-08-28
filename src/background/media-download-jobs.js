@@ -191,6 +191,13 @@ async function normalizeYouTubeQualityCheck(candidate, output) {
       },
     };
   }
+  if (!result.videoOptions.length) {
+    return {
+      status: "quality_unavailable",
+      reason:
+        "No downloadable YouTube video quality is available through the current provider profile.",
+    };
+  }
   if (!output.videoTrackId) {
     return {
       status: "ready",
