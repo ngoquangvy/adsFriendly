@@ -2370,7 +2370,9 @@ var AdsFriendlyPopup = (() => {
     if (stream.resolution?.height) facts.push(`${stream.resolution.height}p`);
     if (Number.isFinite(stream.duration) && stream.duration > 0)
       facts.push(formatDuration2(stream.duration));
-    appendProtectionFacts(facts, stream);
+    appendProtectionFacts(facts, stream, {
+      playerOutputFormats: item.blobTrace?.appendFormats || []
+    });
     return facts.join(" \xB7 ");
   }
   function dashDetails(item) {
@@ -2479,7 +2481,7 @@ var AdsFriendlyPopup = (() => {
       facts.push("browser session");
     return facts.join(" \xB7 ");
   }
-  function appendProtectionFacts(facts, item) {
+  function appendProtectionFacts(facts, item, { playerOutputFormats = [] } = {}) {
     if (item.drm === "confirmed") {
       facts.push(
         `DRM confirmed${item.drmSystem ? ` \xB7 ${formatDrmSystem2(item.drmSystem)}` : ""}`,
@@ -2497,9 +2499,14 @@ var AdsFriendlyPopup = (() => {
     if (hasUnsupportedHlsKeyFormat(item)) {
       const format = item.encryptionKeyFormats.map((value) => String(value || "").trim()).find((value) => value && value.toLowerCase() !== "identity");
       facts.push(
-        `Custom protected HLS${format ? ` \xB7 ${format}` : ""}`,
-        "Playback only"
+        `Custom protected HLS${format ? ` \xB7 ${format}` : ""}`
       );
+      if (playerOutputFormats.length) {
+        facts.push(
+          `Player output \xB7 ${playerOutputFormats.map(playerOutputFormatLabel).join("/")} observed`,
+          "Adapter pending"
+        );
+      } else facts.push("Playback only");
       return;
     }
     if (isWeakSampleAesSignal(item)) {
@@ -2520,6 +2527,14 @@ var AdsFriendlyPopup = (() => {
       return;
     }
     if (item.encryptionMethods?.length) facts.push("Encrypted");
+  }
+  function playerOutputFormatLabel(value) {
+    return {
+      "iso-bmff": "fMP4",
+      "mpeg-ts": "MPEG-TS",
+      webm: "WebM",
+      "aac-adts": "AAC"
+    }[value] || value;
   }
   function formatDrmSystem2(value) {
     return value === "widevine" ? "Widevine" : value === "playready" ? "PlayReady" : value === "fairplay" ? "FairPlay" : value === "clearkey" ? "Clear Key" : "Unknown system";

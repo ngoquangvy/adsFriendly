@@ -794,7 +794,9 @@ function resolvedBlobDetails(item) {
   if (stream.resolution?.height) facts.push(`${stream.resolution.height}p`);
   if (Number.isFinite(stream.duration) && stream.duration > 0)
     facts.push(formatDuration(stream.duration));
-  appendProtectionFacts(facts, stream);
+  appendProtectionFacts(facts, stream, {
+    playerOutputFormats: item.blobTrace?.appendFormats || [],
+  });
   return facts.join(" · ");
 }
 
@@ -923,7 +925,11 @@ function resolvedHlsDetails(item) {
   return facts.join(" · ");
 }
 
-function appendProtectionFacts(facts, item) {
+function appendProtectionFacts(
+  facts,
+  item,
+  { playerOutputFormats = [] } = {},
+) {
   if (item.drm === "confirmed") {
     facts.push(
       `DRM confirmed${item.drmSystem ? ` · ${formatDrmSystem(item.drmSystem)}` : ""}`,
@@ -944,8 +950,13 @@ function appendProtectionFacts(facts, item) {
       .find((value) => value && value.toLowerCase() !== "identity");
     facts.push(
       `Custom protected HLS${format ? ` · ${format}` : ""}`,
-      "Playback only",
     );
+    if (playerOutputFormats.length) {
+      facts.push(
+        `Player output · ${playerOutputFormats.map(playerOutputFormatLabel).join("/")} observed`,
+        "Adapter pending",
+      );
+    } else facts.push("Playback only");
     return;
   }
   if (isWeakSampleAesSignal(item)) {
@@ -970,6 +981,17 @@ function appendProtectionFacts(facts, item) {
     return;
   }
   if (item.encryptionMethods?.length) facts.push("Encrypted");
+}
+
+function playerOutputFormatLabel(value) {
+  return (
+    {
+      "iso-bmff": "fMP4",
+      "mpeg-ts": "MPEG-TS",
+      webm: "WebM",
+      "aac-adts": "AAC",
+    }[value] || value
+  );
 }
 
 function formatDrmSystem(value) {

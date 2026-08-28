@@ -69,7 +69,10 @@ import {
   stageMediaDeepInspectionProfile,
   verifyMediaDeepInspectionProfiles,
 } from "../src/media/deep-inspection-profiles.js";
-import { installBlobSourceTracer } from "../src/main-world/blob-source-tracer.js";
+import {
+  classifyAppendedMediaBuffer,
+  installBlobSourceTracer,
+} from "../src/main-world/blob-source-tracer.js";
 import {
   classifyEncryptedManifestEnvelope,
   clearEncryptedManifestEnvelopes,
@@ -1674,6 +1677,23 @@ test("custom SAMPLE-AES key formats are playback only without an adapter", () =>
   });
   assert.equal(diagnostic.stage, MEDIA_RESOLUTION_STAGES.PLAYBACK_ONLY);
   assert.equal(diagnostic.code, "custom_hls_protection_playback_only");
+  const details = formatMediaDetails({
+    id: "blob-avs",
+    kind: "blob",
+    selectedMediaId: "avs-shield",
+    resolvedKind: "hls",
+    blobTrace: { appendFormats: ["iso-bmff"] },
+    resolvedStream: {
+      kind: "hls",
+      streamType: "vod",
+      duration: 1420,
+      drm: "suspected",
+      encryptionScheme: "sample-aes",
+      encryptionMethods: ["SAMPLE-AES-CTR"],
+      encryptionKeyFormats: ["urn:avs:shield:v3"],
+    },
+  });
+  assert.match(details, /Player output · fMP4 observed · Adapter pending/);
 });
 
 test("HLS key formats are canonicalized before protection classification", () => {
@@ -1958,6 +1978,7 @@ test("blob source tracing links an appended network buffer to an adaptive manife
       'video/mp4; codecs="avc1"',
     );
     const bytes = new ArrayBuffer(128);
+    new Uint8Array(bytes).set([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70]);
     const response = new FakeResponse("https://cdn.example/chunk-1.m4s", bytes);
     sourceBuffer.appendBuffer(await response.arrayBuffer());
     await new Promise((resolve) => setTimeout(resolve, 250));
@@ -1969,6 +1990,8 @@ test("blob source tracing links an appended network buffer to an adaptive manife
     assert.deepEqual(trace.sourceUrls, ["https://cdn.example/chunk-1.m4s"]);
     assert.equal(trace.appendCount, 1);
     assert.equal(trace.totalAppendedBytes, 128);
+    assert.deepEqual(trace.appendFormats, ["iso-bmff"]);
+    assert.equal(trace.unclassifiedAppendCount, 0);
     assert.equal(trace.observerStartedAt, 1234);
     assert.equal(trace.observerDocumentState, "interactive");
     assert.equal("chunk" in trace, false);
@@ -1985,6 +2008,21 @@ test("blob source tracing links an appended network buffer to an adaptive manife
     URL.createObjectURL = previous.createObjectURL;
     URL.revokeObjectURL = previous.revokeObjectURL;
   }
+});
+
+test("appended media classifier identifies containers without retaining payloads", () => {
+  const fmp4 = new Uint8Array([0, 0, 0, 24, 0x6d, 0x6f, 0x6f, 0x66]);
+  const transportStream = new Uint8Array(377);
+  transportStream[0] = 0x47;
+  transportStream[188] = 0x47;
+  const webm = new Uint8Array([0x1a, 0x45, 0xdf, 0xa3]);
+  assert.equal(classifyAppendedMediaBuffer(fmp4), "iso-bmff");
+  assert.equal(classifyAppendedMediaBuffer(transportStream), "mpeg-ts");
+  assert.equal(classifyAppendedMediaBuffer(webm), "webm");
+  assert.equal(
+    classifyAppendedMediaBuffer(new Uint8Array([1, 2, 3, 4])),
+    null,
+  );
 });
 
 test("recognizes a custom encrypted HLS envelope without retaining its payload", () => {

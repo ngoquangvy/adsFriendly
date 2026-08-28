@@ -2544,7 +2544,11 @@ var AdsFriendlyBackground = (() => {
       sourceUrls: normalizeHttpUrls(value.sourceUrls, 32),
       candidateIds: normalizeStrings(value.candidateIds).slice(0, 8),
       mimeTypes: normalizeStrings(value.mimeTypes).slice(0, 8),
+      appendFormats: normalizeStrings(value.appendFormats).filter(
+        (format) => ["iso-bmff", "mpeg-ts", "webm", "aac-adts"].includes(format)
+      ).slice(0, 4),
       appendCount: optionalNonNegativeInteger(value.appendCount) || 0,
+      unclassifiedAppendCount: optionalNonNegativeInteger(value.unclassifiedAppendCount) || 0,
       totalAppendedBytes: optionalNonNegativeInteger(value.totalAppendedBytes) || 0,
       observerStartedAt: optionalFiniteNumber(value.observerStartedAt) || null,
       observerDocumentState: optionalEnumValue(
@@ -3874,6 +3878,10 @@ var AdsFriendlyBackground = (() => {
         ...existing?.mimeTypes || [],
         ...incoming.mimeTypes || []
       ]).slice(-8),
+      appendFormats: uniqueStrings([
+        ...existing?.appendFormats || [],
+        ...incoming.appendFormats || []
+      ]).slice(-4),
       appendCount: Math.max(
         existing?.appendCount || 0,
         incoming.appendCount || 0
@@ -3881,6 +3889,10 @@ var AdsFriendlyBackground = (() => {
       totalAppendedBytes: Math.max(
         existing?.totalAppendedBytes || 0,
         incoming.totalAppendedBytes || 0
+      ),
+      unclassifiedAppendCount: Math.max(
+        existing?.unclassifiedAppendCount || 0,
+        incoming.unclassifiedAppendCount || 0
       ),
       observerStartedAt: existing?.observerStartedAt || incoming.observerStartedAt || null,
       observerDocumentState: existing?.observerDocumentState && existing.observerDocumentState !== "unknown" ? existing.observerDocumentState : incoming.observerDocumentState || "unknown",
@@ -4106,7 +4118,8 @@ var AdsFriendlyBackground = (() => {
         ...item.blobTrace,
         sourceUrls: [...item.blobTrace.sourceUrls || []],
         candidateIds: [...item.blobTrace.candidateIds || []],
-        mimeTypes: [...item.blobTrace.mimeTypes || []]
+        mimeTypes: [...item.blobTrace.mimeTypes || []],
+        appendFormats: [...item.blobTrace.appendFormats || []]
       } : null,
       parentManifestIds: [...resolution?.parents || []],
       childManifestIds: [...resolution?.children || []],

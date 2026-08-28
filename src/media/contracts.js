@@ -377,7 +377,14 @@ export function normalizeBlobSourceTrace(value = {}) {
     sourceUrls: normalizeHttpUrls(value.sourceUrls, 32),
     candidateIds: normalizeStrings(value.candidateIds).slice(0, 8),
     mimeTypes: normalizeStrings(value.mimeTypes).slice(0, 8),
+    appendFormats: normalizeStrings(value.appendFormats)
+      .filter((format) =>
+        ["iso-bmff", "mpeg-ts", "webm", "aac-adts"].includes(format),
+      )
+      .slice(0, 4),
     appendCount: optionalNonNegativeInteger(value.appendCount) || 0,
+    unclassifiedAppendCount:
+      optionalNonNegativeInteger(value.unclassifiedAppendCount) || 0,
     totalAppendedBytes:
       optionalNonNegativeInteger(value.totalAppendedBytes) || 0,
     observerStartedAt: optionalFiniteNumber(value.observerStartedAt) || null,

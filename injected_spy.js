@@ -371,7 +371,11 @@ var AdsFriendlyMainWorld = (() => {
       sourceUrls: normalizeHttpUrls(value.sourceUrls, 32),
       candidateIds: normalizeStrings(value.candidateIds).slice(0, 8),
       mimeTypes: normalizeStrings(value.mimeTypes).slice(0, 8),
+      appendFormats: normalizeStrings(value.appendFormats).filter(
+        (format) => ["iso-bmff", "mpeg-ts", "webm", "aac-adts"].includes(format)
+      ).slice(0, 4),
       appendCount: optionalNonNegativeInteger(value.appendCount) || 0,
+      unclassifiedAppendCount: optionalNonNegativeInteger(value.unclassifiedAppendCount) || 0,
       totalAppendedBytes: optionalNonNegativeInteger(value.totalAppendedBytes) || 0,
       observerStartedAt: optionalFiniteNumber(value.observerStartedAt) || null,
       observerDocumentState: optionalEnumValue(
@@ -3918,6 +3922,10 @@ ${body}`;
             state.appendCount += 1;
             state.totalAppendedBytes += Number(value?.byteLength || 0);
             state.lastAppendAt = Date.now();
+            const appendFormat = classifyAppendedMediaBuffer(value);
+            if (appendFormat)
+              rememberBounded(state.appendFormats, appendFormat, 4);
+            else state.unclassifiedAppendCount += 1;
             if (source?.url) {
               rememberBounded(state.sourceUrls, source.url, MAX_SOURCE_URLS);
               if (source.mimeType)
@@ -4010,7 +4018,9 @@ ${body}`;
         sourceUrls: state.sourceUrls,
         candidateIds: related.map((item) => item.id),
         appendCount: state.appendCount,
-        totalAppendedBytes: state.totalAppendedBytes
+        totalAppendedBytes: state.totalAppendedBytes,
+        appendFormats: state.appendFormats,
+        unclassifiedAppendCount: state.unclassifiedAppendCount
       });
       if (signature === state.lastReportSignature) return;
       state.lastReportSignature = signature;
@@ -4025,6 +4035,8 @@ ${body}`;
           mimeTypes: state.mimeTypes,
           appendCount: state.appendCount,
           totalAppendedBytes: state.totalAppendedBytes,
+          appendFormats: state.appendFormats,
+          unclassifiedAppendCount: state.unclassifiedAppendCount,
           observerStartedAt,
           observerDocumentState,
           observedAt: Date.now()
@@ -4048,10 +4060,38 @@ ${body}`;
       mimeTypes: [],
       appendCount: 0,
       totalAppendedBytes: 0,
+      appendFormats: [],
+      unclassifiedAppendCount: 0,
       lastAppendAt: null,
       lastReportSignature: null,
       timerId: null
     };
+  }
+  function classifyAppendedMediaBuffer(value) {
+    let bytes;
+    if (value instanceof ArrayBuffer) bytes = new Uint8Array(value);
+    else if (ArrayBuffer.isView(value))
+      bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    else return null;
+    if (bytes.length < 4) return null;
+    if (bytes[0] === 26 && bytes[1] === 69 && bytes[2] === 223 && bytes[3] === 163)
+      return "webm";
+    if (bytes.length >= 8 && ["ftyp", "styp", "moof", "moov", "sidx", "mdat"].includes(
+      String.fromCharCode(bytes[4], bytes[5], bytes[6], bytes[7])
+    ))
+      return "iso-bmff";
+    if (hasMpegTsSync(bytes)) return "mpeg-ts";
+    if (bytes[0] === 255 && (bytes[1] & 246) === 240) return "aac-adts";
+    return null;
+  }
+  function hasMpegTsSync(bytes) {
+    const maximumOffset = Math.min(187, bytes.length - 1);
+    for (let offset = 0; offset <= maximumOffset; offset++) {
+      if (bytes[offset] !== 71) continue;
+      if (offset + 188 >= bytes.length || bytes[offset + 188] === 71)
+        return true;
+    }
+    return false;
   }
   function responseSource(response) {
     return {

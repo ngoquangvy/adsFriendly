@@ -485,6 +485,10 @@ function mergeBlobTrace(existing, incoming) {
       ...(existing?.mimeTypes || []),
       ...(incoming.mimeTypes || []),
     ]).slice(-8),
+    appendFormats: uniqueStrings([
+      ...(existing?.appendFormats || []),
+      ...(incoming.appendFormats || []),
+    ]).slice(-4),
     appendCount: Math.max(
       existing?.appendCount || 0,
       incoming.appendCount || 0,
@@ -492,6 +496,10 @@ function mergeBlobTrace(existing, incoming) {
     totalAppendedBytes: Math.max(
       existing?.totalAppendedBytes || 0,
       incoming.totalAppendedBytes || 0,
+    ),
+    unclassifiedAppendCount: Math.max(
+      existing?.unclassifiedAppendCount || 0,
+      incoming.unclassifiedAppendCount || 0,
     ),
     observerStartedAt:
       existing?.observerStartedAt || incoming.observerStartedAt || null,
@@ -773,6 +781,7 @@ function cloneItem(item, resolution = null) {
           sourceUrls: [...(item.blobTrace.sourceUrls || [])],
           candidateIds: [...(item.blobTrace.candidateIds || [])],
           mimeTypes: [...(item.blobTrace.mimeTypes || [])],
+          appendFormats: [...(item.blobTrace.appendFormats || [])],
         }
       : null,
     parentManifestIds: [...(resolution?.parents || [])],
