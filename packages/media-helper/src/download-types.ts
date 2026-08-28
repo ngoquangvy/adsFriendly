@@ -59,6 +59,9 @@ export interface DownloadCandidate {
     credentials: "omit" | "same-origin" | "include" | "unknown";
     requiresBrowserSession: boolean;
   } | null;
+  /** Ephemeral request hints copied from a resolved provider track. */
+  requestMode?: "youtube_query_range" | "http_range" | null;
+  requestCpn?: string | null;
 }
 
 export interface AdaptiveHttpTrack {
@@ -83,6 +86,9 @@ export interface AdaptiveHttpTrack {
   muxed: boolean;
   requestUserAgent?: string | null;
   providerClient?: string | null;
+  /** Provider-specific byte request contract; kept ephemeral with the track. */
+  requestMode?: "youtube_query_range" | "http_range" | null;
+  requestCpn?: string | null;
 }
 
 export interface DownloadJob {

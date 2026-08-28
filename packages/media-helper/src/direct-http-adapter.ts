@@ -113,19 +113,30 @@ async function probeSource(
   if (!sourceUrl) throw new Error("Direct media URL is missing.");
   await assertSafeRemoteUrl(sourceUrl);
   const headers = requestHeaders(job);
-  let response = await fetchRemote(sourceUrl, {
-    method: "HEAD",
-    headers,
-    signal,
-  });
+  const queryRange = youtubeQueryRangeUrl(
+    sourceUrl,
+    job.candidate.requestCpn,
+    0,
+    0,
+    job.candidate.requestMode === "youtube_query_range",
+  );
+  let response = queryRange
+    ? await fetchRemote(queryRange, { headers, signal })
+    : await fetchRemote(sourceUrl, {
+        method: "HEAD",
+        headers,
+        signal,
+      });
   if (
     !response.ok ||
     !positiveInteger(response.headers.get("content-length"))
   ) {
-    response = await fetchRemote(sourceUrl, {
-      headers: { ...headers, Range: "bytes=0-0" },
-      signal,
-    });
+    response = await fetchRemote(
+      queryRange || sourceUrl,
+      queryRange
+        ? { headers, signal }
+        : { headers: { ...headers, Range: "bytes=0-0" }, signal },
+    );
   }
   if (!response.ok) {
     throw new Error(`Media server returned HTTP ${response.status}.`);
@@ -274,16 +285,35 @@ async function downloadRangeWithRetry({
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
       onBytes(0);
-      const response = await fetchRemote(probe.url, {
-        headers: {
-          ...requestHeaders(job),
-          Range: `bytes=${range.start}-${range.end}`,
-          ...(probe.etag ? { "If-Range": probe.etag } : {}),
-        },
-        signal: context.signal,
-      });
-      if (response.status !== 206 || !response.body) {
-        throw new Error(rangeFailureMessage(probe.url, response.status, range));
+      const queryUrl = youtubeQueryRangeUrl(
+        probe.url,
+        job.candidate.requestCpn,
+        range.start,
+        range.end,
+        job.candidate.requestMode === "youtube_query_range",
+      );
+      const response = await fetchRemote(
+        queryUrl || probe.url,
+        queryUrl
+          ? { headers: requestHeaders(job), signal: context.signal }
+          : {
+              headers: {
+                ...requestHeaders(job),
+                Range: `bytes=${range.start}-${range.end}`,
+                ...(probe.etag ? { "If-Range": probe.etag } : {}),
+              },
+              signal: context.signal,
+            },
+      );
+      if ((!queryUrl && response.status !== 206) || !response.ok || !response.body) {
+        throw new Error(
+          rangeFailureMessage(
+            probe.url,
+            response.status,
+            range,
+            queryUrl ? "youtube-query-range" : "http-range",
+          ),
+        );
       }
       const handle = await open(partialPath, "r+");
       try {
@@ -297,10 +327,11 @@ async function downloadRangeWithRetry({
             value.byteOffset,
             value.byteLength,
           );
+          if (written + buffer.byteLength > range.length) {
+            throw new Error("Range exceeded its declared size.");
+          }
           await writeAll(handle, buffer, range.start + written);
           written += buffer.byteLength;
-          if (written > range.length)
-            throw new Error("Range exceeded its declared size.");
           onBytes(written);
         }
         if (written !== range.length) {
@@ -322,18 +353,23 @@ async function downloadRangeWithRetry({
   throw lastError;
 }
 
-function rangeFailureMessage(url: string, status: number, range: ByteRange) {
+function rangeFailureMessage(
+  url: string,
+  status: number,
+  range: ByteRange,
+  mode = "http-range",
+) {
   if (status === 403 && isGoogleVideoUrl(url)) {
     return (
       `GoogleVideo rejected bytes ${range.start}-${range.end} after accepting the initial probe (HTTP 403). ` +
       "This stream requires a valid GVS Proof-of-Origin token or a fresh provider URL. " +
-      `Diagnostics: ${googleVideoDiagnostics(url, range)}.`
+      `Diagnostics: ${googleVideoDiagnostics(url, range, mode)}.`
     );
   }
   return `Range request for bytes ${range.start}-${range.end} returned HTTP ${status}.`;
 }
 
-function googleVideoDiagnostics(value: string, range: ByteRange) {
+function googleVideoDiagnostics(value: string, range: ByteRange, mode: string) {
   try {
     const url = new URL(value);
     const expire = positiveInteger(url.searchParams.get("expire"));
@@ -349,6 +385,8 @@ function googleVideoDiagnostics(value: string, range: ByteRange) {
       `expiry=${secondsUntilExpiry === null ? "unknown" : `${secondsUntilExpiry}s`}`,
       `declaredSize=${url.searchParams.get("clen") || "unknown"}`,
       `rangeSize=${range.length}`,
+      `mode=${mode}`,
+      `cpn=${url.searchParams.has("cpn") ? "present" : "absent"}`,
     ];
     return values.join(", ");
   } catch {
@@ -537,10 +575,40 @@ async function writeAll(
 }
 
 function requestHeaders(job: DownloadJob) {
+  const youtube = job.candidate.provider === "youtube";
   return {
-    Referer: job.candidate.pageUrl,
+    Accept: "*/*",
+    ...(youtube
+      ? { Origin: "https://www.youtube.com", Referer: "https://www.youtube.com" }
+      : { Referer: job.candidate.pageUrl }),
     "User-Agent": job.browserUserAgent || "AdsFriendlyMediaHelper/0.11",
+    ...(youtube ? { DNT: "?1" } : {}),
   };
+}
+
+function youtubeQueryRangeUrl(
+  value: string,
+  cpn: string | null | undefined,
+  start: number,
+  end: number,
+  enabled: boolean,
+) {
+  if (
+    !enabled ||
+    !cpn ||
+    !/^[A-Za-z0-9_-]{8,64}$/.test(cpn) ||
+    !isGoogleVideoUrl(value)
+  ) {
+    return null;
+  }
+  try {
+    const url = new URL(value);
+    url.searchParams.set("cpn", cpn);
+    url.searchParams.set("range", `${start}-${end}`);
+    return url.href;
+  } catch {
+    return null;
+  }
 }
 
 export function resolveOutputDirectory(value: string | null) {

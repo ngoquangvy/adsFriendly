@@ -492,6 +492,8 @@ test("helper accepts YouTube provider-resolvable adaptive descriptors", () => {
           height: 1080,
           contentLength: 80_000_000,
           urlResolution: "provider_client_pending",
+          requestMode: "youtube_query_range",
+          requestCpn: "AbCdEfGhIjKlMnOp",
         },
       ],
       audioTracks: [
@@ -513,6 +515,14 @@ test("helper accepts YouTube provider-resolvable adaptive descriptors", () => {
   assert.equal(
     payload.candidate.variants[0].urlResolution,
     "provider_client_pending",
+  );
+  assert.equal(
+    payload.candidate.variants[0].requestMode,
+    "youtube_query_range",
+  );
+  assert.equal(
+    payload.candidate.variants[0].requestCpn,
+    "AbCdEfGhIjKlMnOp",
   );
   assert.equal(payload.candidate.audioTracks[0].sourceUrl, null);
   assert.equal(payload.output.videoTrackId, "youtube-video-137");

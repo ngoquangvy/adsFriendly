@@ -364,6 +364,18 @@ function normalizeAdaptiveTracks(value, expectedType, candidate) {
         : "resolved",
       signatureCipher: optionalString(track.signatureCipher),
       muxed: track.muxed === true,
+      requestUserAgent: optionalString(track.requestUserAgent),
+      providerClient: optionalString(track.providerClient),
+      requestMode: optionalEnumValue(
+        track.requestMode,
+        ["youtube_query_range", "http_range"],
+        `candidate.${expectedType}Tracks[${index}].requestMode`,
+      ),
+      requestCpn:
+        typeof track.requestCpn === "string" &&
+        /^[A-Za-z0-9_-]{8,64}$/.test(track.requestCpn)
+          ? track.requestCpn
+          : null,
     }));
 }
 
@@ -445,6 +457,13 @@ function nonNegativeInteger(value, field) {
 
 function optionalString(value) {
   return typeof value === "string" && value ? value : null;
+}
+
+function optionalEnumValue(value, allowed, field) {
+  if (value === null || value === undefined || value === "") return null;
+  if (!allowed.includes(value))
+    throw new Error(`[MediaDownload] ${field} is invalid.`);
+  return value;
 }
 
 function optionalFiniteNumber(value) {

@@ -271,6 +271,18 @@ function normalizeHelperAdaptiveTracks(value, expectedType, candidate) {
         ? normalizeYouTubeSignatureCipher(track?.signatureCipher)
         : null,
     muxed: expectedType === "video" && track?.muxed === true,
+    requestUserAgent: normalizeUserAgent(track?.requestUserAgent),
+    providerClient: optionalString(track?.providerClient),
+    requestMode: optionalEnumValue(
+      track?.requestMode,
+      ["youtube_query_range", "http_range"],
+      `candidate.${expectedType}Tracks[${index}].requestMode`,
+    ),
+    requestCpn:
+      typeof track?.requestCpn === "string" &&
+      /^[A-Za-z0-9_-]{8,64}$/.test(track.requestCpn)
+        ? track.requestCpn
+        : null,
   }));
 }
 
@@ -433,6 +445,13 @@ function requiredHttpUrl(value, field) {
 
 function optionalString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function optionalEnumValue(value, allowed, field) {
+  if (value === null || value === undefined || value === "") return null;
+  if (!allowed.includes(value))
+    throw new Error(`[MediaHelperProtocol] ${field} is invalid.`);
+  return value;
 }
 
 function optionalNonNegativeNumber(value) {

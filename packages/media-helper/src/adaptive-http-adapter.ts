@@ -473,6 +473,8 @@ function providerTrackDiagnostic(track: AdaptiveHttpTrack | null | undefined) {
     `client=${track?.providerClient || "unknown"}`,
     `ua=${track?.requestUserAgent ? "provider" : "browser/default"}`,
     `itag=${track?.itag || "unknown"}`,
+    `mode=${track?.requestMode || "http-range"}`,
+    `cpn=${track?.requestCpn ? "present" : "absent"}`,
   ].join(", ");
 }
 
@@ -549,6 +551,8 @@ function directTrackJob(
       manifestUrl: null,
       title,
       mimeType: track.mimeType,
+      requestMode: track.requestMode || "http_range",
+      requestCpn: track.requestCpn || null,
       variants: [],
       audioTracks: [],
     },

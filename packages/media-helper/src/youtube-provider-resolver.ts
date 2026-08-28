@@ -10,7 +10,7 @@ const RESPONSE_CACHE_MS = 5 * 60 * 1000;
 const MAX_CACHE_ITEMS = 20;
 const responseCache = new Map<
   string,
-  { expiresAt: number; formats: ProviderFormat[] }
+  { expiresAt: number; formats: ProviderFormat[]; cpn: string }
 >();
 let sessionPromise: Promise<Innertube> | null = null;
 
@@ -71,13 +71,13 @@ export async function resolveYouTubeProviderTracks(
   const profiles = profilePlan.profiles;
   for (const profile of profiles) {
     try {
-      const { formats, session } = await loadProviderFormats(videoId, profile, {
+      const { formats, session, cpn } = await loadProviderFormats(videoId, profile, {
         force,
       });
       const resolved = await Promise.all(
         tracks.map((track) =>
           force || track.urlResolution === "provider_client_pending"
-            ? resolveTrackFromFormats(track, formats, session, profile)
+            ? resolveTrackFromFormats(track, formats, session, profile, cpn)
             : track,
         ),
       );
@@ -188,6 +188,7 @@ async function resolveTrackFromFormats(
   formats: ProviderFormat[],
   session: Innertube,
   profile: ProviderProfile,
+  cpn: string,
 ): Promise<AdaptiveHttpTrack> {
   const format = selectProviderFormat(
     track,
@@ -221,6 +222,8 @@ async function resolveTrackFromFormats(
     signatureCipher: null,
     requestUserAgent: profile.requestUserAgent,
     providerClient: profile.client,
+    requestMode: "youtube_query_range",
+    requestCpn: cpn,
   };
 }
 
@@ -293,7 +296,7 @@ async function loadProviderFormats(
   const cached = responseCache.get(key);
   const session = await getSession();
   if (!force && cached && cached.expiresAt > Date.now())
-    return { formats: cached.formats, session };
+    return { formats: cached.formats, session, cpn: cached.cpn };
   const info = await session.getBasicInfo(videoId, {
     client: profile.client,
     ...(profile.poToken ? { po_token: profile.poToken } : {}),
@@ -310,10 +313,11 @@ async function loadProviderFormats(
   responseCache.set(key, {
     expiresAt: Date.now() + RESPONSE_CACHE_MS,
     formats,
+    cpn: info.cpn,
   });
   while (responseCache.size > MAX_CACHE_ITEMS)
     responseCache.delete(responseCache.keys().next().value as string);
-  return { formats, session };
+  return { formats, session, cpn: info.cpn };
 }
 
 async function providerProfiles(
