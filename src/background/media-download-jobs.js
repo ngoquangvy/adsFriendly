@@ -175,7 +175,10 @@ async function normalizeYouTubeQualityCheck(candidate, output) {
     };
   }
   if (output.profileId === "audio-ogg") {
-    if (!result.audioOption) {
+    const selectedAudio =
+      result.audioOptions?.find((item) => item.id === output.audioTrackId) ||
+      result.audioOption;
+    if (!selectedAudio) {
       return {
         status: "quality_unavailable",
         reason:
@@ -186,7 +189,7 @@ async function normalizeYouTubeQualityCheck(candidate, output) {
       status: "ready",
       output: {
         ...output,
-        audioTrackId: result.audioOption.id,
+        audioTrackId: selectedAudio.id,
         allowEquivalentVideo: false,
       },
     };
@@ -201,7 +204,15 @@ async function normalizeYouTubeQualityCheck(candidate, output) {
   if (!output.videoTrackId) {
     return {
       status: "ready",
-      output: { ...output, allowEquivalentVideo: true },
+      output: {
+        ...output,
+        audioTrackId: result.audioOptions?.some(
+          (item) => item.id === output.audioTrackId,
+        )
+          ? output.audioTrackId
+          : result.audioOption?.id || null,
+        allowEquivalentVideo: true,
+      },
     };
   }
   const option = result.videoOptions.find(
@@ -218,6 +229,11 @@ async function normalizeYouTubeQualityCheck(candidate, output) {
     status: "ready",
     output: {
       ...output,
+      audioTrackId: result.audioOptions?.some(
+        (item) => item.id === output.audioTrackId,
+      )
+        ? output.audioTrackId
+        : result.audioOption?.id || null,
       allowEquivalentVideo: option.availability === "equivalent",
     },
   };

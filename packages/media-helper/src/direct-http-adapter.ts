@@ -21,11 +21,6 @@ import type {
 
 const MIN_RANGE_BYTES = 4 * 1024 * 1024;
 const MAX_RANGE_BYTES = 32 * 1024 * 1024;
-// GVS may accept a 0-0 probe but reject larger windows. Video endpoints have
-// accepted 2 MiB, while the audio itag 140 endpoint rejects that size and
-// accepts 1 MiB, so keep separate conservative caps by media type.
-const GOOGLEVIDEO_VIDEO_RANGE_BYTES = 2 * 1024 * 1024;
-const GOOGLEVIDEO_AUDIO_RANGE_BYTES = 1 * 1024 * 1024;
 const PROGRESS_INTERVAL_MS = 180;
 const MAX_RETRIES = 2;
 
@@ -120,13 +115,18 @@ async function probeSource(
     0,
     job.candidate.requestMode === "youtube_query_range",
   );
-  let response = queryRange
-    ? await fetchRemote(queryRange, { headers, signal })
-    : await fetchRemote(sourceUrl, {
-        method: "HEAD",
-        headers,
-        signal,
-      });
+  const googleVideo = isGoogleVideoUrl(sourceUrl);
+  let response =
+    queryRange || googleVideo
+      ? await fetchRemote(queryRange || sourceUrl, {
+          headers: queryRange ? headers : { ...headers, Range: "bytes=0-0" },
+          signal,
+        })
+      : await fetchRemote(sourceUrl, {
+          method: "HEAD",
+          headers,
+          signal,
+        });
   if (
     !response.ok ||
     !positiveInteger(response.headers.get("content-length"))
@@ -169,6 +169,15 @@ async function probeSource(
     response.status === 206 ||
     response.headers.get("accept-ranges")?.toLowerCase() === "bytes";
   await response.body?.cancel().catch(() => {});
+  if (googleVideo && acceptsRanges && totalBytes) {
+    await probeGoogleVideoContinuation(
+      job,
+      sourceUrl,
+      totalBytes,
+      headers,
+      signal,
+    );
+  }
   return {
     url: response.url || sourceUrl,
     totalBytes,
@@ -178,6 +187,43 @@ async function probeSource(
     contentType: response.headers.get("content-type"),
     contentDisposition: response.headers.get("content-disposition"),
   };
+}
+
+async function probeGoogleVideoContinuation(
+  job: DownloadJob,
+  sourceUrl: string,
+  totalBytes: number,
+  headers: Record<string, string>,
+  signal: AbortSignal,
+) {
+  const offset = Math.min(1024 * 1024, Math.max(0, totalBytes - 1));
+  if (offset <= 0) return;
+  const queryRange = youtubeQueryRangeUrl(
+    sourceUrl,
+    job.candidate.requestCpn,
+    offset,
+    offset,
+    job.candidate.requestMode === "youtube_query_range",
+  );
+  const response = await fetchRemote(
+    queryRange || sourceUrl,
+    queryRange
+      ? { headers, signal }
+      : { headers: { ...headers, Range: `bytes=${offset}-${offset}` }, signal },
+  );
+  if (!response.ok || (response.status !== 206 && totalBytes > 1)) {
+    await response.body?.cancel().catch(() => {});
+    throw new Error(
+      `GoogleVideo continuation preflight rejected byte ${offset} (HTTP ${response.status}). ` +
+        "The first byte worked, but this provider URL cannot continue reliably. " +
+        `Diagnostics: ${googleVideoDiagnostics(
+          queryRange || sourceUrl,
+          { index: 1, start: offset, end: offset, length: 1 },
+          job.candidate.requestMode || "http-range",
+        )}.`,
+    );
+  }
+  await response.body?.cancel().catch(() => {});
 }
 
 function mediaProbeFailure(url: string, status: number, mode: string) {
@@ -204,12 +250,7 @@ async function downloadRanges({
   partialPath: string;
   metadataPath: string;
 }) {
-  const ranges = buildRanges(
-    probe.totalBytes,
-    job.connections,
-    probe.url,
-    job.candidate.mimeType,
-  );
+  const ranges = buildRanges(probe.totalBytes, job.connections);
   const metadata = expectedMetadata(probe, ranges);
   const completed = await preparePartialFile(
     partialPath,
@@ -569,20 +610,12 @@ function expectedMetadata(
   };
 }
 
-function buildRanges(
-  totalBytes: number,
-  connections: number,
-  sourceUrl = "",
-  mimeType: string | null = null,
-): ByteRange[] {
-  const googleVideo = isGoogleVideoUrl(sourceUrl);
+function buildRanges(totalBytes: number, connections: number): ByteRange[] {
   const desired = Math.ceil(totalBytes / Math.max(1, connections * 4));
-  const googleVideoRange = String(mimeType || "").startsWith("audio/")
-    ? GOOGLEVIDEO_AUDIO_RANGE_BYTES
-    : GOOGLEVIDEO_VIDEO_RANGE_BYTES;
-  const minimum = googleVideo ? googleVideoRange : MIN_RANGE_BYTES;
-  const maximum = googleVideo ? googleVideoRange : MAX_RANGE_BYTES;
-  const chunkSize = Math.max(minimum, Math.min(maximum, desired));
+  const chunkSize = Math.max(
+    MIN_RANGE_BYTES,
+    Math.min(MAX_RANGE_BYTES, desired),
+  );
   const ranges: ByteRange[] = [];
   for (
     let start = 0, index = 0;

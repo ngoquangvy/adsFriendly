@@ -47,7 +47,14 @@ async function downloadAdaptiveHttp(
     "video",
     job,
   );
-  let audio = selectTrack(job.candidate.audioTracks, "audio", job);
+  let audio = selectTrack(
+    job.candidate.audioTracks.filter(
+      (track) =>
+        !job.output.audioTrackId || track.id === job.output.audioTrackId,
+    ),
+    "audio",
+    job,
+  );
   let video =
     requestedVideo || (separateVideo && audio ? separateVideo : muxedVideo);
   if (!video)
@@ -80,6 +87,7 @@ async function downloadAdaptiveHttp(
         allowEquivalentVideo:
           job.output.allowEquivalentVideo === true || !job.output.videoTrackId,
         force: true,
+        ...youtubeProviderLearning(job, context),
       },
     );
     video = resolved[0];
@@ -304,6 +312,7 @@ async function downloadAudioOnly(
       await resolveYouTubeProviderTracks([audio], job.candidate, {
         allowEquivalentVideo: false,
         force: true,
+        ...youtubeProviderLearning(job, context),
       })
     )[0];
   }
@@ -389,7 +398,11 @@ async function downloadAdaptiveTrack(
         [freshTrack] = await resolveYouTubeProviderTracks(
           [track],
           job.candidate,
-          { allowEquivalentVideo, force: true },
+          {
+            allowEquivalentVideo,
+            force: true,
+            ...youtubeProviderLearning(job, context),
+          },
         );
         if (freshTrack?.sourceUrl) {
           return await downloadDirectHttp(
@@ -416,7 +429,11 @@ async function downloadAdaptiveTrack(
             const [resolvedAlternative] = await resolveYouTubeProviderTracks(
               [alternative],
               job.candidate,
-              { allowEquivalentVideo: true, force: true },
+              {
+                allowEquivalentVideo: true,
+                force: true,
+                ...youtubeProviderLearning(job, context),
+              },
             );
             if (!resolvedAlternative?.sourceUrl) continue;
             return await downloadDirectHttp(
@@ -449,6 +466,13 @@ async function downloadAdaptiveTrack(
   }
 }
 
+function youtubeProviderLearning(job: DownloadJob, context: DownloadContext) {
+  return {
+    strategyPreferences: job.accessStrategyPreferences["youtube.com"] || {},
+    onStrategy: context.strategy,
+  };
+}
+
 function equivalentVideoTracks(job: DownloadJob, track: AdaptiveHttpTrack) {
   return [...(job.candidate.variants || [])]
     .filter(
@@ -479,10 +503,13 @@ function providerTrackDiagnostic(track: AdaptiveHttpTrack | null | undefined) {
 }
 
 function isGoogleVideoRangeFailure(error: unknown) {
-  return /GoogleVideo rejected bytes \d+-\d+ after accepting the initial probe/i.test(
-    messageOf(error),
-  ) || /GoogleVideo probe rejected HTTP 403 before byte transfer/i.test(
-    messageOf(error),
+  return (
+    /GoogleVideo rejected bytes \d+-\d+ after accepting the initial probe/i.test(
+      messageOf(error),
+    ) ||
+    /GoogleVideo probe rejected HTTP 403 before byte transfer/i.test(
+      messageOf(error),
+    )
   );
 }
 
@@ -512,12 +539,27 @@ function selectTrack(
     )
     .sort(
       (left, right) =>
+        (type === "audio"
+          ? audioPreferenceScore(right) - audioPreferenceScore(left)
+          : 0) ||
         (preferMp4 ? mp4Score(right) - mp4Score(left) : 0) ||
         (right.height || 0) - (left.height || 0) ||
         (right.averageBandwidth || right.bandwidth || 0) -
           (left.averageBandwidth || left.bandwidth || 0) ||
         (right.contentLength || 0) - (left.contentLength || 0),
     )[0];
+}
+
+function audioPreferenceScore(track: AdaptiveHttpTrack) {
+  const role =
+    {
+      original: 50,
+      secondary: 30,
+      dubbed: 20,
+      auto_dubbed: 10,
+      descriptive: 5,
+    }[track.audioRole || ""] || 25;
+  return role + (track.audioIsDefault ? 4 : 0) - (track.isDrc ? 1 : 0);
 }
 
 function mp4Score(track: AdaptiveHttpTrack) {

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Script, createContext } from "node:vm";
 import { BotGuardClient, getChallenge } from "bgutils-js/botguard";
 import {
@@ -18,6 +19,7 @@ const TOKEN_CACHE_MS = 30 * 60 * 1000;
 const MAX_TOKEN_CACHE_ITEMS = 20;
 
 type TokenMinter = (contentBinding: string) => Promise<string>;
+type TokenMinterBundle = { mint: TokenMinter; revisionId: string };
 type BotGuardChallenge = {
   program: string;
   globalName: string;
@@ -26,19 +28,28 @@ type BotGuardChallenge = {
   };
 };
 
-let minterPromise: Promise<TokenMinter> | null = null;
+let minterPromise: Promise<TokenMinterBundle> | null = null;
 const tokenCache = new Map<string, { token: string; expiresAt: number }>();
 
 export const YOUTUBE_WEB_PO_USER_AGENT = USER_AGENT;
 
-export async function resolveYouTubeWebPoToken(videoId: string) {
+export async function resolveYouTubeWebPoToken(
+  videoId: string,
+  { profileId = "web", playerRevision = "unknown" } = {},
+) {
   if (!/^[a-zA-Z0-9_-]{6,64}$/.test(videoId))
     throw new Error("YouTube PO token requires a valid video ID.");
-  const cached = tokenCache.get(videoId);
+  const minter = await getTokenMinter();
+  const cacheKey = [
+    videoId,
+    safeCacheToken(profileId),
+    safeCacheToken(playerRevision),
+    minter.revisionId,
+  ].join(":");
+  const cached = tokenCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.token;
-  const mint = await getTokenMinter();
-  const token = validateToken(await mint(videoId));
-  tokenCache.set(videoId, {
+  const token = validateToken(await minter.mint(videoId));
+  tokenCache.set(cacheKey, {
     token,
     expiresAt: Date.now() + TOKEN_CACHE_MS,
   });
@@ -63,7 +74,7 @@ function getTokenMinter() {
   return minterPromise;
 }
 
-async function createTokenMinter(): Promise<TokenMinter> {
+async function createTokenMinter(): Promise<TokenMinterBundle> {
   const dom = new JSDOM(
     "<!DOCTYPE html><html><head></head><body></body></html>",
     {
@@ -138,14 +149,28 @@ async function createTokenMinter(): Promise<TokenMinter> {
   if (typeof crossRealmMinter !== "function")
     throw new Error("YouTube PO token minter could not be initialized.");
 
-  return async (contentBinding) => {
-    const bytes = await crossRealmMinter(
-      new TextEncoder().encode(contentBinding),
-    );
-    if (!bytes)
-      throw new Error("YouTube PO token generation returned no data.");
-    return u8ToBase64(new Uint8Array(bytes), true);
+  return {
+    revisionId: createHash("sha256")
+      .update(challenge.globalName)
+      .update(challenge.program)
+      .update(interpreter)
+      .digest("hex")
+      .slice(0, 16),
+    mint: async (contentBinding) => {
+      const bytes = await crossRealmMinter(
+        new TextEncoder().encode(contentBinding),
+      );
+      if (!bytes)
+        throw new Error("YouTube PO token generation returned no data.");
+      return u8ToBase64(new Uint8Array(bytes), true);
+    },
   };
+}
+
+function safeCacheToken(value: string) {
+  return String(value || "unknown")
+    .replace(/[^a-z0-9_-]/gi, "_")
+    .slice(0, 80);
 }
 
 function installCanvasFallback(dom: JSDOM) {

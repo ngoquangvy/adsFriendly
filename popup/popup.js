@@ -574,6 +574,20 @@ var AdsFriendlyPopup = (() => {
     }
     return profiles;
   }
+  function getMediaAudioTrackOptions(candidate = {}) {
+    if (candidate.kind !== "adaptive") return [];
+    return uniqueObjects(candidate.audioTracks || []).filter((track) => isAcquirableAdaptiveTrack(candidate, track)).sort(compareAudioPreference).map(
+      (track) => Object.freeze({
+        id: track.id,
+        label: audioTrackLabel(track),
+        language: track.language || null,
+        role: track.audioRole || null,
+        isOriginal: track.audioRole === "original",
+        isDefault: track.audioIsDefault === true,
+        estimatedBytes: positiveInteger(track.contentLength)
+      })
+    );
+  }
   function getMediaVideoQualityOptions(candidate = {}) {
     if (candidate.kind !== "adaptive") return [];
     const hasSeparateAudio = (candidate.audioTracks || []).some(
@@ -652,7 +666,7 @@ var AdsFriendlyPopup = (() => {
       return null;
     }
   }
-  function getMediaDownloadEstimate(candidate = {}, displayItem = null, { videoTrackId = null, audioOnly = false } = {}) {
+  function getMediaDownloadEstimate(candidate = {}, displayItem = null, { videoTrackId = null, audioTrackId = null, audioOnly = false } = {}) {
     const presentation = displayItem || candidate;
     const resolved = presentation.resolvedStream || candidate.resolvedStream;
     const allVariants = uniqueObjects([
@@ -681,7 +695,7 @@ var AdsFriendlyPopup = (() => {
     );
     if (["dash", "adaptive"].includes(candidate.kind) && bandwidth && selectedVariant?.muxed !== true) {
       const audioBandwidth = [...candidate.audioTracks || []].filter(
-        (track) => candidate.kind === "adaptive" ? isAcquirableAdaptiveTrack(candidate, track) : true
+        (track) => (candidate.kind !== "adaptive" || isAcquirableAdaptiveTrack(candidate, track)) && (!audioTrackId || track.id === audioTrackId)
       ).map(
         (track) => firstPositiveNumber(track.averageBandwidth, track.bandwidth)
       ).filter(Boolean).sort((left, right) => right - left)[0];
@@ -689,12 +703,15 @@ var AdsFriendlyPopup = (() => {
     }
     if (audioOnly) {
       bandwidth = firstPositiveNumber(
-        ...(candidate.audioTracks || []).map(
-          (track) => track.averageBandwidth || track.bandwidth
-        )
+        ...(candidate.audioTracks || []).filter((track) => !audioTrackId || track.id === audioTrackId).map((track) => track.averageBandwidth || track.bandwidth)
       );
     }
-    const adaptiveBytes = candidate.kind === "adaptive" ? adaptiveContentLength(candidate, selectedVariant, audioOnly) : null;
+    const adaptiveBytes = candidate.kind === "adaptive" ? adaptiveContentLength(
+      candidate,
+      selectedVariant,
+      audioOnly,
+      audioTrackId
+    ) : null;
     const estimatedBytes = adaptiveBytes || (duration && bandwidth ? Math.round(duration * bandwidth / 8) : null);
     return Object.freeze({
       resolution: resolution ? {
@@ -707,9 +724,11 @@ var AdsFriendlyPopup = (() => {
       basis: estimatedBytes ? candidate.kind === "adaptive" ? adaptiveBytes ? "track_content_length" : "track_bitrate" : "manifest_bandwidth" : null
     });
   }
-  function adaptiveContentLength(candidate, selectedVariant = null, audioOnly = false) {
+  function adaptiveContentLength(candidate, selectedVariant = null, audioOnly = false, audioTrackId = null) {
     if (audioOnly) {
-      const audio2 = [...candidate.audioTracks || []].filter((track) => isAcquirableAdaptiveTrack(candidate, track)).sort(compareBandwidth)[0]?.contentLength;
+      const audio2 = [...candidate.audioTracks || []].filter(
+        (track) => isAcquirableAdaptiveTrack(candidate, track) && (!audioTrackId || track.id === audioTrackId)
+      ).sort(compareAudioPreference)[0]?.contentLength;
       const total2 = Number(audio2) || 0;
       return Number.isSafeInteger(total2) && total2 > 0 ? total2 : null;
     }
@@ -718,9 +737,53 @@ var AdsFriendlyPopup = (() => {
       const total2 = Number(video) || 0;
       return Number.isSafeInteger(total2) && total2 > 0 ? total2 : null;
     }
-    const audio = [...candidate.audioTracks || []].filter((track) => isAcquirableAdaptiveTrack(candidate, track)).sort(compareBandwidth)[0]?.contentLength;
+    const audio = [...candidate.audioTracks || []].filter(
+      (track) => isAcquirableAdaptiveTrack(candidate, track) && (!audioTrackId || track.id === audioTrackId)
+    ).sort(compareAudioPreference)[0]?.contentLength;
     const total = (Number(video) || 0) + (Number(audio) || 0);
     return Number.isSafeInteger(total) && total > 0 ? total : null;
+  }
+  function compareAudioPreference(left, right) {
+    return audioRoleScore(right) - audioRoleScore(left) || Number(right.audioIsDefault === true) - Number(left.audioIsDefault === true) || Number(left.isDrc === true) - Number(right.isDrc === true) || mp4AudioScore(right) - mp4AudioScore(left) || compareBandwidth(left, right);
+  }
+  function audioRoleScore(track) {
+    return {
+      original: 50,
+      secondary: 30,
+      dubbed: 20,
+      auto_dubbed: 10,
+      descriptive: 5
+    }[track.audioRole] || 25;
+  }
+  function audioTrackLabel(track) {
+    const role = {
+      original: "Original audio",
+      dubbed: "Dubbed",
+      auto_dubbed: "Auto-dubbed",
+      descriptive: "Audio description",
+      secondary: "Secondary audio"
+    }[track.audioRole];
+    const language = track.audioTrackName || languageDisplayName(track.language);
+    const codec = codecLabel(track.codecs);
+    return [
+      role || (track.audioIsDefault ? "Default audio" : "Audio"),
+      language,
+      track.isDrc ? "DRC" : null,
+      codec
+    ].filter(Boolean).join(" \xB7 ");
+  }
+  function languageDisplayName(value) {
+    if (!value) return null;
+    try {
+      return new Intl.DisplayNames([navigator.language || "en"], {
+        type: "language"
+      }).of(value);
+    } catch {
+      return String(value).toUpperCase();
+    }
+  }
+  function mp4AudioScore(track) {
+    return /\/(?:mp4|m4a)(?:$|;)/i.test(track.mimeType || "") ? 1 : 0;
   }
   function compareBandwidth(left, right) {
     return (firstPositiveNumber(right.averageBandwidth, right.bandwidth) || 0) - (firstPositiveNumber(left.averageBandwidth, left.bandwidth) || 0) || (right.resolution?.height || 0) - (left.resolution?.height || 0);
@@ -929,7 +992,25 @@ var AdsFriendlyPopup = (() => {
         track.urlResolution
       ) ? track.urlResolution : "resolved",
       signatureCipher: optionalString(track.signatureCipher),
-      muxed: track.muxed === true
+      muxed: track.muxed === true,
+      requestUserAgent: optionalString(track.requestUserAgent),
+      providerClient: optionalString(track.providerClient),
+      requestMode: optionalEnumValue(
+        track.requestMode,
+        ["youtube_query_range", "http_range"],
+        `candidate.${expectedType}Tracks[${index}].requestMode`
+      ),
+      requestCpn: typeof track.requestCpn === "string" && /^[A-Za-z0-9_-]{8,64}$/.test(track.requestCpn) ? track.requestCpn : null,
+      language: optionalString(track.language),
+      audioTrackId: optionalString(track.audioTrackId),
+      audioTrackName: optionalString(track.audioTrackName),
+      audioRole: optionalEnumValue(
+        track.audioRole,
+        ["original", "dubbed", "auto_dubbed", "descriptive", "secondary"],
+        `candidate.${expectedType}Tracks[${index}].audioRole`
+      ),
+      audioIsDefault: track.audioIsDefault === true,
+      isDrc: track.isDrc === true
     }));
   }
   function hasCurrentManifestHandoff(candidate) {
@@ -981,6 +1062,12 @@ var AdsFriendlyPopup = (() => {
   }
   function optionalString(value) {
     return typeof value === "string" && value ? value : null;
+  }
+  function optionalEnumValue(value, allowed, field) {
+    if (value === null || value === void 0 || value === "") return null;
+    if (!allowed.includes(value))
+      throw new Error(`[MediaDownload] ${field} is invalid.`);
+    return value;
   }
   function optionalFiniteNumber(value) {
     if (value === null || value === void 0) return null;
@@ -2717,15 +2804,43 @@ ${blobTitleKey(item.title)}`;
     const qualitySelect = document.createElement("select");
     qualitySelect.className = "media-download-profile";
     qualitySelect.title = "Video quality";
+    const audioTrackOptions = getMediaAudioTrackOptions(downloadItem);
+    const audioSelect = document.createElement("select");
+    audioSelect.className = "media-download-profile";
+    audioSelect.title = "Audio track";
+    const renderAudioOptions = () => {
+      audioSelect.replaceChildren();
+      const availableById = new Map(
+        (qualityVerdict?.audioOptions || []).map((option) => [option.id, option])
+      );
+      const visibleAudio = needsYouTubePreflight ? audioTrackOptions.filter((option) => availableById.has(option.id)) : audioTrackOptions;
+      if (!visibleAudio.length) {
+        const option = document.createElement("option");
+        option.textContent = needsYouTubePreflight && !qualityVerdict ? "Audio \xB7 Checking availability\u2026" : "Audio \xB7 unavailable";
+        option.disabled = true;
+        audioSelect.append(option);
+        audioSelect.disabled = true;
+        return;
+      }
+      for (const audio of visibleAudio) {
+        const option = document.createElement("option");
+        option.value = audio.id;
+        option.textContent = audio.label;
+        const verdict = availableById.get(audio.id);
+        option.title = verdict?.sourceLabel || audio.label;
+        audioSelect.append(option);
+      }
+      audioSelect.disabled = !availability.supported || visibleAudio.length < 2;
+    };
     const renderQualityOptions = () => {
       qualitySelect.replaceChildren();
       if (profileSelect.value === "audio-ogg") {
         const option = document.createElement("option");
-        option.textContent = !needsYouTubePreflight ? "Audio \xB7 best available" : qualityVerdict?.audioOption ? `Audio \xB7 ${qualityVerdict.audioOption.sourceLabel}` : "Audio \xB7 Checking availability\u2026";
-        option.title = qualityVerdict?.audioOption?.sourceLabel || "The best available audio track will be downloaded as OGG.";
+        option.textContent = "Audio only \xB7 OGG";
+        option.title = "The selected audio track will be converted to OGG.";
         option.disabled = true;
         qualitySelect.append(option);
-        qualitySelect.disabled = needsYouTubePreflight ? !qualityVerdict?.audioOption : true;
+        qualitySelect.disabled = true;
         return;
       }
       if (needsYouTubePreflight && (helper.status !== "ready" || helper.canResolveYouTubeQualityPreflight !== true)) {
@@ -2786,12 +2901,14 @@ ${blobTitleKey(item.title)}`;
       }
       qualitySelect.disabled = !availability.supported || !visibleQualities.length;
     };
+    renderAudioOptions();
     renderQualityOptions();
     const estimateLabel = document.createElement("span");
     estimateLabel.className = "media-download-estimate";
     const updateEstimate = () => {
       const estimate = getMediaDownloadEstimate(downloadItem, item, {
         videoTrackId: qualitySelect.value || null,
+        audioTrackId: audioSelect.value || null,
         audioOnly: profileSelect.value === "audio-ogg"
       });
       estimateLabel.textContent = formatDownloadEstimate(estimate);
@@ -2837,7 +2954,9 @@ ${blobTitleKey(item.title)}`;
             label: "Unavailable",
             title: "The selected YouTube quality is not downloadable."
           };
-        } else if (profileSelect.value === "audio-ogg" && !qualityVerdict.audioOption) {
+        } else if (profileSelect.value === "audio-ogg" && !qualityVerdict.audioOptions?.some(
+          (option) => option.id === audioSelect.value
+        )) {
           next = {
             disabled: true,
             label: "Unavailable",
@@ -2850,6 +2969,10 @@ ${blobTitleKey(item.title)}`;
       button.title = next.title;
     };
     qualitySelect.addEventListener("change", () => {
+      updateEstimate();
+      syncDownloadButton();
+    });
+    audioSelect.addEventListener("change", () => {
       updateEstimate();
       syncDownloadButton();
     });
@@ -2885,7 +3008,7 @@ ${blobTitleKey(item.title)}`;
           output: {
             profileId: profileSelect.value || profiles[0]?.id,
             videoTrackId: profileSelect.value === "audio-ogg" ? null : qualitySelect.value || null,
-            audioTrackId: profileSelect.value === "audio-ogg" ? qualityVerdict?.audioOption?.id || null : null,
+            audioTrackId: audioSelect.value || qualityVerdict?.audioOption?.id || null,
             allowEquivalentVideo: qualityVerdict?.videoOptions?.find(
               (option) => option.id === qualitySelect.value
             )?.availability === "equivalent" || profileSelect.value !== "audio-ogg" && !qualitySelect.value && needsYouTubePreflight
@@ -2907,6 +3030,8 @@ ${blobTitleKey(item.title)}`;
     if (availability.supported && downloadItem.kind === "adaptive" && profiles.some((profile) => profile.id === "video-mp4"))
       control.append(qualitySelect);
     if (availability.supported && profiles.length) control.append(profileSelect);
+    if (availability.supported && downloadItem.kind === "adaptive" && audioTrackOptions.length)
+      control.append(audioSelect);
     control.append(button);
     if (needsYouTubePreflight && helper.status === "ready" && helper.canResolveYouTubeQualityPreflight === true) {
       if (!qualityVerdict) {
@@ -2920,6 +3045,7 @@ ${blobTitleKey(item.title)}`;
             youtubeQualityPreflightCache.set(preflightKey, qualityVerdict);
           if (!control.isConnected) return;
           renderQualityOptions();
+          renderAudioOptions();
           syncDownloadButton();
         }).catch((error) => {
           qualityVerdict = {
@@ -2929,6 +3055,7 @@ ${blobTitleKey(item.title)}`;
           };
           if (control.isConnected) {
             renderQualityOptions();
+            renderAudioOptions();
             syncDownloadButton();
           }
         });
@@ -2950,6 +3077,9 @@ ${blobTitleKey(item.title)}`;
         id: result.audioOption.id,
         sourceLabel: typeof result.audioOption.sourceLabel === "string" ? result.audioOption.sourceLabel : "Audio source"
       } : null,
+      audioOptions: Array.isArray(result?.audioOptions) ? result.audioOptions.filter(
+        (option) => option && typeof option.id === "string"
+      ) : result?.audioOption && typeof result.audioOption.id === "string" ? [result.audioOption] : [],
       reason: typeof result?.reason === "string" ? result.reason : null
     };
   }

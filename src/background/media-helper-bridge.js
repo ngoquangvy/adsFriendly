@@ -222,6 +222,7 @@ export async function preflightMediaHelperYouTubeQualities(candidate) {
       status: "not_required",
       videoOptions: [],
       audioOption: null,
+      audioOptions: [],
       reason: null,
     };
   }
@@ -234,6 +235,7 @@ export async function preflightMediaHelperYouTubeQualities(candidate) {
       status: "helper_unavailable",
       videoOptions: [],
       audioOption: null,
+      audioOptions: [],
       reason: helper.error || "Media Helper is unavailable.",
     };
   }
@@ -246,6 +248,7 @@ export async function preflightMediaHelperYouTubeQualities(candidate) {
       status: "helper_update",
       videoOptions: [],
       audioOption: null,
+      audioOptions: [],
       reason: "Update Media Helper to check YouTube quality compatibility.",
     };
   }
@@ -285,6 +288,7 @@ export async function preflightMediaHelperYouTubeQualities(candidate) {
       status: "unavailable",
       videoOptions: [],
       audioOption: null,
+      audioOptions: [],
       reason: messageOf(error),
     };
   }
@@ -327,10 +331,41 @@ function normalizeYouTubeQualityPreflight(payload) {
               : "Audio source",
         }
       : null;
+  const audioOptions = Array.isArray(payload?.audioOptions)
+    ? payload.audioOptions
+        .filter(
+          (item) =>
+            item &&
+            typeof item.id === "string" &&
+            typeof item.sourceLabel === "string",
+        )
+        .slice(0, 24)
+        .map((item) => ({
+          id: item.id,
+          sourceLabel: item.sourceLabel.slice(0, 160),
+          language:
+            typeof item.language === "string"
+              ? item.language.slice(0, 40)
+              : null,
+          role: [
+            "original",
+            "dubbed",
+            "auto_dubbed",
+            "descriptive",
+            "secondary",
+          ].includes(item.role)
+            ? item.role
+            : null,
+          isDefault: item.isDefault === true,
+        }))
+    : audioOption
+      ? [{ ...audioOption, language: null, role: null, isDefault: false }]
+      : [];
   return {
     status: payload?.status === "ready" ? "ready" : "unavailable",
     videoOptions,
     audioOption,
+    audioOptions,
     reason:
       typeof payload?.reason === "string" ? payload.reason.slice(0, 500) : null,
   };

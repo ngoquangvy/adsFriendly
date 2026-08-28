@@ -206,11 +206,11 @@ travel through Native Messaging; the helper streams them directly to disk. The
 helper is optional for the `media-tools`
 product and is never a dependency of the `ad-protection` product.
 
-## Planned YouTube audio output
+## YouTube audio output
 
-Audio-only download remains a separate output profile rather than a fallback
-that silently discards video. The planned flow selects the highest-quality
-available audio track, preserves its native codec when requested, or explicitly
-transcodes it to OGG through the Media Helper. The popup must show the selected
-track, estimated source size, output codec, and the cost of transcoding before
-the job starts.
+Audio-only download is a separate output profile rather than a fallback that
+silently discards video. Tracks with the same itag remain distinct by YouTube
+audio-track identity, language, and role. The popup labels original, dubbed,
+auto-dubbed, descriptive, secondary, default, and DRC audio where YouTube
+provides those facts. Original audio is the default, but the same explicit
+selection is honored for both video muxing and OGG output.

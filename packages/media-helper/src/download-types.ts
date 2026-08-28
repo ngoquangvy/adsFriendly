@@ -63,6 +63,13 @@ export interface DownloadCandidate {
   /** Ephemeral request hints copied from a resolved provider track. */
   requestMode?: "youtube_query_range" | "http_range" | null;
   requestCpn?: string | null;
+  language?: string | null;
+  audioTrackId?: string | null;
+  audioTrackName?: string | null;
+  audioRole?:
+    "original" | "dubbed" | "auto_dubbed" | "descriptive" | "secondary" | null;
+  audioIsDefault?: boolean;
+  isDrc?: boolean;
 }
 
 export interface AdaptiveHttpTrack {
@@ -140,7 +147,7 @@ export interface DownloadContext {
   signal: AbortSignal;
   progress(value: DownloadProgress): void;
   strategy(value: {
-    resourceKind: "key";
+    resourceKind: "key" | "provider";
     resourceHost: string;
     strategyId: string;
     outcome: "success" | "rejected" | "error";

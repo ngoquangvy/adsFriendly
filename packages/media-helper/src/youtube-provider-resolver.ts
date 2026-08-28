@@ -1,10 +1,15 @@
 import { Constants, Innertube, Platform } from "youtubei.js";
-import type { AdaptiveHttpTrack, DownloadCandidate } from "./download-types.js";
+import type {
+  AdaptiveHttpTrack,
+  DownloadCandidate,
+  DownloadContext,
+} from "./download-types.js";
 import {
   YOUTUBE_WEB_PO_USER_AGENT,
   attachYouTubeWebPoToken,
   resolveYouTubeWebPoToken,
 } from "./youtube-po-token-resolver.js";
+import { resolveYouTubeExternalTracks } from "./youtube-external-provider.js";
 
 const RESPONSE_CACHE_MS = 5 * 60 * 1000;
 const MAX_CACHE_ITEMS = 20;
@@ -27,6 +32,18 @@ type ProviderFormat = {
   height?: number;
   quality_label?: string;
   decipher?: (player: unknown) => Promise<string>;
+  language?: string | null;
+  audio_track?: {
+    audio_is_default: boolean;
+    display_name: string;
+    id: string;
+  };
+  is_drc?: boolean;
+  is_dubbed?: boolean;
+  is_auto_dubbed?: boolean;
+  is_descriptive?: boolean;
+  is_secondary?: boolean;
+  is_original?: boolean;
 };
 
 type ProviderProfile = {
@@ -36,6 +53,15 @@ type ProviderProfile = {
   requestUserAgent: string | null;
   requestMode: "youtube_query_range" | "http_range";
   allowEquivalentVideo: boolean;
+  strategyId: string;
+  baseScore: number;
+};
+
+type ProviderResolutionOptions = {
+  allowEquivalentVideo?: boolean;
+  force?: boolean;
+  strategyPreferences?: Record<string, number>;
+  onStrategy?: DownloadContext["strategy"];
 };
 
 // YouTube.js intentionally ships without a JavaScript evaluator. Provider
@@ -54,13 +80,25 @@ export type YouTubeQualityPreflight = {
     id: string;
     sourceLabel: string;
   } | null;
+  audioOptions: Array<{
+    id: string;
+    sourceLabel: string;
+    language: string | null;
+    role: AdaptiveHttpTrack["audioRole"];
+    isDefault: boolean;
+  }>;
   reason: string | null;
 };
 
 export async function resolveYouTubeProviderTracks(
   tracks: AdaptiveHttpTrack[],
   candidate: DownloadCandidate,
-  { allowEquivalentVideo = false, force = false } = {},
+  {
+    allowEquivalentVideo = false,
+    force = false,
+    strategyPreferences = {},
+    onStrategy,
+  }: ProviderResolutionOptions = {},
 ): Promise<AdaptiveHttpTrack[]> {
   if (candidate.provider !== "youtube") return tracks;
   const pending = tracks.filter(
@@ -72,9 +110,18 @@ export async function resolveYouTubeProviderTracks(
     throw new Error("YouTube provider resolution requires a valid video ID.");
 
   const failures: string[] = [];
-  const profilePlan = await providerProfiles(videoId, allowEquivalentVideo);
+  const profilePlan = await providerProfiles(
+    videoId,
+    allowEquivalentVideo,
+    playerRevision(candidate.playerUrl),
+  );
   failures.push(...profilePlan.failures);
-  const profiles = profilePlan.profiles;
+  const profiles = [...profilePlan.profiles].sort(
+    (left, right) =>
+      right.baseScore +
+      (strategyPreferences[right.strategyId] || 0) -
+      (left.baseScore + (strategyPreferences[left.strategyId] || 0)),
+  );
   for (const profile of profiles) {
     try {
       const { formats, session, cpn } = await loadProviderFormats(
@@ -95,16 +142,132 @@ export async function resolveYouTubeProviderTracks(
         resolved.every(
           (track) => track.urlResolution !== "provider_client_pending",
         )
-      )
+      ) {
+        reportProviderStrategy(onStrategy, profile, "success");
         return resolved;
+      }
+      reportProviderStrategy(onStrategy, profile, "rejected");
       failures.push(`${profile.id}: selected format unavailable`);
     } catch (error) {
+      reportProviderStrategy(onStrategy, profile, "error");
       failures.push(`${profile.id}: ${messageOf(error)}`);
     }
+  }
+  const browserResolved = resolveFromBrowserCandidate(tracks, candidate);
+  if (
+    browserResolved.every(
+      (track) => track.urlResolution !== "provider_client_pending",
+    )
+  ) {
+    reportProviderFallback(
+      onStrategy,
+      "youtube_browser_handoff",
+      "success",
+      0.5,
+    );
+    return browserResolved;
+  }
+  reportProviderFallback(
+    onStrategy,
+    "youtube_browser_handoff",
+    "rejected",
+    0.5,
+  );
+  try {
+    const externalResolved = await resolveYouTubeExternalTracks(
+      tracks,
+      candidate,
+      { allowEquivalentVideo },
+    );
+    if (
+      externalResolved.every(
+        (track) => track.urlResolution !== "provider_client_pending",
+      )
+    ) {
+      reportProviderFallback(
+        onStrategy,
+        "youtube_ytdlp_provider",
+        "success",
+        0.35,
+      );
+      return externalResolved;
+    }
+    reportProviderFallback(
+      onStrategy,
+      "youtube_ytdlp_provider",
+      "rejected",
+      0.35,
+    );
+    failures.push("yt_dlp: selected format unavailable");
+  } catch (error) {
+    reportProviderFallback(onStrategy, "youtube_ytdlp_provider", "error", 0.35);
+    failures.push(`yt_dlp: ${messageOf(error)}`);
   }
   throw new Error(
     `YouTube could not expose the selected adaptive tracks through bounded provider clients (${failures.join("; ")}).`,
   );
+}
+
+function reportProviderStrategy(
+  onStrategy: DownloadContext["strategy"] | undefined,
+  profile: ProviderProfile,
+  outcome: "success" | "rejected" | "error",
+) {
+  reportProviderFallback(
+    onStrategy,
+    profile.strategyId,
+    outcome,
+    profile.baseScore,
+  );
+}
+
+function reportProviderFallback(
+  onStrategy: DownloadContext["strategy"] | undefined,
+  strategyId: string,
+  outcome: "success" | "rejected" | "error",
+  score: number,
+) {
+  onStrategy?.({
+    resourceKind: "provider",
+    resourceHost: "youtube.com",
+    strategyId,
+    outcome,
+    httpStatus: null,
+    score,
+  });
+}
+
+function resolveFromBrowserCandidate(
+  tracks: AdaptiveHttpTrack[],
+  candidate: DownloadCandidate,
+) {
+  const observed = [...candidate.variants, ...candidate.audioTracks].filter(
+    (track) => track.sourceUrl && track.urlResolution === "resolved",
+  );
+  return tracks.map((track) => {
+    if (track.urlResolution !== "provider_client_pending") return track;
+    const match = observed.find(
+      (item) =>
+        item.type === track.type &&
+        (item.id === track.id ||
+          (item.itag === track.itag &&
+            (!track.audioTrackId || item.audioTrackId === track.audioTrackId))),
+    );
+    if (!match?.sourceUrl) return track;
+    try {
+      const sourceUrl = validatedGoogleVideoUrl(match.sourceUrl);
+      return {
+        ...track,
+        ...match,
+        sourceUrl,
+        providerClient: "BROWSER",
+        requestMode: match.requestMode || "http_range",
+        urlResolution: "resolved" as const,
+      };
+    } catch {
+      return track;
+    }
+  });
 }
 
 // This intentionally returns only a quality verdict. URLs and PO tokens remain
@@ -115,7 +278,11 @@ export async function preflightYouTubeProviderQualities(
   const videoId = youtubeVideoId(candidate.pageUrl);
   if (!videoId)
     return unavailableQualityPreflight("YouTube video ID is unavailable.");
-  const plan = await providerProfiles(videoId, true);
+  const plan = await providerProfiles(
+    videoId,
+    true,
+    playerRevision(candidate.playerUrl),
+  );
   if (!plan.profiles.length)
     return unavailableQualityPreflight(
       plan.failures.join("; ") || "No YouTube provider profile is available.",
@@ -131,10 +298,76 @@ export async function preflightYouTubeProviderQualities(
       failures.push(`${profile.id}: ${messageOf(error)}`);
     }
   }
+  try {
+    const external = await resolveYouTubeExternalTracks(
+      [...candidate.variants, ...candidate.audioTracks],
+      candidate,
+      { allowEquivalentVideo: true },
+    );
+    const verdict = inspectResolvedQualityOptions(external);
+    if (verdict.status === "ready") return verdict;
+    failures.push(`yt_dlp: ${verdict.reason}`);
+  } catch (error) {
+    failures.push(`yt_dlp: ${messageOf(error)}`);
+  }
   return unavailableQualityPreflight(
     failures.join("; ") ||
       "No selected YouTube video or audio track is available through the provider profiles.",
   );
+}
+
+function inspectResolvedQualityOptions(
+  tracks: AdaptiveHttpTrack[],
+): YouTubeQualityPreflight {
+  const resolved = tracks.filter(
+    (track) => track.sourceUrl && track.urlResolution === "resolved",
+  );
+  const audioTracks = resolved
+    .filter((track) => track.type === "audio")
+    .sort(compareAudioTracks);
+  const audioOptions = audioTracks.map((track) => ({
+    id: track.id,
+    sourceLabel: audioSourceLabel(track, {
+      itag: Number(track.itag),
+      has_audio: true,
+      has_video: false,
+      mime_type: track.mimeType || "audio/mp4",
+      bitrate: track.bandwidth || 0,
+      language: track.language,
+    }),
+    language: track.language || null,
+    role: track.audioRole || null,
+    isDefault: track.audioIsDefault === true,
+  }));
+  const videoOptions = resolved
+    .filter(
+      (track) =>
+        track.type === "video" &&
+        (track.muxed === true || audioTracks.length > 0),
+    )
+    .map((track) => ({
+      id: track.id,
+      availability: "equivalent" as const,
+      sourceLabel: [track.qualityLabel, track.mimeType]
+        .filter(Boolean)
+        .join(" · "),
+    }));
+  if (!videoOptions.length && !audioOptions.length)
+    return unavailableQualityPreflight(
+      "No selected format was resolved by the optional provider.",
+    );
+  return {
+    status: "ready",
+    videoOptions,
+    audioOption: audioOptions[0]
+      ? {
+          id: audioOptions[0].id,
+          sourceLabel: audioOptions[0].sourceLabel,
+        }
+      : null,
+    audioOptions,
+    reason: null,
+  };
 }
 
 function inspectProviderQualityOptions(
@@ -149,12 +382,10 @@ function inspectProviderQualityOptions(
         format: selectProviderFormat(track, formats, false),
       }))
       .filter((item) => item.format);
-    const preferredAudio = audioOptions.sort(
-      (left, right) =>
-        (right.track.averageBandwidth || right.track.bandwidth || 0) -
-          (left.track.averageBandwidth || left.track.bandwidth || 0) ||
-        mp4AudioScore(right.track) - mp4AudioScore(left.track),
-    )[0];
+    audioOptions.sort((left, right) =>
+      compareAudioTracks(left.track, right.track),
+    );
+    const preferredAudio = audioOptions[0];
     const hasRequiredAudio = audioOptions.length > 0;
     const videoOptions = candidate.variants.flatMap((track) => {
       if (track.type !== "video") return [];
@@ -179,9 +410,21 @@ function inspectProviderQualityOptions(
       audioOption: preferredAudio
         ? {
             id: preferredAudio.track.id,
-            sourceLabel: sourceFormatLabel(preferredAudio.format),
+            sourceLabel: audioSourceLabel(
+              preferredAudio.track,
+              preferredAudio.format,
+            ),
           }
         : null,
+      audioOptions: audioOptions.map(({ track, format }) => ({
+        id: track.id,
+        sourceLabel: audioSourceLabel(track, format),
+        language: track.language || format.language || null,
+        role: track.audioRole || providerAudioRole(format),
+        isDefault:
+          track.audioIsDefault === true ||
+          format.audio_track?.audio_is_default === true,
+      })),
       reason: null,
     };
   } catch (error) {
@@ -190,7 +433,13 @@ function inspectProviderQualityOptions(
 }
 
 function unavailableQualityPreflight(reason: string): YouTubeQualityPreflight {
-  return { status: "unavailable", videoOptions: [], audioOption: null, reason };
+  return {
+    status: "unavailable",
+    videoOptions: [],
+    audioOption: null,
+    audioOptions: [],
+    reason,
+  };
 }
 
 async function resolveTrackFromFormats(
@@ -234,6 +483,15 @@ async function resolveTrackFromFormats(
     providerClient: profile.client,
     requestMode: profile.requestMode,
     requestCpn: cpn,
+    language: format.language || track.language || null,
+    audioTrackId: format.audio_track?.id || track.audioTrackId || null,
+    audioTrackName:
+      format.audio_track?.display_name || track.audioTrackName || null,
+    audioRole: providerAudioRole(format) || track.audioRole || null,
+    audioIsDefault:
+      format.audio_track?.audio_is_default === true ||
+      track.audioIsDefault === true,
+    isDrc: format.is_drc === true || track.isDrc === true,
   };
 }
 
@@ -244,9 +502,13 @@ function selectProviderFormat(
 ) {
   const correctType = (item: ProviderFormat) =>
     track.type === "video" ? item.has_video : item.has_audio;
-  const exact = formats.find(
-    (item) => item.itag === Number(track.itag) && correctType(item),
-  );
+  const exact = formats
+    .filter((item) => item.itag === Number(track.itag) && correctType(item))
+    .sort(
+      (left, right) =>
+        providerAudioMatchScore(right, track) -
+        providerAudioMatchScore(left, track),
+    )[0];
   if (exact || track.type !== "video" || !allowEquivalentVideo) return exact;
   const equivalents = formats.filter(
     (item) =>
@@ -261,6 +523,75 @@ function selectProviderFormat(
       (right.average_bitrate || right.bitrate || 0) -
         (left.average_bitrate || left.bitrate || 0),
   )[0];
+}
+
+function providerAudioMatchScore(
+  format: ProviderFormat,
+  track: AdaptiveHttpTrack,
+) {
+  if (track.type !== "audio") return 0;
+  let score = 0;
+  if (track.audioTrackId && format.audio_track?.id === track.audioTrackId)
+    score += 100;
+  if (track.language && format.language === track.language) score += 40;
+  if (track.audioRole && providerAudioRole(format) === track.audioRole)
+    score += 30;
+  if (
+    track.audioIsDefault === true &&
+    format.audio_track?.audio_is_default === true
+  )
+    score += 10;
+  if (track.isDrc === format.is_drc) score += 5;
+  return score;
+}
+
+function providerAudioRole(
+  format: ProviderFormat,
+): AdaptiveHttpTrack["audioRole"] {
+  if (format.is_original) return "original";
+  if (format.is_auto_dubbed) return "auto_dubbed";
+  if (format.is_dubbed) return "dubbed";
+  if (format.is_descriptive) return "descriptive";
+  if (format.is_secondary) return "secondary";
+  return null;
+}
+
+function compareAudioTracks(left: AdaptiveHttpTrack, right: AdaptiveHttpTrack) {
+  return (
+    audioPreferenceScore(right) - audioPreferenceScore(left) ||
+    mp4AudioScore(right) - mp4AudioScore(left) ||
+    (right.averageBandwidth || right.bandwidth || 0) -
+      (left.averageBandwidth || left.bandwidth || 0)
+  );
+}
+
+function audioPreferenceScore(track: AdaptiveHttpTrack) {
+  const role =
+    {
+      original: 50,
+      secondary: 30,
+      dubbed: 20,
+      auto_dubbed: 10,
+      descriptive: 5,
+    }[track.audioRole || ""] || 25;
+  return role + (track.audioIsDefault ? 4 : 0) - (track.isDrc ? 1 : 0);
+}
+
+function audioSourceLabel(track: AdaptiveHttpTrack, format: ProviderFormat) {
+  const role = {
+    original: "Original audio",
+    dubbed: "Dubbed",
+    auto_dubbed: "Auto-dubbed",
+    descriptive: "Audio description",
+    secondary: "Secondary audio",
+  }[track.audioRole || providerAudioRole(format) || ""];
+  return [
+    role,
+    track.audioTrackName || format.audio_track?.display_name,
+    sourceFormatLabel(format),
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 function formatCompatibilityScore(
@@ -337,37 +668,54 @@ async function loadProviderFormats(
 async function providerProfiles(
   videoId: string,
   allowEquivalentVideo: boolean,
+  playerRevisionId: string,
 ): Promise<{ profiles: ProviderProfile[]; failures: string[] }> {
   const profiles: ProviderProfile[] = [];
   const failures: string[] = [];
   try {
-    const poToken = await resolveYouTubeWebPoToken(videoId);
-    profiles.push({
-      id: "web_po",
-      client: "WEB",
-      poToken,
-      requestUserAgent: YOUTUBE_WEB_PO_USER_AGENT,
-      requestMode: "http_range",
-      allowEquivalentVideo,
+    const mwebPoToken = await resolveYouTubeWebPoToken(videoId, {
+      profileId: "mweb_po",
+      playerRevision: playerRevisionId,
     });
     profiles.push({
       id: "mweb_po",
       client: "MWEB",
-      poToken,
+      poToken: mwebPoToken,
       // Keep the media request fingerprint identical to the environment that
       // minted the Web proof. The MWEB client name is carried by the provider
       // URL; using an unrelated iPad UA invalidates the proof at GVS.
       requestUserAgent: YOUTUBE_WEB_PO_USER_AGENT,
       requestMode: "http_range",
       allowEquivalentVideo,
+      strategyId: "youtube_mweb_po",
+      baseScore: 1,
+    });
+    const webPoToken = await resolveYouTubeWebPoToken(videoId, {
+      profileId: "web_po",
+      playerRevision: playerRevisionId,
+    });
+    profiles.push({
+      id: "web_po",
+      client: "WEB",
+      poToken: webPoToken,
+      requestUserAgent: YOUTUBE_WEB_PO_USER_AGENT,
+      requestMode: "http_range",
+      allowEquivalentVideo,
+      strategyId: "youtube_web_po",
+      baseScore: 0.95,
     });
     profiles.push({
       id: "web_remix_po",
       client: "YTMUSIC",
-      poToken,
+      poToken: await resolveYouTubeWebPoToken(videoId, {
+        profileId: "web_remix_po",
+        playerRevision: playerRevisionId,
+      }),
       requestUserAgent: YOUTUBE_WEB_PO_USER_AGENT,
       requestMode: "http_range",
       allowEquivalentVideo,
+      strategyId: "youtube_ytmusic_po",
+      baseScore: 0.8,
     });
   } catch (error) {
     failures.push(`web_remix_po: ${messageOf(error)}`);
@@ -380,6 +728,8 @@ async function providerProfiles(
       requestUserAgent: Constants.CLIENTS.IOS.USER_AGENT,
       requestMode: "youtube_query_range",
       allowEquivalentVideo: false,
+      strategyId: "youtube_mobile_direct",
+      baseScore: 0.65,
     },
     {
       id: "android_direct",
@@ -388,6 +738,8 @@ async function providerProfiles(
       requestUserAgent: Constants.CLIENTS.ANDROID.USER_AGENT,
       requestMode: "youtube_query_range",
       allowEquivalentVideo: false,
+      strategyId: "youtube_mobile_direct",
+      baseScore: 0.64,
     },
     {
       // The regular Web client is a deliberately bounded last resort. Some
@@ -401,9 +753,22 @@ async function providerProfiles(
       requestUserAgent: YOUTUBE_WEB_PO_USER_AGENT,
       requestMode: "http_range",
       allowEquivalentVideo,
+      strategyId: "youtube_web_direct",
+      baseScore: 0.55,
     },
   );
   return { profiles, failures };
+}
+
+function playerRevision(value: string | null | undefined) {
+  try {
+    return (
+      new URL(value || "").pathname.match(/^\/s\/player\/([^/]+)\//)?.[1] ||
+      "unknown"
+    );
+  } catch {
+    return "unknown";
+  }
 }
 
 function getSession() {

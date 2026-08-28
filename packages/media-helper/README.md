@@ -6,19 +6,28 @@ own navigation protection, DOM protection, and shared media discovery. All
 user-initiated video downloads require this helper; there is no second browser
 download backend to keep in sync.
 
-The helper is the only video download backend. Version 0.16 implements Direct
+The helper is the only video download backend. Version 0.21 implements Direct
 HTTP MP4/WebM downloads with bounded parallel Range requests, progress,
 cancellation, and resumable `.part` metadata, plus completed unencrypted or
 AES-128 identity-key HLS VOD
 and static unencrypted DASH VOD downloads through FFmpeg. It also accepts
 browser-resolved, unencrypted adaptive HTTP video/audio pairs (initially
 YouTube playback tracks), downloads both with the existing bounded parallel
-Range engine, and muxes them locally. For YouTube, it can resolve bounded Player
-JS signature/n challenges and can request an anonymous IOS provider profile for
-a user-selected `itag` when the WEB player exposes only SABR descriptors. The
-IOS result is validated as a `googlevideo` playback URL and retained only for
-the active job. It does not access DRM streams or persist signed playback URLs
-in download history. The manifest adapters
+Range engine, and muxes them locally. For YouTube, it resolves bounded Player
+JS signature/n challenges and prefers a MWEB profile with a short-lived
+Proof-of-Origin token. It verifies both the first byte and a byte after 1 MiB
+before starting parallel transfer, keeps audio languages and roles distinct,
+and defaults to the original audio track when YouTube identifies one. Tokens
+are cached only by video, provider profile, player revision, and attestation
+revision; signed URLs and token values are never written to history or strategy
+memory. Browser-observed URLs are a bounded fallback. If `yt-dlp` is installed,
+it can be used only as an optional provider-URL fallback after the built-in
+profiles fail. Set `ADSFRIENDLY_YTDLP_PATH` to an explicit executable path when
+it is not on PATH. The helper invokes it with `--no-config`, never as the ad
+blocker backend.
+
+It does not access DRM streams or persist signed playback URLs in download
+history. The manifest adapters
 preflight bounded manifests, reject live/DRM streams and unsafe
 private-network resources, and mux the selected video and audio tracks into MP4.
 AES-128 key URIs are validated as HTTP(S) resources but are not persisted.

@@ -77,10 +77,12 @@ the existing HLS validator reports usable media.
 Status: locally scored runtime preference; dataset export and model training
 are intentionally deferred.
 
-The Media Helper can try a bounded set of access strategies when an HLS key is
-not available with the first request profile. Examples include captured
+The Media Helper can try a bounded set of access strategies when an HLS key or
+YouTube provider source is not available with the first request profile.
+Examples include captured
 Referer plus Origin, captured Referer alone, document/page Referer, and an
-ephemeral key response already received by the browser. The extension stores
+ephemeral key response already received by the browser, MWEB/Web PO profiles,
+browser URL handoff, and an optional external provider adapter. The extension stores
 only the resource hostname, registered strategy ID, success/failure counters,
 score, outcome, and timestamps. A later download for that hostname tries the
 higher-scoring registered strategy first.

@@ -6,7 +6,7 @@ import {
   isYouTubeProviderResolvableTrack,
 } from "./adaptive-track-policy.js";
 
-export const MEDIA_HELPER_PROTOCOL_VERSION = 9;
+export const MEDIA_HELPER_PROTOCOL_VERSION = 10;
 export const MEDIA_HELPER_HOST_NAME = "com.adsfriendly.media_helper";
 
 export const MEDIA_HELPER_REQUESTS = Object.freeze({
@@ -283,6 +283,16 @@ function normalizeHelperAdaptiveTracks(value, expectedType, candidate) {
       /^[A-Za-z0-9_-]{8,64}$/.test(track.requestCpn)
         ? track.requestCpn
         : null,
+    language: optionalString(track?.language),
+    audioTrackId: optionalString(track?.audioTrackId),
+    audioTrackName: optionalString(track?.audioTrackName),
+    audioRole: optionalEnumValue(
+      track?.audioRole,
+      ["original", "dubbed", "auto_dubbed", "descriptive", "secondary"],
+      `candidate.${expectedType}Tracks[${index}].audioRole`,
+    ),
+    audioIsDefault: track?.audioIsDefault === true,
+    isDrc: track?.isDrc === true,
   }));
 }
 

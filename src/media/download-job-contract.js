@@ -376,6 +376,16 @@ function normalizeAdaptiveTracks(value, expectedType, candidate) {
         /^[A-Za-z0-9_-]{8,64}$/.test(track.requestCpn)
           ? track.requestCpn
           : null,
+      language: optionalString(track.language),
+      audioTrackId: optionalString(track.audioTrackId),
+      audioTrackName: optionalString(track.audioTrackName),
+      audioRole: optionalEnumValue(
+        track.audioRole,
+        ["original", "dubbed", "auto_dubbed", "descriptive", "secondary"],
+        `candidate.${expectedType}Tracks[${index}].audioRole`,
+      ),
+      audioIsDefault: track.audioIsDefault === true,
+      isDrc: track.isDrc === true,
     }));
 }
 

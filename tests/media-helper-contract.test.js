@@ -304,6 +304,21 @@ test("media access strategies must be registered before scoring", () => {
   );
 });
 
+test("YouTube provider strategies are centrally registered without secrets", () => {
+  assert.equal(
+    getMediaAccessStrategy("youtube_mweb_po").resourceKind,
+    "provider",
+  );
+  assert.equal(
+    getMediaAccessStrategy("youtube_browser_handoff").resourceKind,
+    "provider",
+  );
+  assert.equal(
+    getMediaAccessStrategy("youtube_ytdlp_provider").resourceKind,
+    "provider",
+  );
+});
+
 test("helper accepts MKV only for adaptive media", () => {
   const hls = normalizeHelperDownloadPayload({
     jobId: "hls-mkv",
@@ -506,6 +521,11 @@ test("helper accepts YouTube provider-resolvable adaptive descriptors", () => {
           itag: "140",
           contentLength: 4_000_000,
           urlResolution: "provider_client_pending",
+          language: "vi",
+          audioTrackId: "vi.original",
+          audioTrackName: "Vietnamese (original)",
+          audioRole: "original",
+          audioIsDefault: false,
         },
       ],
     },
@@ -520,11 +540,10 @@ test("helper accepts YouTube provider-resolvable adaptive descriptors", () => {
     payload.candidate.variants[0].requestMode,
     "youtube_query_range",
   );
-  assert.equal(
-    payload.candidate.variants[0].requestCpn,
-    "AbCdEfGhIjKlMnOp",
-  );
+  assert.equal(payload.candidate.variants[0].requestCpn, "AbCdEfGhIjKlMnOp");
   assert.equal(payload.candidate.audioTracks[0].sourceUrl, null);
+  assert.equal(payload.candidate.audioTracks[0].language, "vi");
+  assert.equal(payload.candidate.audioTracks[0].audioRole, "original");
   assert.equal(payload.output.videoTrackId, "youtube-video-137");
 });
 

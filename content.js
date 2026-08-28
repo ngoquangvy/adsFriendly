@@ -3299,7 +3299,13 @@ var AdsFriendlyContent = (() => {
       observedAt: track.observedAt,
       urlResolution: track.urlResolution || "resolved",
       signatureCipher: track.signatureCipher || null,
-      muxed: track.muxed === true
+      muxed: track.muxed === true,
+      language: track.language || null,
+      audioTrackId: track.audioTrackId || null,
+      audioTrackName: track.audioTrackName || null,
+      audioRole: track.audioRole || null,
+      audioIsDefault: track.audioIsDefault === true,
+      isDrc: track.isDrc === true
     };
     return normalizeMediaCandidate({
       id,

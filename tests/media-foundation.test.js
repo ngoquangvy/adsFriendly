@@ -38,6 +38,7 @@ import {
 } from "../src/media/download-job-contract.js";
 import {
   classifyDirectMediaContainer,
+  getMediaAudioTrackOptions,
   getMediaDownloadEstimate,
   getMediaDownloadProfiles,
   getMediaVideoQualityOptions,
@@ -333,6 +334,83 @@ test("YouTube player response merges direct video and audio formats into a ready
   assert.equal(item.probeStatus, "ready");
   assert.equal(item.variants.filter((track) => track.sourceUrl).length, 1);
   assert.equal(item.audioTracks.filter((track) => track.sourceUrl).length, 1);
+});
+
+test("YouTube keeps same-itag language tracks distinct and prefers original audio", () => {
+  const xtags = (entries) => {
+    const pair = (key, value) => {
+      const keyBytes = Buffer.from(key);
+      const valueBytes = Buffer.from(value);
+      const body = Buffer.concat([
+        Buffer.from([10, keyBytes.length]),
+        keyBytes,
+        Buffer.from([18, valueBytes.length]),
+        valueBytes,
+      ]);
+      return Buffer.concat([Buffer.from([10, body.length]), body]);
+    };
+    return Buffer.concat(
+      Object.entries(entries).map(([key, value]) => pair(key, value)),
+    ).toString("base64url");
+  };
+  const observation = parseYouTubePlayerResponse(
+    {
+      playabilityStatus: { status: "OK" },
+      videoDetails: { videoId: "video-1", title: "Languages" },
+      streamingData: {
+        adaptiveFormats: [
+          {
+            itag: 137,
+            mimeType: 'video/mp4; codecs="avc1.640028"',
+            width: 1920,
+            height: 1080,
+            qualityLabel: "1080p",
+          },
+          {
+            itag: 140,
+            mimeType: 'audio/mp4; codecs="mp4a.40.2"',
+            audioTrack: {
+              id: "en.dubbed",
+              displayName: "English",
+              audioIsDefault: true,
+            },
+            xtags: xtags({ lang: "en", acont: "dubbed" }),
+          },
+          {
+            itag: 140,
+            mimeType: 'audio/mp4; codecs="mp4a.40.2"',
+            audioTrack: {
+              id: "vi.original",
+              displayName: "Vietnamese (original)",
+              audioIsDefault: false,
+            },
+            xtags: xtags({ lang: "vi", acont: "original" }),
+          },
+        ],
+      },
+    },
+    { pageUrl: "https://www.youtube.com/watch?v=video-1" },
+  );
+  const candidate = observation.candidates[0];
+  assert.equal(candidate.audioTracks.length, 2);
+  assert.notEqual(candidate.audioTracks[0].id, candidate.audioTracks[1].id);
+  const options = getMediaAudioTrackOptions(candidate);
+  assert.equal(options[0].role, "original");
+  assert.equal(options[0].language, "vi");
+  assert.match(options[0].label, /Original audio.*Vietnamese/i);
+
+  const job = normalizeMediaDownloadJob({
+    id: "youtube-original-audio-job",
+    createdAt: Date.now(),
+    sourceTabId: 7,
+    output: {
+      profileId: "video-mp4",
+      audioTrackId: options[0].id,
+    },
+    candidate: { ...candidate, probeStatus: "ready" },
+  });
+  assert.equal(job.output.audioTrackId, options[0].id);
+  assert.equal(job.candidate.audioTracks[1].audioRole, "original");
 });
 
 test("YouTube progressive 360p format is ready because audio is already muxed", () => {

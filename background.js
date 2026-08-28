@@ -4619,7 +4619,7 @@ var AdsFriendlyBackground = (() => {
     };
     if (candidate.kind === "adaptive") {
       normalized.allowEquivalentVideo = value?.allowEquivalentVideo === true;
-      if (profile.id === "audio-ogg") {
+      if ((candidate.audioTracks || []).length) {
         normalized.audioTrackId = normalizeAudioTrackId(
           value?.audioTrackId,
           candidate
@@ -5061,7 +5061,25 @@ var AdsFriendlyBackground = (() => {
         track.urlResolution
       ) ? track.urlResolution : "resolved",
       signatureCipher: optionalString2(track.signatureCipher),
-      muxed: track.muxed === true
+      muxed: track.muxed === true,
+      requestUserAgent: optionalString2(track.requestUserAgent),
+      providerClient: optionalString2(track.providerClient),
+      requestMode: optionalEnumValue2(
+        track.requestMode,
+        ["youtube_query_range", "http_range"],
+        `candidate.${expectedType}Tracks[${index}].requestMode`
+      ),
+      requestCpn: typeof track.requestCpn === "string" && /^[A-Za-z0-9_-]{8,64}$/.test(track.requestCpn) ? track.requestCpn : null,
+      language: optionalString2(track.language),
+      audioTrackId: optionalString2(track.audioTrackId),
+      audioTrackName: optionalString2(track.audioTrackName),
+      audioRole: optionalEnumValue2(
+        track.audioRole,
+        ["original", "dubbed", "auto_dubbed", "descriptive", "secondary"],
+        `candidate.${expectedType}Tracks[${index}].audioRole`
+      ),
+      audioIsDefault: track.audioIsDefault === true,
+      isDrc: track.isDrc === true
     }));
   }
   function hasCurrentManifestHandoff(candidate) {
@@ -5114,6 +5132,12 @@ var AdsFriendlyBackground = (() => {
   function optionalString2(value) {
     return typeof value === "string" && value ? value : null;
   }
+  function optionalEnumValue2(value, allowed, field) {
+    if (value === null || value === void 0 || value === "") return null;
+    if (!allowed.includes(value))
+      throw new Error(`[MediaDownload] ${field} is invalid.`);
+    return value;
+  }
   function optionalFiniteNumber2(value) {
     if (value === null || value === void 0) return null;
     return finiteNumber(value, "optional number");
@@ -5151,7 +5175,14 @@ var AdsFriendlyBackground = (() => {
     DOCUMENT_REFERER: "document_referer",
     PARENT_REFERER: "parent_referer",
     PAGE_REFERER: "page_referer",
-    BROWSER_KEY_HANDOFF: "browser_key_handoff"
+    BROWSER_KEY_HANDOFF: "browser_key_handoff",
+    YOUTUBE_MWEB_PO: "youtube_mweb_po",
+    YOUTUBE_WEB_PO: "youtube_web_po",
+    YOUTUBE_YTMUSIC_PO: "youtube_ytmusic_po",
+    YOUTUBE_MOBILE_DIRECT: "youtube_mobile_direct",
+    YOUTUBE_WEB_DIRECT: "youtube_web_direct",
+    YOUTUBE_BROWSER_HANDOFF: "youtube_browser_handoff",
+    YOUTUBE_YTDLP_PROVIDER: "youtube_ytdlp_provider"
   });
   var MEDIA_ACCESS_STRATEGY_CATALOG = Object.freeze([
     strategy2(MEDIA_ACCESS_STRATEGIES.BROWSER_KEY_HANDOFF, "key", 1.2),
@@ -5159,7 +5190,14 @@ var AdsFriendlyBackground = (() => {
     strategy2(MEDIA_ACCESS_STRATEGIES.CAPTURED_REFERER, "http", 0.9),
     strategy2(MEDIA_ACCESS_STRATEGIES.DOCUMENT_REFERER, "http", 0.82),
     strategy2(MEDIA_ACCESS_STRATEGIES.PARENT_REFERER, "http", 0.72),
-    strategy2(MEDIA_ACCESS_STRATEGIES.PAGE_REFERER, "http", 0.72)
+    strategy2(MEDIA_ACCESS_STRATEGIES.PAGE_REFERER, "http", 0.72),
+    strategy2(MEDIA_ACCESS_STRATEGIES.YOUTUBE_MWEB_PO, "provider", 1),
+    strategy2(MEDIA_ACCESS_STRATEGIES.YOUTUBE_WEB_PO, "provider", 0.95),
+    strategy2(MEDIA_ACCESS_STRATEGIES.YOUTUBE_YTMUSIC_PO, "provider", 0.8),
+    strategy2(MEDIA_ACCESS_STRATEGIES.YOUTUBE_MOBILE_DIRECT, "provider", 0.65),
+    strategy2(MEDIA_ACCESS_STRATEGIES.YOUTUBE_WEB_DIRECT, "provider", 0.55),
+    strategy2(MEDIA_ACCESS_STRATEGIES.YOUTUBE_BROWSER_HANDOFF, "provider", 0.5),
+    strategy2(MEDIA_ACCESS_STRATEGIES.YOUTUBE_YTDLP_PROVIDER, "provider", 0.35)
   ]);
   var STRATEGY_BY_ID2 = new Map(
     MEDIA_ACCESS_STRATEGY_CATALOG.map((definition) => [
@@ -5175,7 +5213,7 @@ var AdsFriendlyBackground = (() => {
   }
 
   // src/media/helper-contract.js
-  var MEDIA_HELPER_PROTOCOL_VERSION = 9;
+  var MEDIA_HELPER_PROTOCOL_VERSION = 10;
   var MEDIA_HELPER_HOST_NAME = "com.adsfriendly.media_helper";
   var MEDIA_HELPER_REQUESTS = Object.freeze({
     HELLO: "helper.hello",
@@ -5522,6 +5560,7 @@ var AdsFriendlyBackground = (() => {
         status: "not_required",
         videoOptions: [],
         audioOption: null,
+        audioOptions: [],
         reason: null
       };
     }
@@ -5534,6 +5573,7 @@ var AdsFriendlyBackground = (() => {
         status: "helper_unavailable",
         videoOptions: [],
         audioOption: null,
+        audioOptions: [],
         reason: helper.error || "Media Helper is unavailable."
       };
     }
@@ -5542,6 +5582,7 @@ var AdsFriendlyBackground = (() => {
         status: "helper_update",
         videoOptions: [],
         audioOption: null,
+        audioOptions: [],
         reason: "Update Media Helper to check YouTube quality compatibility."
       };
     }
@@ -5578,6 +5619,7 @@ var AdsFriendlyBackground = (() => {
         status: "unavailable",
         videoOptions: [],
         audioOption: null,
+        audioOptions: [],
         reason: messageOf(error)
       };
     }
@@ -5599,10 +5641,26 @@ var AdsFriendlyBackground = (() => {
       id: payload.audioOption.id,
       sourceLabel: typeof payload.audioOption.sourceLabel === "string" ? payload.audioOption.sourceLabel.slice(0, 120) : "Audio source"
     } : null;
+    const audioOptions = Array.isArray(payload?.audioOptions) ? payload.audioOptions.filter(
+      (item) => item && typeof item.id === "string" && typeof item.sourceLabel === "string"
+    ).slice(0, 24).map((item) => ({
+      id: item.id,
+      sourceLabel: item.sourceLabel.slice(0, 160),
+      language: typeof item.language === "string" ? item.language.slice(0, 40) : null,
+      role: [
+        "original",
+        "dubbed",
+        "auto_dubbed",
+        "descriptive",
+        "secondary"
+      ].includes(item.role) ? item.role : null,
+      isDefault: item.isDefault === true
+    })) : audioOption ? [{ ...audioOption, language: null, role: null, isDefault: false }] : [];
     return {
       status: payload?.status === "ready" ? "ready" : "unavailable",
       videoOptions,
       audioOption,
+      audioOptions,
       reason: typeof payload?.reason === "string" ? payload.reason.slice(0, 500) : null
     };
   }
@@ -6754,7 +6812,8 @@ ${body}`;
       };
     }
     if (output.profileId === "audio-ogg") {
-      if (!result.audioOption) {
+      const selectedAudio = result.audioOptions?.find((item) => item.id === output.audioTrackId) || result.audioOption;
+      if (!selectedAudio) {
         return {
           status: "quality_unavailable",
           reason: "No compatible YouTube audio track is available through the current provider profile."
@@ -6764,7 +6823,7 @@ ${body}`;
         status: "ready",
         output: {
           ...output,
-          audioTrackId: result.audioOption.id,
+          audioTrackId: selectedAudio.id,
           allowEquivalentVideo: false
         }
       };
@@ -6778,7 +6837,13 @@ ${body}`;
     if (!output.videoTrackId) {
       return {
         status: "ready",
-        output: { ...output, allowEquivalentVideo: true }
+        output: {
+          ...output,
+          audioTrackId: result.audioOptions?.some(
+            (item) => item.id === output.audioTrackId
+          ) ? output.audioTrackId : result.audioOption?.id || null,
+          allowEquivalentVideo: true
+        }
       };
     }
     const option = result.videoOptions.find(
@@ -6794,6 +6859,9 @@ ${body}`;
       status: "ready",
       output: {
         ...output,
+        audioTrackId: result.audioOptions?.some(
+          (item) => item.id === output.audioTrackId
+        ) ? output.audioTrackId : result.audioOption?.id || null,
         allowEquivalentVideo: option.availability === "equivalent"
       }
     };
@@ -8373,7 +8441,13 @@ ${body}`;
       observedAt: track.observedAt,
       urlResolution: track.urlResolution || "resolved",
       signatureCipher: track.signatureCipher || null,
-      muxed: track.muxed === true
+      muxed: track.muxed === true,
+      language: track.language || null,
+      audioTrackId: track.audioTrackId || null,
+      audioTrackName: track.audioTrackName || null,
+      audioRole: track.audioRole || null,
+      audioIsDefault: track.audioIsDefault === true,
+      isDrc: track.isDrc === true
     };
     return normalizeMediaCandidate({
       id,

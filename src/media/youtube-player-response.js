@@ -257,8 +257,13 @@ function normalizeFormatDescriptor(format, { muxed = false } = {}) {
   const height = positiveInteger(format.height);
   const bitrate = positiveInteger(format.bitrate);
   const averageBandwidth = positiveInteger(format.averageBitrate) || bitrate;
+  const audioMetadata =
+    type === "audio" ? normalizeYouTubeAudioMetadata(format) : {};
   return {
-    id: `youtube-${type}-${itag}`,
+    id:
+      type === "audio" && audioMetadata.audioTrackId
+        ? `youtube-audio-${itag}-${stableTrackToken(audioMetadata.audioTrackId)}`
+        : `youtube-${type}-${itag}`,
     type,
     itag,
     sourceUrl: null,
@@ -274,6 +279,7 @@ function normalizeFormatDescriptor(format, { muxed = false } = {}) {
     qualityLabel: safeToken(format.qualityLabel || format.quality, 40),
     fps: positiveInteger(format.fps),
     muxed: muxed && type === "video",
+    ...audioMetadata,
   };
 }
 
@@ -281,6 +287,7 @@ function enrichResolvedTrack(track, format, { muxed = false } = {}) {
   const descriptor = normalizeFormatDescriptor(format, { muxed });
   return {
     ...track,
+    id: descriptor?.id || track.id,
     contentLength: descriptor?.contentLength || track.contentLength,
     width: descriptor?.width || track.width,
     height: descriptor?.height || track.height,
@@ -290,8 +297,115 @@ function enrichResolvedTrack(track, format, { muxed = false } = {}) {
     averageBandwidth: descriptor?.averageBandwidth || track.averageBandwidth,
     fps: descriptor?.fps || null,
     muxed: descriptor?.muxed === true,
+    language: descriptor?.language || track.language || null,
+    audioTrackId: descriptor?.audioTrackId || track.audioTrackId || null,
+    audioTrackName: descriptor?.audioTrackName || track.audioTrackName || null,
+    audioRole: descriptor?.audioRole || track.audioRole || null,
+    audioIsDefault:
+      descriptor?.audioIsDefault === true || track.audioIsDefault === true,
+    isDrc: descriptor?.isDrc === true || track.isDrc === true,
     duration: positiveNumber(format.approxDurationMs) / 1000 || track.duration,
   };
+}
+
+function normalizeYouTubeAudioMetadata(format) {
+  const audioTrack = objectValue(format.audioTrack);
+  const xtags = decodeYouTubeXtags(format.xtags);
+  const contentRole = safeToken(xtags.get("acont"), 40);
+  const audioRole =
+    contentRole === "original"
+      ? "original"
+      : contentRole === "dubbed"
+        ? "dubbed"
+        : contentRole === "dubbed-auto"
+          ? "auto_dubbed"
+          : contentRole === "descriptive"
+            ? "descriptive"
+            : contentRole === "secondary"
+              ? "secondary"
+              : null;
+  return {
+    language:
+      safeToken(xtags.get("lang"), 40) ||
+      languageFromAudioTrackId(audioTrack?.id),
+    audioTrackId: safeToken(audioTrack?.id, 240),
+    audioTrackName: safeToken(audioTrack?.displayName, 160),
+    audioRole,
+    audioIsDefault: audioTrack?.audioIsDefault === true,
+    isDrc:
+      format.isDrc === true ||
+      (xtags.get("drc") === "1" && audioRole !== "original"),
+  };
+}
+
+function decodeYouTubeXtags(value) {
+  const tags = new Map();
+  if (typeof value !== "string" || !value || value.length > 4_096) return tags;
+  try {
+    const bytes = Uint8Array.from(
+      atob(decodeURIComponent(value).replace(/-/g, "+").replace(/_/g, "/")),
+      (character) => character.charCodeAt(0),
+    );
+    let offset = 0;
+    while (offset < bytes.length) {
+      const outerTag = readVarint(bytes, offset);
+      if (!outerTag) break;
+      offset = outerTag.next;
+      if (outerTag.value !== 10) break;
+      const pairLength = readVarint(bytes, offset);
+      if (!pairLength || pairLength.value > 512) break;
+      offset = pairLength.next;
+      const end = Math.min(bytes.length, offset + pairLength.value);
+      let key = null;
+      let entryValue = null;
+      while (offset < end) {
+        const fieldTag = readVarint(bytes, offset);
+        if (!fieldTag) break;
+        offset = fieldTag.next;
+        const fieldLength = readVarint(bytes, offset);
+        if (!fieldLength || fieldLength.value > 160) break;
+        offset = fieldLength.next;
+        const text = new TextDecoder().decode(
+          bytes.subarray(offset, offset + fieldLength.value),
+        );
+        offset += fieldLength.value;
+        if (fieldTag.value === 10) key = text;
+        else if (fieldTag.value === 18) entryValue = text;
+      }
+      offset = end;
+      if (["lang", "acont", "drc"].includes(key) && entryValue)
+        tags.set(key, entryValue);
+    }
+  } catch {}
+  return tags;
+}
+
+function readVarint(bytes, start) {
+  let value = 0;
+  let shift = 0;
+  for (let index = start; index < bytes.length && shift <= 28; index += 1) {
+    const byte = bytes[index];
+    value |= (byte & 0x7f) << shift;
+    if ((byte & 0x80) === 0) return { value, next: index + 1 };
+    shift += 7;
+  }
+  return null;
+}
+
+function languageFromAudioTrackId(value) {
+  const match = String(value || "").match(
+    /^[^.]+\.([a-z]{2,3}(?:-[A-Z]{2})?)\b/,
+  );
+  return match?.[1] || null;
+}
+
+function stableTrackToken(value) {
+  let hash = 2166136261;
+  for (const character of String(value || "")) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
 }
 
 function selectPlayerStage({
