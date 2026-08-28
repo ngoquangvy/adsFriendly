@@ -1,4 +1,4 @@
-import { Innertube } from "youtubei.js";
+import { Constants, Innertube } from "youtubei.js";
 import type { AdaptiveHttpTrack, DownloadCandidate } from "./download-types.js";
 import {
   YOUTUBE_WEB_PO_USER_AGENT,
@@ -338,14 +338,14 @@ async function providerProfiles(
       id: "ios_direct",
       client: "IOS",
       poToken: null,
-      requestUserAgent: null,
+      requestUserAgent: Constants.CLIENTS.IOS.USER_AGENT,
       allowEquivalentVideo: false,
     },
     {
       id: "android_direct",
       client: "ANDROID",
       poToken: null,
-      requestUserAgent: null,
+      requestUserAgent: Constants.CLIENTS.ANDROID.USER_AGENT,
       allowEquivalentVideo: false,
     },
     {
