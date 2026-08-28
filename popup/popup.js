@@ -1867,10 +1867,17 @@ var AdsFriendlyPopup = (() => {
     const synthetic = [];
     for (const [key, group] of groups) {
       if (group.length < 2) continue;
+      const adaptive = createFacebookAdaptiveGroup(key, group);
+      if (!adaptive) continue;
       group.forEach((item) => consumed.add(item.id));
-      synthetic.push(createFacebookAdaptiveGroup(key, group));
+      synthetic.push(adaptive);
     }
-    return [...items.filter((item) => !consumed.has(item.id)), ...synthetic];
+    return [
+      ...items.filter(
+        (item) => !consumed.has(item.id) && !isFacebookAudioTrack(item)
+      ),
+      ...synthetic
+    ];
   }
   function prioritizeFacebookPlayback(items) {
     const facebookItems = items.filter(isFacebookMediaItem);
@@ -1894,7 +1901,11 @@ var AdsFriendlyPopup = (() => {
     }
   }
   function createFacebookAdaptiveGroup(key, items) {
-    const representations = collapseFacebookRepresentations(items);
+    const audioItems = items.filter(isFacebookAudioTrack);
+    const representations = collapseFacebookRepresentations(
+      items.filter((item) => !isFacebookAudioTrack(item))
+    );
+    if (!representations.length) return null;
     const sorted = [...representations].sort(
       (left, right) => facebookQualityScore(right) - facebookQualityScore(left) || (right.contentLength || 0) - (left.contentLength || 0) || (right.lastSeenAt || 0) - (left.lastSeenAt || 0)
     );
@@ -1914,8 +1925,9 @@ var AdsFriendlyPopup = (() => {
       qualityLabel: facebookQualityLabel(item) || `Source ${index + 1}`,
       urlResolution: "resolved",
       signatureCipher: null,
-      muxed: true
+      muxed: !isFacebookDashTrack(item)
     }));
+    const audioTracks = createFacebookAudioTracks(audioItems);
     return {
       ...primary,
       id: stableMediaId("adaptive", key),
@@ -1926,7 +1938,7 @@ var AdsFriendlyPopup = (() => {
       contentLength: facebookUrlHasByteLimit(primary.sourceUrl) ? null : primary.contentLength || null,
       mimeType: "video/mp4",
       variants,
-      audioTracks: [],
+      audioTracks,
       subtitles: [],
       acquisitionProfile: "facebook_direct_representations",
       probeStatus: "ready",
@@ -1936,6 +1948,52 @@ var AdsFriendlyPopup = (() => {
       firstSeenAt: Math.min(...items.map((item) => item.firstSeenAt || 0)),
       lastSeenAt: Math.max(...items.map((item) => item.lastSeenAt || 0))
     };
+  }
+  function createFacebookAudioTracks(items) {
+    if (!items.length) return [];
+    const selected = [...items].sort(
+      (left, right) => facebookAudioScore(right) - facebookAudioScore(left) || facebookObservationTime(right) - facebookObservationTime(left)
+    )[0];
+    return [
+      {
+        id: selected.id,
+        type: "audio",
+        sourceUrl: facebookFullMediaUrl(selected.sourceUrl),
+        mimeType: selected.mimeType || "audio/mp4",
+        codecs: null,
+        bandwidth: selected.bandwidth || null,
+        averageBandwidth: selected.averageBandwidth || null,
+        contentLength: facebookUrlHasByteLimit(selected.sourceUrl) ? null : selected.contentLength || null,
+        qualityLabel: "Facebook audio",
+        urlResolution: "resolved",
+        signatureCipher: null,
+        muxed: false,
+        language: null,
+        audioTrackName: "Facebook audio",
+        audioRole: "original",
+        audioIsDefault: true
+      }
+    ];
+  }
+  function isFacebookAudioTrack(item) {
+    const mimeType = String(item?.mimeType || "").toLowerCase();
+    if (mimeType.startsWith("audio/")) return true;
+    const tag = facebookEncodingTag(item?.sourceUrl);
+    return /(?:^|[_-])(?:audio|aac|opus)(?:[_-]|$)/i.test(tag || "");
+  }
+  function isFacebookDashTrack(item) {
+    return /(?:^|[_-])dash(?:[_-]|$)/i.test(
+      facebookEncodingTag(item?.sourceUrl) || ""
+    );
+  }
+  function facebookAudioScore(item) {
+    const bandwidth = item.averageBandwidth || item.bandwidth;
+    if (Number.isFinite(bandwidth) && bandwidth > 0) return bandwidth;
+    const tag = facebookEncodingTag(item.sourceUrl) || "";
+    const kilobits = Number(
+      tag.match(/(?:audio|aac|opus)[_-]?(\d{2,3})(?:k|kbps)?/i)?.[1]
+    );
+    return Number.isFinite(kilobits) ? kilobits * 1e3 : 0;
   }
   function collapseFacebookRepresentations(items) {
     const representations = /* @__PURE__ */ new Map();

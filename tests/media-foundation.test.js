@@ -3894,17 +3894,17 @@ test("media popup groups Facebook representations into one quality asset", () =>
     lastSeenAt: 20,
   });
   const visible = selectVisibleMediaItems([
-    representation("AQ_hd", "asset-7", "dash_1080p", "hd", {
+    representation("AQ_hd", "asset-7", "progressive_1080p", "hd", {
       playing: true,
       visible: true,
       observedAt: 20,
     }),
-    representation("AQ_sd", "asset-7", "dash_480p", "sd", {
+    representation("AQ_sd", "asset-7", "progressive_480p", "sd", {
       playing: true,
       visible: true,
       observedAt: 20,
     }),
-    representation("AQ_other", "asset-8", "dash_720p", "other"),
+    representation("AQ_other", "asset-8", "progressive_720p", "other"),
   ]);
   const grouped = visible.find((item) => item.provider === "facebook");
   assert.equal(visible.length, 1);
@@ -3942,6 +3942,36 @@ test("Facebook byte fragments do not become duplicate quality tracks", () => {
   assert.equal(visible[0].variants[0].contentLength, null);
   assert.equal(new URL(visible[0].variants[0].sourceUrl).searchParams.has("bytestart"), false);
   assert.equal(new URL(visible[0].variants[0].sourceUrl).searchParams.has("byteend"), false);
+});
+
+test("Facebook DASH keeps video and audio in separate adaptive tracks", () => {
+  const efg = (tag) =>
+    Buffer.from(
+      JSON.stringify({ xpv_asset_id: "asset-dash", vencode_tag: tag }),
+    ).toString("base64url");
+  const track = (id, tag, mimeType) => ({
+    ...createMediaCandidateFromSource({
+      pageUrl: "https://www.facebook.com/",
+      sourceUrl: `https://scontent.fsgn5-21.fna.fbcdn.net/${id}.mp4?efg=${efg(tag)}&bytestart=0&byteend=500000`,
+      mimeType,
+      title: "Facebook",
+    }),
+    id,
+    firstSeenAt: 10,
+    lastSeenAt: 20,
+  });
+  const visible = selectVisibleMediaItems([
+    track("video-1080", "dash_1080p", "video/mp4"),
+    track("video-720", "dash_720p", "video/mp4"),
+    track("audio-aac", "dash_audio_128k", "audio/mp4"),
+  ]);
+  assert.equal(visible.length, 1);
+  assert.equal(visible[0].variants.length, 2);
+  assert.equal(visible[0].variants.every((item) => item.muxed === false), true);
+  assert.equal(visible[0].audioTracks.length, 1);
+  assert.equal(visible[0].audioTracks[0].type, "audio");
+  assert.equal(visible[0].audioTracks[0].audioRole, "original");
+  assert.equal(getMediaDownloadAvailability(visible[0]).supported, true);
 });
 
 test("media popup keeps only the Facebook asset that is currently playing", () => {
