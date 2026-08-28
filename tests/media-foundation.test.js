@@ -43,6 +43,7 @@ import {
   getMediaDownloadProfiles,
   getMediaVideoQualityOptions,
 } from "../src/media/download-options.js";
+import { formatAudioLanguageLabel } from "../src/media/audio-language-label.js";
 import {
   createMediaCatalogViewSignature,
   formatMediaDetails,
@@ -408,7 +409,7 @@ test("YouTube keeps same-itag language tracks distinct and prefers original audi
   assert.equal(options[0].language, "vi");
   assert.match(
     options[0].label,
-    /Original audio.*Vietnamese.*160 kbps.*Opus.*Stereo.*48 kHz/i,
+    /Vietnamese \(Original\).*160 kbps.*Opus.*Stereo.*48 kHz/i,
   );
 
   const job = normalizeMediaDownloadJob({
@@ -425,6 +426,33 @@ test("YouTube keeps same-itag language tracks distinct and prefers original audi
   assert.equal(job.candidate.audioTracks[1].audioRole, "original");
   assert.equal(job.candidate.audioTracks[1].audioSampleRate, 48000);
   assert.equal(job.candidate.audioTracks[1].audioChannels, 2);
+});
+
+test("audio labels use English language names and compact region codes", () => {
+  assert.equal(
+    formatAudioLanguageLabel({
+      language: "vi",
+      name: "Tiếng Việt",
+      role: "original",
+    }),
+    "Vietnamese (Original)",
+  );
+  assert.equal(
+    formatAudioLanguageLabel({ language: "en-US" }),
+    "English (US)",
+  );
+  assert.equal(
+    formatAudioLanguageLabel({ language: "en-GB", role: "dubbed" }),
+    "English (UK, Dubbed)",
+  );
+  assert.equal(
+    formatAudioLanguageLabel({ language: "zh-CN" }),
+    "Chinese",
+  );
+  assert.equal(
+    formatAudioLanguageLabel({ language: "vi", name: "Vietnamese (original)" }),
+    "Vietnamese (Original)",
+  );
 });
 
 test("YouTube progressive 360p format is ready because audio is already muxed", () => {

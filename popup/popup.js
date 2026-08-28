@@ -517,6 +517,82 @@ var AdsFriendlyPopup = (() => {
     ].some((track) => isYouTubeProviderResolvableTrack(candidate, track));
   }
 
+  // src/media/audio-language-label.js
+  var ROLE_LABELS = Object.freeze({
+    original: "Original",
+    dubbed: "Dubbed",
+    auto_dubbed: "Auto-dubbed",
+    descriptive: "Audio Description",
+    secondary: "Secondary"
+  });
+  var LOCALIZED_LANGUAGE_NAMES = Object.freeze({
+    "ti\u1EBFng vi\u1EC7t": "Vietnamese",
+    "ti\u1EBFng anh": "English",
+    "ti\u1EBFng trung": "Chinese",
+    "ti\u1EBFng trung qu\u1ED1c": "Chinese",
+    "ti\u1EBFng nh\u1EADt": "Japanese",
+    "ti\u1EBFng h\xE0n": "Korean"
+  });
+  function formatAudioLanguageLabel({
+    language = null,
+    name = null,
+    role = null,
+    isDefault = false
+  } = {}) {
+    const locale = normalizedLocale(language);
+    const baseName = englishLanguageName(locale?.language) || normalizedSourceName(name);
+    const region = normalizedRegion(
+      locale?.region || regionFromName(name),
+      locale?.language
+    );
+    const effectiveRole = role || roleFromName(name);
+    const qualifiers = [region, ROLE_LABELS[effectiveRole]].filter(Boolean);
+    const identity = baseName || (isDefault ? "Default Audio" : "Audio");
+    return qualifiers.length ? `${identity} (${qualifiers.join(", ")})` : identity;
+  }
+  function normalizedLocale(value) {
+    if (typeof value !== "string" || !value.trim()) return null;
+    try {
+      return new Intl.Locale(value.replace(/_/g, "-"));
+    } catch {
+      return null;
+    }
+  }
+  function englishLanguageName(value) {
+    if (!value) return null;
+    try {
+      return new Intl.DisplayNames(["en"], { type: "language" }).of(value);
+    } catch {
+      return null;
+    }
+  }
+  function normalizedSourceName(value) {
+    if (typeof value !== "string" || !value.trim()) return null;
+    const withoutQualifiers = value.replace(/\s*\([^)]*\)\s*$/u, "").trim();
+    return LOCALIZED_LANGUAGE_NAMES[withoutQualifiers.toLowerCase()] || withoutQualifiers;
+  }
+  function regionFromName(value) {
+    if (typeof value !== "string") return null;
+    return value.match(/\((US|UK|GB|United States|United Kingdom)\b/i)?.[1] || null;
+  }
+  function normalizedRegion(value, language) {
+    if (!value) return null;
+    const region = String(value).toUpperCase();
+    if (language === "vi" && region === "VN" || language === "zh" && region === "CN" || language === "ja" && region === "JP" || language === "ko" && region === "KR")
+      return null;
+    if (region === "UNITED STATES") return "US";
+    if (region === "UNITED KINGDOM") return "UK";
+    return region === "GB" ? "UK" : region;
+  }
+  function roleFromName(value) {
+    if (typeof value !== "string") return null;
+    const qualifier = value.match(/\(([^)]*)\)\s*$/u)?.[1]?.toLowerCase() || "";
+    if (/\boriginal\b/.test(qualifier)) return "original";
+    if (/\bauto[- ]?dubbed\b/.test(qualifier)) return "auto_dubbed";
+    if (/\bdubbed\b/.test(qualifier)) return "dubbed";
+    return null;
+  }
+
   // src/media/download-options.js
   var MEDIA_OUTPUT_CONTAINERS = Object.freeze({
     SOURCE: "source",
@@ -759,20 +835,17 @@ var AdsFriendlyPopup = (() => {
     }[track.audioRole] || 25;
   }
   function audioTrackLabel(track) {
-    const role = {
-      original: "Original audio",
-      dubbed: "Dubbed",
-      auto_dubbed: "Auto-dubbed",
-      descriptive: "Audio description",
-      secondary: "Secondary audio"
-    }[track.audioRole];
-    const language = track.audioTrackName || languageDisplayName(track.language);
+    const language = formatAudioLanguageLabel({
+      language: track.language,
+      name: track.audioTrackName,
+      role: track.audioRole,
+      isDefault: track.audioIsDefault === true
+    });
     const codec = codecLabel(track.codecs);
     const bitrate = audioBitrateLabel(
       firstPositiveNumber(track.averageBandwidth, track.bandwidth)
     );
     return [
-      role || (track.audioIsDefault ? "Default audio" : "Audio"),
       language,
       bitrate,
       codec,
@@ -780,16 +853,6 @@ var AdsFriendlyPopup = (() => {
       audioSampleRateLabel(track.audioSampleRate),
       track.isDrc ? "DRC" : null
     ].filter(Boolean).join(" \xB7 ");
-  }
-  function languageDisplayName(value) {
-    if (!value) return null;
-    try {
-      return new Intl.DisplayNames([globalThis.navigator?.language || "en"], {
-        type: "language"
-      }).of(value);
-    } catch {
-      return String(value).toUpperCase();
-    }
   }
   function audioBitrateLabel(value) {
     const bitrate = positiveInteger(value);

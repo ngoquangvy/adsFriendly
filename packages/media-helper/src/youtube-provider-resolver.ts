@@ -11,6 +11,7 @@ import {
 } from "./youtube-po-token-resolver.js";
 import { resolveYouTubeExternalTracks } from "./youtube-external-provider.js";
 import { preflightGoogleVideoTrack } from "./direct-http-adapter.js";
+import { formatAudioLanguageLabel } from "../../../src/media/audio-language-label.js";
 
 const RESPONSE_CACHE_MS = 5 * 60 * 1000;
 const MAX_CACHE_ITEMS = 20;
@@ -785,16 +786,16 @@ function audioPreferenceScore(track: AdaptiveHttpTrack) {
 }
 
 function audioSourceLabel(track: AdaptiveHttpTrack, format: ProviderFormat) {
-  const role = {
-    original: "Original audio",
-    dubbed: "Dubbed",
-    auto_dubbed: "Auto-dubbed",
-    descriptive: "Audio description",
-    secondary: "Secondary audio",
-  }[track.audioRole || providerAudioRole(format) || ""];
+  const role = track.audioRole || providerAudioRole(format) || null;
   return [
-    role,
-    track.audioTrackName || format.audio_track?.display_name,
+    formatAudioLanguageLabel({
+      language: track.language || format.language,
+      name: track.audioTrackName || format.audio_track?.display_name,
+      role,
+      isDefault:
+        track.audioIsDefault === true ||
+        format.audio_track?.audio_is_default === true,
+    }),
     audioBitrateLabel(
       format.average_bitrate ||
         format.bitrate ||

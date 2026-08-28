@@ -1,4 +1,5 @@
 import { isAcquirableAdaptiveTrack } from "./adaptive-track-policy.js";
+import { formatAudioLanguageLabel } from "./audio-language-label.js";
 
 export const MEDIA_OUTPUT_CONTAINERS = Object.freeze({
   SOURCE: "source",
@@ -436,20 +437,17 @@ function audioRoleScore(track) {
 }
 
 function audioTrackLabel(track) {
-  const role = {
-    original: "Original audio",
-    dubbed: "Dubbed",
-    auto_dubbed: "Auto-dubbed",
-    descriptive: "Audio description",
-    secondary: "Secondary audio",
-  }[track.audioRole];
-  const language = track.audioTrackName || languageDisplayName(track.language);
+  const language = formatAudioLanguageLabel({
+    language: track.language,
+    name: track.audioTrackName,
+    role: track.audioRole,
+    isDefault: track.audioIsDefault === true,
+  });
   const codec = codecLabel(track.codecs);
   const bitrate = audioBitrateLabel(
     firstPositiveNumber(track.averageBandwidth, track.bandwidth),
   );
   return [
-    role || (track.audioIsDefault ? "Default audio" : "Audio"),
     language,
     bitrate,
     codec,
@@ -459,17 +457,6 @@ function audioTrackLabel(track) {
   ]
     .filter(Boolean)
     .join(" · ");
-}
-
-function languageDisplayName(value) {
-  if (!value) return null;
-  try {
-    return new Intl.DisplayNames([globalThis.navigator?.language || "en"], {
-      type: "language",
-    }).of(value);
-  } catch {
-    return String(value).toUpperCase();
-  }
 }
 
 function audioBitrateLabel(value) {

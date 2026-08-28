@@ -4543,6 +4543,23 @@ var AdsFriendlyBackground = (() => {
     return () => chrome.storage.onChanged.removeListener(onChanged);
   }
 
+  // src/media/audio-language-label.js
+  var ROLE_LABELS = Object.freeze({
+    original: "Original",
+    dubbed: "Dubbed",
+    auto_dubbed: "Auto-dubbed",
+    descriptive: "Audio Description",
+    secondary: "Secondary"
+  });
+  var LOCALIZED_LANGUAGE_NAMES = Object.freeze({
+    "ti\u1EBFng vi\u1EC7t": "Vietnamese",
+    "ti\u1EBFng anh": "English",
+    "ti\u1EBFng trung": "Chinese",
+    "ti\u1EBFng trung qu\u1ED1c": "Chinese",
+    "ti\u1EBFng nh\u1EADt": "Japanese",
+    "ti\u1EBFng h\xE0n": "Korean"
+  });
+
   // src/media/download-options.js
   var MEDIA_OUTPUT_CONTAINERS = Object.freeze({
     SOURCE: "source",
