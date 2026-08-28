@@ -163,15 +163,18 @@ async function downloadAdaptiveHttp(
   try {
     await unlink(partialPath).catch(() => {});
     if (video.muxed) {
-      const muxedResult = await downloadDirectHttp(
-        directTrackJob(
-          job,
-          video,
-          "muxed-track",
-          cacheDirectory,
-          job.connections,
-        ),
+      const muxedResult = await downloadAdaptiveTrack(
+        job,
+        video,
+        "muxed-track",
+        cacheDirectory,
+        job.connections,
         childContext(context, (value) => update("muxed", value)),
+        {
+          allowEquivalentVideo:
+            job.output.allowEquivalentVideo === true ||
+            !job.output.videoTrackId,
+        },
       );
       context.progress({
         phase: "finalizing",
