@@ -10,6 +10,38 @@ export const NEW_TAB_REVIEW_SURFACES = Object.freeze({
   CLOSE: "close",
 });
 
+const USER_NAVIGATION_TRANSITIONS = new Set([
+  "typed",
+  "generated",
+  "keyword",
+  "keyword_generated",
+  "auto_bookmark",
+]);
+
+export function isBrowserUiNewTab({
+  url = "",
+  pendingUrl = "",
+  openerTabId = null,
+} = {}) {
+  if (Number.isInteger(openerTabId)) return false;
+  const initialUrl = pendingUrl || url;
+  return (
+    initialUrl === "chrome://newtab/" ||
+    initialUrl === "chrome://new-tab-page/" ||
+    initialUrl.startsWith("chrome-search://local-ntp/")
+  );
+}
+
+export function isExplicitAddressBarNavigation({
+  transitionType = "",
+  transitionQualifiers = [],
+} = {}) {
+  return (
+    USER_NAVIGATION_TRANSITIONS.has(transitionType) ||
+    transitionQualifiers.includes("from_address_bar")
+  );
+}
+
 export function decideNewTabNavigation({
   sameSite = false,
   trustedInitiator = false,

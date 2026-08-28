@@ -11,6 +11,8 @@ import {
   NEW_TAB_REVIEW_SURFACES,
   chooseNewTabReviewSurface,
   decideNewTabNavigation,
+  isBrowserUiNewTab,
+  isExplicitAddressBarNavigation,
   shouldKeepTrackingNewTab,
 } from "../src/navigation/background/new-tab-policy.js";
 import { isExtensionContextInvalidated } from "../src/shared/extension-context.js";
@@ -41,6 +43,39 @@ test("registers every supported navigation sequence explicitly", () => {
         openedTabId: 2,
       }),
     /Register it before use/,
+  );
+});
+
+test("recognizes a Chrome plus-button tab without trusting web-created blanks", () => {
+  assert.equal(
+    isBrowserUiNewTab({ url: "chrome://newtab/", openerTabId: null }),
+    true,
+  );
+  assert.equal(
+    isBrowserUiNewTab({ url: "about:blank", openerTabId: null }),
+    false,
+  );
+  assert.equal(
+    isBrowserUiNewTab({ url: "chrome://newtab/", openerTabId: 7 }),
+    false,
+  );
+});
+
+test("address-bar searches are distinct from page link navigation", () => {
+  assert.equal(
+    isExplicitAddressBarNavigation({ transitionType: "generated" }),
+    true,
+  );
+  assert.equal(
+    isExplicitAddressBarNavigation({
+      transitionType: "link",
+      transitionQualifiers: ["from_address_bar"],
+    }),
+    true,
+  );
+  assert.equal(
+    isExplicitAddressBarNavigation({ transitionType: "link" }),
+    false,
   );
 });
 

@@ -10,6 +10,8 @@ import {
   NEW_TAB_REVIEW_SURFACES,
   chooseNewTabReviewSurface,
   decideNewTabNavigation,
+  isBrowserUiNewTab,
+  isExplicitAddressBarNavigation,
   shouldKeepTrackingNewTab,
 } from "./new-tab-policy.js";
 import {
@@ -64,6 +66,7 @@ const committedUrlsByTab = new Map();
 const pendingReviewToasts = new Map();
 const blockedNoticesBySource = new Map();
 const userOpenedNavigations = new Map();
+const browserUiTabs = new Map();
 let navigationPolicy = null;
 
 export function registerNavigationGuard(policy) {
@@ -112,6 +115,11 @@ export function registerNavigationGuard(policy) {
 
   const onCreated = (tab) => {
     rememberCommittedUrl(tab.id, tab.pendingUrl || tab.url);
+    if (isBrowserUiNewTab(tab) && Number.isInteger(tab.id)) {
+      browserUiTabs.set(tab.id, Date.now());
+      setTimeout(() => browserUiTabs.delete(tab.id), 2 * 60 * 1000);
+      return;
+    }
     const sourceTabId =
       tab.openerTabId || getRecentUserGestureSourceTabId(2500);
     if (sourceTabId) {
@@ -139,6 +147,11 @@ export function registerNavigationGuard(policy) {
 
   const onUpdated = (tabId, changeInfo) => {
     if (!changeInfo.url || isBlankUrl(changeInfo.url)) return;
+    if (browserUiTabs.has(tabId)) {
+      browserUiTabs.delete(tabId);
+      pendingTabs.delete(tabId);
+      return;
+    }
     observeReverseNavigation(tabId, changeInfo.url);
     const pending = pendingTabs.get(tabId);
     if (!pending) return;
@@ -155,6 +168,15 @@ export function registerNavigationGuard(policy) {
 
   const onCommitted = (details) => {
     if (details.frameId !== 0 || isBlankUrl(details.url)) return;
+    if (
+      browserUiTabs.has(details.tabId) ||
+      isExplicitAddressBarNavigation(details)
+    ) {
+      browserUiTabs.delete(details.tabId);
+      pendingTabs.delete(details.tabId);
+      rememberCommittedUrl(details.tabId, details.url);
+      return;
+    }
     observeReverseNavigation(details.tabId, details.url);
     rememberCommittedUrl(details.tabId, details.url);
     const pending = pendingTabs.get(details.tabId);
@@ -173,6 +195,7 @@ export function registerNavigationGuard(policy) {
   const onRemoved = (tabId) => {
     committedUrlsByTab.delete(tabId);
     pendingReviewToasts.delete(tabId);
+    browserUiTabs.delete(tabId);
   };
 
   chrome.webNavigation.onCreatedNavigationTarget.addListener(
@@ -199,6 +222,7 @@ export function registerNavigationGuard(policy) {
     pendingReviewToasts.clear();
     blockedNoticesBySource.clear();
     userOpenedNavigations.clear();
+    browserUiTabs.clear();
     navigationPolicy = null;
   };
 }

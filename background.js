@@ -1246,6 +1246,28 @@ var AdsFriendlyBackground = (() => {
     TOAST: "toast",
     CLOSE: "close"
   });
+  var USER_NAVIGATION_TRANSITIONS = /* @__PURE__ */ new Set([
+    "typed",
+    "generated",
+    "keyword",
+    "keyword_generated",
+    "auto_bookmark"
+  ]);
+  function isBrowserUiNewTab({
+    url = "",
+    pendingUrl = "",
+    openerTabId = null
+  } = {}) {
+    if (Number.isInteger(openerTabId)) return false;
+    const initialUrl = pendingUrl || url;
+    return initialUrl === "chrome://newtab/" || initialUrl === "chrome://new-tab-page/" || initialUrl.startsWith("chrome-search://local-ntp/");
+  }
+  function isExplicitAddressBarNavigation({
+    transitionType = "",
+    transitionQualifiers = []
+  } = {}) {
+    return USER_NAVIGATION_TRANSITIONS.has(transitionType) || transitionQualifiers.includes("from_address_bar");
+  }
   function decideNewTabNavigation({
     sameSite = false,
     trustedInitiator = false,
@@ -1484,6 +1506,7 @@ var AdsFriendlyBackground = (() => {
   var pendingReviewToasts = /* @__PURE__ */ new Map();
   var blockedNoticesBySource = /* @__PURE__ */ new Map();
   var userOpenedNavigations = /* @__PURE__ */ new Map();
+  var browserUiTabs = /* @__PURE__ */ new Map();
   var navigationPolicy = null;
   function registerNavigationGuard(policy) {
     navigationPolicy = policy;
@@ -1527,6 +1550,11 @@ var AdsFriendlyBackground = (() => {
     };
     const onCreated = (tab) => {
       rememberCommittedUrl(tab.id, tab.pendingUrl || tab.url);
+      if (isBrowserUiNewTab(tab) && Number.isInteger(tab.id)) {
+        browserUiTabs.set(tab.id, Date.now());
+        setTimeout(() => browserUiTabs.delete(tab.id), 2 * 60 * 1e3);
+        return;
+      }
       const sourceTabId = tab.openerTabId || getRecentUserGestureSourceTabId(2500);
       if (sourceTabId) {
         registerPendingTab(tab, sourceTabId, !!tab.openerTabId);
@@ -1547,6 +1575,11 @@ var AdsFriendlyBackground = (() => {
     };
     const onUpdated = (tabId, changeInfo) => {
       if (!changeInfo.url || isBlankUrl(changeInfo.url)) return;
+      if (browserUiTabs.has(tabId)) {
+        browserUiTabs.delete(tabId);
+        pendingTabs.delete(tabId);
+        return;
+      }
       observeReverseNavigation(tabId, changeInfo.url);
       const pending = pendingTabs.get(tabId);
       if (!pending) return;
@@ -1562,6 +1595,12 @@ var AdsFriendlyBackground = (() => {
     };
     const onCommitted = (details) => {
       if (details.frameId !== 0 || isBlankUrl(details.url)) return;
+      if (browserUiTabs.has(details.tabId) || isExplicitAddressBarNavigation(details)) {
+        browserUiTabs.delete(details.tabId);
+        pendingTabs.delete(details.tabId);
+        rememberCommittedUrl(details.tabId, details.url);
+        return;
+      }
       observeReverseNavigation(details.tabId, details.url);
       rememberCommittedUrl(details.tabId, details.url);
       const pending = pendingTabs.get(details.tabId);
@@ -1579,6 +1618,7 @@ var AdsFriendlyBackground = (() => {
     const onRemoved = (tabId) => {
       committedUrlsByTab.delete(tabId);
       pendingReviewToasts.delete(tabId);
+      browserUiTabs.delete(tabId);
     };
     chrome.webNavigation.onCreatedNavigationTarget.addListener(
       onCreatedNavigationTarget
@@ -1603,6 +1643,7 @@ var AdsFriendlyBackground = (() => {
       pendingReviewToasts.clear();
       blockedNoticesBySource.clear();
       userOpenedNavigations.clear();
+      browserUiTabs.clear();
       navigationPolicy = null;
     };
   }
