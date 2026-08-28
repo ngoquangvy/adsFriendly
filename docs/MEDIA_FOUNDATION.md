@@ -37,8 +37,9 @@ effects execute through an action broker, while pure media transformations stay
 independent of protection mode.
 
 Download execution requires the optional Native Messaging helper. It does not
-require Chrome's `downloads` permission, and media bytes never pass through the
-extension message channel.
+require Chrome's `downloads` permission. Normal network downloads are fetched
+directly by the Helper; only the explicit custom-player output fallback passes
+bounded, acknowledged media chunks through the extension message channel.
 
 ## Current discovery slice
 
@@ -58,6 +59,14 @@ Empty HLS envelopes remain unknown until media evidence appears instead of being
 inferred as live merely because `EXT-X-ENDLIST` is absent. The catalog also links
 discovered child quality/audio/subtitle playlists back to their master. Full manifest bodies, signed URLs outside
 the per-tab session catalog, and segment lists are not persisted.
+
+HTML media elements also emit bounded `media.playback_observed` snapshots. A
+document-scoped session ID links player state transitions to one or more Media
+Catalog IDs without deciding whether any interval is content or an ad. These
+session timelines preserve frame lineage and reset on navigation; they exclude
+source URLs, credentials, bytes, and training labels. Continuous time updates
+are coalesced and storage checkpoints are throttled, while playback state
+transitions remain immediate.
 
 YouTube is handled by a bounded acquisition profile rather than pretending its
 `blob:` player source is a DASH manifest. Successful `googlevideo/videoplayback`
@@ -200,10 +209,13 @@ history; temporary key files are removed after any terminal outcome. See
 future AI training.
 
 The extension declares `nativeMessaging` as an optional permission and asks for
-it only after a user initiates Media Helper setup. The extension sends only
-bounded job metadata and receives status/progress events. Media bytes never
-travel through Native Messaging; the helper streams them directly to disk. The
-helper is optional for the `media-tools`
+it only after a user initiates Media Helper setup. Ordinary Direct HTTP, HLS,
+DASH, and adaptive jobs send bounded metadata and status/progress events while
+the Helper streams media directly to disk. The custom-player output fallback is
+the exception: after a bounded FFprobe canary succeeds, size-limited ordered
+chunks travel through Native Messaging because no replayable network source
+exists. That fallback is non-resumable and is not the primary high-throughput
+download path. The helper is optional for the `media-tools`
 product and is never a dependency of the `ad-protection` product.
 
 ## YouTube audio output

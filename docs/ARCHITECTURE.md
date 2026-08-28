@@ -140,6 +140,23 @@ Cross-module media and video-ad messages are declared in
 contracts in `src/media/contracts.js`; downloader events and video-ad evidence
 remain separate even when both reference the same media ID.
 
+## Media Sessions and Timeline
+
+`media.playback_observed` is the content-neutral boundary between browser media
+observation and future video-ad reasoning. Each HTML media element receives an
+ephemeral player session ID scoped to its document. A bounded session timeline
+records playback state, media time, visibility, mute state, playback rate,
+ready state, frame lineage, and the media IDs seen by that player.
+
+Session timelines contain no source URL, signed query, token, cookie, media
+bytes, or ad/content label. They live only in the versioned
+`chrome.storage.session` Media Catalog snapshot and reset on navigation. The
+observer coalesces continuous playback heartbeats and checkpoints them at a
+bounded interval; state transitions are persisted immediately. The
+downloader may use lineage to select the intended content asset. A future
+video-ad classifier may consume the same timeline, but it must emit separate
+`video_ad.*` evidence rather than mutating the media observation.
+
 Legacy `friendlyMode` and `isEnabled` values are migrated once into:
 
 ```json

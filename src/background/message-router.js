@@ -28,11 +28,13 @@ import {
 import { addDomTrainingSample } from "../storage/training-store.js";
 import {
   listDiscoveredMedia,
+  listMediaPlaybackSessions,
   recordBlobSourceTrace,
   recordDiscoveredMedia,
   recordMediaProbe,
   recordMediaProbeDiagnostic,
   recordMediaEmeObservation,
+  recordMediaPlaybackObservation,
   recordMediaManifestHandoff,
 } from "./media-catalog.js";
 import {
@@ -95,8 +97,10 @@ const MESSAGE_CAPABILITIES = Object.freeze({
   MEDIA_PROBE_DIAGNOSTIC: CAPABILITIES.MEDIA_CATALOG,
   MEDIA_BLOB_TRACED: CAPABILITIES.MEDIA_CATALOG,
   MEDIA_EME_OBSERVED: CAPABILITIES.MEDIA_CATALOG,
+  MEDIA_PLAYBACK_OBSERVED: CAPABILITIES.MEDIA_CATALOG,
   PREPARE_MEDIA_CONTEXTUAL_PROBE: CAPABILITIES.MEDIA_CATALOG,
   GET_MEDIA_CATALOG: CAPABILITIES.MEDIA_CATALOG,
+  GET_MEDIA_SESSIONS: CAPABILITIES.MEDIA_CATALOG,
   SAVE_MEDIA_DEBUG_MANIFEST: CAPABILITIES.MEDIA_CATALOG,
   GET_MEDIA_DEBUG_MANIFEST: CAPABILITIES.MEDIA_CATALOG,
   SAVE_DECRYPTED_MEDIA_MANIFEST: CAPABILITIES.MEDIA_CATALOG,
@@ -276,6 +280,22 @@ async function route(message, sender) {
       },
     });
   }
+  if (message.type === "MEDIA_PLAYBACK_OBSERVED") {
+    const tabId = sender?.tab?.id;
+    if (!Number.isInteger(tabId)) return { status: "ignored" };
+    return recordMediaPlaybackObservation(tabId, {
+      ...message.event,
+      payload: {
+        ...message.event?.payload,
+        pageUrl: sender.tab.url || message.event?.payload?.pageUrl,
+      },
+      metadata: {
+        ...message.event?.metadata,
+        frameId: sender.frameId ?? null,
+        frameUrl: message.event?.payload?.pageUrl || null,
+      },
+    });
+  }
   if (message.type === "PREPARE_MEDIA_CONTEXTUAL_PROBE") {
     const tabId = sender?.tab?.id;
     const frameId = sender?.frameId;
@@ -306,6 +326,10 @@ async function route(message, sender) {
   if (message.type === "GET_MEDIA_CATALOG") {
     if (!Number.isInteger(message.tabId)) return { status: "invalid_tab" };
     return listDiscoveredMedia(message.tabId, message.pageUrl || null);
+  }
+  if (message.type === "GET_MEDIA_SESSIONS") {
+    if (!Number.isInteger(message.tabId)) return { status: "invalid_tab" };
+    return listMediaPlaybackSessions(message.tabId, message.pageUrl || null);
   }
   if (message.type === "SAVE_MEDIA_DEBUG_MANIFEST") {
     const tabId = sender?.tab?.id;

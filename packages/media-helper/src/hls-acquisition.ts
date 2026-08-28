@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
-import { extname, join } from "node:path";
+import { basename, extname, join } from "node:path";
 import {
   parseHlsAttributeList,
   parseHlsManifest,
@@ -221,7 +221,10 @@ export function createHlsAcquisitionPlan(
       continue;
     }
     if (line.startsWith("#EXT-X-KEY:")) {
-      const attributes = parseHlsAttributeList(valueAfterColon(line));
+      const attributes = parseHlsAttributeList(valueAfterColon(line)) as Record<
+        string,
+        string
+      >;
       if (String(attributes.METHOD || "").toUpperCase() === "NONE") {
         currentKey = null;
         currentKeyLine = rawLine;
@@ -235,7 +238,10 @@ export function createHlsAcquisitionPlan(
       continue;
     }
     if (line.startsWith("#EXT-X-MAP:")) {
-      const attributes = parseHlsAttributeList(valueAfterColon(line));
+      const attributes = parseHlsAttributeList(valueAfterColon(line)) as Record<
+        string,
+        string
+      >;
       if (!attributes.URI) throw new Error("HLS init segment URI is missing.");
       const mapUrl = resolveHttpUrl(attributes.URI, manifestUrl);
       const byteRange = parseByteRange(
@@ -473,7 +479,25 @@ async function acquireResources(
   }
   if (!pending.length) return;
   const startedAt = Date.now();
-  await downloadResourcesInParallel(pending, {
+  const parallelDownload = downloadResourcesInParallel as unknown as (
+    resources: HlsAcquisitionResource[],
+    options: {
+      concurrency: number;
+      retries: number;
+      signal: AbortSignal;
+      writeInOrder: boolean;
+      fetchResource(
+        resource: HlsAcquisitionResource,
+        signal: AbortSignal,
+      ): Promise<Uint8Array>;
+      writeResource(
+        bytes: Uint8Array,
+        resource: HlsAcquisitionResource,
+      ): Promise<void>;
+      onProgress(progress: { downloadedBytes: number }): void;
+    },
+  ) => Promise<unknown>;
+  await parallelDownload(pending, {
     concurrency: job.connections,
     retries: 2,
     signal: context.signal,

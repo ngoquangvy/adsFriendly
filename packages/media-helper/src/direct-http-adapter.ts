@@ -58,7 +58,8 @@ interface ResumeMetadata {
 
 export const directHttpAdapter: DownloadAdapter = Object.freeze({
   id: "direct-http",
-  supports: (candidate) => candidate.kind === "direct" && !!candidate.sourceUrl,
+  supports: (candidate: DownloadJob["candidate"]) =>
+    candidate.kind === "direct" && !!candidate.sourceUrl,
   execute: downloadDirectHttp,
 });
 
@@ -173,12 +174,7 @@ async function probeSource(
     Boolean(queryRange) ||
     response.status === 206 ||
     response.headers.get("accept-ranges")?.toLowerCase() === "bytes";
-  if (
-    !googleVideo &&
-    !queryRange &&
-    response.status !== 206 &&
-    acceptsRanges
-  ) {
+  if (!googleVideo && !queryRange && response.status !== 206 && acceptsRanges) {
     const verification = await fetchRemote(sourceUrl, {
       headers: { ...headers, Range: "bytes=0-0" },
       signal,
@@ -289,7 +285,9 @@ export async function preflightGoogleVideoTrack(
   const firstAccepted = first.ok && (first.status === 206 || totalBytes === 1);
   await first.body?.cancel().catch(() => {});
   if (!firstAccepted)
-    throw new Error(`GoogleVideo rejected the first-byte preflight (HTTP ${first.status}).`);
+    throw new Error(
+      `GoogleVideo rejected the first-byte preflight (HTTP ${first.status}).`,
+    );
   if (!totalBytes)
     throw new Error("GoogleVideo preflight did not declare a track size.");
   const offset = Math.min(
@@ -304,15 +302,12 @@ export async function preflightGoogleVideoTrack(
       offset,
       track.requestMode === "youtube_query_range",
     );
-    const continuation = await fetchRemote(
-      continuationUrl || track.sourceUrl,
-      {
-        headers: continuationUrl
-          ? headers
-          : { ...headers, Range: `bytes=${offset}-${offset}` },
-        signal,
-      },
-    );
+    const continuation = await fetchRemote(continuationUrl || track.sourceUrl, {
+      headers: continuationUrl
+        ? headers
+        : { ...headers, Range: `bytes=${offset}-${offset}` },
+      signal,
+    });
     const accepted = continuation.ok && continuation.status === 206;
     await continuation.body?.cancel().catch(() => {});
     if (!accepted)
@@ -328,7 +323,7 @@ function mediaProbeFailure(url: string, status: number, mode: string) {
     return (
       `GoogleVideo probe rejected HTTP 403 before byte transfer. ` +
       "The provider URL, client profile, or proof-of-origin token was rejected. " +
-      `Diagnostics: ${googleVideoDiagnostics(url, { start: 0, end: 0, length: 1 }, mode)}.`
+      `Diagnostics: ${googleVideoDiagnostics(url, { index: 0, start: 0, end: 0, length: 1 }, mode)}.`
     );
   }
   return `Media server returned HTTP ${status} during the initial probe.`;
@@ -911,7 +906,7 @@ function isPrivateAddress(address: string) {
   );
 }
 
-function positiveInteger(value: string | null | undefined) {
+function positiveInteger(value: string | number | null | undefined) {
   const number = Number(value);
   return Number.isSafeInteger(number) && number > 0 ? number : null;
 }

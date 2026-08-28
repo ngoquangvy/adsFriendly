@@ -56,6 +56,30 @@ export const MEDIA_PROBE_SOURCES = Object.freeze({
   DECRYPTED_BLOB: "decrypted_blob",
 });
 
+export const MEDIA_PLAYBACK_STATES = Object.freeze({
+  IDLE: "idle",
+  PLAYING: "playing",
+  PAUSED: "paused",
+  WAITING: "waiting",
+  SEEKING: "seeking",
+  ENDED: "ended",
+});
+
+export const MEDIA_PLAYBACK_TRIGGERS = Object.freeze([
+  "initial",
+  "loadedmetadata",
+  "durationchange",
+  "play",
+  "pause",
+  "ended",
+  "waiting",
+  "seeking",
+  "seeked",
+  "ratechange",
+  "timeupdate",
+  "visibility",
+]);
+
 export function normalizeMediaCandidate(value = {}) {
   const candidate = {
     id: requiredString(value.id, "id"),
@@ -144,6 +168,31 @@ function normalizePlaybackState(value) {
     muted: value.muted === true,
     currentTime: optionalFiniteNumber(value.currentTime),
     observedAt: optionalNonNegativeInteger(value.observedAt),
+  };
+}
+
+export function normalizeMediaPlaybackObservation(value = {}) {
+  return {
+    sessionId: requiredString(value.sessionId, "sessionId").slice(0, 160),
+    pageUrl: requiredString(value.pageUrl, "pageUrl"),
+    mediaId: optionalString(value.mediaId)?.slice(0, 200) || null,
+    state: enumValue(
+      value.state,
+      Object.values(MEDIA_PLAYBACK_STATES),
+      "playback.state",
+    ),
+    trigger: enumValue(
+      value.trigger,
+      MEDIA_PLAYBACK_TRIGGERS,
+      "playback.trigger",
+    ),
+    currentTime: optionalNonNegativeNumber(value.currentTime),
+    duration: optionalPositiveNumber(value.duration),
+    playbackRate: optionalPositiveNumber(value.playbackRate) || 1,
+    muted: value.muted === true,
+    visible: value.visible === true,
+    readyState: optionalBoundedInteger(value.readyState, 0, 4),
+    observedAt: optionalNonNegativeInteger(value.observedAt) || Date.now(),
   };
 }
 
@@ -618,6 +667,26 @@ function optionalPositiveNumber(value) {
   const number = Number(value);
   if (!Number.isFinite(number) || number <= 0) {
     throw new Error("[MediaContract] Expected a positive number.");
+  }
+  return number;
+}
+
+function optionalNonNegativeNumber(value) {
+  if (value === null || value === undefined) return null;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) {
+    throw new Error("[MediaContract] Expected a non-negative number.");
+  }
+  return number;
+}
+
+function optionalBoundedInteger(value, minimum, maximum) {
+  if (value === null || value === undefined) return null;
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < minimum || number > maximum) {
+    throw new Error(
+      `[MediaContract] Expected an integer from ${minimum} to ${maximum}.`,
+    );
   }
   return number;
 }

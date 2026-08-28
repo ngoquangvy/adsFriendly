@@ -27,6 +27,7 @@ import { openManagedOutput, revealManagedOutput } from "./output-actions.js";
 import { preflightYouTubeProviderQualities } from "./youtube-provider-resolver.js";
 import { validatePlayerOutputCanary } from "./player-output-canary.js";
 import { PlayerOutputCaptureManager } from "./player-output-capture-manager.js";
+import type { DownloadCandidate } from "./download-types.js";
 
 const HELPER_VERSION = "0.24.1";
 const callerOrigin = process.argv[2] || null;
@@ -63,7 +64,9 @@ process.stdin.on("error", (error) => {
 async function handleMessage(rawMessage: unknown): Promise<void> {
   let requestId = "unknown";
   try {
-    const request = normalizeHelperRequest(rawMessage);
+    const request = normalizeHelperRequest(
+      rawMessage as Record<string, unknown>,
+    );
     requestId = request.requestId;
     if (request.protocolVersion !== MEDIA_HELPER_PROTOCOL_VERSION) {
       writeError(
@@ -101,7 +104,9 @@ async function handleMessage(rawMessage: unknown): Promise<void> {
         createHelperEvent(
           MEDIA_HELPER_EVENTS.YOUTUBE_QUALITY_PREFLIGHT,
           requestId,
-          await preflightYouTubeProviderQualities(payload.candidate),
+          await preflightYouTubeProviderQualities(
+            payload.candidate as DownloadCandidate,
+          ),
         ),
       );
       return;

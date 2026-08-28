@@ -188,6 +188,11 @@ export function adaptiveRequestHeaderProfiles(
   job: DownloadJob,
   resourceUrl: string | null = null,
 ) {
+  type HeaderProfile = {
+    id: string;
+    baseScore: number;
+    headers: Record<string, string>;
+  };
   const context = job.candidate.requestContext;
   const referers = uniqueHttpUrls([
     context?.referrer,
@@ -196,7 +201,7 @@ export function adaptiveRequestHeaderProfiles(
     job.candidate.pageUrl,
   ]);
   const userAgent = job.browserUserAgent || "AdsFriendlyMediaHelper/0.11";
-  const profiles = [];
+  const profiles: HeaderProfile[] = [];
   const register = (
     id: string,
     referer: string,
@@ -245,7 +250,7 @@ export function adaptiveRequestHeaderProfiles(
       getMediaAccessStrategy(relation).baseScore,
     );
   }
-  let learned = {};
+  let learned: Record<string, number> = {};
   try {
     learned = resourceUrl
       ? job.accessStrategyPreferences[

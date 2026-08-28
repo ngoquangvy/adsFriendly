@@ -10,6 +10,14 @@ type CanaryTrack = {
   chunks: string[];
 };
 
+type FfprobeStream = {
+  codec_type?: unknown;
+  codec_name?: unknown;
+  start_time?: unknown;
+};
+
+type FfprobeOutput = { streams?: FfprobeStream[] };
+
 export async function validatePlayerOutputCanary(payload: {
   tracks: CanaryTrack[];
 }) {
@@ -122,7 +130,7 @@ async function probeTrack(
   }
 }
 
-function runFfprobe(filePath: string): Promise<any> {
+function runFfprobe(filePath: string): Promise<FfprobeOutput> {
   return new Promise((resolve, reject) => {
     const child = spawn(
       "ffprobe",

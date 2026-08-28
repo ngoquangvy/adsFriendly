@@ -13,7 +13,9 @@ export class DownloadJobManager {
   constructor(private readonly registry: DownloadAdapterRegistry) {}
 
   start(rawPayload: unknown, emit: Emit): DownloadJob {
-    const job = normalizeHelperDownloadPayload(rawPayload) as DownloadJob;
+    const job = normalizeHelperDownloadPayload(
+      rawPayload as Record<string, unknown>,
+    ) as DownloadJob;
     if (this.jobs.has(job.jobId)) {
       throw new Error(`Download job "${job.jobId}" is already running.`);
     }

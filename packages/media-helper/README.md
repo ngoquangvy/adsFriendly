@@ -6,7 +6,7 @@ own navigation protection, DOM protection, and shared media discovery. All
 user-initiated video downloads require this helper; there is no second browser
 download backend to keep in sync.
 
-The helper is the only video download backend. Version 0.22 implements Direct
+The helper is the only video download backend. Version 0.24.1 implements Direct
 HTTP MP4/WebM downloads with bounded parallel Range requests, progress,
 cancellation, and resumable `.part` metadata, plus completed unencrypted or
 AES-128 identity-key HLS VOD
@@ -38,6 +38,11 @@ AES-128 key URIs are validated as HTTP(S) resources but are not persisted.
 It can also open a completed output or reveal it in the operating system file
 manager. Output actions are restricted to regular files inside the user's
 managed Downloads directory.
+For a custom JavaScript-protected player with no replayable media URL, the
+Helper can validate a bounded player-output canary and accept an explicitly
+started, ordered fMP4 capture. This fallback is non-resumable and transports
+acknowledged bounded chunks through Native Messaging; normal network downloads
+continue to stream directly from the Helper to disk.
 Blob resolution remains a separate discovery adapter so extending it does not
 change the extension's ad-protection runtime.
 

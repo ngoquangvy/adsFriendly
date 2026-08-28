@@ -7,6 +7,8 @@ import { EVENTS, createRegisteredEvent } from "../runtime/event-catalog.js";
 import { isLikelyMediaSegment } from "../media/detection.js";
 
 const catalog = createMediaCatalog();
+const PLAYBACK_CHECKPOINT_INTERVAL_MS = 10_000;
+const playbackCheckpointTimers = new Map();
 let active = false;
 
 export async function startBackgroundMediaCatalog() {
@@ -27,6 +29,8 @@ export async function startBackgroundMediaCatalog() {
   chrome.tabs.onUpdated.addListener(onUpdated);
   return async () => {
     active = false;
+    for (const timer of playbackCheckpointTimers.values()) clearTimeout(timer);
+    playbackCheckpointTimers.clear();
     catalog.clearAll();
     chrome.tabs.onRemoved.removeListener(onRemoved);
     chrome.tabs.onUpdated.removeListener(onUpdated);
@@ -77,18 +81,33 @@ export async function recordMediaEmeObservation(tabId, event) {
   return { status: "recorded", items };
 }
 
+export async function recordMediaPlaybackObservation(tabId, event) {
+  if (!active) return { status: "catalog_disabled" };
+  const session = catalog.applyPlayback(tabId, event);
+  if (event?.payload?.trigger === "timeupdate")
+    schedulePlaybackCheckpoint(tabId);
+  else await flushPlaybackCheckpoint(tabId).catch(() => {});
+  return { status: "recorded", session };
+}
+
 export async function listDiscoveredMedia(tabId, pageUrl = null) {
   if (!active) return { status: "catalog_disabled", items: [] };
   return { status: "ok", items: catalog.list(tabId, pageUrl) };
+}
+
+export async function listMediaPlaybackSessions(tabId, pageUrl = null) {
+  if (!active) return { status: "catalog_disabled", sessions: [] };
+  return { status: "ok", sessions: catalog.listSessions(tabId, pageUrl) };
 }
 
 async function hydrateCatalog() {
   const storage = chrome.storage.session;
   if (!storage) return;
   const snapshot = await storage.get(null);
-  for (const [key, items] of Object.entries(snapshot)) {
-    if (!key.startsWith(MEDIA_CATALOG_SESSION_PREFIX) || !Array.isArray(items))
-      continue;
+  for (const [key, stored] of Object.entries(snapshot)) {
+    if (!key.startsWith(MEDIA_CATALOG_SESSION_PREFIX)) continue;
+    const { items, sessions } = normalizeStoredMediaCatalogSnapshot(stored);
+    if (!items.length && !sessions.length) continue;
     const tabId = Number(key.slice(MEDIA_CATALOG_SESSION_PREFIX.length));
     if (!Number.isInteger(tabId)) continue;
     for (const item of items) {
@@ -156,19 +175,70 @@ async function hydrateCatalog() {
         } catch {}
       }
     }
+    for (const session of sessions) {
+      for (const point of session.timeline || []) {
+        try {
+          catalog.applyPlayback(tabId, {
+            ...createRegisteredEvent(EVENTS.MEDIA_PLAYBACK_OBSERVED, {
+              ...point,
+              sessionId: session.id,
+              pageUrl: session.pageUrl || stored.pageUrl,
+            }),
+            timestamp: point.observedAt || session.lastSeenAt || Date.now(),
+            metadata: {
+              frameId: session.frameId ?? null,
+              frameUrl: session.frameUrl || null,
+            },
+          });
+        } catch {}
+      }
+    }
     const cleanedItems = catalog.list(tabId);
-    if (cleanedItems.length) await storage.set({ [key]: cleanedItems });
+    if (cleanedItems.length || catalog.listSessions(tabId).length)
+      await storage.set({ [key]: catalog.snapshot(tabId) });
     else await storage.remove(key);
   }
+}
+
+export function normalizeStoredMediaCatalogSnapshot(stored) {
+  return {
+    items: Array.isArray(stored)
+      ? stored
+      : Array.isArray(stored?.items)
+        ? stored.items
+        : [],
+    sessions: Array.isArray(stored?.sessions) ? stored.sessions : [],
+  };
 }
 
 async function persistTab(tabId) {
   const storage = chrome.storage.session;
   if (!storage) return;
-  await storage.set({ [mediaCatalogSessionKey(tabId)]: catalog.list(tabId) });
+  const snapshot = catalog.snapshot(tabId);
+  if (snapshot)
+    await storage.set({ [mediaCatalogSessionKey(tabId)]: snapshot });
+}
+
+function schedulePlaybackCheckpoint(tabId) {
+  if (playbackCheckpointTimers.has(tabId)) return;
+  const timer = setTimeout(() => {
+    playbackCheckpointTimers.delete(tabId);
+    if (active) persistTab(tabId).catch(() => {});
+  }, PLAYBACK_CHECKPOINT_INTERVAL_MS);
+  playbackCheckpointTimers.set(tabId, timer);
+}
+
+async function flushPlaybackCheckpoint(tabId) {
+  const timer = playbackCheckpointTimers.get(tabId);
+  if (timer) clearTimeout(timer);
+  playbackCheckpointTimers.delete(tabId);
+  await persistTab(tabId);
 }
 
 async function clearTab(tabId) {
+  const timer = playbackCheckpointTimers.get(tabId);
+  if (timer) clearTimeout(timer);
+  playbackCheckpointTimers.delete(tabId);
   catalog.clear(tabId);
   if (chrome.storage.session)
     await chrome.storage.session.remove(mediaCatalogSessionKey(tabId));

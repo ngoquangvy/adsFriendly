@@ -121,6 +121,25 @@ test("registered media events normalize a content-neutral candidate", () => {
   assert.equal(event.payload.probeStatus, "discovered");
 });
 
+test("registered playback events expose lineage facts without classifying ads", () => {
+  const event = createRegisteredEvent(EVENTS.MEDIA_PLAYBACK_OBSERVED, {
+    sessionId: "page-a:player-1",
+    pageUrl: "https://video.example/watch",
+    mediaId: "media-1",
+    state: "playing",
+    trigger: "play",
+    currentTime: 4.5,
+    duration: 90,
+    playbackRate: 1,
+    visible: true,
+    observedAt: 1_000,
+    label: "ad",
+  });
+  assert.equal(event.payload.sessionId, "page-a:player-1");
+  assert.equal(event.payload.state, "playing");
+  assert.equal("label" in event.payload, false);
+});
+
 test("registered media probe events normalize manifest metadata", () => {
   const event = createRegisteredEvent(EVENTS.MEDIA_PROBED, {
     mediaId: "media-1",

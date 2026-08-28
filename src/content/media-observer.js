@@ -10,6 +10,21 @@ import {
 } from "../runtime/event-catalog.js";
 import { isExtensionContextInvalidated } from "../shared/extension-context.js";
 import { createYouTubeCandidateFromObservedSource } from "../media/youtube-track-profile.js";
+import { createPlaybackObservationTracker } from "../media/playback-observation.js";
+
+const VIDEO_OBSERVATION_EVENTS = Object.freeze([
+  "loadedmetadata",
+  "durationchange",
+  "play",
+  "pause",
+  "ended",
+  "waiting",
+  "seeking",
+  "seeked",
+  "ratechange",
+  "timeupdate",
+]);
+const MAX_REPORTED_EVENT_KEYS = 2_000;
 
 export function startMediaObserver() {
   let stopped = false;
@@ -21,11 +36,14 @@ export function startMediaObserver() {
   const requestedProbes = new Set();
   const contextualProbeRetries = new Set();
   const videoListeners = new Map();
+  const playbackTracker = createPlaybackObservationTracker();
   const videoVisibilityObserver =
     typeof IntersectionObserver === "function"
       ? new IntersectionObserver(
           (entries) =>
-            entries.forEach((entry) => reportElementSource(entry.target)),
+            entries.forEach((entry) =>
+              reportElementSource(entry.target, "visibility"),
+            ),
           { threshold: [0, 0.25, 0.6] },
         )
       : null;
@@ -211,6 +229,7 @@ export function startMediaObserver() {
         EVENTS.MEDIA_PROBE_DIAGNOSTIC,
         EVENTS.MEDIA_BLOB_TRACED,
         EVENTS.MEDIA_EME_OBSERVED,
+        EVENTS.MEDIA_PLAYBACK_OBSERVED,
       ].includes(messageEvent.data.event?.type)
     )
       return;
@@ -282,11 +301,8 @@ export function startMediaObserver() {
     window.removeEventListener("message", onMainWorldMessage);
     chrome.runtime.onMessage.removeListener(onBackgroundMessage);
     for (const [video, listener] of videoListeners) {
-      video.removeEventListener("loadedmetadata", listener);
-      video.removeEventListener("durationchange", listener);
-      video.removeEventListener("play", listener);
-      video.removeEventListener("pause", listener);
-      video.removeEventListener("ended", listener);
+      for (const eventType of VIDEO_OBSERVATION_EVENTS)
+        video.removeEventListener(eventType, listener);
     }
     videoListeners.clear();
     videoVisibilityObserver?.disconnect();
@@ -492,21 +508,18 @@ export function startMediaObserver() {
 
   function observeVideo(video) {
     if (videoListeners.has(video)) return;
-    const listener = () => {
-      reportElementSource(video);
+    const listener = (event) => {
+      reportElementSource(video, event?.type || "initial");
       video.querySelectorAll("source").forEach(reportElementSource);
     };
     videoListeners.set(video, listener);
-    video.addEventListener("loadedmetadata", listener);
-    video.addEventListener("durationchange", listener);
-    video.addEventListener("play", listener);
-    video.addEventListener("pause", listener);
-    video.addEventListener("ended", listener);
+    for (const eventType of VIDEO_OBSERVATION_EVENTS)
+      video.addEventListener(eventType, listener);
     videoVisibilityObserver?.observe(video);
-    listener();
+    listener({ type: "initial" });
   }
 
-  function reportElementSource(element) {
+  function reportElementSource(element, playbackTrigger = null) {
     const sourceUrl =
       element.currentSrc || element.src || element.getAttribute?.("src");
     const mimeType =
@@ -532,7 +545,7 @@ export function startMediaObserver() {
           observedAt: Date.now(),
         }
       : null;
-    reportSource(
+    const candidate = reportSource(
       sourceUrl,
       mimeType,
       MEDIA_DETECTION_SOURCES.DOM,
@@ -540,6 +553,13 @@ export function startMediaObserver() {
       resolution,
       playback,
     );
+    if (element.matches?.("video")) {
+      reportPlaybackObservation(
+        element,
+        candidate?.id || null,
+        playbackTrigger || "initial",
+      );
+    }
   }
 
   function reportSource(
@@ -567,8 +587,22 @@ export function startMediaObserver() {
         playback,
         detectedBy,
       });
-    if (!candidate) return;
+    if (!candidate) return null;
     reportEvent(createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, candidate));
+    return candidate;
+  }
+
+  function reportPlaybackObservation(video, mediaId, trigger) {
+    const observation = playbackTracker.observe(video, {
+      pageUrl: location.href,
+      mediaId,
+      trigger,
+      visible: isVisibleVideo(video),
+    });
+    if (!observation) return;
+    reportEvent(
+      createRegisteredEvent(EVENTS.MEDIA_PLAYBACK_OBSERVED, observation),
+    );
   }
 
   function isVisibleVideo(video) {
@@ -612,13 +646,15 @@ export function startMediaObserver() {
                 ? "MEDIA_BLOB_TRACED"
                 : event.type === EVENTS.MEDIA_EME_OBSERVED
                   ? "MEDIA_EME_OBSERVED"
-                  : "MEDIA_DISCOVERED",
+                  : event.type === EVENTS.MEDIA_PLAYBACK_OBSERVED
+                    ? "MEDIA_PLAYBACK_OBSERVED"
+                    : "MEDIA_DISCOVERED",
         event,
       })
       .then((response) => {
         pending.delete(reportKey);
         if (response?.status === "recorded") {
-          reported.add(reportKey);
+          rememberReportedKey(reported, reportKey);
           retryCounts.delete(reportKey);
           if (event.type === EVENTS.MEDIA_DISCOVERED)
             scheduleManifestProbe(event.payload);
@@ -804,6 +840,17 @@ export function createMediaObserverReportKey(event) {
       ...(payload.keyStatuses || []),
     ].join(":");
   }
+  if (event?.type === EVENTS.MEDIA_PLAYBACK_OBSERVED) {
+    return [
+      event.type,
+      payload.sessionId,
+      payload.mediaId || "unlinked",
+      payload.state,
+      payload.trigger,
+      payload.visible ? "visible" : "hidden",
+      Math.floor((payload.currentTime || 0) / 5),
+    ].join(":");
+  }
   if (event?.type === EVENTS.MEDIA_PROBE_DIAGNOSTIC) {
     return [
       event.type,
@@ -837,6 +884,15 @@ export function createMediaObserverReportKey(event) {
     payload.encryptionScheme || "none",
     (payload.encryptionMethods || []).join(","),
   ].join(":");
+}
+
+function rememberReportedKey(reported, reportKey) {
+  reported.add(reportKey);
+  while (reported.size > MAX_REPORTED_EVENT_KEYS) {
+    const oldest = reported.values().next().value;
+    if (oldest === undefined) return;
+    reported.delete(oldest);
+  }
 }
 
 function startPerformanceObserver(onEntry) {

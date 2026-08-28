@@ -32,7 +32,8 @@ const HLS_PREFLIGHT_TIMEOUT_MS = configuredTimeout(
 
 export const hlsFfmpegAdapter: DownloadAdapter = Object.freeze({
   id: "hls-ffmpeg",
-  supports: (candidate) => candidate.kind === "hls" && !!candidate.manifestUrl,
+  supports: (candidate: DownloadJob["candidate"]) =>
+    candidate.kind === "hls" && !!candidate.manifestUrl,
   execute: downloadHls,
 });
 

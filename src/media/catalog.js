@@ -9,6 +9,7 @@ import {
 import { isLikelyMediaSegment } from "./detection.js";
 import { resolveHlsSources } from "./hls-resolver.js";
 import { isAcquirableAdaptiveTrack } from "./adaptive-track-policy.js";
+import { createMediaSessionTimeline } from "./session-timeline.js";
 
 export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
   const tabs = new Map();
@@ -32,7 +33,7 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
         tabCatalog = null;
       }
       if (!tabCatalog) {
-        tabCatalog = { pageUrl: candidate.pageUrl, items: new Map() };
+        tabCatalog = createTabCatalog(candidate.pageUrl);
         tabs.set(tabId, tabCatalog);
       }
 
@@ -82,6 +83,7 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
         firstSeenAt: existing?.firstSeenAt || now,
         lastSeenAt: now,
       };
+      attachKnownSessions(item, tabCatalog.sessions);
       applyEmeToItem(item, tabCatalog.eme);
       tabCatalog.items.set(candidate.id, item);
       trimOldest(tabCatalog.items, maximumPerTab);
@@ -102,7 +104,7 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
         tabCatalog = null;
       }
       if (!tabCatalog) {
-        tabCatalog = { pageUrl: probe.pageUrl, items: new Map() };
+        tabCatalog = createTabCatalog(probe.pageUrl);
         tabs.set(tabId, tabCatalog);
       }
 
@@ -148,6 +150,7 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
         firstSeenAt: existing?.firstSeenAt || event.timestamp,
         lastSeenAt: event.timestamp,
       };
+      attachKnownSessions(item, tabCatalog.sessions);
       applyEmeToItem(item, tabCatalog.eme);
       tabCatalog.items.set(probe.mediaId, item);
       trimOldest(tabCatalog.items, maximumPerTab);
@@ -168,7 +171,7 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
         tabCatalog = null;
       }
       if (!tabCatalog) {
-        tabCatalog = { pageUrl: diagnostic.pageUrl, items: new Map() };
+        tabCatalog = createTabCatalog(diagnostic.pageUrl);
         tabs.set(tabId, tabCatalog);
       }
       const existing = tabCatalog.items.get(diagnostic.mediaId);
@@ -205,6 +208,7 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
         firstSeenAt: existing?.firstSeenAt || event.timestamp,
         lastSeenAt: event.timestamp,
       };
+      attachKnownSessions(item, tabCatalog.sessions);
       applyEmeToItem(item, tabCatalog.eme);
       tabCatalog.items.set(diagnostic.mediaId, item);
       trimOldest(tabCatalog.items, maximumPerTab);
@@ -225,7 +229,7 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
         tabCatalog = null;
       }
       if (!tabCatalog) {
-        tabCatalog = { pageUrl: trace.pageUrl, items: new Map() };
+        tabCatalog = createTabCatalog(trace.pageUrl);
         tabs.set(tabId, tabCatalog);
       }
       const existing = tabCatalog.items.get(trace.mediaId);
@@ -258,6 +262,7 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
         firstSeenAt: existing?.firstSeenAt || event.timestamp,
         lastSeenAt: event.timestamp,
       };
+      attachKnownSessions(item, tabCatalog.sessions);
       applyEmeToItem(item, tabCatalog.eme);
       tabCatalog.items.set(trace.mediaId, item);
       trimOldest(tabCatalog.items, maximumPerTab);
@@ -286,6 +291,40 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
       tabCatalog.items.set(handoff.mediaId, item);
       return cloneItem(item);
     },
+    applyPlayback(tabId, rawEvent) {
+      assertTabId(tabId);
+      const event = normalizeRegisteredEvent(rawEvent);
+      if (event.type !== EVENTS.MEDIA_PLAYBACK_OBSERVED) {
+        throw new Error(
+          `[MediaCatalog] Cannot apply playback event "${event.type}".`,
+        );
+      }
+      const observation = event.payload;
+      let tabCatalog = tabs.get(tabId);
+      if (tabCatalog && !samePageUrl(tabCatalog.pageUrl, observation.pageUrl)) {
+        tabs.delete(tabId);
+        tabCatalog = null;
+      }
+      if (!tabCatalog) {
+        tabCatalog = createTabCatalog(observation.pageUrl);
+        tabs.set(tabId, tabCatalog);
+      }
+      const session = tabCatalog.sessions.add(observation, {
+        frameId: event.metadata?.frameId,
+        frameUrl: event.metadata?.frameUrl,
+      });
+      for (const mediaId of session.mediaIds) {
+        const item = tabCatalog.items.get(mediaId);
+        if (!item) continue;
+        item.playerSessionIds = uniqueStrings([
+          ...(item.playerSessionIds || []),
+          session.id,
+        ]).slice(-16);
+        item.playback = playbackFromSessionPoint(session.current);
+        item.lastSeenAt = Math.max(item.lastSeenAt || 0, event.timestamp);
+      }
+      return session;
+    },
     applyEme(tabId, rawEvent) {
       assertTabId(tabId);
       const event = normalizeRegisteredEvent(rawEvent);
@@ -301,11 +340,7 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
         tabCatalog = null;
       }
       if (!tabCatalog) {
-        tabCatalog = {
-          pageUrl: observation.pageUrl,
-          items: new Map(),
-          eme: null,
-        };
+        tabCatalog = createTabCatalog(observation.pageUrl);
         tabs.set(tabId, tabCatalog);
       }
       tabCatalog.eme = mergeEmeMetadata(tabCatalog.eme, observation);
@@ -318,17 +353,25 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
       const tabCatalog = tabs.get(tabId);
       if (!tabCatalog || (pageUrl && !samePageUrl(tabCatalog.pageUrl, pageUrl)))
         return [];
-      const items = [...tabCatalog.items.values()].sort(
-        (left, right) => right.lastSeenAt - left.lastSeenAt,
-      );
-      const resolutions = resolveHlsSources(items);
-      const blobResolutions = resolveBlobSources(items, resolutions);
-      return items.map((item) =>
-        cloneItem(
-          item,
-          blobResolutions.get(item.id) || resolutions.get(item.id),
-        ),
-      );
+      return listTabItems(tabCatalog);
+    },
+    listSessions(tabId, pageUrl = null) {
+      assertTabId(tabId);
+      const tabCatalog = tabs.get(tabId);
+      if (!tabCatalog || (pageUrl && !samePageUrl(tabCatalog.pageUrl, pageUrl)))
+        return [];
+      return tabCatalog.sessions.list();
+    },
+    snapshot(tabId) {
+      assertTabId(tabId);
+      const tabCatalog = tabs.get(tabId);
+      if (!tabCatalog) return null;
+      return {
+        version: 2,
+        pageUrl: tabCatalog.pageUrl,
+        items: listTabItems(tabCatalog),
+        sessions: tabCatalog.sessions.list(),
+      };
     },
     clear(tabId) {
       assertTabId(tabId);
@@ -338,6 +381,49 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
       tabs.clear();
     },
   });
+}
+
+function createTabCatalog(pageUrl) {
+  return {
+    pageUrl,
+    items: new Map(),
+    sessions: createMediaSessionTimeline(),
+    eme: null,
+  };
+}
+
+function listTabItems(tabCatalog) {
+  const items = [...tabCatalog.items.values()].sort(
+    (left, right) => right.lastSeenAt - left.lastSeenAt,
+  );
+  const resolutions = resolveHlsSources(items);
+  const blobResolutions = resolveBlobSources(items, resolutions);
+  return items.map((item) =>
+    cloneItem(item, blobResolutions.get(item.id) || resolutions.get(item.id)),
+  );
+}
+
+function attachKnownSessions(item, sessions) {
+  const related = sessions.forMedia(item.id);
+  item.playerSessionIds = uniqueStrings([
+    ...(item.playerSessionIds || []),
+    ...related.map((session) => session.id),
+  ]).slice(-16);
+  if (!item.playback && related[0]?.current)
+    item.playback = playbackFromSessionPoint(related[0].current);
+}
+
+function playbackFromSessionPoint(point) {
+  if (!point) return null;
+  return {
+    state: point.state,
+    playing: point.state === "playing",
+    visible: point.visible === true,
+    muted: point.muted === true,
+    currentTime: point.currentTime,
+    playbackRate: point.playbackRate,
+    observedAt: point.observedAt,
+  };
 }
 
 function probeFields(item) {
@@ -743,6 +829,7 @@ function cloneItem(item, resolution = null) {
     subtitles: item.subtitles.map((track) => ({ ...track })),
     detectionSources: [...item.detectionSources],
     playerAdapters: [...(item.playerAdapters || [])],
+    playerSessionIds: [...(item.playerSessionIds || [])],
     encryptionMethods: [...(item.encryptionMethods || [])],
     encryptionKeyFormats: [...(item.encryptionKeyFormats || [])],
     drmEvidence: [...(item.drmEvidence || [])],

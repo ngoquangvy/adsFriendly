@@ -100,6 +100,16 @@ export interface AdaptiveHttpTrack {
   /** Provider-specific byte request contract; kept ephemeral with the track. */
   requestMode?: "youtube_query_range" | "http_range" | null;
   requestCpn?: string | null;
+  language?: string | null;
+  audioTrackId?: string | null;
+  audioTrackName?: string | null;
+  audioRole?:
+    "original" | "dubbed" | "auto_dubbed" | "descriptive" | "secondary" | null;
+  audioIsDefault?: boolean;
+  isDrc?: boolean;
+  audioSampleRate?: number | null;
+  audioChannels?: number | null;
+  audioQuality?: string | null;
 }
 
 export interface DownloadJob {

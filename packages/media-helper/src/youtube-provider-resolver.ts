@@ -460,9 +460,7 @@ async function inspectProviderQualityOptions(
   videoId: string,
 ): Promise<YouTubeQualityPreflight> {
   try {
-    const preflightSignal = AbortSignal.timeout(
-      SOURCE_PREFLIGHT_TIMEOUT_MS,
-    );
+    const preflightSignal = AbortSignal.timeout(SOURCE_PREFLIGHT_TIMEOUT_MS);
     const audioCandidates = (candidate.audioTracks || [])
       .filter((track) => track.type === "audio")
       .map((track) => ({
@@ -774,14 +772,16 @@ function compareAudioTracks(left: AdaptiveHttpTrack, right: AdaptiveHttpTrack) {
 }
 
 function audioPreferenceScore(track: AdaptiveHttpTrack) {
-  const role =
-    {
-      original: 50,
-      secondary: 30,
-      dubbed: 20,
-      auto_dubbed: 10,
-      descriptive: 5,
-    }[track.audioRole || ""] || 25;
+  const priorities: Partial<
+    Record<NonNullable<AdaptiveHttpTrack["audioRole"]>, number>
+  > = {
+    original: 50,
+    secondary: 30,
+    dubbed: 20,
+    auto_dubbed: 10,
+    descriptive: 5,
+  };
+  const role = track.audioRole ? priorities[track.audioRole] || 25 : 25;
   return role + (track.audioIsDefault ? 4 : 0) - (track.isDrc ? 1 : 0);
 }
 

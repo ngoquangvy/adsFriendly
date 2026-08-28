@@ -20,7 +20,8 @@ import { resolveYouTubeProviderTracks } from "./youtube-provider-resolver.js";
 
 export const adaptiveHttpAdapter: DownloadAdapter = Object.freeze({
   id: "adaptive-http",
-  supports: (candidate) => candidate.kind === "adaptive",
+  supports: (candidate: DownloadJob["candidate"]) =>
+    candidate.kind === "adaptive",
   execute: downloadAdaptiveHttp,
 });
 
@@ -47,7 +48,7 @@ async function downloadAdaptiveHttp(
     "video",
     job,
   );
-  let audio = selectTrack(
+  let audio: AdaptiveHttpTrack | null = selectTrack(
     job.candidate.audioTracks.filter(
       (track) =>
         !job.output.audioTrackId || track.id === job.output.audioTrackId,
@@ -145,10 +146,12 @@ async function downloadAdaptiveHttp(
       0,
     );
     const knownTotals = values.map((item) => item.totalBytes);
+    const allTotalsKnown = knownTotals.every((value): value is number =>
+      Number.isFinite(value),
+    );
     const totalBytes =
-      values.length === expectedTransferCount &&
-      knownTotals.every(Number.isFinite)
-        ? knownTotals.reduce((total, value) => total + Number(value), 0)
+      values.length === expectedTransferCount && allTotalsKnown
+        ? knownTotals.reduce((total, value) => total + value, 0)
         : null;
     context.progress({
       phase: values.some((item) => item.phase === "downloading")
@@ -555,14 +558,16 @@ function selectTrack(
 }
 
 function audioPreferenceScore(track: AdaptiveHttpTrack) {
-  const role =
-    {
-      original: 50,
-      secondary: 30,
-      dubbed: 20,
-      auto_dubbed: 10,
-      descriptive: 5,
-    }[track.audioRole || ""] || 25;
+  const priorities: Partial<
+    Record<NonNullable<AdaptiveHttpTrack["audioRole"]>, number>
+  > = {
+    original: 50,
+    secondary: 30,
+    dubbed: 20,
+    auto_dubbed: 10,
+    descriptive: 5,
+  };
+  const role = track.audioRole ? priorities[track.audioRole] || 25 : 25;
   return role + (track.audioIsDefault ? 4 : 0) - (track.isDrc ? 1 : 0);
 }
 

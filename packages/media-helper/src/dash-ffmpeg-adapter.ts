@@ -25,7 +25,8 @@ const MAX_MANIFEST_BYTES = 2 * 1024 * 1024;
 
 export const dashFfmpegAdapter: DownloadAdapter = Object.freeze({
   id: "dash-ffmpeg",
-  supports: (candidate) => candidate.kind === "dash" && !!candidate.manifestUrl,
+  supports: (candidate: DownloadJob["candidate"]) =>
+    candidate.kind === "dash" && !!candidate.manifestUrl,
   execute: downloadDash,
 });
 

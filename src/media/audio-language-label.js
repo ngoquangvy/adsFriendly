@@ -15,6 +15,14 @@ const LOCALIZED_LANGUAGE_NAMES = Object.freeze({
   "tiếng hàn": "Korean",
 });
 
+/**
+ * @param {{
+ *   language?: string | null,
+ *   name?: string | null,
+ *   role?: "original" | "dubbed" | "auto_dubbed" | "descriptive" | "secondary" | null,
+ *   isDefault?: boolean
+ * }} [options]
+ */
 export function formatAudioLanguageLabel({
   language = null,
   name = null,

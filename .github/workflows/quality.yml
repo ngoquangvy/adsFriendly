@@ -1,0 +1,36 @@
+name: Quality
+
+on:
+  push:
+    branches:
+      - main
+      - product/**
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  extension-and-helper:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build and test
+        run: pnpm test:ci

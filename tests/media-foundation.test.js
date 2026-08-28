@@ -17,10 +17,13 @@ import {
   normalizeHttpMediaUrl,
 } from "../src/media/probe-gate.js";
 import { createMediaObserverReportKey } from "../src/content/media-observer.js";
+import { createPlaybackObservationTracker } from "../src/media/playback-observation.js";
+import { createMediaSessionTimeline } from "../src/media/session-timeline.js";
 import { createMediaProbeRefererRule } from "../src/background/media-probe-context.js";
 import { createMediaRequestObservation } from "../src/background/media-request-observer.js";
 import { normalizeDebugCapture } from "../src/background/media-debug-capture.js";
 import { normalizeMediaManifestHandoff as normalizeStoredManifestHandoff } from "../src/background/media-manifest-handoff.js";
+import { normalizeStoredMediaCatalogSnapshot } from "../src/background/media-catalog.js";
 import {
   createContextualProbeInit,
   readXhrResponseBody,
@@ -62,7 +65,10 @@ import {
   selectCompactMediaJobs,
 } from "../src/media/download-job-view.js";
 import { EVENTS, createRegisteredEvent } from "../src/runtime/event-catalog.js";
-import { normalizeMediaRequestContext } from "../src/media/contracts.js";
+import {
+  normalizeMediaPlaybackObservation,
+  normalizeMediaRequestContext,
+} from "../src/media/contracts.js";
 import { evaluateMediaDeepInspection } from "../src/media/deep-inspection.js";
 import {
   MEDIA_DEEP_INSPECTION_PROFILES_KEY,
@@ -129,6 +135,140 @@ import {
   formatAesKeyHandoffDiagnostic,
   normalizeAesKeyHandoffDiagnostic,
 } from "../src/media/key-handoff-diagnostics.js";
+
+test("playback observations keep a stable player session without ad labels", () => {
+  let now = 1_000;
+  const tracker = createPlaybackObservationTracker({
+    scopeId: "frame-a",
+    now: () => now,
+  });
+  const video = {
+    paused: false,
+    ended: false,
+    muted: false,
+    currentTime: 12,
+    duration: 120,
+    playbackRate: 1,
+    readyState: 4,
+  };
+  const first = tracker.observe(video, {
+    pageUrl: "https://video.example/watch",
+    mediaId: "content-track",
+    trigger: "play",
+    visible: true,
+  });
+  now += 2_000;
+  video.currentTime = 30;
+  const second = tracker.observe(video, {
+    pageUrl: "https://video.example/watch",
+    mediaId: "replacement-track",
+    trigger: "timeupdate",
+    visible: true,
+  });
+  assert.equal(first.sessionId, second.sessionId);
+  assert.equal(first.state, "playing");
+  assert.equal("label" in first, false);
+  assert.equal("sourceUrl" in first, false);
+});
+
+test("media session timeline links bounded playback facts across media sources", () => {
+  const timeline = createMediaSessionTimeline({
+    maximumSessions: 2,
+    maximumObservations: 3,
+  });
+  for (const [index, mediaId] of [
+    "content-a",
+    "content-a",
+    "content-b",
+  ].entries()) {
+    timeline.add(
+      normalizeMediaPlaybackObservation({
+        sessionId: "frame-a:player-1",
+        pageUrl: "https://video.example/watch",
+        mediaId,
+        state: "playing",
+        trigger: "timeupdate",
+        currentTime: index * 10,
+        duration: 120,
+        playbackRate: 1,
+        visible: true,
+        observedAt: 1_000 + index * 6_000,
+      }),
+      { frameId: 7, frameUrl: "https://embed.example/player" },
+    );
+  }
+  const [session] = timeline.list();
+  assert.equal(session.lineageId, "frame-7:frame-a:player-1");
+  assert.deepEqual(session.mediaIds, ["content-a", "content-b"]);
+  assert.equal(session.timeline.length, 2);
+  assert.equal(session.current.currentTime, 20);
+});
+
+test("media catalog exposes content-neutral player lineage and resets it on navigation", () => {
+  const catalog = createMediaCatalog();
+  const pageUrl = "https://video.example/watch";
+  catalog.applyPlayback(
+    9,
+    createRegisteredEvent(
+      EVENTS.MEDIA_PLAYBACK_OBSERVED,
+      {
+        sessionId: "page-1:player-1",
+        pageUrl,
+        mediaId: "video-1",
+        state: "playing",
+        trigger: "play",
+        currentTime: 0,
+        duration: 60,
+        playbackRate: 1,
+        visible: true,
+        observedAt: 1_000,
+      },
+      { frameId: 3, frameUrl: "https://embed.example/player" },
+    ),
+  );
+  catalog.add(
+    9,
+    createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, {
+      id: "video-1",
+      pageUrl,
+      sourceUrl: "https://cdn.example/video.mp4",
+      kind: "direct",
+      detectedBy: "dom",
+    }),
+  );
+  assert.deepEqual(catalog.list(9)[0].playerSessionIds, ["page-1:player-1"]);
+  assert.equal(catalog.listSessions(9)[0].current.state, "playing");
+  assert.equal(catalog.snapshot(9).version, 2);
+
+  catalog.add(
+    9,
+    createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, {
+      id: "video-2",
+      pageUrl: "https://video.example/next",
+      sourceUrl: "https://cdn.example/next.mp4",
+      kind: "direct",
+      detectedBy: "dom",
+    }),
+  );
+  assert.deepEqual(catalog.listSessions(9), []);
+});
+
+test("media catalog session snapshots migrate from the legacy item array", () => {
+  const legacyItems = [{ id: "legacy-media" }];
+  assert.deepEqual(normalizeStoredMediaCatalogSnapshot(legacyItems), {
+    items: legacyItems,
+    sessions: [],
+  });
+  const current = {
+    version: 2,
+    items: [{ id: "current-media" }],
+    sessions: [{ id: "player-1", timeline: [] }],
+  };
+  assert.deepEqual(normalizeStoredMediaCatalogSnapshot(current), {
+    items: current.items,
+    sessions: current.sessions,
+  });
+});
 
 test("parses browser-resolved YouTube playback tracks without retaining the playback range", () => {
   const track = parseYouTubePlaybackTrack(

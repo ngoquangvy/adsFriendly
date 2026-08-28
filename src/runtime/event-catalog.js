@@ -2,6 +2,7 @@ import {
   normalizeMediaCandidate,
   normalizeBlobSourceTrace,
   normalizeMediaManifestHandoff,
+  normalizeMediaPlaybackObservation,
   normalizeMediaProbe,
   normalizeMediaProbeDiagnostic,
   normalizeEmeObservation,
@@ -15,6 +16,7 @@ export const EVENTS = Object.freeze({
   MEDIA_BLOB_TRACED: "media.blob_traced",
   MEDIA_MANIFEST_HANDOFF_READY: "media.manifest_handoff_ready",
   MEDIA_EME_OBSERVED: "media.eme_observed",
+  MEDIA_PLAYBACK_OBSERVED: "media.playback_observed",
   MEDIA_CATALOG_UPDATED: "media.catalog.updated",
   VIDEO_AD_EVIDENCE_FOUND: "video_ad.evidence_found",
   VIDEO_AD_LABELLED: "video_ad.labelled",
@@ -58,6 +60,12 @@ export const EVENT_CATALOG = Object.freeze({
     "media.eme-observer",
     ["media.catalog"],
     normalizeEmeObservation,
+  ),
+  [E.MEDIA_PLAYBACK_OBSERVED]: event(
+    E.MEDIA_PLAYBACK_OBSERVED,
+    "media.playback-observer",
+    ["media.catalog", "video-ad.evidence-collector"],
+    normalizeMediaPlaybackObservation,
   ),
   [E.MEDIA_CATALOG_UPDATED]: event(
     E.MEDIA_CATALOG_UPDATED,

@@ -9,6 +9,9 @@ AdsFriendly is a Chrome extension focused on friendly ad protection: pop-under p
 - In-page ad cleanup with learned rules.
 - Manual picker for marking ads and training local patterns.
 - Video ad heuristics with stream manifest inspection.
+- Content-neutral player sessions and bounded playback timelines.
+- Optional Media Helper downloads for supported Direct, HLS, DASH, YouTube,
+  Facebook, and validated custom-player output.
 - Modular source layout under `src/`, bundled with esbuild.
 
 ## Development
