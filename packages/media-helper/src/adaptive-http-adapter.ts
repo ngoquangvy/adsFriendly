@@ -481,6 +481,8 @@ function providerTrackDiagnostic(track: AdaptiveHttpTrack | null | undefined) {
 function isGoogleVideoRangeFailure(error: unknown) {
   return /GoogleVideo rejected bytes \d+-\d+ after accepting the initial probe/i.test(
     messageOf(error),
+  ) || /GoogleVideo probe rejected HTTP 403 before byte transfer/i.test(
+    messageOf(error),
   );
 }
 

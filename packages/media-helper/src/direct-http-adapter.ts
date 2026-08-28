@@ -139,7 +139,13 @@ async function probeSource(
     );
   }
   if (!response.ok) {
-    throw new Error(`Media server returned HTTP ${response.status}.`);
+    throw new Error(
+      mediaProbeFailure(
+        sourceUrl,
+        response.status,
+        job.candidate.requestMode || "http-range",
+      ),
+    );
   }
   await assertSafeRemoteUrl(response.url);
   const contentRange = response.headers.get("content-range");
@@ -172,6 +178,17 @@ async function probeSource(
     contentType: response.headers.get("content-type"),
     contentDisposition: response.headers.get("content-disposition"),
   };
+}
+
+function mediaProbeFailure(url: string, status: number, mode: string) {
+  if (status === 403 && isGoogleVideoUrl(url)) {
+    return (
+      `GoogleVideo probe rejected HTTP 403 before byte transfer. ` +
+      "The provider URL, client profile, or proof-of-origin token was rejected. " +
+      `Diagnostics: ${googleVideoDiagnostics(url, { start: 0, end: 0, length: 1 }, mode)}.`
+    );
+  }
+  return `Media server returned HTTP ${status} during the initial probe.`;
 }
 
 async function downloadRanges({
@@ -433,7 +450,13 @@ async function downloadSequential({
     signal: context.signal,
   });
   if (!response.ok || !response.body) {
-    throw new Error(`Media server returned HTTP ${response.status}.`);
+    throw new Error(
+      mediaProbeFailure(
+        probe.url,
+        response.status,
+        job.candidate.requestMode || "http-range",
+      ),
+    );
   }
   const handle = await open(partialPath, "w");
   const startedAt = Date.now();

@@ -292,7 +292,11 @@ async function loadProviderFormats(
   profile: ProviderProfile,
   { force = false } = {},
 ) {
-  const key = `${profile.client}:${videoId}`;
+  // Keep each client/profile isolated. A PO-enabled Web response must never
+  // reuse a URL/CPN pair obtained from the non-PO Web fallback, otherwise the
+  // URL receives a token from a different provider context and GVS can return
+  // 403 after the initial probe.
+  const key = `${profile.id}:${profile.client}:${videoId}`;
   const cached = responseCache.get(key);
   const session = await getSession();
   if (!force && cached && cached.expiresAt > Date.now())
