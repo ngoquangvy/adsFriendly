@@ -79,6 +79,7 @@ async function downloadAdaptiveHttp(
       {
         allowEquivalentVideo:
           job.output.allowEquivalentVideo === true || !job.output.videoTrackId,
+        force: true,
       },
     );
     video = resolved[0];
@@ -210,6 +211,11 @@ async function downloadAdaptiveHttp(
         cacheDirectory,
         videoConnections,
         transferContext("video"),
+        {
+          allowEquivalentVideo:
+            job.output.allowEquivalentVideo === true ||
+            !job.output.videoTrackId,
+        },
       );
     const downloadAudio = () =>
       downloadAdaptiveTrack(
@@ -219,6 +225,7 @@ async function downloadAdaptiveHttp(
         cacheDirectory,
         audioConnections,
         transferContext("audio"),
+        { allowEquivalentVideo: false },
       );
     let videoResult;
     let audioResult;
@@ -293,6 +300,7 @@ async function downloadAudioOnly(
     audio = (
       await resolveYouTubeProviderTracks([audio], job.candidate, {
         allowEquivalentVideo: false,
+        force: true,
       })
     )[0];
   }
@@ -311,20 +319,19 @@ async function downloadAudioOnly(
     join(outputDirectory, ".adsfriendly-audio-"),
   );
   try {
-    const audioResult = await downloadDirectHttp(
-      directTrackJob(
-        job,
-        audio,
-        "audio-track",
-        cacheDirectory,
-        job.connections,
-      ),
+    const audioResult = await downloadAdaptiveTrack(
+      job,
+      audio,
+      "audio-track",
+      cacheDirectory,
+      job.connections,
       childContext(context, (value) =>
         context.progress({
           ...value,
           duration: job.candidate.duration,
         }),
       ),
+      { allowEquivalentVideo: false },
     );
     context.progress({
       phase: "finalizing",
@@ -357,6 +364,7 @@ async function downloadAdaptiveTrack(
   outputDirectory: string,
   connections: number,
   context: DownloadContext,
+  { allowEquivalentVideo = false } = {},
 ) {
   try {
     return await downloadDirectHttp(
@@ -364,11 +372,50 @@ async function downloadAdaptiveTrack(
       context,
     );
   } catch (error) {
+    if (
+      job.candidate.provider === "youtube" &&
+      isGoogleVideoRangeFailure(error) &&
+      track.itag
+    ) {
+      try {
+        // GoogleVideo URLs can accept the first probe and reject later byte
+        // windows when their proof-of-origin binding is stale. Refresh the
+        // provider response once, then retry only this track. This keeps the
+        // normal multi-connection downloader unchanged and bounds retries.
+        const [freshTrack] = await resolveYouTubeProviderTracks(
+          [track],
+          job.candidate,
+          { allowEquivalentVideo, force: true },
+        );
+        if (freshTrack?.sourceUrl) {
+          return await downloadDirectHttp(
+            directTrackJob(
+              job,
+              freshTrack,
+              title,
+              outputDirectory,
+              connections,
+            ),
+            context,
+          );
+        }
+      } catch (refreshError) {
+        error = new Error(
+          `${messageOf(error)}; fresh provider URL retry failed: ${messageOf(refreshError)}`,
+        );
+      }
+    }
     const provider = job.candidate.provider === "youtube" ? "YouTube " : "";
     throw new Error(
       `${provider}${track.type} track (${adaptiveTrackLabel(track)}) failed: ${messageOf(error)}`,
     );
   }
+}
+
+function isGoogleVideoRangeFailure(error: unknown) {
+  return /GoogleVideo rejected bytes \d+-\d+ after accepting the initial probe/i.test(
+    messageOf(error),
+  );
 }
 
 function adaptiveTrackLabel(track: AdaptiveHttpTrack) {

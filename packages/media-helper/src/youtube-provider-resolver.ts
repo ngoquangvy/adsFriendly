@@ -54,11 +54,11 @@ export type YouTubeQualityPreflight = {
 export async function resolveYouTubeProviderTracks(
   tracks: AdaptiveHttpTrack[],
   candidate: DownloadCandidate,
-  { allowEquivalentVideo = false } = {},
+  { allowEquivalentVideo = false, force = false } = {},
 ): Promise<AdaptiveHttpTrack[]> {
   if (candidate.provider !== "youtube") return tracks;
   const pending = tracks.filter(
-    (track) => track.urlResolution === "provider_client_pending",
+    (track) => force || track.urlResolution === "provider_client_pending",
   );
   if (!pending.length) return tracks;
   const videoId = youtubeVideoId(candidate.pageUrl);
@@ -71,10 +71,12 @@ export async function resolveYouTubeProviderTracks(
   const profiles = profilePlan.profiles;
   for (const profile of profiles) {
     try {
-      const { formats, session } = await loadProviderFormats(videoId, profile);
+      const { formats, session } = await loadProviderFormats(videoId, profile, {
+        force,
+      });
       const resolved = await Promise.all(
         tracks.map((track) =>
-          track.urlResolution === "provider_client_pending"
+          force || track.urlResolution === "provider_client_pending"
             ? resolveTrackFromFormats(track, formats, session, profile)
             : track,
         ),
@@ -282,11 +284,15 @@ function sourceFormatLabel(format: ProviderFormat) {
   return [format.quality_label, container, codec].filter(Boolean).join(" · ");
 }
 
-async function loadProviderFormats(videoId: string, profile: ProviderProfile) {
+async function loadProviderFormats(
+  videoId: string,
+  profile: ProviderProfile,
+  { force = false } = {},
+) {
   const key = `${profile.client}:${videoId}`;
   const cached = responseCache.get(key);
   const session = await getSession();
-  if (cached && cached.expiresAt > Date.now())
+  if (!force && cached && cached.expiresAt > Date.now())
     return { formats: cached.formats, session };
   const info = await session.getBasicInfo(videoId, {
     client: profile.client,
