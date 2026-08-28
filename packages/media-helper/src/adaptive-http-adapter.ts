@@ -551,6 +551,7 @@ function directTrackJob(
       manifestUrl: null,
       title,
       mimeType: track.mimeType,
+      contentLength: track.contentLength,
       requestMode: track.requestMode || "http_range",
       requestCpn: track.requestCpn || null,
       variants: [],

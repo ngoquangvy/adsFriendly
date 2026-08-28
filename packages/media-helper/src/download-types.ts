@@ -6,6 +6,7 @@ export interface DownloadCandidate {
   manifestUrl: string | null;
   title: string | null;
   mimeType: string | null;
+  contentLength?: number | null;
   duration: number | null;
   segmentCount: number | null;
   provider: string | null;

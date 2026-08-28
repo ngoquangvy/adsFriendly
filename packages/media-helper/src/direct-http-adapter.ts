@@ -144,10 +144,22 @@ async function probeSource(
   await assertSafeRemoteUrl(response.url);
   const contentRange = response.headers.get("content-range");
   const rangeTotal = contentRange?.match(/\/(\d+)$/)?.[1] || null;
+  const declaredUrlSize = positiveInteger(
+    (() => {
+      try {
+        return new URL(sourceUrl).searchParams.get("clen");
+      } catch {
+        return null;
+      }
+    })(),
+  );
   const totalBytes =
     positiveInteger(rangeTotal) ||
+    (queryRange &&
+      (positiveInteger(job.candidate.contentLength) || declaredUrlSize)) ||
     positiveInteger(response.headers.get("content-length"));
   const acceptsRanges =
+    Boolean(queryRange) ||
     response.status === 206 ||
     response.headers.get("accept-ranges")?.toLowerCase() === "bytes";
   await response.body?.cancel().catch(() => {});
