@@ -21,9 +21,11 @@ import type {
 
 const MIN_RANGE_BYTES = 4 * 1024 * 1024;
 const MAX_RANGE_BYTES = 32 * 1024 * 1024;
-// GVS may accept a 0-0 probe but reject larger windows. Keep YouTube ranges
-// at the conservative 2 MiB boundary observed across IOS/Android endpoints.
-const GOOGLEVIDEO_RANGE_BYTES = 2 * 1024 * 1024;
+// GVS may accept a 0-0 probe but reject larger windows. Video endpoints have
+// accepted 2 MiB, while the audio itag 140 endpoint rejects that size and
+// accepts 1 MiB, so keep separate conservative caps by media type.
+const GOOGLEVIDEO_VIDEO_RANGE_BYTES = 2 * 1024 * 1024;
+const GOOGLEVIDEO_AUDIO_RANGE_BYTES = 1 * 1024 * 1024;
 const PROGRESS_INTERVAL_MS = 180;
 const MAX_RETRIES = 2;
 
@@ -162,7 +164,12 @@ async function downloadRanges({
   partialPath: string;
   metadataPath: string;
 }) {
-  const ranges = buildRanges(probe.totalBytes, job.connections, probe.url);
+  const ranges = buildRanges(
+    probe.totalBytes,
+    job.connections,
+    probe.url,
+    job.candidate.mimeType,
+  );
   const metadata = expectedMetadata(probe, ranges);
   const completed = await preparePartialFile(
     partialPath,
@@ -489,11 +496,15 @@ function buildRanges(
   totalBytes: number,
   connections: number,
   sourceUrl = "",
+  mimeType: string | null = null,
 ): ByteRange[] {
   const googleVideo = isGoogleVideoUrl(sourceUrl);
   const desired = Math.ceil(totalBytes / Math.max(1, connections * 4));
-  const minimum = googleVideo ? GOOGLEVIDEO_RANGE_BYTES : MIN_RANGE_BYTES;
-  const maximum = googleVideo ? GOOGLEVIDEO_RANGE_BYTES : MAX_RANGE_BYTES;
+  const googleVideoRange = String(mimeType || "").startsWith("audio/")
+    ? GOOGLEVIDEO_AUDIO_RANGE_BYTES
+    : GOOGLEVIDEO_VIDEO_RANGE_BYTES;
+  const minimum = googleVideo ? googleVideoRange : MIN_RANGE_BYTES;
+  const maximum = googleVideo ? googleVideoRange : MAX_RANGE_BYTES;
   const chunkSize = Math.max(minimum, Math.min(maximum, desired));
   const ranges: ByteRange[] = [];
   for (
