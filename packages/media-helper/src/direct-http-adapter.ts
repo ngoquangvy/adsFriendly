@@ -169,10 +169,23 @@ async function probeSource(
     (queryRange &&
       (positiveInteger(job.candidate.contentLength) || declaredUrlSize)) ||
     positiveInteger(response.headers.get("content-length"));
-  const acceptsRanges =
+  let acceptsRanges =
     Boolean(queryRange) ||
     response.status === 206 ||
     response.headers.get("accept-ranges")?.toLowerCase() === "bytes";
+  if (
+    !googleVideo &&
+    !queryRange &&
+    response.status !== 206 &&
+    acceptsRanges
+  ) {
+    const verification = await fetchRemote(sourceUrl, {
+      headers: { ...headers, Range: "bytes=0-0" },
+      signal,
+    });
+    acceptsRanges = verification.status === 206;
+    await verification.body?.cancel().catch(() => {});
+  }
   await response.body?.cancel().catch(() => {});
   if (googleVideo && acceptsRanges && totalBytes) {
     await probeGoogleVideoContinuation(

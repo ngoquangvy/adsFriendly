@@ -51,6 +51,7 @@ export function createMediaCandidateFromSource({
   title = null,
   duration = null,
   resolution = null,
+  playback = null,
   detectedBy = MEDIA_DETECTION_SOURCES.DOM,
 }) {
   const absoluteSourceUrl = resolveSourceUrl(sourceUrl, pageUrl);
@@ -67,6 +68,7 @@ export function createMediaCandidateFromSource({
     mimeType,
     duration,
     resolution,
+    playback,
     detectedBy,
     drm: "none",
   });

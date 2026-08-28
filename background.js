@@ -2296,6 +2296,7 @@ var AdsFriendlyBackground = (() => {
       ),
       duration: optionalFiniteNumber(value.duration),
       resolution: normalizeResolution(value.resolution),
+      playback: normalizePlaybackState(value.playback),
       bandwidth: optionalPositiveNumber(value.bandwidth),
       averageBandwidth: optionalPositiveNumber(value.averageBandwidth),
       targetDuration: optionalFiniteNumber(value.targetDuration),
@@ -2326,6 +2327,16 @@ var AdsFriendlyBackground = (() => {
       );
     }
     return candidate;
+  }
+  function normalizePlaybackState(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    return {
+      playing: value.playing === true,
+      visible: value.visible === true,
+      muted: value.muted === true,
+      currentTime: optionalFiniteNumber(value.currentTime),
+      observedAt: optionalNonNegativeInteger(value.observedAt)
+    };
   }
   function normalizeMediaAcquisitionDiagnostic(value) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -2921,6 +2932,7 @@ var AdsFriendlyBackground = (() => {
     title = null,
     duration = null,
     resolution = null,
+    playback = null,
     detectedBy = MEDIA_DETECTION_SOURCES.DOM
   }) {
     const absoluteSourceUrl = resolveSourceUrl(sourceUrl, pageUrl);
@@ -2937,6 +2949,7 @@ var AdsFriendlyBackground = (() => {
       mimeType,
       duration,
       resolution,
+      playback,
       detectedBy,
       drm: "none"
     });
@@ -3475,6 +3488,7 @@ var AdsFriendlyBackground = (() => {
           acquisitionDiagnostic: candidate.acquisitionDiagnostic || existing?.acquisitionDiagnostic || null,
           duration: candidate.duration ?? existing?.duration ?? null,
           resolution: candidate.resolution ?? existing?.resolution ?? null,
+          playback: candidate.playback || existing?.playback || null,
           requestContexts: mergeRequestContexts(
             existing?.requestContexts,
             candidate.requestContexts,
@@ -7102,7 +7116,9 @@ ${body}`;
       ...item,
       resolutionDiagnostic: diagnoseMediaResolution(item, items)
     }));
-    const displayItems = groupFacebookDirectRepresentations(diagnosedItems);
+    const displayItems = prioritizeFacebookPlayback(
+      groupFacebookDirectRepresentations(diagnosedItems)
+    );
     const blobResolvedSourceIds = new Set(
       diagnosedItems.filter((item) => item.kind === "blob" && item.selectedMediaId).flatMap((item) => [
         item.selectedMediaId,
@@ -7188,6 +7204,27 @@ ${body}`;
     }
     return [...items.filter((item) => !consumed.has(item.id)), ...synthetic];
   }
+  function prioritizeFacebookPlayback(items) {
+    const facebookItems = items.filter(isFacebookMediaItem);
+    if (facebookItems.length <= 1) return items;
+    const playing = facebookItems.filter((item) => item.playback?.playing);
+    const visible = facebookItems.filter((item) => item.playback?.visible);
+    const preferred = playing.length ? playing : visible.length ? visible : [...facebookItems].sort(
+      (left, right) => (right.lastSeenAt || right.firstSeenAt || 0) - (left.lastSeenAt || left.firstSeenAt || 0)
+    ).slice(0, 1);
+    const preferredIds = new Set(preferred.map((item) => item.id));
+    return items.filter(
+      (item) => !isFacebookMediaItem(item) || preferredIds.has(item.id)
+    );
+  }
+  function isFacebookMediaItem(item) {
+    if (item.provider === "facebook") return true;
+    try {
+      return item.kind === "direct" && isFacebookCdnHost(new URL(item.sourceUrl).hostname);
+    } catch {
+      return false;
+    }
+  }
   function createFacebookAdaptiveGroup(key, items) {
     const sorted = [...items].sort(
       (left, right) => facebookQualityScore(right) - facebookQualityScore(left) || (right.contentLength || 0) - (left.contentLength || 0) || (right.lastSeenAt || 0) - (left.lastSeenAt || 0)
@@ -7215,7 +7252,7 @@ ${body}`;
       id: stableMediaId("adaptive", key),
       kind: "adaptive",
       provider: "facebook",
-      title: primary.title && !/^facebook$/i.test(primary.title.trim()) ? primary.title : "Facebook video",
+      title: primary.title && !/^(?:\(\d+\+?\)\s*)?facebook$/i.test(primary.title.trim()) ? primary.title : "Facebook video",
       sourceUrl: primary.sourceUrl,
       mimeType: "video/mp4",
       variants,
@@ -7225,8 +7262,19 @@ ${body}`;
       probeStatus: "ready",
       streamType: "vod",
       relatedCount: items.length,
+      playback: newestPlaybackState(items),
       firstSeenAt: Math.min(...items.map((item) => item.firstSeenAt || 0)),
       lastSeenAt: Math.max(...items.map((item) => item.lastSeenAt || 0))
+    };
+  }
+  function newestPlaybackState(items) {
+    const states = items.map((item) => item.playback).filter(Boolean).sort((left, right) => (right.observedAt || 0) - (left.observedAt || 0));
+    if (!states.length) return null;
+    const active2 = states.find((state) => state.playing) || states[0];
+    return {
+      ...active2,
+      playing: states.some((state) => state.playing),
+      visible: states.some((state) => state.visible)
     };
   }
   function facebookMediaAssetKey(item) {

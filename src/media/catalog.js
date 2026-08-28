@@ -57,6 +57,7 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
           null,
         duration: candidate.duration ?? existing?.duration ?? null,
         resolution: candidate.resolution ?? existing?.resolution ?? null,
+        playback: candidate.playback || existing?.playback || null,
         requestContexts: mergeRequestContexts(
           existing?.requestContexts,
           candidate.requestContexts,

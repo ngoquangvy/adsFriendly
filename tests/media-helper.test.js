@@ -153,6 +153,36 @@ test("built helper downloads direct media with ranges, cancellation, and resume"
   assert.deepEqual(await readFile(completed.payload.outputPath), bytes);
 });
 
+test("built helper falls back when a server advertises ranges but returns 200", async (t) => {
+  const bytes = Buffer.from("facebook-style-full-response".repeat(4096));
+  const server = createServer((request, response) => {
+    response.setHeader("Accept-Ranges", "bytes");
+    response.setHeader("Content-Type", "video/mp4");
+    response.setHeader("Content-Length", bytes.length);
+    if (request.method === "HEAD") return response.end();
+    response.writeHead(200);
+    response.end(bytes);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const outputDirectory = await mkdtemp(join(tmpdir(), "adsfriendly-full-"));
+  t.after(() => rm(outputDirectory, { recursive: true, force: true }));
+  const address = server.address();
+  const sourceUrl = `http://127.0.0.1:${address.port}/facebook.mp4`;
+  const child = spawnHelper();
+  t.after(() => child.kill());
+  const frames = createFrameReader(child.stdout);
+  child.stdin.write(
+    frame(downloadRequest("full-response-1", sourceUrl, outputDirectory)),
+  );
+  const completed = await frames.next(
+    (event) =>
+      event.requestId === "full-response-1" &&
+      event.type === MEDIA_HELPER_EVENTS.DOWNLOAD_COMPLETED,
+  );
+  assert.deepEqual(await readFile(completed.payload.outputPath), bytes);
+});
+
 test("built helper remuxes inline HLS with disguised segment extensions", async (t) => {
   if (
     !(await executableAvailable("ffmpeg")) ||

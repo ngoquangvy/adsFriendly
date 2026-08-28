@@ -235,6 +235,29 @@ test("media observer reports separate YouTube video and audio tracks before cata
   assert.match(audioKey, /audio=youtube-audio-140/);
 });
 
+test("media observer reports Facebook playback state transitions", () => {
+  const candidate = createMediaCandidateFromSource({
+    pageUrl: "https://www.facebook.com/",
+    sourceUrl: "https://scontent.example.fbcdn.net/current.mp4",
+    mimeType: "video/mp4",
+    playback: {
+      playing: false,
+      visible: true,
+      observedAt: 1000,
+    },
+  });
+  const paused = createMediaObserverReportKey(
+    createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, candidate),
+  );
+  const playing = createMediaObserverReportKey(
+    createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, {
+      ...candidate,
+      playback: { ...candidate.playback, playing: true, observedAt: 2000 },
+    }),
+  );
+  assert.notEqual(paused, playing);
+});
+
 test("YouTube SABR descriptors become provider-resolvable adaptive tracks", () => {
   const observation = parseYouTubePlayerResponse(
     {
@@ -3779,6 +3802,18 @@ test("media popup signature ignores heartbeat timestamps but detects visible cha
     }),
     initial,
   );
+  assert.notEqual(
+    createMediaCatalogViewSignature({
+      ...base,
+      items: [
+        {
+          ...base.items[0],
+          playback: { playing: true, visible: true, observedAt: 500 },
+        },
+      ],
+    }),
+    initial,
+  );
 });
 
 test("media popup keeps rows stable when heartbeat order changes", () => {
@@ -3819,7 +3854,7 @@ test("media popup groups duplicate unresolved blobs from one player", () => {
   assert.equal(items[0].relatedCount, 2);
 });
 
-test("media popup groups duplicate Facebook CDN URLs but keeps distinct videos", () => {
+test("media popup collapses duplicate Facebook CDN URLs to the newest video", () => {
   const facebookDirect = (path, query, id) => ({
     ...createMediaCandidateFromSource({
       pageUrl: "https://www.facebook.com/watch/",
@@ -3835,8 +3870,9 @@ test("media popup groups duplicate Facebook CDN URLs but keeps distinct videos",
     facebookDirect("AQNk_same", "token=new&byteend=999", "newer"),
     facebookDirect("AQNw_other", "token=new", "other"),
   ]);
-  assert.equal(visible.length, 2);
-  assert.equal(visible.find((item) => item.id === "newer")?.relatedCount, 2);
+  assert.equal(visible.length, 1);
+  assert.equal(visible[0].id, "newer");
+  assert.equal(visible[0].relatedCount, 1);
   assert.match(formatMediaName(visible[0]), /^Facebook video · /);
 });
 
@@ -3845,24 +3881,33 @@ test("media popup groups Facebook representations into one quality asset", () =>
     Buffer.from(
       JSON.stringify({ xpv_asset_id: assetId, vencode_tag: tag }),
     ).toString("base64url");
-  const representation = (path, assetId, tag, id) => ({
+  const representation = (path, assetId, tag, id, playback = null) => ({
     ...createMediaCandidateFromSource({
       pageUrl: "https://www.facebook.com/",
       sourceUrl: `https://scontent.fsgn5-21.fna.fbcdn.net/${path}.mp4?efg=${efg(assetId, tag)}`,
       mimeType: "video/mp4",
       title: "Facebook",
+      playback,
     }),
     id,
     firstSeenAt: 10,
     lastSeenAt: 20,
   });
   const visible = selectVisibleMediaItems([
-    representation("AQ_hd", "asset-7", "dash_1080p", "hd"),
-    representation("AQ_sd", "asset-7", "dash_480p", "sd"),
+    representation("AQ_hd", "asset-7", "dash_1080p", "hd", {
+      playing: true,
+      visible: true,
+      observedAt: 20,
+    }),
+    representation("AQ_sd", "asset-7", "dash_480p", "sd", {
+      playing: true,
+      visible: true,
+      observedAt: 20,
+    }),
     representation("AQ_other", "asset-8", "dash_720p", "other"),
   ]);
   const grouped = visible.find((item) => item.provider === "facebook");
-  assert.equal(visible.length, 2);
+  assert.equal(visible.length, 1);
   assert.equal(grouped.kind, "adaptive");
   assert.equal(grouped.relatedCount, 2);
   assert.deepEqual(
@@ -3870,6 +3915,52 @@ test("media popup groups Facebook representations into one quality asset", () =>
     ["1080p", "480p"],
   );
   assert.equal(getMediaDownloadAvailability(grouped).supported, true);
+});
+
+test("media popup keeps only the Facebook asset that is currently playing", () => {
+  const efg = (assetId, tag) =>
+    Buffer.from(
+      JSON.stringify({ xpv_asset_id: assetId, vencode_tag: tag }),
+    ).toString("base64url");
+  const representation = (assetId, tag, id, playback) => ({
+    ...createMediaCandidateFromSource({
+      pageUrl: "https://www.facebook.com/",
+      sourceUrl: `https://scontent.fsgn5-21.fna.fbcdn.net/${id}.mp4?efg=${efg(assetId, tag)}`,
+      mimeType: "video/mp4",
+      title: "(20+) Facebook",
+      playback,
+    }),
+    id,
+    firstSeenAt: 10,
+    lastSeenAt: playback.playing ? 30 : 20,
+  });
+  const visible = selectVisibleMediaItems([
+    representation("asset-old", "dash_1080p", "old-hd", {
+      playing: false,
+      visible: true,
+      observedAt: 10,
+    }),
+    representation("asset-old", "dash_480p", "old-sd", {
+      playing: false,
+      visible: true,
+      observedAt: 10,
+    }),
+    representation("asset-current", "dash_1080p", "current-hd", {
+      playing: true,
+      visible: true,
+      observedAt: 20,
+    }),
+    representation("asset-current", "dash_480p", "current-sd", {
+      playing: true,
+      visible: true,
+      observedAt: 20,
+    }),
+  ]);
+  assert.equal(visible.length, 1);
+  assert.equal(visible[0].provider, "facebook");
+  assert.equal(visible[0].playback.playing, true);
+  assert.equal(visible[0].variants.length, 2);
+  assert.equal(visible[0].title, "Facebook video");
 });
 
 test("media popup keeps the resolved Blob when grouping player handles", () => {

@@ -97,6 +97,7 @@ var AdsFriendlyMediaFrame = (() => {
       ),
       duration: optionalFiniteNumber(value.duration),
       resolution: normalizeResolution(value.resolution),
+      playback: normalizePlaybackState(value.playback),
       bandwidth: optionalPositiveNumber(value.bandwidth),
       averageBandwidth: optionalPositiveNumber(value.averageBandwidth),
       targetDuration: optionalFiniteNumber(value.targetDuration),
@@ -127,6 +128,16 @@ var AdsFriendlyMediaFrame = (() => {
       );
     }
     return candidate;
+  }
+  function normalizePlaybackState(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    return {
+      playing: value.playing === true,
+      visible: value.visible === true,
+      muted: value.muted === true,
+      currentTime: optionalFiniteNumber(value.currentTime),
+      observedAt: optionalNonNegativeInteger(value.observedAt)
+    };
   }
   function normalizeMediaAcquisitionDiagnostic(value) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -578,6 +589,7 @@ var AdsFriendlyMediaFrame = (() => {
     title = null,
     duration = null,
     resolution = null,
+    playback = null,
     detectedBy = MEDIA_DETECTION_SOURCES.DOM
   }) {
     const absoluteSourceUrl = resolveSourceUrl(sourceUrl, pageUrl);
@@ -594,6 +606,7 @@ var AdsFriendlyMediaFrame = (() => {
       mimeType,
       duration,
       resolution,
+      playback,
       detectedBy,
       drm: "none"
     });
@@ -970,6 +983,10 @@ var AdsFriendlyMediaFrame = (() => {
     const requestedProbes = /* @__PURE__ */ new Set();
     const contextualProbeRetries = /* @__PURE__ */ new Set();
     const videoListeners = /* @__PURE__ */ new Map();
+    const videoVisibilityObserver = typeof IntersectionObserver === "function" ? new IntersectionObserver(
+      (entries) => entries.forEach((entry) => reportElementSource(entry.target)),
+      { threshold: [0, 0.25, 0.6] }
+    ) : null;
     const aesKeyHandoffRequests = /* @__PURE__ */ new Map();
     const youtubeMediaHandoffRequests = /* @__PURE__ */ new Map();
     const mutationObserver = new MutationObserver((mutations) => {
@@ -1081,8 +1098,11 @@ var AdsFriendlyMediaFrame = (() => {
         video.removeEventListener("loadedmetadata", listener);
         video.removeEventListener("durationchange", listener);
         video.removeEventListener("play", listener);
+        video.removeEventListener("pause", listener);
+        video.removeEventListener("ended", listener);
       }
       videoListeners.clear();
+      videoVisibilityObserver?.disconnect();
       reported.clear();
       pending.clear();
       retryCounts.clear();
@@ -1161,6 +1181,9 @@ var AdsFriendlyMediaFrame = (() => {
       video.addEventListener("loadedmetadata", listener);
       video.addEventListener("durationchange", listener);
       video.addEventListener("play", listener);
+      video.addEventListener("pause", listener);
+      video.addEventListener("ended", listener);
+      videoVisibilityObserver?.observe(video);
       listener();
     }
     function reportElementSource(element) {
@@ -1171,15 +1194,23 @@ var AdsFriendlyMediaFrame = (() => {
         width: Number(element.videoWidth) || null,
         height: Number(element.videoHeight) || null
       } : null;
+      const playback = element.matches?.("video") ? {
+        playing: element.paused === false && element.ended !== true,
+        visible: isVisibleVideo(element),
+        muted: element.muted === true,
+        currentTime: Number.isFinite(element.currentTime) ? element.currentTime : null,
+        observedAt: Date.now()
+      } : null;
       reportSource(
         sourceUrl,
         mimeType,
         MEDIA_DETECTION_SOURCES.DOM,
         duration,
-        resolution
+        resolution,
+        playback
       );
     }
-    function reportSource(sourceUrl, mimeType, detectedBy, duration = null, resolution = null) {
+    function reportSource(sourceUrl, mimeType, detectedBy, duration = null, resolution = null, playback = null) {
       const candidate = createYouTubeCandidateFromObservedSource({
         pageUrl: location.href,
         sourceUrl,
@@ -1192,10 +1223,29 @@ var AdsFriendlyMediaFrame = (() => {
         title: document.title || null,
         duration,
         resolution,
+        playback,
         detectedBy
       });
       if (!candidate) return;
       reportEvent(createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, candidate));
+    }
+    function isVisibleVideo(video) {
+      try {
+        const rect = video.getBoundingClientRect();
+        const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
+        const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+        const visibleWidth = Math.max(
+          0,
+          Math.min(rect.right, viewportWidth) - Math.max(rect.left, 0)
+        );
+        const visibleHeight = Math.max(
+          0,
+          Math.min(rect.bottom, viewportHeight) - Math.max(rect.top, 0)
+        );
+        return rect.width > 0 && rect.height > 0 && visibleWidth * visibleHeight >= rect.width * rect.height * 0.25;
+      } catch {
+        return false;
+      }
     }
     function reportEvent(event2) {
       if (stopped) return;
@@ -1333,14 +1383,15 @@ var AdsFriendlyMediaFrame = (() => {
     const payload = event2?.payload || {};
     const mediaId = payload.id || payload.mediaId || "unknown";
     if (event2?.type === EVENTS.MEDIA_DISCOVERED) {
+      const playbackKey = payload.playback ? `:${payload.playback.playing ? "playing" : "paused"}:${payload.playback.visible ? "visible" : "hidden"}` : "";
       if (payload.kind === "adaptive") {
         const videoTracks = (payload.variants || []).map((track) => track.id || track.itag || track.sourceUrl).filter(Boolean).join(",");
         const audioTracks = (payload.audioTracks || []).map((track) => track.id || track.itag || track.sourceUrl).filter(Boolean).join(",");
         const acquisition = payload.acquisitionDiagnostic;
-        return `${event2.type}:${mediaId}:${payload.detectedBy || "unknown"}:video=${videoTracks || "none"}:audio=${audioTracks || "none"}:stage=${acquisition?.stage || "none"}:direct=${acquisition?.directVideoCount || 0}+${acquisition?.directAudioCount || 0}`;
+        return `${event2.type}:${mediaId}:${payload.detectedBy || "unknown"}:video=${videoTracks || "none"}:audio=${audioTracks || "none"}:stage=${acquisition?.stage || "none"}:direct=${acquisition?.directVideoCount || 0}+${acquisition?.directAudioCount || 0}${playbackKey}`;
       }
       const playbackDuration = payload.kind === "blob" && Number.isFinite(payload.duration) ? Math.round(payload.duration) : "unknown";
-      return `${event2.type}:${mediaId}:${payload.detectedBy || "unknown"}:${playbackDuration}:${payload.resolution?.width || 0}x${payload.resolution?.height || 0}`;
+      return `${event2.type}:${mediaId}:${payload.detectedBy || "unknown"}:${playbackDuration}:${payload.resolution?.width || 0}x${payload.resolution?.height || 0}${playbackKey}`;
     }
     if (event2?.type === EVENTS.MEDIA_BLOB_TRACED) {
       return [

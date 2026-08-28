@@ -46,7 +46,9 @@ export function selectVisibleMediaItems(items = [], maximum = 8) {
     ...item,
     resolutionDiagnostic: diagnoseMediaResolution(item, items),
   }));
-  const displayItems = groupFacebookDirectRepresentations(diagnosedItems);
+  const displayItems = prioritizeFacebookPlayback(
+    groupFacebookDirectRepresentations(diagnosedItems),
+  );
   const blobResolvedSourceIds = new Set(
     diagnosedItems
       .filter((item) => item.kind === "blob" && item.selectedMediaId)
@@ -147,6 +149,37 @@ function groupFacebookDirectRepresentations(items) {
   return [...items.filter((item) => !consumed.has(item.id)), ...synthetic];
 }
 
+function prioritizeFacebookPlayback(items) {
+  const facebookItems = items.filter(isFacebookMediaItem);
+  if (facebookItems.length <= 1) return items;
+  const playing = facebookItems.filter((item) => item.playback?.playing);
+  const visible = facebookItems.filter((item) => item.playback?.visible);
+  const preferred = playing.length
+    ? playing
+    : visible.length
+      ? visible
+      : [...facebookItems]
+          .sort(
+            (left, right) =>
+              (right.lastSeenAt || right.firstSeenAt || 0) -
+              (left.lastSeenAt || left.firstSeenAt || 0),
+          )
+          .slice(0, 1);
+  const preferredIds = new Set(preferred.map((item) => item.id));
+  return items.filter(
+    (item) => !isFacebookMediaItem(item) || preferredIds.has(item.id),
+  );
+}
+
+function isFacebookMediaItem(item) {
+  if (item.provider === "facebook") return true;
+  try {
+    return item.kind === "direct" && isFacebookCdnHost(new URL(item.sourceUrl).hostname);
+  } catch {
+    return false;
+  }
+}
+
 function createFacebookAdaptiveGroup(key, items) {
   const sorted = [...items].sort(
     (left, right) =>
@@ -178,7 +211,8 @@ function createFacebookAdaptiveGroup(key, items) {
     kind: "adaptive",
     provider: "facebook",
     title:
-      primary.title && !/^facebook$/i.test(primary.title.trim())
+      primary.title &&
+      !/^(?:\(\d+\+?\)\s*)?facebook$/i.test(primary.title.trim())
         ? primary.title
         : "Facebook video",
     sourceUrl: primary.sourceUrl,
@@ -190,8 +224,23 @@ function createFacebookAdaptiveGroup(key, items) {
     probeStatus: "ready",
     streamType: "vod",
     relatedCount: items.length,
+    playback: newestPlaybackState(items),
     firstSeenAt: Math.min(...items.map((item) => item.firstSeenAt || 0)),
     lastSeenAt: Math.max(...items.map((item) => item.lastSeenAt || 0)),
+  };
+}
+
+function newestPlaybackState(items) {
+  const states = items
+    .map((item) => item.playback)
+    .filter(Boolean)
+    .sort((left, right) => (right.observedAt || 0) - (left.observedAt || 0));
+  if (!states.length) return null;
+  const active = states.find((state) => state.playing) || states[0];
+  return {
+    ...active,
+    playing: states.some((state) => state.playing),
+    visible: states.some((state) => state.visible),
   };
 }
 
@@ -951,6 +1000,12 @@ function mediaRenderFacts(item) {
     audioTracks: item.audioTracks,
     subtitles: item.subtitles,
     resolutionDiagnostic: item.resolutionDiagnostic,
+    playback: item.playback
+      ? {
+          playing: item.playback.playing === true,
+          visible: item.playback.visible === true,
+        }
+      : null,
   };
 }
 

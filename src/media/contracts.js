@@ -103,6 +103,7 @@ export function normalizeMediaCandidate(value = {}) {
     ),
     duration: optionalFiniteNumber(value.duration),
     resolution: normalizeResolution(value.resolution),
+    playback: normalizePlaybackState(value.playback),
     bandwidth: optionalPositiveNumber(value.bandwidth),
     averageBandwidth: optionalPositiveNumber(value.averageBandwidth),
     targetDuration: optionalFiniteNumber(value.targetDuration),
@@ -133,6 +134,17 @@ export function normalizeMediaCandidate(value = {}) {
     );
   }
   return candidate;
+}
+
+function normalizePlaybackState(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return {
+    playing: value.playing === true,
+    visible: value.visible === true,
+    muted: value.muted === true,
+    currentTime: optionalFiniteNumber(value.currentTime),
+    observedAt: optionalNonNegativeInteger(value.observedAt),
+  };
 }
 
 export function normalizeMediaAcquisitionDiagnostic(value) {

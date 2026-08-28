@@ -123,6 +123,7 @@ var AdsFriendlyMainWorld = (() => {
       ),
       duration: optionalFiniteNumber(value.duration),
       resolution: normalizeResolution(value.resolution),
+      playback: normalizePlaybackState(value.playback),
       bandwidth: optionalPositiveNumber(value.bandwidth),
       averageBandwidth: optionalPositiveNumber(value.averageBandwidth),
       targetDuration: optionalFiniteNumber(value.targetDuration),
@@ -153,6 +154,16 @@ var AdsFriendlyMainWorld = (() => {
       );
     }
     return candidate;
+  }
+  function normalizePlaybackState(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    return {
+      playing: value.playing === true,
+      visible: value.visible === true,
+      muted: value.muted === true,
+      currentTime: optionalFiniteNumber(value.currentTime),
+      observedAt: optionalNonNegativeInteger(value.observedAt)
+    };
   }
   function normalizeMediaAcquisitionDiagnostic(value) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -604,6 +615,7 @@ var AdsFriendlyMainWorld = (() => {
     title = null,
     duration = null,
     resolution = null,
+    playback = null,
     detectedBy = MEDIA_DETECTION_SOURCES.DOM
   }) {
     const absoluteSourceUrl = resolveSourceUrl(sourceUrl, pageUrl);
@@ -620,6 +632,7 @@ var AdsFriendlyMainWorld = (() => {
       mimeType,
       duration,
       resolution,
+      playback,
       detectedBy,
       drm: "none"
     });
