@@ -1,4 +1,4 @@
-import { Constants, Innertube } from "youtubei.js";
+import { Constants, Innertube, Platform } from "youtubei.js";
 import type { AdaptiveHttpTrack, DownloadCandidate } from "./download-types.js";
 import {
   YOUTUBE_WEB_PO_USER_AGENT,
@@ -34,8 +34,14 @@ type ProviderProfile = {
   client: "YTMUSIC" | "MWEB" | "IOS" | "ANDROID" | "WEB";
   poToken: string | null;
   requestUserAgent: string | null;
+  requestMode: "youtube_query_range" | "http_range";
   allowEquivalentVideo: boolean;
 };
+
+// YouTube.js intentionally ships without a JavaScript evaluator. Provider
+// URLs may already be present while still carrying an unresolved `n` value,
+// so Format.decipher() must be allowed to run for every selected format.
+Platform.shim.eval = async (data) => new Function(data.output)();
 
 export type YouTubeQualityPreflight = {
   status: "ready" | "unavailable";
@@ -71,9 +77,13 @@ export async function resolveYouTubeProviderTracks(
   const profiles = profilePlan.profiles;
   for (const profile of profiles) {
     try {
-      const { formats, session, cpn } = await loadProviderFormats(videoId, profile, {
-        force,
-      });
+      const { formats, session, cpn } = await loadProviderFormats(
+        videoId,
+        profile,
+        {
+          force,
+        },
+      );
       const resolved = await Promise.all(
         tracks.map((track) =>
           force || track.urlResolution === "provider_client_pending"
@@ -197,10 +207,10 @@ async function resolveTrackFromFormats(
   );
   if (!format) return track;
   const rawUrl =
-    typeof format.url === "string"
-      ? format.url
-      : typeof format.decipher === "function"
-        ? await format.decipher(session.session.player)
+    typeof format.decipher === "function"
+      ? await format.decipher(session.session.player)
+      : typeof format.url === "string"
+        ? format.url
         : null;
   if (!rawUrl) return track;
   const sourceUrl = profile.poToken
@@ -222,7 +232,7 @@ async function resolveTrackFromFormats(
     signatureCipher: null,
     requestUserAgent: profile.requestUserAgent,
     providerClient: profile.client,
-    requestMode: "youtube_query_range",
+    requestMode: profile.requestMode,
     requestCpn: cpn,
   };
 }
@@ -337,14 +347,18 @@ async function providerProfiles(
       client: "WEB",
       poToken,
       requestUserAgent: YOUTUBE_WEB_PO_USER_AGENT,
+      requestMode: "http_range",
       allowEquivalentVideo,
     });
     profiles.push({
       id: "mweb_po",
       client: "MWEB",
       poToken,
-      requestUserAgent:
-        "Mozilla/5.0 (iPad; CPU OS 16_7_10 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+      // Keep the media request fingerprint identical to the environment that
+      // minted the Web proof. The MWEB client name is carried by the provider
+      // URL; using an unrelated iPad UA invalidates the proof at GVS.
+      requestUserAgent: YOUTUBE_WEB_PO_USER_AGENT,
+      requestMode: "http_range",
       allowEquivalentVideo,
     });
     profiles.push({
@@ -352,6 +366,7 @@ async function providerProfiles(
       client: "YTMUSIC",
       poToken,
       requestUserAgent: YOUTUBE_WEB_PO_USER_AGENT,
+      requestMode: "http_range",
       allowEquivalentVideo,
     });
   } catch (error) {
@@ -363,6 +378,7 @@ async function providerProfiles(
       client: "IOS",
       poToken: null,
       requestUserAgent: Constants.CLIENTS.IOS.USER_AGENT,
+      requestMode: "youtube_query_range",
       allowEquivalentVideo: false,
     },
     {
@@ -370,6 +386,7 @@ async function providerProfiles(
       client: "ANDROID",
       poToken: null,
       requestUserAgent: Constants.CLIENTS.ANDROID.USER_AGENT,
+      requestMode: "youtube_query_range",
       allowEquivalentVideo: false,
     },
     {
@@ -382,6 +399,7 @@ async function providerProfiles(
       client: "WEB",
       poToken: null,
       requestUserAgent: YOUTUBE_WEB_PO_USER_AGENT,
+      requestMode: "http_range",
       allowEquivalentVideo,
     },
   );

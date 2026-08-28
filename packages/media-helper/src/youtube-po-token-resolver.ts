@@ -5,10 +5,11 @@ import {
   base64ToU8,
   buildURL,
   getHeaders,
+  parseLooseJSON,
   u8ToBase64,
 } from "bgutils-js/utils";
 import type { WebPoSignalOutput } from "bgutils-js/shared-types";
-import { JSDOM } from "jsdom";
+import { JSDOM, ResourceLoader } from "jsdom";
 
 const REQUEST_KEY = "O43z0dpjhgX20SCx4KAo";
 const REMOTE_TIMEOUT_MS = 15_000;
@@ -17,6 +18,13 @@ const TOKEN_CACHE_MS = 30 * 60 * 1000;
 const MAX_TOKEN_CACHE_ITEMS = 20;
 
 type TokenMinter = (contentBinding: string) => Promise<string>;
+type BotGuardChallenge = {
+  program: string;
+  globalName: string;
+  interpreterJavascript?: {
+    privateDoNotAccessOrElseSafeScriptWrappedValue?: string;
+  };
+};
 
 let minterPromise: Promise<TokenMinter> | null = null;
 const tokenCache = new Map<string, { token: string; expiresAt: number }>();
@@ -61,9 +69,14 @@ async function createTokenMinter(): Promise<TokenMinter> {
     {
       url: "https://www.youtube.com/",
       referrer: "https://www.youtube.com/",
-      userAgent: USER_AGENT,
+      // JSDOM ignores a top-level `userAgent` option. ResourceLoader is the
+      // supported path and also updates navigator.userAgent, which BotGuard
+      // inspects while minting the proof. A mismatched JSDOM/HTTP UA produces
+      // a syntactically valid token that GVS rejects with HTTP 403.
+      resources: new ResourceLoader({ userAgent: USER_AGENT }),
     },
   );
+  installCanvasFallback(dom);
   const sandbox: Record<string, unknown> = {
     window: dom.window,
     document: dom.window.document,
@@ -84,10 +97,7 @@ async function createTokenMinter(): Promise<TokenMinter> {
   sandbox.self = sandbox;
   createContext(sandbox);
 
-  const challenge = await getChallenge({
-    fetchFunction: boundedFetch,
-    requestKey: REQUEST_KEY,
-  });
+  const challenge = await resolveBotGuardChallenge(dom, sandbox);
   const interpreter =
     challenge.interpreterJavascript
       ?.privateDoNotAccessOrElseSafeScriptWrappedValue;
@@ -106,7 +116,11 @@ async function createTokenMinter(): Promise<TokenMinter> {
     { webPoSignalOutput },
     REMOTE_TIMEOUT_MS,
   );
-  const response = await boundedFetch(buildURL("GenerateIT", true), {
+  // Both the homepage attestation challenge and the bounded WAA fallback use
+  // the WAA integrity exchange. Sending their snapshot to YouTube's separate
+  // `/api/jnn/v1/GenerateIT` endpoint yields a token-shaped value that GVS
+  // rejects.
+  const response = await boundedFetch(buildURL("GenerateIT"), {
     method: "POST",
     headers: getHeaders(),
     body: JSON.stringify([REQUEST_KEY, snapshot]),
@@ -134,6 +148,143 @@ async function createTokenMinter(): Promise<TokenMinter> {
   };
 }
 
+function installCanvasFallback(dom: JSDOM) {
+  const prototype = dom.window.HTMLCanvasElement.prototype;
+  Object.defineProperty(prototype, "getContext", {
+    configurable: true,
+    value(this: HTMLCanvasElement, kind: string) {
+      if (kind !== "2d") return null;
+      const gradient = { addColorStop() {} };
+      const imageData = (width = 1, height = 1) => ({
+        data: new Uint8ClampedArray(
+          Math.max(0, Number(width) * Number(height) * 4),
+        ),
+        width: Number(width),
+        height: Number(height),
+      });
+      return new Proxy(
+        { canvas: this },
+        {
+          get(target, property) {
+            if (property in target)
+              return target[property as keyof typeof target];
+            if (property === "measureText") return () => ({ width: 0 });
+            if (property === "getImageData" || property === "createImageData")
+              return imageData;
+            if (
+              property === "createLinearGradient" ||
+              property === "createRadialGradient"
+            )
+              return () => gradient;
+            if (property === "createPattern") return () => null;
+            if (property === "isPointInPath" || property === "isPointInStroke")
+              return () => false;
+            return () => undefined;
+          },
+          set(target, property, value) {
+            (target as Record<PropertyKey, unknown>)[property] = value;
+            return true;
+          },
+        },
+      );
+    },
+  });
+  Object.defineProperty(prototype, "toDataURL", {
+    configurable: true,
+    value: () => "data:image/png;base64,",
+  });
+}
+
+async function resolveBotGuardChallenge(
+  dom: JSDOM,
+  sandbox: Record<string, unknown>,
+): Promise<BotGuardChallenge> {
+  try {
+    const response = await boundedFetch("https://www.youtube.com/", {
+      headers: {
+        Accept: "text/html,application/xhtml+xml",
+        "Accept-Language": "en-US,en;q=0.7",
+        "User-Agent": USER_AGENT,
+      },
+    });
+    if (!response.ok)
+      throw new Error(`homepage returned HTTP ${response.status}`);
+    const html = await response.text();
+    if (html.length > 5_000_000)
+      throw new Error("homepage challenge response is too large");
+
+    const configText = html.match(/ytcfg\.set\(({[\s\S]+?})\);/)?.[1];
+    const attestationText = html.match(
+      /window\.ytAtN\(\s*({[\s\S]*?})\s*\)/,
+    )?.[1];
+    if (!configText || !attestationText)
+      throw new Error("homepage attestation data is unavailable");
+
+    const config = parseLooseJSON(configText) as Record<string, unknown>;
+    const attestation = parseLooseJSON(attestationText) as {
+      R?: {
+        bgChallenge?: {
+          program?: string;
+          globalName?: string;
+          interpreterUrl?: {
+            privateDoNotAccessOrElseTrustedResourceUrlWrappedValue?: string;
+          };
+        };
+      };
+    };
+    const source = attestation.R?.bgChallenge;
+    const interpreterValue =
+      source?.interpreterUrl
+        ?.privateDoNotAccessOrElseTrustedResourceUrlWrappedValue;
+    if (!source?.program || !source.globalName || !interpreterValue)
+      throw new Error("homepage BotGuard challenge is incomplete");
+
+    const interpreterUrl = new URL(
+      interpreterValue,
+      "https://www.youtube.com/",
+    );
+    if (
+      interpreterUrl.protocol !== "https:" ||
+      !(
+        interpreterUrl.hostname === "youtube.com" ||
+        interpreterUrl.hostname.endsWith(".youtube.com") ||
+        interpreterUrl.hostname === "google.com" ||
+        interpreterUrl.hostname.endsWith(".google.com")
+      )
+    )
+      throw new Error("homepage interpreter URL is not trusted");
+    const interpreterResponse = await boundedFetch(interpreterUrl, {
+      headers: { "User-Agent": USER_AGENT },
+    });
+    if (!interpreterResponse.ok)
+      throw new Error(
+        `homepage interpreter returned HTTP ${interpreterResponse.status}`,
+      );
+    const interpreter = await interpreterResponse.text();
+    if (!interpreter || interpreter.length > 5_000_000)
+      throw new Error("homepage interpreter is invalid");
+
+    const youtubeRuntime = { config_: config };
+    sandbox.yt = youtubeRuntime;
+    (dom.window as unknown as { yt: typeof youtubeRuntime }).yt =
+      youtubeRuntime;
+    return {
+      program: source.program,
+      globalName: source.globalName,
+      interpreterJavascript: {
+        privateDoNotAccessOrElseSafeScriptWrappedValue: interpreter,
+      },
+    };
+  } catch {
+    // The WAA endpoint is retained as a bounded fallback for environments
+    // where YouTube does not embed an attestation challenge in the homepage.
+    return (await getChallenge({
+      fetchFunction: boundedFetch,
+      requestKey: REQUEST_KEY,
+    })) as BotGuardChallenge;
+  }
+}
+
 function boundedFetch(input: RequestInfo | URL, init: RequestInit = {}) {
   const timeoutSignal = AbortSignal.timeout(REMOTE_TIMEOUT_MS);
   const signal = init.signal
@@ -157,12 +308,18 @@ function validatedGoogleVideoUrl(value: string) {
 }
 
 function validateToken(value: string) {
+  const normalized = typeof value === "string" ? value.replace(/=+$/u, "") : "";
+  const length = normalized.length;
+  const alphabetValid =
+    typeof value === "string" && /^[a-zA-Z0-9_-]+$/.test(normalized);
   if (
     typeof value !== "string" ||
-    value.length < 32 ||
-    value.length > 1_024 ||
-    !/^[a-zA-Z0-9_-]+$/.test(value)
+    length < 32 ||
+    length > 1_024 ||
+    !alphabetValid
   )
-    throw new Error("YouTube PO token is invalid.");
-  return value;
+    throw new Error(
+      `YouTube PO token is invalid (length=${length}, alphabet=${alphabetValid ? "valid" : "invalid"}).`,
+    );
+  return normalized;
 }

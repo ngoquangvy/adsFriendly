@@ -141,7 +141,7 @@ async function probeSource(
   if (!response.ok) {
     throw new Error(
       mediaProbeFailure(
-        sourceUrl,
+        queryRange || sourceUrl,
         response.status,
         job.candidate.requestMode || "http-range",
       ),
@@ -334,7 +334,11 @@ async function downloadRangeWithRetry({
               signal: context.signal,
             },
       );
-      if ((!queryUrl && response.status !== 206) || !response.ok || !response.body) {
+      if (
+        (!queryUrl && response.status !== 206) ||
+        !response.ok ||
+        !response.body
+      ) {
         throw new Error(
           rangeFailureMessage(
             probe.url,
@@ -614,7 +618,10 @@ function requestHeaders(job: DownloadJob) {
   return {
     Accept: "*/*",
     ...(youtube
-      ? { Origin: "https://www.youtube.com", Referer: "https://www.youtube.com" }
+      ? {
+          Origin: "https://www.youtube.com",
+          Referer: "https://www.youtube.com",
+        }
       : { Referer: job.candidate.pageUrl }),
     "User-Agent": job.browserUserAgent || "AdsFriendlyMediaHelper/0.11",
     ...(youtube ? { DNT: "?1" } : {}),
