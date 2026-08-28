@@ -15,6 +15,7 @@ const MAX_CANARY_BYTES_PER_TRACK = 8 * 1024 * 1024;
 const MAX_CANARY_BYTES_TOTAL = 16 * 1024 * 1024;
 const MAX_CAPTURE_MESSAGE_BYTES = 1024 * 1024;
 const MAX_CAPTURE_QUEUE_BYTES = 32 * 1024 * 1024;
+const PENDING_CAPTURE_STORAGE_KEY = "adsfriendly.player-output-capture.v1";
 const canaryStores = new Set();
 let pendingCanaryEvidence = null;
 
@@ -105,15 +106,7 @@ export function startPlayerOutputCapture({ captureId } = {}) {
     };
   }
   if (store.fullCapture) return { status: "capture_already_running" };
-  const capture = {
-    id: captureId,
-    queue: [],
-    queuedBytes: 0,
-    pending: null,
-    sequenceByTrack: new Map(),
-    finishing: false,
-    finishSent: false,
-  };
+  const capture = createFullCapture(captureId);
   store.fullCapture = capture;
   for (const track of store.tracks.values()) {
     for (const chunk of track.chunks) {
@@ -127,6 +120,34 @@ export function startPlayerOutputCapture({ captureId } = {}) {
     seededBytes: capture.queuedBytes,
     trackCount: store.tracks.size,
   };
+}
+
+export function preparePlayerOutputCaptureReload({ captureId } = {}) {
+  if (typeof captureId !== "string" || !captureId)
+    return { status: "invalid_capture" };
+  try {
+    globalThis.sessionStorage?.setItem(
+      PENDING_CAPTURE_STORAGE_KEY,
+      JSON.stringify({
+        captureId,
+        expiresAt: Date.now() + 60_000,
+      }),
+    );
+    if (!globalThis.sessionStorage?.getItem(PENDING_CAPTURE_STORAGE_KEY)) {
+      throw new Error("Player session storage is unavailable.");
+    }
+  } catch (error) {
+    return {
+      status: "reload_unavailable",
+      reason: error?.message || String(error),
+    };
+  }
+  setTimeout(() => {
+    try {
+      globalThis.location?.reload?.();
+    } catch {}
+  }, 75);
+  return { status: "reloading", captureId };
 }
 
 export function acknowledgePlayerOutputCapture(message = {}) {
@@ -188,6 +209,7 @@ export function installBlobSourceTracer(
   const sourceBufferStates = new WeakMap();
   const objectUrlStates = new Map();
   const cleanups = [];
+  const pendingCaptureId = takePendingCaptureId();
   const canaryStore = {
     evidence:
       pendingCanaryEvidence?.expiresAt > Date.now()
@@ -197,7 +219,9 @@ export function installBlobSourceTracer(
     totalBytes: 0,
     nextTrackId: 1,
     saturated: false,
-    fullCapture: null,
+    fullCapture: pendingCaptureId
+      ? createFullCapture(pendingCaptureId)
+      : null,
   };
   canaryStores.add(canaryStore);
 
@@ -207,6 +231,7 @@ export function installBlobSourceTracer(
   patchXhrResponse();
   patchMediaSource();
   patchObjectUrls();
+  if (pendingCaptureId) resumePlaybackAfterCaptureReload();
   const onVideoEnded = (event) => {
     if (event.target?.tagName === "VIDEO")
       requestFullCaptureFinish(canaryStore);
@@ -440,6 +465,29 @@ export function installBlobSourceTracer(
     }
   }
 
+  function resumePlaybackAfterCaptureReload() {
+    let attempts = 0;
+    let timerId = null;
+    const attempt = () => {
+      attempts += 1;
+      const videos = [
+        ...(globalThis.document?.querySelectorAll?.("video") || []),
+      ];
+      for (const video of videos) {
+        if (!video.paused) continue;
+        try {
+          const result = video.play?.();
+          result?.catch?.(() => {});
+        } catch {}
+      }
+      if (attempts < 12 && !videos.some((video) => !video.paused)) {
+        timerId = setTimeout(attempt, 250);
+      }
+    };
+    attempt();
+    cleanups.push(() => clearTimeout(timerId));
+  }
+
   function mediaSourceState(mediaSource) {
     let state = mediaSourceStates.get(mediaSource);
     if (!state) {
@@ -496,6 +544,36 @@ export function installBlobSourceTracer(
   function rememberBuffer(buffer, source) {
     if (buffer instanceof ArrayBuffer && source?.url)
       bufferSources.set(buffer, source);
+  }
+}
+
+function createFullCapture(captureId) {
+  return {
+    id: captureId,
+    queue: [],
+    queuedBytes: 0,
+    pending: null,
+    sequenceByTrack: new Map(),
+    finishing: false,
+    finishSent: false,
+  };
+}
+
+function takePendingCaptureId() {
+  try {
+    const raw = globalThis.sessionStorage?.getItem(
+      PENDING_CAPTURE_STORAGE_KEY,
+    );
+    globalThis.sessionStorage?.removeItem(PENDING_CAPTURE_STORAGE_KEY);
+    if (!raw) return null;
+    const value = JSON.parse(raw);
+    return typeof value?.captureId === "string" &&
+      value.captureId &&
+      Number(value.expiresAt) > Date.now()
+      ? value.captureId
+      : null;
+  } catch {
+    return null;
   }
 }
 

@@ -5,6 +5,7 @@ import {
   installBlobSourceTracer,
   acknowledgePlayerOutputCapture,
   readPlayerOutputCanary,
+  preparePlayerOutputCaptureReload,
   startPlayerOutputCapture,
   stopPlayerOutputCapture,
 } from "./blob-source-tracer.js";
@@ -90,6 +91,15 @@ onContentMessage((message) => {
       type: "PLAYER_OUTPUT_CAPTURE_START_RESPONSE",
       requestId: message.requestId,
       result: startPlayerOutputCapture({ captureId: message.captureId }),
+    });
+  }
+  if (message.type === "PREPARE_PLAYER_OUTPUT_CAPTURE_RELOAD") {
+    notifyContentScript({
+      type: "PLAYER_OUTPUT_CAPTURE_RELOAD_RESPONSE",
+      requestId: message.requestId,
+      result: preparePlayerOutputCaptureReload({
+        captureId: message.captureId,
+      }),
     });
   }
   if (message.type === "PLAYER_OUTPUT_CAPTURE_ACK") {

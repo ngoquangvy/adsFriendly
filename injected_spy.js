@@ -2986,6 +2986,7 @@ ${body}`;
   var MAX_CANARY_BYTES_TOTAL = 16 * 1024 * 1024;
   var MAX_CAPTURE_MESSAGE_BYTES = 1024 * 1024;
   var MAX_CAPTURE_QUEUE_BYTES = 32 * 1024 * 1024;
+  var PENDING_CAPTURE_STORAGE_KEY = "adsfriendly.player-output-capture.v1";
   var canaryStores = /* @__PURE__ */ new Set();
   var pendingCanaryEvidence = null;
   function armPlayerOutputCanary(evidence = {}) {
@@ -3056,15 +3057,7 @@ ${body}`;
       };
     }
     if (store.fullCapture) return { status: "capture_already_running" };
-    const capture = {
-      id: captureId,
-      queue: [],
-      queuedBytes: 0,
-      pending: null,
-      sequenceByTrack: /* @__PURE__ */ new Map(),
-      finishing: false,
-      finishSent: false
-    };
+    const capture = createFullCapture(captureId);
     store.fullCapture = capture;
     for (const track of store.tracks.values()) {
       for (const chunk of track.chunks) {
@@ -3078,6 +3071,34 @@ ${body}`;
       seededBytes: capture.queuedBytes,
       trackCount: store.tracks.size
     };
+  }
+  function preparePlayerOutputCaptureReload({ captureId } = {}) {
+    if (typeof captureId !== "string" || !captureId)
+      return { status: "invalid_capture" };
+    try {
+      globalThis.sessionStorage?.setItem(
+        PENDING_CAPTURE_STORAGE_KEY,
+        JSON.stringify({
+          captureId,
+          expiresAt: Date.now() + 6e4
+        })
+      );
+      if (!globalThis.sessionStorage?.getItem(PENDING_CAPTURE_STORAGE_KEY)) {
+        throw new Error("Player session storage is unavailable.");
+      }
+    } catch (error) {
+      return {
+        status: "reload_unavailable",
+        reason: error?.message || String(error)
+      };
+    }
+    setTimeout(() => {
+      try {
+        globalThis.location?.reload?.();
+      } catch {
+      }
+    }, 75);
+    return { status: "reloading", captureId };
   }
   function acknowledgePlayerOutputCapture(message = {}) {
     for (const store of canaryStores) {
@@ -3131,13 +3152,14 @@ ${body}`;
     const sourceBufferStates = /* @__PURE__ */ new WeakMap();
     const objectUrlStates = /* @__PURE__ */ new Map();
     const cleanups = [];
+    const pendingCaptureId = takePendingCaptureId();
     const canaryStore = {
       evidence: pendingCanaryEvidence?.expiresAt > Date.now() ? pendingCanaryEvidence : null,
       tracks: /* @__PURE__ */ new Map(),
       totalBytes: 0,
       nextTrackId: 1,
       saturated: false,
-      fullCapture: null
+      fullCapture: pendingCaptureId ? createFullCapture(pendingCaptureId) : null
     };
     canaryStores.add(canaryStore);
     patchResponseArrayBuffer();
@@ -3146,6 +3168,7 @@ ${body}`;
     patchXhrResponse();
     patchMediaSource();
     patchObjectUrls();
+    if (pendingCaptureId) resumePlaybackAfterCaptureReload();
     const onVideoEnded = (event2) => {
       if (event2.target?.tagName === "VIDEO")
         requestFullCaptureFinish(canaryStore);
@@ -3365,6 +3388,30 @@ ${body}`;
         });
       }
     }
+    function resumePlaybackAfterCaptureReload() {
+      let attempts = 0;
+      let timerId = null;
+      const attempt = () => {
+        attempts += 1;
+        const videos = [
+          ...globalThis.document?.querySelectorAll?.("video") || []
+        ];
+        for (const video of videos) {
+          if (!video.paused) continue;
+          try {
+            const result = video.play?.();
+            result?.catch?.(() => {
+            });
+          } catch {
+          }
+        }
+        if (attempts < 12 && !videos.some((video) => !video.paused)) {
+          timerId = setTimeout(attempt, 250);
+        }
+      };
+      attempt();
+      cleanups.push(() => clearTimeout(timerId));
+    }
     function mediaSourceState(mediaSource) {
       let state = mediaSourceStates.get(mediaSource);
       if (!state) {
@@ -3417,6 +3464,30 @@ ${body}`;
     function rememberBuffer(buffer, source) {
       if (buffer instanceof ArrayBuffer && source?.url)
         bufferSources.set(buffer, source);
+    }
+  }
+  function createFullCapture(captureId) {
+    return {
+      id: captureId,
+      queue: [],
+      queuedBytes: 0,
+      pending: null,
+      sequenceByTrack: /* @__PURE__ */ new Map(),
+      finishing: false,
+      finishSent: false
+    };
+  }
+  function takePendingCaptureId() {
+    try {
+      const raw = globalThis.sessionStorage?.getItem(
+        PENDING_CAPTURE_STORAGE_KEY
+      );
+      globalThis.sessionStorage?.removeItem(PENDING_CAPTURE_STORAGE_KEY);
+      if (!raw) return null;
+      const value = JSON.parse(raw);
+      return typeof value?.captureId === "string" && value.captureId && Number(value.expiresAt) > Date.now() ? value.captureId : null;
+    } catch {
+      return null;
     }
   }
   function captureCanaryChunk(store, sourceBufferState, value, appendFormat) {
@@ -5649,6 +5720,15 @@ ${body}`;
         type: "PLAYER_OUTPUT_CAPTURE_START_RESPONSE",
         requestId: message.requestId,
         result: startPlayerOutputCapture({ captureId: message.captureId })
+      });
+    }
+    if (message.type === "PREPARE_PLAYER_OUTPUT_CAPTURE_RELOAD") {
+      notifyContentScript({
+        type: "PLAYER_OUTPUT_CAPTURE_RELOAD_RESPONSE",
+        requestId: message.requestId,
+        result: preparePlayerOutputCaptureReload({
+          captureId: message.captureId
+        })
       });
     }
     if (message.type === "PLAYER_OUTPUT_CAPTURE_ACK") {

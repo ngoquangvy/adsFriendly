@@ -75,6 +75,7 @@ import {
   classifyAppendedMediaBuffer,
   clearPlayerOutputCanary,
   installBlobSourceTracer,
+  preparePlayerOutputCaptureReload,
   readPlayerOutputCanary,
   startPlayerOutputCapture,
 } from "../src/main-world/blob-source-tracer.js";
@@ -2048,6 +2049,84 @@ test("blob source tracing links an appended network buffer to an adaptive manife
     globalThis.XMLHttpRequest = previous.XMLHttpRequest;
     globalThis.MediaSource = previous.MediaSource;
     globalThis.SourceBuffer = previous.SourceBuffer;
+    globalThis.window = previous.window;
+    globalThis.location = previous.location;
+    URL.createObjectURL = previous.createObjectURL;
+    URL.revokeObjectURL = previous.revokeObjectURL;
+  }
+});
+
+test("player output capture arms itself across one player-frame reload", async () => {
+  const previous = {
+    MediaSource: globalThis.MediaSource,
+    SourceBuffer: globalThis.SourceBuffer,
+    sessionStorage: globalThis.sessionStorage,
+    window: globalThis.window,
+    location: globalThis.location,
+    createObjectURL: URL.createObjectURL,
+    revokeObjectURL: URL.revokeObjectURL,
+  };
+  const storage = new Map();
+  const messages = [];
+  let reloadCount = 0;
+  class FakeSourceBuffer {
+    appendBuffer(value) {
+      this.lastValue = value;
+    }
+  }
+  class FakeMediaSource {
+    addSourceBuffer() {
+      return new FakeSourceBuffer();
+    }
+    endOfStream() {}
+  }
+  globalThis.MediaSource = FakeMediaSource;
+  globalThis.SourceBuffer = FakeSourceBuffer;
+  globalThis.sessionStorage = {
+    getItem: (key) => storage.get(key) || null,
+    setItem: (key, value) => storage.set(key, String(value)),
+    removeItem: (key) => storage.delete(key),
+  };
+  globalThis.window = {
+    postMessage(message) {
+      messages.push(message);
+    },
+  };
+  globalThis.location = {
+    href: "https://player.example/embed",
+    reload() {
+      reloadCount += 1;
+    },
+  };
+  URL.createObjectURL = () => "blob:https://player.example/output";
+  URL.revokeObjectURL = () => {};
+  const prepared = preparePlayerOutputCaptureReload({
+    captureId: "capture-after-reload",
+  });
+  assert.equal(prepared.status, "reloading");
+  const stop = installBlobSourceTracer({ can: () => true });
+  try {
+    const mediaSource = new FakeMediaSource();
+    URL.createObjectURL(mediaSource);
+    const sourceBuffer = mediaSource.addSourceBuffer(
+      'video/mp4; codecs="avc1"',
+    );
+    const bytes = new ArrayBuffer(64);
+    new Uint8Array(bytes).set([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70]);
+    sourceBuffer.appendBuffer(bytes);
+    const chunk = messages.find(
+      (message) => message.type === "PLAYER_OUTPUT_CAPTURE_CHUNK",
+    );
+    assert.equal(chunk.captureId, "capture-after-reload");
+    assert.equal(chunk.sequence, 0);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(reloadCount, 1);
+    assert.equal(storage.size, 0);
+  } finally {
+    stop();
+    globalThis.MediaSource = previous.MediaSource;
+    globalThis.SourceBuffer = previous.SourceBuffer;
+    globalThis.sessionStorage = previous.sessionStorage;
     globalThis.window = previous.window;
     globalThis.location = previous.location;
     URL.createObjectURL = previous.createObjectURL;

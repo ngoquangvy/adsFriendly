@@ -8021,9 +8021,12 @@ ${blobTitleKey(item.title)}`;
       }
     }
     if (!Number.isInteger(sourceFrameId)) {
+      sourceFrameId = frameIds.includes(preferredFrameId) ? preferredFrameId : null;
+    }
+    if (!Number.isInteger(sourceFrameId)) {
       return {
         status: "reload_required",
-        reason: "No continuous player-output start buffer is available. Reload the page and play briefly before capture."
+        reason: "The player frame could not be identified for automatic reload capture."
       };
     }
     const jobId = randomId5();
@@ -8048,6 +8051,35 @@ ${blobTitleKey(item.title)}`;
         { frameId: sourceFrameId }
       );
     } catch {
+    }
+    if (result?.status === "reload_required") {
+      let reloadResult = null;
+      try {
+        reloadResult = sourceFrameId === 0 ? await chrome.tabs.sendMessage(tabId, {
+          type: "PREPARE_PLAYER_OUTPUT_CAPTURE_RELOAD",
+          captureId: jobId
+        }) : await chrome.tabs.sendMessage(
+          tabId,
+          {
+            type: "PREPARE_PLAYER_OUTPUT_CAPTURE_RELOAD",
+            captureId: jobId
+          },
+          { frameId: sourceFrameId }
+        );
+      } catch {
+      }
+      if (reloadResult?.status === "reloading") {
+        return {
+          status: "started",
+          jobId,
+          reloading: true,
+          reason: "The player frame is reloading and capture is armed from its first output buffer."
+        };
+      }
+      result = {
+        status: "reload_unavailable",
+        reason: reloadResult?.reason || "The player frame could not preserve capture across reload."
+      };
     }
     if (result?.status !== "started") {
       await failMediaHelperPlayerOutputCapture(

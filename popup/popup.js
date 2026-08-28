@@ -3598,7 +3598,7 @@ ${blobTitleKey(item.title)}`;
         button.textContent = "Capture";
       } else if (state.status === "reload_required") {
         button.disabled = false;
-        button.textContent = "Reload & test";
+        button.textContent = "Reload & capture";
       } else if (state.status === "failed") {
         button.disabled = false;
         button.textContent = "Test again";
@@ -3641,12 +3641,13 @@ ${blobTitleKey(item.title)}`;
         return;
       }
       const canaryReady = state.status === "ready";
+      const shouldStartCapture = canaryReady || state.status === "reload_required";
       commitState({
-        status: canaryReady ? "starting" : "testing",
-        detail: canaryReady ? "Starting continuous player-output capture\u2026" : "FFprobe is checking the bounded player-output sample\u2026"
+        status: shouldStartCapture ? "starting" : "testing",
+        detail: shouldStartCapture ? state.status === "reload_required" ? "Arming capture and reloading the player frame automatically\u2026" : "Starting continuous player-output capture\u2026" : "FFprobe is checking the bounded player-output sample\u2026"
       });
       try {
-        if (canaryReady) {
+        if (shouldStartCapture) {
           const response2 = await chrome.runtime.sendMessage({
             type: "START_PLAYER_OUTPUT_CAPTURE",
             tabId: tab.id,
@@ -3659,7 +3660,7 @@ ${blobTitleKey(item.title)}`;
           }
           commitState({
             status: "capturing",
-            detail: "Keep the player running. Download Manager will finalize the MP4 when playback ends."
+            detail: response2.reloading ? "Player reloaded automatically; press Play if paused. Capture is armed from the first output buffer." : "Keep the player running. Download Manager will finalize the MP4 when playback ends."
           });
           await updateMediaJobs();
           return;
