@@ -16,6 +16,7 @@ const MAX_CANARY_BYTES_TOTAL = 16 * 1024 * 1024;
 const MAX_CAPTURE_MESSAGE_BYTES = 1024 * 1024;
 const MAX_CAPTURE_QUEUE_BYTES = 32 * 1024 * 1024;
 const PENDING_CAPTURE_STORAGE_KEY = "adsfriendly.player-output-capture.v1";
+const CAPTURE_PLAYBACK_RATES = Object.freeze([16, 12, 8, 4, 2, 1]);
 const canaryStores = new Set();
 let pendingCanaryEvidence = null;
 
@@ -113,6 +114,7 @@ export function startPlayerOutputCapture({ captureId } = {}) {
       enqueueCaptureBytes(store, track, chunk, track.appendFormats[0] || null);
     }
   }
+  startCaptureAcceleration(store);
   pumpCaptureQueue(store);
   return {
     status: "started",
@@ -178,6 +180,7 @@ export function acknowledgePlayerOutputCapture(message = {}) {
 export function stopPlayerOutputCapture(captureId) {
   for (const store of canaryStores) {
     if (store.fullCapture?.id !== captureId) continue;
+    stopCaptureAcceleration(store);
     store.fullCapture.queue.length = 0;
     store.fullCapture = null;
     return { status: "stopped", captureId };
@@ -188,6 +191,7 @@ export function stopPlayerOutputCapture(captureId) {
 export function clearPlayerOutputCanary() {
   pendingCanaryEvidence = null;
   for (const store of canaryStores) {
+    stopCaptureAcceleration(store);
     store.evidence = null;
     store.tracks.clear();
     store.totalBytes = 0;
@@ -222,6 +226,7 @@ export function installBlobSourceTracer(
     fullCapture: pendingCaptureId
       ? createFullCapture(pendingCaptureId)
       : null,
+    acceleration: null,
   };
   canaryStores.add(canaryStore);
 
@@ -231,7 +236,7 @@ export function installBlobSourceTracer(
   patchXhrResponse();
   patchMediaSource();
   patchObjectUrls();
-  if (pendingCaptureId) resumePlaybackAfterCaptureReload();
+  if (pendingCaptureId) startCaptureAcceleration(canaryStore);
   const onVideoEnded = (event) => {
     if (event.target?.tagName === "VIDEO")
       requestFullCaptureFinish(canaryStore);
@@ -244,6 +249,7 @@ export function installBlobSourceTracer(
   }
 
   return () => {
+    stopCaptureAcceleration(canaryStore);
     for (const cleanup of cleanups.reverse()) cleanup();
     for (const state of objectUrlStates.values()) clearTimeout(state.timerId);
     objectUrlStates.clear();
@@ -465,29 +471,6 @@ export function installBlobSourceTracer(
     }
   }
 
-  function resumePlaybackAfterCaptureReload() {
-    let attempts = 0;
-    let timerId = null;
-    const attempt = () => {
-      attempts += 1;
-      const videos = [
-        ...(globalThis.document?.querySelectorAll?.("video") || []),
-      ];
-      for (const video of videos) {
-        if (!video.paused) continue;
-        try {
-          const result = video.play?.();
-          result?.catch?.(() => {});
-        } catch {}
-      }
-      if (attempts < 12 && !videos.some((video) => !video.paused)) {
-        timerId = setTimeout(attempt, 250);
-      }
-    };
-    attempt();
-    cleanups.push(() => clearTimeout(timerId));
-  }
-
   function mediaSourceState(mediaSource) {
     let state = mediaSourceStates.get(mediaSource);
     if (!state) {
@@ -557,6 +540,114 @@ function createFullCapture(captureId) {
     finishing: false,
     finishSent: false,
   };
+}
+
+function startCaptureAcceleration(store) {
+  stopCaptureAcceleration(store);
+  const acceleration = {
+    rateIndex: 0,
+    startedAt: Date.now(),
+    lastShiftAt: 0,
+    stableTicks: 0,
+    timerId: null,
+    videos: new Map(),
+    stalled: false,
+    onStall: null,
+  };
+  acceleration.onStall = () => {
+    acceleration.stalled = true;
+  };
+  globalThis.document?.addEventListener?.(
+    "waiting",
+    acceleration.onStall,
+    true,
+  );
+  globalThis.document?.addEventListener?.(
+    "stalled",
+    acceleration.onStall,
+    true,
+  );
+  store.acceleration = acceleration;
+  const tick = () => {
+    if (store.acceleration !== acceleration || !store.fullCapture) return;
+    const now = Date.now();
+    const queuePressure =
+      store.fullCapture.queuedBytes / MAX_CAPTURE_QUEUE_BYTES;
+    const mayShift = now - acceleration.lastShiftAt >= 2000;
+    if (
+      mayShift &&
+      now - acceleration.startedAt > 2500 &&
+      (acceleration.stalled || queuePressure >= 0.7)
+    ) {
+      acceleration.rateIndex = Math.min(
+        CAPTURE_PLAYBACK_RATES.length - 1,
+        acceleration.rateIndex + 1,
+      );
+      acceleration.lastShiftAt = now;
+      acceleration.stableTicks = 0;
+    } else if (
+      mayShift &&
+      !acceleration.stalled &&
+      queuePressure < 0.25 &&
+      acceleration.stableTicks >= 20 &&
+      acceleration.rateIndex > 0
+    ) {
+      acceleration.rateIndex -= 1;
+      acceleration.lastShiftAt = now;
+      acceleration.stableTicks = 0;
+    } else if (!acceleration.stalled && queuePressure < 0.5) {
+      acceleration.stableTicks += 1;
+    }
+    acceleration.stalled = false;
+    const rate = CAPTURE_PLAYBACK_RATES[acceleration.rateIndex];
+    const videos = [
+      ...(globalThis.document?.querySelectorAll?.("video") || []),
+    ];
+    for (const video of videos) {
+      if (!acceleration.videos.has(video)) {
+        acceleration.videos.set(video, {
+          playbackRate: Number(video.playbackRate) || 1,
+          defaultPlaybackRate: Number(video.defaultPlaybackRate) || 1,
+          muted: video.muted === true,
+        });
+      }
+      try {
+        video.defaultPlaybackRate = rate;
+        video.playbackRate = rate;
+        video.muted = true;
+        if (video.paused) video.play?.()?.catch?.(() => {});
+      } catch {
+        acceleration.stalled = true;
+      }
+    }
+    acceleration.timerId = setTimeout(tick, 500);
+  };
+  tick();
+}
+
+function stopCaptureAcceleration(store) {
+  const acceleration = store?.acceleration;
+  if (!acceleration) return;
+  store.acceleration = null;
+  clearTimeout(acceleration.timerId);
+  globalThis.document?.removeEventListener?.(
+    "waiting",
+    acceleration.onStall,
+    true,
+  );
+  globalThis.document?.removeEventListener?.(
+    "stalled",
+    acceleration.onStall,
+    true,
+  );
+  for (const [video, previous] of acceleration.videos) {
+    try {
+      video.defaultPlaybackRate = previous.defaultPlaybackRate;
+      video.playbackRate = previous.playbackRate;
+      video.muted = previous.muted;
+    } catch {}
+  }
+  acceleration.videos.clear();
 }
 
 function takePendingCaptureId() {
@@ -705,12 +796,14 @@ function requestFullCaptureFinish(store) {
   const capture = store.fullCapture;
   if (!capture || capture.finishing) return;
   capture.finishing = true;
+  stopCaptureAcceleration(store);
   pumpCaptureQueue(store);
 }
 
 function failFullCapture(store, error) {
   const capture = store.fullCapture;
   if (!capture) return;
+  stopCaptureAcceleration(store);
   store.fullCapture = null;
   notifyContentScript({
     type: "PLAYER_OUTPUT_CAPTURE_FAILED",

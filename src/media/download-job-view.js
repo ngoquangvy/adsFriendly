@@ -166,7 +166,7 @@ export function formatMediaJobStage(job = {}) {
     segment_download: "Downloading HLS segments…",
     local_assembly: "Preparing local HLS manifest…",
     local_processing: "Processing downloaded media…",
-    player_output_capture: "Capturing decoded player output…",
+    player_output_capture: "Fast-capturing decoded player output…",
     player_output_probe: "Validating captured video and audio…",
     player_output_remux: "Remuxing captured tracks to MP4…",
   };

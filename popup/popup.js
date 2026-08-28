@@ -1320,7 +1320,7 @@ var AdsFriendlyPopup = (() => {
       segment_download: "Downloading HLS segments\u2026",
       local_assembly: "Preparing local HLS manifest\u2026",
       local_processing: "Processing downloaded media\u2026",
-      player_output_capture: "Capturing decoded player output\u2026",
+      player_output_capture: "Fast-capturing decoded player output\u2026",
       player_output_probe: "Validating captured video and audio\u2026",
       player_output_remux: "Remuxing captured tracks to MP4\u2026"
     };
@@ -3660,7 +3660,7 @@ ${blobTitleKey(item.title)}`;
           }
           commitState({
             status: "capturing",
-            detail: response2.reloading ? "Player reloaded automatically; press Play if paused. Capture is armed from the first output buffer." : "Keep the player running. Download Manager will finalize the MP4 when playback ends."
+            detail: response2.reloading ? "Player reloaded automatically. Fast capture is armed from the first output buffer." : "Fast capture uses the highest stable player rate and finalizes when output ends."
           });
           await updateMediaJobs();
           return;

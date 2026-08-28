@@ -2060,6 +2060,7 @@ test("player output capture arms itself across one player-frame reload", async (
   const previous = {
     MediaSource: globalThis.MediaSource,
     SourceBuffer: globalThis.SourceBuffer,
+    document: globalThis.document,
     sessionStorage: globalThis.sessionStorage,
     window: globalThis.window,
     location: globalThis.location,
@@ -2069,6 +2070,16 @@ test("player output capture arms itself across one player-frame reload", async (
   const storage = new Map();
   const messages = [];
   let reloadCount = 0;
+  const video = {
+    paused: true,
+    playbackRate: 1,
+    defaultPlaybackRate: 1,
+    muted: false,
+    play() {
+      this.paused = false;
+      return Promise.resolve();
+    },
+  };
   class FakeSourceBuffer {
     appendBuffer(value) {
       this.lastValue = value;
@@ -2082,6 +2093,12 @@ test("player output capture arms itself across one player-frame reload", async (
   }
   globalThis.MediaSource = FakeMediaSource;
   globalThis.SourceBuffer = FakeSourceBuffer;
+  globalThis.document = {
+    readyState: "interactive",
+    querySelectorAll: (selector) => (selector === "video" ? [video] : []),
+    addEventListener() {},
+    removeEventListener() {},
+  };
   globalThis.sessionStorage = {
     getItem: (key) => storage.get(key) || null,
     setItem: (key, value) => storage.set(key, String(value)),
@@ -2119,13 +2136,18 @@ test("player output capture arms itself across one player-frame reload", async (
     );
     assert.equal(chunk.captureId, "capture-after-reload");
     assert.equal(chunk.sequence, 0);
+    assert.equal(video.playbackRate, 16);
+    assert.equal(video.muted, true);
     await new Promise((resolve) => setTimeout(resolve, 100));
     assert.equal(reloadCount, 1);
     assert.equal(storage.size, 0);
   } finally {
     stop();
+    assert.equal(video.playbackRate, 1);
+    assert.equal(video.muted, false);
     globalThis.MediaSource = previous.MediaSource;
     globalThis.SourceBuffer = previous.SourceBuffer;
+    globalThis.document = previous.document;
     globalThis.sessionStorage = previous.sessionStorage;
     globalThis.window = previous.window;
     globalThis.location = previous.location;

@@ -1003,7 +1003,7 @@ var AdsFriendlyOptions = (() => {
       segment_download: "Downloading HLS segments\u2026",
       local_assembly: "Preparing local HLS manifest\u2026",
       local_processing: "Processing downloaded media\u2026",
-      player_output_capture: "Capturing decoded player output\u2026",
+      player_output_capture: "Fast-capturing decoded player output\u2026",
       player_output_probe: "Validating captured video and audio\u2026",
       player_output_remux: "Remuxing captured tracks to MP4\u2026"
     };

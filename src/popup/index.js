@@ -1002,8 +1002,8 @@ function createPlayerOutputCanaryControl(item, tab, helper, control) {
         commitState({
           status: "capturing",
           detail: response.reloading
-            ? "Player reloaded automatically; press Play if paused. Capture is armed from the first output buffer."
-            : "Keep the player running. Download Manager will finalize the MP4 when playback ends.",
+            ? "Player reloaded automatically. Fast capture is armed from the first output buffer."
+            : "Fast capture uses the highest stable player rate and finalizes when output ends.",
         });
         await updateMediaJobs();
         return;
