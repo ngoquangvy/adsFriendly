@@ -25,6 +25,7 @@ import {
 import { getMediaManifestHandoff } from "./media-manifest-handoff.js";
 import { normalizeMediaDownloadOutput } from "../media/download-options.js";
 import { hasYouTubeProviderPendingTracks } from "../media/adaptive-track-policy.js";
+import { selectVisibleMediaItems } from "../media/catalog-view.js";
 
 let broker = null;
 
@@ -110,7 +111,7 @@ async function createJob({ tabId, mediaId, connections, output } = {}) {
   if (typeof mediaId !== "string" || !mediaId)
     return { status: "invalid_media" };
   const response = await listDiscoveredMedia(tabId);
-  let candidate = response.items.find((item) => item.id === mediaId);
+  let candidate = findDownloadCandidate(response.items, mediaId);
   if (!candidate) return { status: "media_not_found" };
   if (candidate.kind === "hls" && candidate.selectedMediaId) {
     candidate =
@@ -154,7 +155,7 @@ async function preflightJob({ tabId, mediaId } = {}) {
   if (typeof mediaId !== "string" || !mediaId)
     return { status: "invalid_media" };
   const response = await listDiscoveredMedia(tabId);
-  let candidate = response.items.find((item) => item.id === mediaId);
+  let candidate = findDownloadCandidate(response.items, mediaId);
   if (!candidate) return { status: "media_not_found" };
   candidate = await attachFreshYouTubeBrowserHandoff(tabId, candidate);
   return preflightMediaHelperYouTubeQualities(candidate);
@@ -632,7 +633,17 @@ function uniqueHttpUrls(values) {
 async function recoverCandidate(state) {
   if (!Number.isInteger(state.sourceTabId) || !state.mediaId) return null;
   const response = await listDiscoveredMedia(state.sourceTabId);
-  return response.items.find((item) => item.id === state.mediaId) || null;
+  return findDownloadCandidate(response.items, state.mediaId);
+}
+
+function findDownloadCandidate(items, mediaId) {
+  return (
+    items.find((item) => item.id === mediaId) ||
+    selectVisibleMediaItems(items, Number.MAX_SAFE_INTEGER).find(
+      (item) => item.id === mediaId,
+    ) ||
+    null
+  );
 }
 
 async function helperFailureFor(candidate, output) {

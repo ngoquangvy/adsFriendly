@@ -10,6 +10,7 @@ import {
   hasYouTubeProviderPendingTracks,
   isAcquirableAdaptiveTrack,
 } from "./adaptive-track-policy.js";
+import { stableMediaId } from "./detection.js";
 
 export function createMediaCatalogViewSignature({
   tabId = null,
@@ -45,6 +46,7 @@ export function selectVisibleMediaItems(items = [], maximum = 8) {
     ...item,
     resolutionDiagnostic: diagnoseMediaResolution(item, items),
   }));
+  const displayItems = groupFacebookDirectRepresentations(diagnosedItems);
   const blobResolvedSourceIds = new Set(
     diagnosedItems
       .filter((item) => item.kind === "blob" && item.selectedMediaId)
@@ -72,14 +74,14 @@ export function selectVisibleMediaItems(items = [], maximum = 8) {
       }
     }
   }
-  const sorted = [...diagnosedItems].sort(
+  const sorted = [...displayItems].sort(
     (left, right) =>
       (right.firstSeenAt || 0) - (left.firstSeenAt || 0) ||
       String(left.id || "").localeCompare(String(right.id || "")),
   );
   const visible = [];
   const adaptivePages = new Set(
-    diagnosedItems
+    displayItems
       .filter((item) => item.kind === "adaptive")
       .map((item) => item.pageUrl),
   );
@@ -123,6 +125,159 @@ export function selectVisibleMediaItems(items = [], maximum = 8) {
     visible.push(grouped);
   }
   return visible.slice(0, maximum);
+}
+
+function groupFacebookDirectRepresentations(items) {
+  const groups = new Map();
+  for (const item of items) {
+    if (item.kind !== "direct") continue;
+    const key = facebookMediaAssetKey(item);
+    if (!key) continue;
+    const group = groups.get(key) || [];
+    group.push(item);
+    groups.set(key, group);
+  }
+  const consumed = new Set();
+  const synthetic = [];
+  for (const [key, group] of groups) {
+    if (group.length < 2) continue;
+    group.forEach((item) => consumed.add(item.id));
+    synthetic.push(createFacebookAdaptiveGroup(key, group));
+  }
+  return [...items.filter((item) => !consumed.has(item.id)), ...synthetic];
+}
+
+function createFacebookAdaptiveGroup(key, items) {
+  const sorted = [...items].sort(
+    (left, right) =>
+      facebookQualityScore(right) - facebookQualityScore(left) ||
+      (right.contentLength || 0) - (left.contentLength || 0) ||
+      (right.lastSeenAt || 0) - (left.lastSeenAt || 0),
+  );
+  const primary = sorted[0];
+  const variants = sorted.map((item, index) => ({
+    id: item.id,
+    type: "video",
+    sourceUrl: item.sourceUrl,
+    mimeType: item.mimeType || "video/mp4",
+    codecs: null,
+    itag: null,
+    bandwidth: item.bandwidth || null,
+    averageBandwidth: item.averageBandwidth || null,
+    contentLength: item.contentLength || null,
+    width: item.resolution?.width || null,
+    height: item.resolution?.height || null,
+    qualityLabel: facebookQualityLabel(item) || `Source ${index + 1}`,
+    urlResolution: "resolved",
+    signatureCipher: null,
+    muxed: true,
+  }));
+  return {
+    ...primary,
+    id: stableMediaId("adaptive", key),
+    kind: "adaptive",
+    provider: "facebook",
+    title:
+      primary.title && !/^facebook$/i.test(primary.title.trim())
+        ? primary.title
+        : "Facebook video",
+    sourceUrl: primary.sourceUrl,
+    mimeType: "video/mp4",
+    variants,
+    audioTracks: [],
+    subtitles: [],
+    acquisitionProfile: "facebook_direct_representations",
+    probeStatus: "ready",
+    streamType: "vod",
+    relatedCount: items.length,
+    firstSeenAt: Math.min(...items.map((item) => item.firstSeenAt || 0)),
+    lastSeenAt: Math.max(...items.map((item) => item.lastSeenAt || 0)),
+  };
+}
+
+function facebookMediaAssetKey(item) {
+  try {
+    const source = new URL(item.sourceUrl || "");
+    if (!isFacebookCdnHost(source.hostname)) return null;
+    const envelope = decodeFacebookEfg(source.searchParams.get("efg"));
+    const assetId = findFacebookAssetId(envelope);
+    if (assetId) return `facebook-asset:${assetId}`;
+    const pageId = facebookPageVideoId(item.pageUrl);
+    return pageId ? `facebook-page:${pageId}` : null;
+  } catch {
+    return null;
+  }
+}
+
+function decodeFacebookEfg(value) {
+  if (typeof value !== "string" || !value || value.length > 10_000)
+    return null;
+  try {
+    const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+    return JSON.parse(atob(padded));
+  } catch {
+    return null;
+  }
+}
+
+function findFacebookAssetId(value, depth = 0) {
+  if (!value || typeof value !== "object" || depth > 2) return null;
+  for (const key of ["xpv_asset_id", "video_id", "asset_id"]) {
+    const candidate = value[key];
+    if (typeof candidate === "string" || Number.isSafeInteger(candidate))
+      return String(candidate);
+  }
+  for (const child of Object.values(value)) {
+    const candidate = findFacebookAssetId(child, depth + 1);
+    if (candidate) return candidate;
+  }
+  return null;
+}
+
+function facebookPageVideoId(value) {
+  try {
+    const page = new URL(value || "");
+    if (!(page.hostname === "facebook.com" || page.hostname.endsWith(".facebook.com")))
+      return null;
+    return (
+      page.searchParams.get("v") ||
+      page.pathname.match(/\/(?:reel|videos)\/(\d+)/i)?.[1] ||
+      null
+    );
+  } catch {
+    return null;
+  }
+}
+
+function facebookQualityLabel(item) {
+  const tag = facebookEncodingTag(item.sourceUrl);
+  const height =
+    item.resolution?.height || Number(tag?.match(/(?:^|[^0-9])(\d{3,4})p/i)?.[1]);
+  if (height) return `${height}p`;
+  if (/\bhd\b/i.test(tag || "")) return "HD";
+  if (/\bsd\b/i.test(tag || "")) return "SD";
+  return null;
+}
+
+function facebookQualityScore(item) {
+  const label = facebookQualityLabel(item);
+  const height = Number(label?.match(/^(\d+)p$/)?.[1]);
+  if (height) return height;
+  if (label === "HD") return 720;
+  if (label === "SD") return 480;
+  return 0;
+}
+
+function facebookEncodingTag(value) {
+  try {
+    const envelope = decodeFacebookEfg(new URL(value).searchParams.get("efg"));
+    return typeof envelope?.vencode_tag === "string"
+      ? envelope.vencode_tag
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 export function getMediaCatalogDownloadState(items = []) {

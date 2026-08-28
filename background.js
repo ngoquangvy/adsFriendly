@@ -3563,27 +3563,27 @@ var AdsFriendlyBackground = (() => {
             `[MediaCatalog] Cannot apply probe diagnostic event "${event2.type}".`
           );
         }
-        const diagnostic = event2.payload;
+        const diagnostic2 = event2.payload;
         let tabCatalog = tabs.get(tabId);
-        if (tabCatalog && !samePageUrl(tabCatalog.pageUrl, diagnostic.pageUrl)) {
+        if (tabCatalog && !samePageUrl(tabCatalog.pageUrl, diagnostic2.pageUrl)) {
           tabs.delete(tabId);
           tabCatalog = null;
         }
         if (!tabCatalog) {
-          tabCatalog = { pageUrl: diagnostic.pageUrl, items: /* @__PURE__ */ new Map() };
+          tabCatalog = { pageUrl: diagnostic2.pageUrl, items: /* @__PURE__ */ new Map() };
           tabs.set(tabId, tabCatalog);
         }
-        const existing = tabCatalog.items.get(diagnostic.mediaId);
+        const existing = tabCatalog.items.get(diagnostic2.mediaId);
         const base = existing || normalizeMediaCandidate({
-          id: diagnostic.mediaId,
-          pageUrl: diagnostic.pageUrl,
-          manifestUrl: diagnostic.manifestUrl,
-          kind: diagnostic.kind,
+          id: diagnostic2.mediaId,
+          pageUrl: diagnostic2.pageUrl,
+          manifestUrl: diagnostic2.manifestUrl,
+          kind: diagnostic2.kind,
           detectedBy: MEDIA_DETECTION_SOURCES.NETWORK
         });
         const probeDiagnostics = mergeProbeDiagnostics(
           existing?.probeDiagnostics,
-          diagnostic
+          diagnostic2
         );
         const item = {
           ...base,
@@ -3603,7 +3603,7 @@ var AdsFriendlyBackground = (() => {
           lastSeenAt: event2.timestamp
         };
         applyEmeToItem(item, tabCatalog.eme);
-        tabCatalog.items.set(diagnostic.mediaId, item);
+        tabCatalog.items.set(diagnostic2.mediaId, item);
         trimOldest(tabCatalog.items, maximumPerTab);
         return cloneItem(item);
       },
@@ -3831,17 +3831,17 @@ var AdsFriendlyBackground = (() => {
   }
   function mergeProbeDiagnostics(existing = [], incoming) {
     const unique = /* @__PURE__ */ new Map();
-    for (const diagnostic of [incoming, ...existing || []]) {
-      if (!diagnostic) continue;
+    for (const diagnostic2 of [incoming, ...existing || []]) {
+      if (!diagnostic2) continue;
       const key = [
-        diagnostic.phase,
-        diagnostic.code,
-        diagnostic.httpStatus,
-        diagnostic.bodyBytes,
-        diagnostic.playlistType,
-        diagnostic.segmentCount
+        diagnostic2.phase,
+        diagnostic2.code,
+        diagnostic2.httpStatus,
+        diagnostic2.bodyBytes,
+        diagnostic2.playlistType,
+        diagnostic2.segmentCount
       ].join("\n");
-      if (!unique.has(key)) unique.set(key, { ...diagnostic });
+      if (!unique.has(key)) unique.set(key, { ...diagnostic2 });
     }
     return [...unique.values()].sort((left, right) => (right.observedAt || 0) - (left.observedAt || 0)).slice(0, 8);
   }
@@ -4076,8 +4076,8 @@ var AdsFriendlyBackground = (() => {
         ...context
       })),
       probeDiagnostic: item.probeDiagnostic ? { ...item.probeDiagnostic } : null,
-      probeDiagnostics: (item.probeDiagnostics || []).map((diagnostic) => ({
-        ...diagnostic
+      probeDiagnostics: (item.probeDiagnostics || []).map((diagnostic2) => ({
+        ...diagnostic2
       })),
       resolutionAttempt: item.resolutionAttempt ? {
         ...item.resolutionAttempt,
@@ -4262,11 +4262,11 @@ var AdsFriendlyBackground = (() => {
           } catch {
           }
         }
-        for (const diagnostic of item.probeDiagnostics || []) {
+        for (const diagnostic2 of item.probeDiagnostics || []) {
           try {
             catalog.applyProbeDiagnostic(tabId, {
-              ...createRegisteredEvent(EVENTS.MEDIA_PROBE_DIAGNOSTIC, diagnostic),
-              timestamp: diagnostic.observedAt || item.lastSeenAt || Date.now(),
+              ...createRegisteredEvent(EVENTS.MEDIA_PROBE_DIAGNOSTIC, diagnostic2),
+              timestamp: diagnostic2.observedAt || item.lastSeenAt || Date.now(),
               metadata: {
                 frameId: item.frameId ?? null,
                 frameUrl: item.frameUrl || null
@@ -4815,12 +4815,12 @@ var AdsFriendlyBackground = (() => {
     };
   }
   function formatAesKeyHandoffDiagnostic(value) {
-    const diagnostic = normalizeAesKeyHandoffDiagnostic(value);
-    if (!diagnostic) return "";
-    const statuses = diagnostic.pageFetchStatuses.length ? `; key fetch status ${diagnostic.pageFetchStatuses.join(", ")}` : "";
-    const manifestStatuses = diagnostic.pageManifestFetchStatuses.length ? `; manifest fetch status ${diagnostic.pageManifestFetchStatuses.join(", ")}` : "";
-    const encryption = diagnostic.encryptionMethods.length ? `, encryption ${diagnostic.encryptionMethods.join("+")} (${diagnostic.encryptionKeyFormats.join("+") || "no key format"})` : "";
-    return ` Browser capture: ${diagnostic.framesResponded}/${diagnostic.framesQueried} frames responded, ${diagnostic.matchedManifestCount}/${diagnostic.requestedManifestCount} requested manifests matched, ${diagnostic.relatedManifestCount} related manifests (${diagnostic.relatedManifestBytes} bytes, ${diagnostic.childManifestCount} children, ${diagnostic.segmentDirectiveCount} segments), ${diagnostic.pageManifestFetchSuccessCount}/${diagnostic.pageManifestFetchAttemptCount} manifest fetches succeeded${manifestStatuses}, ${diagnostic.keyDirectiveCount} key directives (${diagnostic.unsupportedKeyDirectiveCount} unsupported)${encryption}, ${diagnostic.declaredKeyCount} identity keys declared, ${diagnostic.capturedKeyCount} captured, ${diagnostic.pageFetchSuccessCount}/${diagnostic.pageFetchAttemptCount} key fetches succeeded${statuses}.`;
+    const diagnostic2 = normalizeAesKeyHandoffDiagnostic(value);
+    if (!diagnostic2) return "";
+    const statuses = diagnostic2.pageFetchStatuses.length ? `; key fetch status ${diagnostic2.pageFetchStatuses.join(", ")}` : "";
+    const manifestStatuses = diagnostic2.pageManifestFetchStatuses.length ? `; manifest fetch status ${diagnostic2.pageManifestFetchStatuses.join(", ")}` : "";
+    const encryption = diagnostic2.encryptionMethods.length ? `, encryption ${diagnostic2.encryptionMethods.join("+")} (${diagnostic2.encryptionKeyFormats.join("+") || "no key format"})` : "";
+    return ` Browser capture: ${diagnostic2.framesResponded}/${diagnostic2.framesQueried} frames responded, ${diagnostic2.matchedManifestCount}/${diagnostic2.requestedManifestCount} requested manifests matched, ${diagnostic2.relatedManifestCount} related manifests (${diagnostic2.relatedManifestBytes} bytes, ${diagnostic2.childManifestCount} children, ${diagnostic2.segmentDirectiveCount} segments), ${diagnostic2.pageManifestFetchSuccessCount}/${diagnostic2.pageManifestFetchAttemptCount} manifest fetches succeeded${manifestStatuses}, ${diagnostic2.keyDirectiveCount} key directives (${diagnostic2.unsupportedKeyDirectiveCount} unsupported)${encryption}, ${diagnostic2.declaredKeyCount} identity keys declared, ${diagnostic2.capturedKeyCount} captured, ${diagnostic2.pageFetchSuccessCount}/${diagnostic2.pageFetchAttemptCount} key fetches succeeded${statuses}.`;
   }
   function normalizeDiagnosticStrings(value) {
     return Array.isArray(value) ? [
@@ -6770,6 +6770,605 @@ ${body}`;
     }
   }
 
+  // src/media/resolution-diagnostics.js
+  var MEDIA_RESOLUTION_STAGES = Object.freeze({
+    NETWORK_OBSERVATION: "network_observation",
+    MANIFEST_PROBE: "manifest_probe",
+    CHILD_DISCOVERY: "child_discovery",
+    CHILD_PROBE: "child_probe",
+    SOURCE_MATCHING: "source_matching",
+    PLAYER_DECRYPTION: "player_decryption",
+    PLAYER_SEGMENT_RESOLUTION: "player_segment_resolution",
+    DOWNLOAD_READY: "download_ready",
+    PLAYBACK_ONLY: "playback_only"
+  });
+  var MEDIA_RESOLUTION_DIAGNOSTIC_STATES = Object.freeze({
+    WAITING: "waiting",
+    FAILED: "failed",
+    UNHANDLED: "unhandled",
+    READY: "ready",
+    BLOCKED: "blocked"
+  });
+  var S2 = MEDIA_RESOLUTION_STAGES;
+  var D = MEDIA_RESOLUTION_DIAGNOSTIC_STATES;
+  var MEDIA_RESOLUTION_STAGE_CATALOG = Object.freeze({
+    [S2.NETWORK_OBSERVATION]: stage("Browser media request", "Catalog candidate"),
+    [S2.MANIFEST_PROBE]: stage("Manifest candidate", "Parsed manifest"),
+    [S2.CHILD_DISCOVERY]: stage(
+      "Master or playback request",
+      "Observed child playlist"
+    ),
+    [S2.CHILD_PROBE]: stage("Observed child playlist", "Playable child stream"),
+    [S2.SOURCE_MATCHING]: stage(
+      "Playable child stream + player context",
+      "Selected media source"
+    ),
+    [S2.PLAYER_DECRYPTION]: stage(
+      "Encrypted manifest + player Blob",
+      "Parsed plaintext manifest"
+    ),
+    [S2.PLAYER_SEGMENT_RESOLUTION]: stage(
+      "SAMPLE-AES candidate + player playback",
+      "Resolved media segment sequence"
+    ),
+    [S2.DOWNLOAD_READY]: stage("Selected media source", "Download plan input"),
+    [S2.PLAYBACK_ONLY]: stage("Protected media metadata", "Playback-only result")
+  });
+  function diagnoseMediaResolution(item, items = []) {
+    const byId = new Map(items.map((candidate) => [candidate.id, candidate]));
+    const target = item.kind === "blob" && item.selectedMediaId ? byId.get(item.selectedMediaId) || item.resolvedStream || item : item;
+    if (target.kind === "direct")
+      return diagnostic(S2.DOWNLOAD_READY, D.READY, "direct_ready", {
+        message: "Download ready \xB7 direct media"
+      });
+    if (target.kind === "blob")
+      return diagnostic(S2.NETWORK_OBSERVATION, D.WAITING, "blob_source_missing", {
+        message: "Network observation \xB7 Blob found \xB7 source request missing"
+      });
+    if (!["hls", "dash"].includes(target.kind))
+      return diagnostic(S2.NETWORK_OBSERVATION, D.UNHANDLED, "media_unhandled", {
+        message: "Network observation \xB7 media type not handled"
+      });
+    if (hasStrongDrmEvidence(target))
+      return diagnostic(S2.PLAYBACK_ONLY, D.BLOCKED, "drm_playback_only", {
+        message: "Playback only \xB7 DRM protected"
+      });
+    if (hasUnsupportedHlsKeyFormat(target))
+      return diagnostic(
+        S2.PLAYBACK_ONLY,
+        D.BLOCKED,
+        "custom_hls_protection_playback_only",
+        { message: "Playback only \xB7 custom HLS protection" }
+      );
+    if (target.probeStatus === "ready" && isWeakSampleAesSignal(target) && !isFfmpegCompatibleSampleAes(target))
+      return diagnostic(
+        S2.PLAYER_SEGMENT_RESOLUTION,
+        D.WAITING,
+        "sample_aes_player_segments_pending",
+        {
+          message: "Player URL resolution \xB7 waiting for resolved media segments"
+        }
+      );
+    if (target.kind === "dash") return diagnoseDash(target);
+    if (target.probeSource === "decrypted_blob" && !(Number(target.manifestHandoff?.expiresAt) > Date.now()))
+      return diagnostic(
+        S2.PLAYER_DECRYPTION,
+        D.UNHANDLED,
+        "decrypted_manifest_handoff_pending",
+        {
+          message: "Player decryption \xB7 manifest parsed \xB7 download handoff pending"
+        }
+      );
+    if (target.resolutionStatus === "resolved" || target.probeStatus === "ready" && target.playlistType === "media" && target.streamType === "vod" && target.segmentCount > 0)
+      return diagnostic(S2.DOWNLOAD_READY, D.READY, "hls_ready", {
+        message: "Download ready \xB7 HLS VOD resolved"
+      });
+    if (target.probeStatus === "unsupported")
+      return diagnostic(
+        S2.MANIFEST_PROBE,
+        D.UNHANDLED,
+        "hls_manifest_unsupported",
+        { message: "Manifest probe \xB7 HLS format not handled" }
+      );
+    const latestTargetProbe = latestProbeDiagnostic([target]);
+    if (latestTargetProbe?.code?.startsWith("contextual_probe_")) {
+      const described2 = describeProbeDiagnostic(latestTargetProbe);
+      return diagnostic(S2.MANIFEST_PROBE, described2.status, described2.code, {
+        probeDiagnostic: latestTargetProbe,
+        message: `Manifest probe \xB7 ${described2.message}`
+      });
+    }
+    const children = findObservedChildren(target, items);
+    const readyChildren = children.filter(isUsableChild);
+    const failedChildren = children.filter(
+      (candidate) => candidate.probeStatus === "failed"
+    );
+    const facts = {
+      observedChildCount: children.length,
+      readyChildCount: readyChildren.length,
+      failedChildCount: failedChildren.length,
+      masterProbeStatus: target.probeStatus || "discovered",
+      masterProbeError: target.probeError || null
+    };
+    if (!children.length) {
+      const masterFailure = formatProbeFailure(target);
+      if (target.probeStatus !== "failed" && target.playlistType !== "master") {
+        return diagnostic(S2.MANIFEST_PROBE, D.WAITING, "hls_probe_pending", {
+          ...facts,
+          message: "Manifest probe \xB7 HLS response not parsed yet"
+        });
+      }
+      return diagnostic(
+        S2.CHILD_DISCOVERY,
+        target.probeStatus === "failed" ? D.FAILED : D.WAITING,
+        target.probeStatus === "failed" ? "master_failed_child_not_observed" : "child_request_not_observed",
+        {
+          ...facts,
+          message: `Child discovery \xB7 0 child playlists${masterFailure ? ` \xB7 ${masterFailure}` : ""}`
+        }
+      );
+    }
+    if (readyChildren.length && !target.selectedMediaId) {
+      return diagnostic(S2.SOURCE_MATCHING, D.WAITING, "child_ready_not_matched", {
+        ...facts,
+        message: `Source matching \xB7 ${readyChildren.length} child ready \xB7 not linked to player`
+      });
+    }
+    const latestChildProbe = latestProbeDiagnostic(children);
+    if (latestChildProbe) {
+      const described2 = describeProbeDiagnostic(latestChildProbe);
+      return diagnostic(S2.CHILD_PROBE, described2.status, described2.code, {
+        ...facts,
+        probeDiagnostic: latestChildProbe,
+        message: `Child probe \xB7 ${described2.message}`
+      });
+    }
+    if (failedChildren.length === children.length) {
+      return diagnostic(S2.CHILD_PROBE, D.FAILED, "child_probe_failed", {
+        ...facts,
+        message: `Child probe \xB7 ${failedChildren.length} failed \xB7 ${formatProbeFailure(failedChildren[0]) || "request rejected"}`
+      });
+    }
+    return diagnostic(S2.CHILD_PROBE, D.WAITING, "child_observed_probe_pending", {
+      ...facts,
+      message: `Child probe \xB7 ${children.length} observed \xB7 manifest not parsed`
+    });
+  }
+  function diagnoseDash(item) {
+    if (item.probeStatus === "failed")
+      return diagnostic(S2.MANIFEST_PROBE, D.FAILED, "dash_probe_failed", {
+        message: `Manifest probe \xB7 DASH failed${item.probeError ? ` \xB7 ${item.probeError}` : ""}`
+      });
+    if (item.probeStatus !== "ready")
+      return diagnostic(S2.MANIFEST_PROBE, D.WAITING, "dash_probe_pending", {
+        message: "Manifest probe \xB7 DASH tracks not parsed"
+      });
+    return diagnostic(S2.DOWNLOAD_READY, D.READY, "dash_ready", {
+      message: "Download ready \xB7 DASH tracks resolved"
+    });
+  }
+  function findObservedChildren(parent, items) {
+    const explicitIds = new Set(parent.childManifestIds || []);
+    return items.filter((candidate) => {
+      if (candidate.kind !== "hls" || candidate.id === parent.id) return false;
+      if (explicitIds.has(candidate.id) || candidate.parentManifestIds?.includes(parent.id))
+        return true;
+      if (!sameFrame2(parent, candidate)) return false;
+      const parentAt = parent.firstSeenAt || parent.lastSeenAt;
+      const childAt = candidate.firstSeenAt || candidate.lastSeenAt;
+      return Number.isFinite(parentAt) && Number.isFinite(childAt) && Math.abs(parentAt - childAt) <= 6e4;
+    });
+  }
+  function isUsableChild(item) {
+    return item.probeStatus === "ready" && item.playlistType === "media" && ["vod", "live"].includes(item.streamType) && (item.segmentCount > 0 || item.partialSegmentCount > 0);
+  }
+  function sameFrame2(left, right) {
+    return Number.isInteger(left.frameId) && Number.isInteger(right.frameId) && left.frameId === right.frameId;
+  }
+  function formatProbeFailure(item) {
+    if (item.probeError === "manifest_http_403") return "master probe 403";
+    if (item.probeError === "fallback_fetch_blocked")
+      return "probe blocked by page/CORS";
+    if (item.probeStatus === "failed") return "manifest probe failed";
+    return null;
+  }
+  function latestProbeDiagnostic(items) {
+    return items.flatMap((item) => item.probeDiagnostics || [item.probeDiagnostic]).filter(Boolean).sort((left, right) => (right.observedAt || 0) - (left.observedAt || 0))[0];
+  }
+  function describeProbeDiagnostic(diagnostic2) {
+    const code = diagnostic2.code || "probe_status_unknown";
+    if (code === "iframe_probe_scheduled")
+      return described(D.WAITING, code, "scheduled in player frame");
+    if (code === "manifest_fetch_dispatched")
+      return described(D.WAITING, code, "request sent \xB7 waiting for response");
+    if (code === "contextual_probe_prepared")
+      return described(
+        D.WAITING,
+        code,
+        "Referer/Origin prepared \xB7 retry starting"
+      );
+    if (code === "contextual_manifest_fetch_dispatched")
+      return described(
+        D.WAITING,
+        code,
+        "contextual request sent \xB7 waiting for response"
+      );
+    if (code.startsWith("contextual_probe_"))
+      return described(
+        D.FAILED,
+        code,
+        `context setup failed \xB7 ${code.slice("contextual_probe_".length)}`
+      );
+    if (code === "content_duplicate")
+      return described(D.WAITING, code, "duplicate schedule skipped");
+    if (code === "probe_gate_duplicate")
+      return described(D.WAITING, code, "probe already in progress or completed");
+    if (code === "manifest_probe_timeout")
+      return described(D.FAILED, code, "timed out after 10s");
+    if (/^manifest_http_\d+$/.test(code))
+      return described(
+        D.FAILED,
+        code,
+        `HTTP ${diagnostic2.httpStatus || code.split("_").at(-1)}`
+      );
+    if (code === "fallback_fetch_blocked")
+      return described(D.FAILED, code, "request blocked by page/CORS");
+    if (code === "manifest_body_received")
+      return described(
+        D.WAITING,
+        code,
+        `${formatBodySize(diagnostic2.bodyBytes)} body received \xB7 ${diagnostic2.bodyFormat || "unknown"} format \xB7 parser pending`
+      );
+    if (code === "manifest_parsed_zero_segments")
+      return described(
+        D.UNHANDLED,
+        code,
+        `${formatBodySize(diagnostic2.bodyBytes)} ${diagnostic2.bodyFormat || "unknown"} parsed \xB7 0 segments`
+      );
+    if (code === "manifest_parsed_no_stream")
+      return described(
+        D.UNHANDLED,
+        code,
+        `${formatBodySize(diagnostic2.bodyBytes)} body parsed \xB7 no playable stream`
+      );
+    if (code === "manifest_unsupported")
+      return described(D.UNHANDLED, code, "body received \xB7 format unsupported");
+    if (code === "manifest_parsed")
+      return described(
+        D.WAITING,
+        code,
+        `${diagnostic2.playlistType || "manifest"} parsed \xB7 ${diagnostic2.segmentCount || 0} segments \xB7 matching pending`
+      );
+    if (code === "decrypted_manifest_blob_observed")
+      return described(
+        D.WAITING,
+        code,
+        `player decrypted ${diagnostic2.bodyFormat || "manifest"} \xB7 parser pending`
+      );
+    if (code === "decrypted_manifest_parsed")
+      return described(
+        D.READY,
+        code,
+        `player-decrypted ${diagnostic2.playlistType || "manifest"} parsed \xB7 ${diagnostic2.segmentCount || 0} segments`
+      );
+    if (code === "decrypted_manifest_zero_segments")
+      return described(
+        D.UNHANDLED,
+        code,
+        "player-decrypted manifest \xB7 0 segments"
+      );
+    if (code === "decrypted_manifest_no_stream")
+      return described(
+        D.UNHANDLED,
+        code,
+        "player-decrypted manifest \xB7 no playable stream"
+      );
+    if (code === "decrypted_manifest_unsupported")
+      return described(D.UNHANDLED, code, "player-decrypted format unsupported");
+    if (code === "decrypted_manifest_parse_failed")
+      return described(D.FAILED, code, "player-decrypted manifest parse failed");
+    return described(
+      diagnostic2.phase === "failed" ? D.FAILED : D.WAITING,
+      code,
+      code.replaceAll("_", " ")
+    );
+  }
+  function described(status, code, message) {
+    return { status, code, message };
+  }
+  function formatBodySize(bytes) {
+    if (!Number.isFinite(bytes)) return "Unknown-size";
+    if (bytes < 1024) return `${bytes} B`;
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+  function diagnostic(stage2, status, code, facts = {}) {
+    const contract = MEDIA_RESOLUTION_STAGE_CATALOG[stage2];
+    return Object.freeze({
+      stage: stage2,
+      status,
+      code,
+      input: contract.input,
+      output: contract.output,
+      ...facts
+    });
+  }
+  function stage(input, output) {
+    return Object.freeze({ input, output });
+  }
+
+  // src/media/catalog-view.js
+  function selectVisibleMediaItems(items = [], maximum = 8) {
+    const diagnosedItems = items.map((item) => ({
+      ...item,
+      resolutionDiagnostic: diagnoseMediaResolution(item, items)
+    }));
+    const displayItems = groupFacebookDirectRepresentations(diagnosedItems);
+    const blobResolvedSourceIds = new Set(
+      diagnosedItems.filter((item) => item.kind === "blob" && item.selectedMediaId).flatMap((item) => [
+        item.selectedMediaId,
+        ...item.resolvedMediaIds || [],
+        ...item.blobTrace?.candidateIds || []
+      ]).filter(Boolean)
+    );
+    for (const blob of diagnosedItems.filter(
+      (item) => item.kind === "blob" && item.selectedMediaId
+    )) {
+      for (const source of diagnosedItems) {
+        if (source.kind !== "blob" && samePlaybackFrame(blob, source) && (source.selectedMediaId === blob.selectedMediaId || source.resolvedMediaIds?.includes(blob.selectedMediaId) || (blob.resolvedMediaIds || []).some(
+          (id) => source.resolvedMediaIds?.includes(id)
+        ))) {
+          blobResolvedSourceIds.add(source.id);
+        }
+      }
+    }
+    const sorted = [...displayItems].sort(
+      (left, right) => (right.firstSeenAt || 0) - (left.firstSeenAt || 0) || String(left.id || "").localeCompare(String(right.id || ""))
+    );
+    const visible = [];
+    const adaptivePages = new Set(
+      displayItems.filter((item) => item.kind === "adaptive").map((item) => item.pageUrl)
+    );
+    const blobGroups = /* @__PURE__ */ new Map();
+    const directGroups = /* @__PURE__ */ new Map();
+    const resolvedBlobGroupKeys = resolvedBlobGroupKeysByPage(diagnosedItems);
+    for (const item of sorted) {
+      if (item.kind === "blob" && adaptivePages.has(item.pageUrl)) continue;
+      if (item.kind !== "blob" && blobResolvedSourceIds.has(item.id)) continue;
+      if (item.kind === "hls" && item.parentManifestIds?.length) continue;
+      if (item.kind === "direct") {
+        const key2 = directMediaGroupKey(item);
+        const existing2 = directGroups.get(key2);
+        if (existing2) {
+          existing2.relatedCount += 1;
+          continue;
+        }
+        const grouped2 = { ...item, relatedCount: 1 };
+        directGroups.set(key2, grouped2);
+        visible.push(grouped2);
+        continue;
+      }
+      if (item.kind !== "blob") {
+        visible.push(item);
+        continue;
+      }
+      const key = blobGroupKey(item, resolvedBlobGroupKeys);
+      const existing = blobGroups.get(key);
+      if (existing) {
+        existing.relatedCount += 1;
+        if (item.selectedMediaId && !existing.selectedMediaId) {
+          const resolved = { ...item, relatedCount: existing.relatedCount };
+          blobGroups.set(key, resolved);
+          const visibleIndex = visible.indexOf(existing);
+          if (visibleIndex >= 0) visible[visibleIndex] = resolved;
+        }
+        continue;
+      }
+      const grouped = { ...item, relatedCount: 1 };
+      blobGroups.set(key, grouped);
+      visible.push(grouped);
+    }
+    return visible.slice(0, maximum);
+  }
+  function groupFacebookDirectRepresentations(items) {
+    const groups = /* @__PURE__ */ new Map();
+    for (const item of items) {
+      if (item.kind !== "direct") continue;
+      const key = facebookMediaAssetKey(item);
+      if (!key) continue;
+      const group = groups.get(key) || [];
+      group.push(item);
+      groups.set(key, group);
+    }
+    const consumed = /* @__PURE__ */ new Set();
+    const synthetic = [];
+    for (const [key, group] of groups) {
+      if (group.length < 2) continue;
+      group.forEach((item) => consumed.add(item.id));
+      synthetic.push(createFacebookAdaptiveGroup(key, group));
+    }
+    return [...items.filter((item) => !consumed.has(item.id)), ...synthetic];
+  }
+  function createFacebookAdaptiveGroup(key, items) {
+    const sorted = [...items].sort(
+      (left, right) => facebookQualityScore(right) - facebookQualityScore(left) || (right.contentLength || 0) - (left.contentLength || 0) || (right.lastSeenAt || 0) - (left.lastSeenAt || 0)
+    );
+    const primary = sorted[0];
+    const variants = sorted.map((item, index) => ({
+      id: item.id,
+      type: "video",
+      sourceUrl: item.sourceUrl,
+      mimeType: item.mimeType || "video/mp4",
+      codecs: null,
+      itag: null,
+      bandwidth: item.bandwidth || null,
+      averageBandwidth: item.averageBandwidth || null,
+      contentLength: item.contentLength || null,
+      width: item.resolution?.width || null,
+      height: item.resolution?.height || null,
+      qualityLabel: facebookQualityLabel(item) || `Source ${index + 1}`,
+      urlResolution: "resolved",
+      signatureCipher: null,
+      muxed: true
+    }));
+    return {
+      ...primary,
+      id: stableMediaId("adaptive", key),
+      kind: "adaptive",
+      provider: "facebook",
+      title: primary.title && !/^facebook$/i.test(primary.title.trim()) ? primary.title : "Facebook video",
+      sourceUrl: primary.sourceUrl,
+      mimeType: "video/mp4",
+      variants,
+      audioTracks: [],
+      subtitles: [],
+      acquisitionProfile: "facebook_direct_representations",
+      probeStatus: "ready",
+      streamType: "vod",
+      relatedCount: items.length,
+      firstSeenAt: Math.min(...items.map((item) => item.firstSeenAt || 0)),
+      lastSeenAt: Math.max(...items.map((item) => item.lastSeenAt || 0))
+    };
+  }
+  function facebookMediaAssetKey(item) {
+    try {
+      const source = new URL(item.sourceUrl || "");
+      if (!isFacebookCdnHost(source.hostname)) return null;
+      const envelope = decodeFacebookEfg(source.searchParams.get("efg"));
+      const assetId = findFacebookAssetId(envelope);
+      if (assetId) return `facebook-asset:${assetId}`;
+      const pageId = facebookPageVideoId(item.pageUrl);
+      return pageId ? `facebook-page:${pageId}` : null;
+    } catch {
+      return null;
+    }
+  }
+  function decodeFacebookEfg(value) {
+    if (typeof value !== "string" || !value || value.length > 1e4)
+      return null;
+    try {
+      const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+      const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+      return JSON.parse(atob(padded));
+    } catch {
+      return null;
+    }
+  }
+  function findFacebookAssetId(value, depth = 0) {
+    if (!value || typeof value !== "object" || depth > 2) return null;
+    for (const key of ["xpv_asset_id", "video_id", "asset_id"]) {
+      const candidate = value[key];
+      if (typeof candidate === "string" || Number.isSafeInteger(candidate))
+        return String(candidate);
+    }
+    for (const child of Object.values(value)) {
+      const candidate = findFacebookAssetId(child, depth + 1);
+      if (candidate) return candidate;
+    }
+    return null;
+  }
+  function facebookPageVideoId(value) {
+    try {
+      const page = new URL(value || "");
+      if (!(page.hostname === "facebook.com" || page.hostname.endsWith(".facebook.com")))
+        return null;
+      return page.searchParams.get("v") || page.pathname.match(/\/(?:reel|videos)\/(\d+)/i)?.[1] || null;
+    } catch {
+      return null;
+    }
+  }
+  function facebookQualityLabel(item) {
+    const tag = facebookEncodingTag(item.sourceUrl);
+    const height = item.resolution?.height || Number(tag?.match(/(?:^|[^0-9])(\d{3,4})p/i)?.[1]);
+    if (height) return `${height}p`;
+    if (/\bhd\b/i.test(tag || "")) return "HD";
+    if (/\bsd\b/i.test(tag || "")) return "SD";
+    return null;
+  }
+  function facebookQualityScore(item) {
+    const label = facebookQualityLabel(item);
+    const height = Number(label?.match(/^(\d+)p$/)?.[1]);
+    if (height) return height;
+    if (label === "HD") return 720;
+    if (label === "SD") return 480;
+    return 0;
+  }
+  function facebookEncodingTag(value) {
+    try {
+      const envelope = decodeFacebookEfg(new URL(value).searchParams.get("efg"));
+      return typeof envelope?.vencode_tag === "string" ? envelope.vencode_tag : null;
+    } catch {
+      return null;
+    }
+  }
+  function directMediaGroupKey(item) {
+    const sourceUrl = item.sourceUrl || "";
+    try {
+      const url = new URL(sourceUrl);
+      url.hash = "";
+      if (isFacebookCdnHost(url.hostname))
+        return `facebook:${url.pathname.toLowerCase()}`;
+      for (const name of ["range", "bytestart", "byteend"])
+        url.searchParams.delete(name);
+      const entries = [...url.searchParams.entries()].sort(
+        ([leftKey, left], [rightKey, right]) => leftKey.localeCompare(rightKey) || left.localeCompare(right)
+      );
+      url.search = "";
+      for (const [name, value] of entries) url.searchParams.append(name, value);
+      return url.href;
+    } catch {
+      return sourceUrl;
+    }
+  }
+  function isFacebookCdnHost(value) {
+    const host = String(value || "").toLowerCase();
+    return host === "fbcdn.net" || host.endsWith(".fbcdn.net");
+  }
+  function readableMediaTitle(value) {
+    const title = typeof value === "string" ? value.trim() : "";
+    if (!title || title.length > 160) return null;
+    if (/^[a-f0-9]{24,}$/i.test(title)) return null;
+    return title;
+  }
+  function resolvedBlobGroupKeysByPage(items) {
+    const byPage = /* @__PURE__ */ new Map();
+    for (const item of items) {
+      if (item.kind !== "blob" || !item.selectedMediaId) continue;
+      const pageUrl = item.pageUrl || "";
+      const matches = byPage.get(pageUrl) || [];
+      matches.push(item);
+      byPage.set(pageUrl, matches);
+    }
+    return new Map(
+      [...byPage].flatMap(
+        ([pageUrl, matches]) => matches.length === 1 ? [[pageUrl, `${pageUrl}
+${blobTitleKey(matches[0].title)}`]] : []
+      )
+    );
+  }
+  function blobGroupKey(item, resolvedGroupKeys) {
+    const pageUrl = item.pageUrl || "";
+    if (!item.selectedMediaId && isGenericBlobTitle(item.title)) {
+      const resolvedKey = resolvedGroupKeys.get(pageUrl);
+      if (resolvedKey) return resolvedKey;
+    }
+    return `${pageUrl}
+${blobTitleKey(item.title)}`;
+  }
+  function blobTitleKey(value) {
+    return readableMediaTitle(value)?.toLowerCase() || "blob";
+  }
+  function isGenericBlobTitle(value) {
+    const title = typeof value === "string" ? value.trim() : "";
+    return !readableMediaTitle(title) || /^(blob|blob media stream|media stream)$/i.test(title);
+  }
+  function samePlaybackFrame(left, right) {
+    if (Number.isInteger(left.frameId) && Number.isInteger(right.frameId))
+      return left.frameId === right.frameId;
+    return Boolean(
+      left.frameUrl && right.frameUrl && left.frameUrl === right.frameUrl
+    );
+  }
+
   // src/background/media-download-jobs.js
   var broker = null;
   async function startMediaDownloadJobStore(policy) {
@@ -6842,7 +7441,7 @@ ${body}`;
     if (typeof mediaId !== "string" || !mediaId)
       return { status: "invalid_media" };
     const response = await listDiscoveredMedia(tabId);
-    let candidate = response.items.find((item) => item.id === mediaId);
+    let candidate = findDownloadCandidate(response.items, mediaId);
     if (!candidate) return { status: "media_not_found" };
     if (candidate.kind === "hls" && candidate.selectedMediaId) {
       candidate = response.items.find((item) => item.id === candidate.selectedMediaId) || candidate;
@@ -6883,7 +7482,7 @@ ${body}`;
     if (typeof mediaId !== "string" || !mediaId)
       return { status: "invalid_media" };
     const response = await listDiscoveredMedia(tabId);
-    let candidate = response.items.find((item) => item.id === mediaId);
+    let candidate = findDownloadCandidate(response.items, mediaId);
     if (!candidate) return { status: "media_not_found" };
     candidate = await attachFreshYouTubeBrowserHandoff(tabId, candidate);
     return preflightMediaHelperYouTubeQualities(candidate);
@@ -7279,7 +7878,12 @@ ${body}`;
   async function recoverCandidate(state) {
     if (!Number.isInteger(state.sourceTabId) || !state.mediaId) return null;
     const response = await listDiscoveredMedia(state.sourceTabId);
-    return response.items.find((item) => item.id === state.mediaId) || null;
+    return findDownloadCandidate(response.items, state.mediaId);
+  }
+  function findDownloadCandidate(items, mediaId) {
+    return items.find((item) => item.id === mediaId) || selectVisibleMediaItems(items, Number.MAX_SAFE_INTEGER).find(
+      (item) => item.id === mediaId
+    ) || null;
   }
   async function helperFailureFor(candidate, output) {
     const helper = await getMediaHelperStatus({ force: true });
