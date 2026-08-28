@@ -16,7 +16,7 @@ export async function openManagedOutput(rawPath: string): Promise<void> {
 export async function revealManagedOutput(rawPath: string): Promise<void> {
   const outputPath = await managedOutputPath(rawPath);
   if (process.platform === "win32")
-    return spawnDetached("explorer.exe", windowsRevealArguments(outputPath));
+    return spawnDetached("rundll32.exe", windowsRevealArguments(outputPath));
   if (process.platform === "darwin")
     return spawnDetached("open", ["-R", outputPath]);
   return spawnDetached("xdg-open", [resolve(outputPath, "..")]);

@@ -1,5 +1,7 @@
+import { dirname } from "node:path";
+
 export function windowsRevealArguments(outputPath) {
-  // Explorer parses /select,<path> as one switch. Passing the path as a second
-  // process argument opens inconsistently, especially when it contains spaces.
-  return [`/select,${outputPath}`];
+  // ShellExecute opens the containing folder without relying on Explorer's
+  // legacy /select parser, which truncates some paths containing spaces.
+  return ["url.dll,FileProtocolHandler", dirname(outputPath)];
 }

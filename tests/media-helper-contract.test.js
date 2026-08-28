@@ -38,11 +38,12 @@ import {
 } from "../src/background/media-access-strategy-memory.js";
 import { getMediaAccessStrategy } from "../src/media/access-strategy-catalog.js";
 
-test("Windows reveal keeps the Explorer select switch and path together", () => {
+test("Windows reveal opens the exact containing folder through ShellExecute", () => {
   const outputPath =
     "C:\\Users\\Example User\\Downloads\\AdsFriendly\\funny video.mp4";
   assert.deepEqual(windowsRevealArguments(outputPath), [
-    `/select,${outputPath}`,
+    "url.dll,FileProtocolHandler",
+    "C:\\Users\\Example User\\Downloads\\AdsFriendly",
   ]);
 });
 
