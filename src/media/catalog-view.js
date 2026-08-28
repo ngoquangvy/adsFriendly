@@ -84,11 +84,24 @@ export function selectVisibleMediaItems(items = [], maximum = 8) {
       .map((item) => item.pageUrl),
   );
   const blobGroups = new Map();
+  const directGroups = new Map();
   const resolvedBlobGroupKeys = resolvedBlobGroupKeysByPage(diagnosedItems);
   for (const item of sorted) {
     if (item.kind === "blob" && adaptivePages.has(item.pageUrl)) continue;
     if (item.kind !== "blob" && blobResolvedSourceIds.has(item.id)) continue;
     if (item.kind === "hls" && item.parentManifestIds?.length) continue;
+    if (item.kind === "direct") {
+      const key = directMediaGroupKey(item);
+      const existing = directGroups.get(key);
+      if (existing) {
+        existing.relatedCount += 1;
+        continue;
+      }
+      const grouped = { ...item, relatedCount: 1 };
+      directGroups.set(key, grouped);
+      visible.push(grouped);
+      continue;
+    }
     if (item.kind !== "blob") {
       visible.push(item);
       continue;
@@ -405,12 +418,47 @@ export function formatMediaName(item) {
       return "Blob media stream";
     }
     const file = url.pathname.split("/").filter(Boolean).at(-1);
+    if (item.kind === "direct" && isFacebookCdnHost(url.hostname)) {
+      const shortName = compactFacebookMediaName(file);
+      return shortName ? `Facebook video · ${shortName}` : "Facebook video";
+    }
     if (item.kind === "hls" && file?.length > 48 && /^[a-z0-9_-]+$/i.test(file))
       return `${url.hostname} · tokenized playlist`;
     return file ? `${url.hostname} · ${file}` : url.hostname;
   } catch {
     return readableMediaTitle(item.title) || sourceUrl || "Unknown media";
   }
+}
+
+function directMediaGroupKey(item) {
+  const sourceUrl = item.sourceUrl || "";
+  try {
+    const url = new URL(sourceUrl);
+    url.hash = "";
+    if (isFacebookCdnHost(url.hostname))
+      return `facebook:${url.pathname.toLowerCase()}`;
+    for (const name of ["range", "bytestart", "byteend"])
+      url.searchParams.delete(name);
+    const entries = [...url.searchParams.entries()].sort(([leftKey, left], [rightKey, right]) =>
+      leftKey.localeCompare(rightKey) || left.localeCompare(right),
+    );
+    url.search = "";
+    for (const [name, value] of entries) url.searchParams.append(name, value);
+    return url.href;
+  } catch {
+    return sourceUrl;
+  }
+}
+
+function isFacebookCdnHost(value) {
+  const host = String(value || "").toLowerCase();
+  return host === "fbcdn.net" || host.endsWith(".fbcdn.net");
+}
+
+function compactFacebookMediaName(value) {
+  const name = String(value || "").replace(/\.mp4$/i, "");
+  if (!name) return null;
+  return `${name.slice(0, 12)}${name.length > 12 ? "…" : ""}`;
 }
 
 function resolvedBlobDetails(item) {

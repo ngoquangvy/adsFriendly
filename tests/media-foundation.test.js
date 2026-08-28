@@ -3819,6 +3819,27 @@ test("media popup groups duplicate unresolved blobs from one player", () => {
   assert.equal(items[0].relatedCount, 2);
 });
 
+test("media popup groups duplicate Facebook CDN URLs but keeps distinct videos", () => {
+  const facebookDirect = (path, query, id) => ({
+    ...createMediaCandidateFromSource({
+      pageUrl: "https://www.facebook.com/watch/",
+      sourceUrl: `https://scontent.fsgn5-11.fna.fbcdn.net/${path}.mp4?${query}`,
+      mimeType: "video/mp4",
+      title: "Facebook",
+    }),
+    id,
+    firstSeenAt: id === "newer" ? 20 : 10,
+  });
+  const visible = selectVisibleMediaItems([
+    facebookDirect("AQNk_same", "token=old&bytestart=0", "older"),
+    facebookDirect("AQNk_same", "token=new&byteend=999", "newer"),
+    facebookDirect("AQNw_other", "token=new", "other"),
+  ]);
+  assert.equal(visible.length, 2);
+  assert.equal(visible.find((item) => item.id === "newer")?.relatedCount, 2);
+  assert.match(formatMediaName(visible[0]), /^Facebook video · /);
+});
+
 test("media popup keeps the resolved Blob when grouping player handles", () => {
   const items = selectVisibleMediaItems([
     {
