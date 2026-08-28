@@ -7,6 +7,7 @@ import {
   MEDIA_HELPER_REQUESTS,
   createHelperEvent,
   normalizeHelperRequest,
+  normalizePlayerOutputCanaryPayload,
   normalizeYouTubeQualityPreflightPayload,
 } from "../../../src/media/helper-contract.js";
 import {
@@ -21,8 +22,9 @@ import { adaptiveHttpAdapter } from "./adaptive-http-adapter.js";
 import { DownloadJobManager } from "./job-manager.js";
 import { openManagedOutput, revealManagedOutput } from "./output-actions.js";
 import { preflightYouTubeProviderQualities } from "./youtube-provider-resolver.js";
+import { validatePlayerOutputCanary } from "./player-output-canary.js";
 
-const HELPER_VERSION = "0.22.0";
+const HELPER_VERSION = "0.23.0";
 const callerOrigin = process.argv[2] || null;
 const reader = new NativeMessageReader();
 const adapters = new DownloadAdapterRegistry([
@@ -96,6 +98,17 @@ async function handleMessage(rawMessage: unknown): Promise<void> {
       );
       return;
     }
+    if (request.type === MEDIA_HELPER_REQUESTS.PLAYER_OUTPUT_CANARY) {
+      const payload = normalizePlayerOutputCanaryPayload(request.payload);
+      writeMessage(
+        createHelperEvent(
+          MEDIA_HELPER_EVENTS.PLAYER_OUTPUT_CANARY,
+          requestId,
+          await validatePlayerOutputCanary(payload),
+        ),
+      );
+      return;
+    }
     if (request.type === MEDIA_HELPER_REQUESTS.DOWNLOAD_START) {
       await jobs.start(request.payload, (type, payload) => {
         writeMessage(createHelperEvent(type, requestId, payload));
@@ -150,6 +163,7 @@ async function handleMessage(rawMessage: unknown): Promise<void> {
 
 async function inspectCapabilities() {
   const ffmpeg = await detectExecutable("ffmpeg", ["-version"]);
+  const ffprobe = await detectExecutable("ffprobe", ["-version"]);
   return {
     [MEDIA_HELPER_CAPABILITIES.DIRECT_HTTP_DOWNLOAD]: true,
     [MEDIA_HELPER_CAPABILITIES.HLS_VOD_DOWNLOAD]: ffmpeg.available,
@@ -161,10 +175,12 @@ async function inspectCapabilities() {
     [MEDIA_HELPER_CAPABILITIES.YOUTUBE_PLAYER_JS_RESOLUTION]: true,
     [MEDIA_HELPER_CAPABILITIES.YOUTUBE_PROVIDER_FORMAT_RESOLUTION]: true,
     [MEDIA_HELPER_CAPABILITIES.YOUTUBE_QUALITY_PREFLIGHT]: true,
+    [MEDIA_HELPER_CAPABILITIES.PLAYER_OUTPUT_CANARY]: ffprobe.available,
     [MEDIA_HELPER_CAPABILITIES.FFMPEG_MUX]: ffmpeg.available,
     [MEDIA_HELPER_CAPABILITIES.OUTPUT_OPEN]: true,
     [MEDIA_HELPER_CAPABILITIES.OUTPUT_REVEAL]: true,
     ffmpeg,
+    ffprobe,
   };
 }
 

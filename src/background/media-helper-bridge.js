@@ -123,6 +123,8 @@ async function probeMediaHelperStatus(timeoutMs) {
       canResolveYouTubeQualityPreflight:
         capabilities[MEDIA_HELPER_CAPABILITIES.YOUTUBE_QUALITY_PREFLIGHT] ===
         true,
+      canValidatePlayerOutput:
+        capabilities[MEDIA_HELPER_CAPABILITIES.PLAYER_OUTPUT_CANARY] === true,
       canMuxWithFfmpeg:
         capabilities[MEDIA_HELPER_CAPABILITIES.FFMPEG_MUX] === true,
     });
@@ -132,6 +134,108 @@ async function probeMediaHelperStatus(timeoutMs) {
       error: message,
     });
   }
+}
+
+export async function validateMediaHelperPlayerOutputCanary(canary) {
+  if (!(await hasNativeMessagingPermission())) {
+    return {
+      status: "permission_required",
+      reason: "Native Messaging permission is required.",
+    };
+  }
+  const helper = await getMediaHelperStatus();
+  if (helper.status !== MEDIA_HELPER_STATES.READY) {
+    return {
+      status: "helper_unavailable",
+      reason: helper.error || "Media Helper is unavailable.",
+    };
+  }
+  if (!helper.canValidatePlayerOutput) {
+    return {
+      status: "helper_update",
+      reason: "Update Media Helper to validate player output.",
+    };
+  }
+  const requestId = randomId();
+  try {
+    const response = normalizeHelperEvent(
+      await withTimeout(
+        chrome.runtime.sendNativeMessage(MEDIA_HELPER_HOST_NAME, {
+          type: MEDIA_HELPER_REQUESTS.PLAYER_OUTPUT_CANARY,
+          requestId,
+          protocolVersion: MEDIA_HELPER_PROTOCOL_VERSION,
+          payload: canary,
+        }),
+        20_000,
+      ),
+    );
+    if (
+      response.requestId !== requestId ||
+      response.type !== MEDIA_HELPER_EVENTS.PLAYER_OUTPUT_CANARY
+    ) {
+      throw new Error("Media Helper returned an invalid player-output check.");
+    }
+    return normalizePlayerOutputCanaryResult(response.payload);
+  } catch (error) {
+    return { status: "unavailable", reason: messageOf(error), tracks: [] };
+  }
+}
+
+function normalizePlayerOutputCanaryResult(payload) {
+  const tracks = Array.isArray(payload?.tracks)
+    ? payload.tracks.slice(0, 4).map((track) => ({
+        id: stringOrNull(track?.id),
+        format: stringOrNull(track?.format),
+        capturedBytes: Math.max(0, Number(track?.capturedBytes) || 0),
+        status: track?.status === "recognized" ? "recognized" : "unrecognized",
+        streamTypes: Array.isArray(track?.streamTypes)
+          ? track.streamTypes.filter((value) =>
+              ["video", "audio"].includes(value),
+            )
+          : [],
+        codecs: Array.isArray(track?.codecs)
+          ? track.codecs
+              .filter((value) => typeof value === "string")
+              .slice(0, 8)
+          : [],
+        startTimes: Array.isArray(track?.startTimes)
+          ? track.startTimes
+              .filter((value) => typeof value === "string")
+              .slice(0, 8)
+          : [],
+        diagnostic: stringOrNull(track?.diagnostic),
+      }))
+    : [];
+  return {
+    status: payload?.status === "ready" ? "ready" : "unrecognized",
+    hasVideo: payload?.hasVideo === true,
+    hasAudio: payload?.hasAudio === true,
+    timeline: normalizePlayerOutputTimeline(payload?.timeline),
+    tracks,
+    reason: stringOrNull(payload?.reason),
+  };
+}
+
+function normalizePlayerOutputTimeline(value) {
+  const status = ["aligned", "misaligned", "unknown"].includes(value?.status)
+    ? value.status
+    : "unknown";
+  return {
+    status,
+    videoStart:
+      value?.videoStart !== null && Number.isFinite(Number(value?.videoStart))
+        ? Number(value.videoStart)
+        : null,
+    audioStart:
+      value?.audioStart !== null && Number.isFinite(Number(value?.audioStart))
+        ? Number(value.audioStart)
+        : null,
+    deltaSeconds:
+      value?.deltaSeconds !== null &&
+      Number.isFinite(Number(value?.deltaSeconds))
+        ? Math.max(0, Number(value.deltaSeconds))
+        : null,
+  };
 }
 
 export async function startMediaHelperDownload(

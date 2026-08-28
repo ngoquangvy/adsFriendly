@@ -41,6 +41,7 @@ import {
   requestMediaDownloadHistoryClear,
   requestMediaDownloadJob,
   requestMediaDownloadQualityPreflight,
+  requestPlayerOutputCanary,
   requestMediaDownloadHistoryRemove,
   requestMediaDownloadOpen,
   requestMediaDownloadPause,
@@ -97,6 +98,7 @@ const MESSAGE_CAPABILITIES = Object.freeze({
   SAVE_DECRYPTED_MEDIA_MANIFEST: CAPABILITIES.MEDIA_CATALOG,
   GET_MEDIA_HELPER_STATUS: CAPABILITIES.MEDIA_DOWNLOAD,
   PREFLIGHT_MEDIA_DOWNLOAD_QUALITIES: CAPABILITIES.MEDIA_DOWNLOAD,
+  VALIDATE_PLAYER_OUTPUT_CANARY: CAPABILITIES.MEDIA_DOWNLOAD,
   CREATE_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
   CANCEL_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
   PAUSE_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
@@ -346,6 +348,11 @@ async function route(message, sender) {
     });
   if (message.type === "PREFLIGHT_MEDIA_DOWNLOAD_QUALITIES")
     return requestMediaDownloadQualityPreflight({
+      tabId: message.tabId,
+      mediaId: message.mediaId,
+    });
+  if (message.type === "VALIDATE_PLAYER_OUTPUT_CANARY")
+    return requestPlayerOutputCanary({
       tabId: message.tabId,
       mediaId: message.mediaId,
     });

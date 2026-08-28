@@ -533,6 +533,7 @@ var AdsFriendlyVideo = (() => {
     MEDIA_DOWNLOAD_CANCEL: "media.download.cancel",
     MEDIA_DOWNLOAD_CREATE: "media.download.create",
     MEDIA_DOWNLOAD_PREFLIGHT: "media.download.preflight",
+    MEDIA_OUTPUT_CANARY: "media.output.canary",
     MEDIA_DOWNLOAD_PAUSE: "media.download.pause",
     MEDIA_DOWNLOAD_OPEN: "media.download.open",
     MEDIA_DOWNLOAD_CLEAR_HISTORY: "media.download.clear_history",
@@ -560,6 +561,11 @@ var AdsFriendlyVideo = (() => {
     ),
     [A.MEDIA_DOWNLOAD_PREFLIGHT]: action(
       A.MEDIA_DOWNLOAD_PREFLIGHT,
+      "background.media-download-jobs",
+      C3.MEDIA_NATIVE_DOWNLOAD
+    ),
+    [A.MEDIA_OUTPUT_CANARY]: action(
+      A.MEDIA_OUTPUT_CANARY,
       "background.media-download-jobs",
       C3.MEDIA_NATIVE_DOWNLOAD
     ),

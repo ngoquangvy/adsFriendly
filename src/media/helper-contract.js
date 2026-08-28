@@ -6,13 +6,14 @@ import {
   isYouTubeProviderResolvableTrack,
 } from "./adaptive-track-policy.js";
 
-export const MEDIA_HELPER_PROTOCOL_VERSION = 10;
+export const MEDIA_HELPER_PROTOCOL_VERSION = 11;
 export const MEDIA_HELPER_HOST_NAME = "com.adsfriendly.media_helper";
 
 export const MEDIA_HELPER_REQUESTS = Object.freeze({
   HELLO: "helper.hello",
   GET_CAPABILITIES: "helper.capabilities.get",
   YOUTUBE_QUALITY_PREFLIGHT: "youtube.quality_preflight",
+  PLAYER_OUTPUT_CANARY: "player_output.canary",
   DOWNLOAD_START: "download.start",
   DOWNLOAD_CANCEL: "download.cancel",
   OUTPUT_OPEN: "output.open",
@@ -23,6 +24,7 @@ export const MEDIA_HELPER_EVENTS = Object.freeze({
   READY: "helper.ready",
   CAPABILITIES: "helper.capabilities",
   YOUTUBE_QUALITY_PREFLIGHT: "youtube.quality_preflight",
+  PLAYER_OUTPUT_CANARY: "player_output.canary",
   DOWNLOAD_STARTED: "download.started",
   DOWNLOAD_PROGRESS: "download.progress",
   ACCESS_STRATEGY_RESULT: "media.access_strategy_result",
@@ -43,6 +45,7 @@ export const MEDIA_HELPER_CAPABILITIES = Object.freeze({
   YOUTUBE_PLAYER_JS_RESOLUTION: "resolve.youtube_player_js",
   YOUTUBE_PROVIDER_FORMAT_RESOLUTION: "resolve.youtube_provider_formats",
   YOUTUBE_QUALITY_PREFLIGHT: "resolve.youtube_quality_preflight",
+  PLAYER_OUTPUT_CANARY: "validate.player_output_canary",
   FFMPEG_MUX: "mux.ffmpeg",
   OUTPUT_OPEN: "output.open",
   OUTPUT_REVEAL: "output.reveal",
@@ -232,6 +235,72 @@ export function normalizeYouTubeQualityPreflightPayload(value = {}) {
     );
   }
   return { candidate: normalized.candidate };
+}
+
+export function normalizePlayerOutputCanaryPayload(value = {}) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("[MediaHelperProtocol] Player output canary is required.");
+  }
+  const tracks = Array.isArray(value.tracks)
+    ? value.tracks.slice(0, 4).map(normalizePlayerOutputCanaryTrack)
+    : [];
+  const capturedBytes = tracks.reduce(
+    (total, track) => total + track.capturedBytes,
+    0,
+  );
+  if (!tracks.length || capturedBytes <= 0 || capturedBytes > 3 * 1024 * 1024) {
+    throw new Error(
+      "[MediaHelperProtocol] Player output canary is empty or too large.",
+    );
+  }
+  return { tracks, capturedBytes };
+}
+
+function normalizePlayerOutputCanaryTrack(value, index) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("[MediaHelperProtocol] Invalid player output track.");
+  }
+  const chunks = Array.isArray(value.chunks)
+    ? value.chunks.slice(0, 16).map((chunk) => normalizeCanaryChunk(chunk))
+    : [];
+  const capturedBytes = chunks.reduce((total, chunk) => {
+    try {
+      return total + atob(chunk).length;
+    } catch {
+      throw new Error("[MediaHelperProtocol] Invalid player output bytes.");
+    }
+  }, 0);
+  if (!chunks.length || capturedBytes > 1536 * 1024) {
+    throw new Error(
+      "[MediaHelperProtocol] Player output track is empty or too large.",
+    );
+  }
+  return {
+    id: optionalString(value.id) || `source-buffer-${index + 1}`,
+    mimeType: optionalString(value.mimeType),
+    appendFormats: normalizeCanaryFormats(value.appendFormats),
+    capturedBytes,
+    chunks,
+  };
+}
+
+function normalizeCanaryChunk(value) {
+  if (
+    typeof value !== "string" ||
+    !value ||
+    value.length > 2 * 1024 * 1024 + 16 ||
+    !/^[A-Za-z0-9+/]+={0,2}$/.test(value)
+  ) {
+    throw new Error("[MediaHelperProtocol] Invalid player output chunk.");
+  }
+  return value;
+}
+
+function normalizeCanaryFormats(value) {
+  const allowed = new Set(["iso-bmff", "mpeg-ts", "webm", "aac-adts"]);
+  return Array.isArray(value)
+    ? [...new Set(value.filter((format) => allowed.has(format)))].slice(0, 4)
+    : [];
 }
 
 function normalizeHelperAdaptiveTracks(value, expectedType, candidate) {

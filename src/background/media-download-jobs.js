@@ -21,6 +21,7 @@ import {
   runMediaHelperOutputAction,
   startMediaHelperDownload,
   preflightMediaHelperYouTubeQualities,
+  validateMediaHelperPlayerOutputCanary,
 } from "./media-helper-bridge.js";
 import { getMediaManifestHandoff } from "./media-manifest-handoff.js";
 import { normalizeMediaDownloadOutput } from "../media/download-options.js";
@@ -39,6 +40,7 @@ export async function startMediaDownloadJobStore(policy) {
       [ACTIONS.MEDIA_DOWNLOAD_CLEAR_HISTORY]: clearJobHistory,
       [ACTIONS.MEDIA_DOWNLOAD_CREATE]: createJob,
       [ACTIONS.MEDIA_DOWNLOAD_PREFLIGHT]: preflightJob,
+      [ACTIONS.MEDIA_OUTPUT_CANARY]: validatePlayerOutput,
       [ACTIONS.MEDIA_DOWNLOAD_PAUSE]: pauseJob,
       [ACTIONS.MEDIA_DOWNLOAD_OPEN]: openJobOutput,
       [ACTIONS.MEDIA_DOWNLOAD_REMOVE_HISTORY]: removeJobHistory,
@@ -60,6 +62,11 @@ export async function requestMediaDownloadJob(payload) {
 export async function requestMediaDownloadQualityPreflight(payload) {
   if (!broker) return { status: "download_disabled" };
   return broker.execute(ACTIONS.MEDIA_DOWNLOAD_PREFLIGHT, payload);
+}
+
+export async function requestPlayerOutputCanary(payload) {
+  if (!broker) return { status: "download_disabled" };
+  return broker.execute(ACTIONS.MEDIA_OUTPUT_CANARY, payload);
 }
 
 export async function requestMediaDownloadCancel(payload) {
@@ -104,6 +111,75 @@ export async function requestMediaDownloadHistoryClear() {
 
 export async function listMediaDownloadJobs() {
   return { status: "ok", items: await listMediaHelperDownloads() };
+}
+
+async function validatePlayerOutput({ tabId, mediaId } = {}) {
+  if (!Number.isInteger(tabId) || tabId < 0) return { status: "invalid_tab" };
+  if (typeof mediaId !== "string" || !mediaId)
+    return { status: "invalid_media" };
+  const catalog = await listDiscoveredMedia(tabId);
+  const candidate = findDownloadCandidate(catalog.items || [], mediaId);
+  if (!candidate) return { status: "media_not_found" };
+  if (!isPlayerOutputCanaryEligible(candidate)) {
+    return {
+      status: "not_eligible",
+      reason: "No custom-protected player output was detected for this item.",
+    };
+  }
+  let frames = [{ frameId: 0 }];
+  try {
+    frames = (await chrome.webNavigation?.getAllFrames?.({ tabId })) || frames;
+  } catch {}
+  const responses = await Promise.all(
+    frames.slice(0, 24).map(async ({ frameId }) => {
+      try {
+        return frameId === 0
+          ? await chrome.tabs.sendMessage(tabId, {
+              type: "GET_PLAYER_OUTPUT_CANARY",
+            })
+          : await chrome.tabs.sendMessage(
+              tabId,
+              { type: "GET_PLAYER_OUTPUT_CANARY" },
+              { frameId },
+            );
+      } catch {
+        return null;
+      }
+    }),
+  );
+  const canary = responses
+    .map((response) => response?.canary)
+    .filter((value) => value?.status === "ready" && value.tracks?.length)
+    .sort(
+      (left, right) =>
+        (Number(right.capturedBytes) || 0) - (Number(left.capturedBytes) || 0),
+    )[0];
+  if (!canary) {
+    return {
+      status: "reload_required",
+      reason:
+        "No bounded player-output sample is available yet. Reload the page, play the video briefly, then test again.",
+    };
+  }
+  return validateMediaHelperPlayerOutputCanary(canary);
+}
+
+function isPlayerOutputCanaryEligible(candidate) {
+  if (candidate?.kind !== "blob") return false;
+  if (!candidate.blobTrace?.appendFormats?.length) return false;
+  const stream = candidate.resolvedStream || candidate;
+  if (candidate.eme?.confirmed === true || stream.drm === "confirmed")
+    return false;
+  return (stream.encryptionKeyFormats || []).some((format) => {
+    const value = String(format || "").toLowerCase();
+    return (
+      value &&
+      value !== "identity" &&
+      !value.includes("widevine") &&
+      !value.includes("playready") &&
+      !value.includes("fairplay")
+    );
+  });
 }
 
 async function createJob({ tabId, mediaId, connections, output } = {}) {
@@ -370,8 +446,7 @@ async function attachFreshYouTubeBrowserHandoff(tabId, candidate) {
     return candidate;
   let frames = [{ frameId: 0 }];
   try {
-    frames =
-      (await chrome.webNavigation?.getAllFrames?.({ tabId })) || frames;
+    frames = (await chrome.webNavigation?.getAllFrames?.({ tabId })) || frames;
   } catch {}
   const responses = await Promise.all(
     frames.slice(0, 24).map(async ({ frameId }) => {

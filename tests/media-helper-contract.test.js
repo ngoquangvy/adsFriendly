@@ -20,6 +20,7 @@ import {
   normalizeHelperEvent,
   normalizeHelperDownloadPayload,
   normalizeHelperRequest,
+  normalizePlayerOutputCanaryPayload,
   normalizeYouTubeQualityPreflightPayload,
 } from "../src/media/helper-contract.js";
 import { windowsRevealArguments } from "../packages/media-helper/src/output-action-arguments.js";
@@ -139,6 +140,30 @@ test("media helper messages are versioned and normalized", () => {
       action: "open",
     }).type,
     MEDIA_HELPER_EVENTS.OUTPUT_OPENED,
+  );
+});
+
+test("player output canary accepts only bounded content-only track bytes", () => {
+  const payload = normalizePlayerOutputCanaryPayload({
+    tracks: [
+      {
+        id: "source-buffer-1",
+        mimeType: 'video/mp4; codecs="avc1.640028"',
+        appendFormats: ["iso-bmff"],
+        chunks: [btoa("small fmp4 canary")],
+      },
+    ],
+  });
+  assert.equal(payload.tracks.length, 1);
+  assert.equal(payload.tracks[0].capturedBytes, 17);
+  assert.deepEqual(payload.tracks[0].appendFormats, ["iso-bmff"]);
+  assert.equal("url" in payload.tracks[0], false);
+  assert.throws(
+    () =>
+      normalizePlayerOutputCanaryPayload({
+        tracks: [{ chunks: ["not base64!"], appendFormats: ["unknown"] }],
+      }),
+    /Invalid player output chunk/,
   );
 });
 

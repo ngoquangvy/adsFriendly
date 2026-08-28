@@ -1,7 +1,10 @@
 import { notifyContentScript, onContentMessage } from "./bridge.js";
 import { installNetworkCapture } from "./network-capture.js";
 import { installPlayerSourceObserver } from "./player-source-observer.js";
-import { installBlobSourceTracer } from "./blob-source-tracer.js";
+import {
+  installBlobSourceTracer,
+  readPlayerOutputCanary,
+} from "./blob-source-tracer.js";
 import { installDecryptedManifestObserver } from "./decrypted-manifest-observer.js";
 import { installEmeObserver } from "./eme-observer.js";
 import { installTimerControl, setAdMode } from "./timer-control.js";
@@ -70,6 +73,13 @@ onContentMessage((message) => {
       type: "YOUTUBE_MEDIA_HANDOFF_RESPONSE",
       requestId: message.requestId,
       handoff,
+    });
+  }
+  if (message.type === "GET_PLAYER_OUTPUT_CANARY") {
+    notifyContentScript({
+      type: "PLAYER_OUTPUT_CANARY_RESPONSE",
+      requestId: message.requestId,
+      canary: readPlayerOutputCanary(),
     });
   }
 });

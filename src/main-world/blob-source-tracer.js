@@ -8,6 +8,74 @@ import { publishCreatedBlob } from "./decrypted-manifest-observer.js";
 const MAX_SOURCE_URLS = 32;
 const MAX_MIME_TYPES = 8;
 const REPORT_DELAY_MS = 200;
+const CANARY_ARM_MS = 10 * 60 * 1000;
+const MAX_CANARY_TRACKS = 4;
+const MAX_CANARY_BYTES_PER_TRACK = 1536 * 1024;
+const MAX_CANARY_BYTES_TOTAL = 3 * 1024 * 1024;
+const canaryStores = new Set();
+let pendingCanaryEvidence = null;
+
+export function armPlayerOutputCanary(evidence = {}) {
+  pendingCanaryEvidence = {
+    mediaId: typeof evidence.mediaId === "string" ? evidence.mediaId : null,
+    manifestUrl:
+      typeof evidence.manifestUrl === "string" ? evidence.manifestUrl : null,
+    keyFormats: Array.isArray(evidence.keyFormats)
+      ? evidence.keyFormats
+          .filter((value) => typeof value === "string")
+          .slice(0, 4)
+      : [],
+    armedAt: Date.now(),
+    expiresAt: Date.now() + CANARY_ARM_MS,
+  };
+  for (const store of canaryStores) store.evidence = pendingCanaryEvidence;
+}
+
+export function readPlayerOutputCanary() {
+  const stores = [...canaryStores]
+    .filter((store) => store.evidence?.expiresAt > Date.now())
+    .sort((left, right) => right.totalBytes - left.totalBytes);
+  const tracks = [];
+  for (const store of stores) {
+    for (const track of store.tracks.values()) {
+      if (!track.chunks.length || tracks.length >= MAX_CANARY_TRACKS) continue;
+      tracks.push({
+        id: track.id,
+        mimeType: track.mimeType,
+        appendFormats: [...track.appendFormats],
+        appendCount: track.appendCount,
+        capturedBytes: track.capturedBytes,
+        chunks: track.chunks.map(bytesToBase64),
+      });
+    }
+  }
+  const evidence = stores[0]?.evidence || pendingCanaryEvidence;
+  return {
+    status: tracks.length ? "ready" : "empty",
+    evidence: evidence
+      ? {
+          mediaId: evidence.mediaId,
+          manifestUrl: evidence.manifestUrl,
+          keyFormats: evidence.keyFormats,
+          armedAt: evidence.armedAt,
+        }
+      : null,
+    tracks,
+    capturedBytes: tracks.reduce(
+      (total, track) => total + track.capturedBytes,
+      0,
+    ),
+  };
+}
+
+export function clearPlayerOutputCanary() {
+  pendingCanaryEvidence = null;
+  for (const store of canaryStores) {
+    store.evidence = null;
+    store.tracks.clear();
+    store.totalBytes = 0;
+  }
+}
 
 export function installBlobSourceTracer(
   policy,
@@ -22,6 +90,16 @@ export function installBlobSourceTracer(
   const sourceBufferStates = new WeakMap();
   const objectUrlStates = new Map();
   const cleanups = [];
+  const canaryStore = {
+    evidence:
+      pendingCanaryEvidence?.expiresAt > Date.now()
+        ? pendingCanaryEvidence
+        : null,
+    tracks: new Map(),
+    totalBytes: 0,
+    nextTrackId: 1,
+  };
+  canaryStores.add(canaryStore);
 
   patchResponseArrayBuffer();
   patchResponseBlob();
@@ -34,6 +112,8 @@ export function installBlobSourceTracer(
     for (const cleanup of cleanups.reverse()) cleanup();
     for (const state of objectUrlStates.values()) clearTimeout(state.timerId);
     objectUrlStates.clear();
+    canaryStore.tracks.clear();
+    canaryStores.delete(canaryStore);
   };
 
   function patchResponseArrayBuffer() {
@@ -128,7 +208,11 @@ export function installBlobSourceTracer(
           String(mimeType || ""),
           MAX_MIME_TYPES,
         );
-        sourceBufferStates.set(sourceBuffer, { state, mimeType });
+        sourceBufferStates.set(sourceBuffer, {
+          state,
+          mimeType: String(mimeType || ""),
+          canaryTrackId: `source-buffer-${canaryStore.nextTrackId++}`,
+        });
         scheduleReport(state);
         return sourceBuffer;
       };
@@ -152,6 +236,12 @@ export function installBlobSourceTracer(
           if (appendFormat)
             rememberBounded(state.appendFormats, appendFormat, 4);
           else state.unclassifiedAppendCount += 1;
+          captureCanaryChunk(
+            canaryStore,
+            sourceBufferState,
+            value,
+            appendFormat,
+          );
           if (source?.url) {
             rememberBounded(state.sourceUrls, source.url, MAX_SOURCE_URLS);
             if (source.mimeType)
@@ -279,6 +369,49 @@ export function installBlobSourceTracer(
     if (buffer instanceof ArrayBuffer && source?.url)
       bufferSources.set(buffer, source);
   }
+}
+
+function captureCanaryChunk(store, sourceBufferState, value, appendFormat) {
+  if (!store.evidence || store.evidence.expiresAt <= Date.now()) return;
+  if (store.totalBytes >= MAX_CANARY_BYTES_TOTAL) return;
+  let bytes;
+  if (value instanceof ArrayBuffer) bytes = new Uint8Array(value);
+  else if (ArrayBuffer.isView(value))
+    bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  else return;
+  let track = store.tracks.get(sourceBufferState.canaryTrackId);
+  if (!track) {
+    if (store.tracks.size >= MAX_CANARY_TRACKS) return;
+    track = {
+      id: sourceBufferState.canaryTrackId,
+      mimeType: sourceBufferState.mimeType,
+      appendFormats: [],
+      appendCount: 0,
+      capturedBytes: 0,
+      chunks: [],
+    };
+    store.tracks.set(track.id, track);
+  }
+  track.appendCount += 1;
+  if (appendFormat) rememberBounded(track.appendFormats, appendFormat, 4);
+  const remaining = Math.min(
+    MAX_CANARY_BYTES_PER_TRACK - track.capturedBytes,
+    MAX_CANARY_BYTES_TOTAL - store.totalBytes,
+  );
+  if (remaining <= 0) return;
+  const copy = bytes.slice(0, Math.min(bytes.byteLength, remaining));
+  track.chunks.push(copy);
+  track.capturedBytes += copy.byteLength;
+  store.totalBytes += copy.byteLength;
+}
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  const step = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += step) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + step));
+  }
+  return btoa(binary);
 }
 
 function currentDocumentState() {

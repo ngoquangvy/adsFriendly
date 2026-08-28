@@ -536,6 +536,9 @@ function createMediaDownloadControl(item, downloadItem, tab, helper) {
   const availability = getMediaDownloadAvailability(downloadItem);
   const control = document.createElement("div");
   control.className = "media-download-control";
+  if (isPlayerOutputCanaryEligible(item)) {
+    return createPlayerOutputCanaryControl(item, tab, helper, control);
+  }
   const profiles = getMediaDownloadProfiles(downloadItem, {
     canSelectContainer: helper.canSelectContainer === true,
   });
@@ -895,6 +898,94 @@ function createMediaDownloadControl(item, downloadItem, tab, helper) {
     syncDownloadButton();
   }
   return control;
+}
+
+function createPlayerOutputCanaryControl(item, tab, helper, control) {
+  const button = document.createElement("button");
+  button.className = "media-download";
+  if (helper.status !== "ready") {
+    button.disabled = false;
+    button.textContent =
+      helper.status === "permission_required" ? "Set up" : "Retry helper";
+    button.title =
+      helper.error || "Media Helper is required to validate player output.";
+  } else if (helper.canValidatePlayerOutput !== true) {
+    button.disabled = true;
+    button.textContent = "Update helper";
+    button.title = "Media Helper 0.23.0 or newer is required.";
+  } else {
+    button.disabled = false;
+    button.textContent = "Test output";
+    button.title =
+      "Validate a bounded in-memory player-output sample with FFprobe.";
+  }
+  button.addEventListener("click", async () => {
+    if (helper.status !== "ready") {
+      button.disabled = true;
+      await setupMediaHelper(button, helper);
+      return;
+    }
+    button.disabled = true;
+    button.textContent = "Testing…";
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: "VALIDATE_PLAYER_OUTPUT_CANARY",
+        tabId: tab.id,
+        mediaId: item.id,
+      });
+      if (response?.status !== "ready") {
+        throw new Error(
+          response?.reason ||
+            response?.error ||
+            "Player output could not be validated.",
+        );
+      }
+      button.textContent = "Output ready";
+      button.title = formatPlayerOutputCanaryResult(response);
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = "Test again";
+      button.title = error?.message || String(error);
+    }
+  });
+  control.append(button);
+  return control;
+}
+
+function isPlayerOutputCanaryEligible(item) {
+  if (item?.kind !== "blob" || !item.blobTrace?.appendFormats?.length)
+    return false;
+  const stream = item.resolvedStream || item;
+  if (item.eme?.confirmed === true || stream.drm === "confirmed") return false;
+  return (stream.encryptionKeyFormats || []).some((format) => {
+    const value = String(format || "").toLowerCase();
+    return (
+      value &&
+      value !== "identity" &&
+      !value.includes("widevine") &&
+      !value.includes("playready") &&
+      !value.includes("fairplay")
+    );
+  });
+}
+
+function formatPlayerOutputCanaryResult(result) {
+  const streamTypes = [
+    result.hasVideo ? "video" : null,
+    result.hasAudio ? "audio" : null,
+  ].filter(Boolean);
+  const codecs = [
+    ...new Set((result.tracks || []).flatMap((track) => track.codecs || [])),
+  ];
+  const timeline =
+    result.timeline?.status === "aligned"
+      ? " · timestamps aligned"
+      : result.timeline?.status === "misaligned"
+        ? ` · timestamp gap ${result.timeline.deltaSeconds?.toFixed?.(2) || "?"}s`
+        : " · timestamp alignment unknown";
+  return `FFprobe recognized ${streamTypes.join(" + ") || "media"}${
+    codecs.length ? ` · ${codecs.join(" / ")}` : ""
+  }${timeline}. Helper temporary files were discarded after validation.`;
 }
 
 function normalizePopupYouTubePreflight(response) {

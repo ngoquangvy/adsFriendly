@@ -4373,6 +4373,7 @@ var AdsFriendlyBackground = (() => {
     MEDIA_DOWNLOAD_CANCEL: "media.download.cancel",
     MEDIA_DOWNLOAD_CREATE: "media.download.create",
     MEDIA_DOWNLOAD_PREFLIGHT: "media.download.preflight",
+    MEDIA_OUTPUT_CANARY: "media.output.canary",
     MEDIA_DOWNLOAD_PAUSE: "media.download.pause",
     MEDIA_DOWNLOAD_OPEN: "media.download.open",
     MEDIA_DOWNLOAD_CLEAR_HISTORY: "media.download.clear_history",
@@ -4400,6 +4401,11 @@ var AdsFriendlyBackground = (() => {
     ),
     [A.MEDIA_DOWNLOAD_PREFLIGHT]: action(
       A.MEDIA_DOWNLOAD_PREFLIGHT,
+      "background.media-download-jobs",
+      C3.MEDIA_NATIVE_DOWNLOAD
+    ),
+    [A.MEDIA_OUTPUT_CANARY]: action(
+      A.MEDIA_OUTPUT_CANARY,
       "background.media-download-jobs",
       C3.MEDIA_NATIVE_DOWNLOAD
     ),
@@ -5301,12 +5307,13 @@ var AdsFriendlyBackground = (() => {
   }
 
   // src/media/helper-contract.js
-  var MEDIA_HELPER_PROTOCOL_VERSION = 10;
+  var MEDIA_HELPER_PROTOCOL_VERSION = 11;
   var MEDIA_HELPER_HOST_NAME = "com.adsfriendly.media_helper";
   var MEDIA_HELPER_REQUESTS = Object.freeze({
     HELLO: "helper.hello",
     GET_CAPABILITIES: "helper.capabilities.get",
     YOUTUBE_QUALITY_PREFLIGHT: "youtube.quality_preflight",
+    PLAYER_OUTPUT_CANARY: "player_output.canary",
     DOWNLOAD_START: "download.start",
     DOWNLOAD_CANCEL: "download.cancel",
     OUTPUT_OPEN: "output.open",
@@ -5316,6 +5323,7 @@ var AdsFriendlyBackground = (() => {
     READY: "helper.ready",
     CAPABILITIES: "helper.capabilities",
     YOUTUBE_QUALITY_PREFLIGHT: "youtube.quality_preflight",
+    PLAYER_OUTPUT_CANARY: "player_output.canary",
     DOWNLOAD_STARTED: "download.started",
     DOWNLOAD_PROGRESS: "download.progress",
     ACCESS_STRATEGY_RESULT: "media.access_strategy_result",
@@ -5335,6 +5343,7 @@ var AdsFriendlyBackground = (() => {
     YOUTUBE_PLAYER_JS_RESOLUTION: "resolve.youtube_player_js",
     YOUTUBE_PROVIDER_FORMAT_RESOLUTION: "resolve.youtube_provider_formats",
     YOUTUBE_QUALITY_PREFLIGHT: "resolve.youtube_quality_preflight",
+    PLAYER_OUTPUT_CANARY: "validate.player_output_canary",
     FFMPEG_MUX: "mux.ffmpeg",
     OUTPUT_OPEN: "output.open",
     OUTPUT_REVEAL: "output.reveal"
@@ -5559,6 +5568,7 @@ var AdsFriendlyBackground = (() => {
         canResolveYouTubePlayerJs: capabilities[MEDIA_HELPER_CAPABILITIES.YOUTUBE_PLAYER_JS_RESOLUTION] === true,
         canResolveYouTubeProviderFormats: capabilities[MEDIA_HELPER_CAPABILITIES.YOUTUBE_PROVIDER_FORMAT_RESOLUTION] === true,
         canResolveYouTubeQualityPreflight: capabilities[MEDIA_HELPER_CAPABILITIES.YOUTUBE_QUALITY_PREFLIGHT] === true,
+        canValidatePlayerOutput: capabilities[MEDIA_HELPER_CAPABILITIES.PLAYER_OUTPUT_CANARY] === true,
         canMuxWithFfmpeg: capabilities[MEDIA_HELPER_CAPABILITIES.FFMPEG_MUX] === true
       });
     } catch (error) {
@@ -5567,6 +5577,78 @@ var AdsFriendlyBackground = (() => {
         error: message
       });
     }
+  }
+  async function validateMediaHelperPlayerOutputCanary(canary) {
+    if (!await hasNativeMessagingPermission()) {
+      return {
+        status: "permission_required",
+        reason: "Native Messaging permission is required."
+      };
+    }
+    const helper = await getMediaHelperStatus();
+    if (helper.status !== MEDIA_HELPER_STATES.READY) {
+      return {
+        status: "helper_unavailable",
+        reason: helper.error || "Media Helper is unavailable."
+      };
+    }
+    if (!helper.canValidatePlayerOutput) {
+      return {
+        status: "helper_update",
+        reason: "Update Media Helper to validate player output."
+      };
+    }
+    const requestId = randomId4();
+    try {
+      const response = normalizeHelperEvent(
+        await withTimeout(
+          chrome.runtime.sendNativeMessage(MEDIA_HELPER_HOST_NAME, {
+            type: MEDIA_HELPER_REQUESTS.PLAYER_OUTPUT_CANARY,
+            requestId,
+            protocolVersion: MEDIA_HELPER_PROTOCOL_VERSION,
+            payload: canary
+          }),
+          2e4
+        )
+      );
+      if (response.requestId !== requestId || response.type !== MEDIA_HELPER_EVENTS.PLAYER_OUTPUT_CANARY) {
+        throw new Error("Media Helper returned an invalid player-output check.");
+      }
+      return normalizePlayerOutputCanaryResult(response.payload);
+    } catch (error) {
+      return { status: "unavailable", reason: messageOf(error), tracks: [] };
+    }
+  }
+  function normalizePlayerOutputCanaryResult(payload) {
+    const tracks = Array.isArray(payload?.tracks) ? payload.tracks.slice(0, 4).map((track) => ({
+      id: stringOrNull(track?.id),
+      format: stringOrNull(track?.format),
+      capturedBytes: Math.max(0, Number(track?.capturedBytes) || 0),
+      status: track?.status === "recognized" ? "recognized" : "unrecognized",
+      streamTypes: Array.isArray(track?.streamTypes) ? track.streamTypes.filter(
+        (value) => ["video", "audio"].includes(value)
+      ) : [],
+      codecs: Array.isArray(track?.codecs) ? track.codecs.filter((value) => typeof value === "string").slice(0, 8) : [],
+      startTimes: Array.isArray(track?.startTimes) ? track.startTimes.filter((value) => typeof value === "string").slice(0, 8) : [],
+      diagnostic: stringOrNull(track?.diagnostic)
+    })) : [];
+    return {
+      status: payload?.status === "ready" ? "ready" : "unrecognized",
+      hasVideo: payload?.hasVideo === true,
+      hasAudio: payload?.hasAudio === true,
+      timeline: normalizePlayerOutputTimeline(payload?.timeline),
+      tracks,
+      reason: stringOrNull(payload?.reason)
+    };
+  }
+  function normalizePlayerOutputTimeline(value) {
+    const status = ["aligned", "misaligned", "unknown"].includes(value?.status) ? value.status : "unknown";
+    return {
+      status,
+      videoStart: value?.videoStart !== null && Number.isFinite(Number(value?.videoStart)) ? Number(value.videoStart) : null,
+      audioStart: value?.audioStart !== null && Number.isFinite(Number(value?.audioStart)) ? Number(value.audioStart) : null,
+      deltaSeconds: value?.deltaSeconds !== null && Number.isFinite(Number(value?.deltaSeconds)) ? Math.max(0, Number(value.deltaSeconds)) : null
+    };
   }
   async function startMediaHelperDownload(rawJob, { connections = 8, attempt = 1 } = {}) {
     if (!await hasNativeMessagingPermission()) {
@@ -7536,6 +7618,7 @@ ${blobTitleKey(item.title)}`;
         [ACTIONS.MEDIA_DOWNLOAD_CLEAR_HISTORY]: clearJobHistory,
         [ACTIONS.MEDIA_DOWNLOAD_CREATE]: createJob,
         [ACTIONS.MEDIA_DOWNLOAD_PREFLIGHT]: preflightJob,
+        [ACTIONS.MEDIA_OUTPUT_CANARY]: validatePlayerOutput,
         [ACTIONS.MEDIA_DOWNLOAD_PAUSE]: pauseJob,
         [ACTIONS.MEDIA_DOWNLOAD_OPEN]: openJobOutput,
         [ACTIONS.MEDIA_DOWNLOAD_REMOVE_HISTORY]: removeJobHistory,
@@ -7555,6 +7638,10 @@ ${blobTitleKey(item.title)}`;
   async function requestMediaDownloadQualityPreflight(payload) {
     if (!broker) return { status: "download_disabled" };
     return broker.execute(ACTIONS.MEDIA_DOWNLOAD_PREFLIGHT, payload);
+  }
+  async function requestPlayerOutputCanary(payload) {
+    if (!broker) return { status: "download_disabled" };
+    return broker.execute(ACTIONS.MEDIA_OUTPUT_CANARY, payload);
   }
   async function requestMediaDownloadCancel(payload) {
     if (!broker) return { status: "download_disabled" };
@@ -7590,6 +7677,61 @@ ${blobTitleKey(item.title)}`;
   }
   async function listMediaDownloadJobs() {
     return { status: "ok", items: await listMediaHelperDownloads() };
+  }
+  async function validatePlayerOutput({ tabId, mediaId } = {}) {
+    if (!Number.isInteger(tabId) || tabId < 0) return { status: "invalid_tab" };
+    if (typeof mediaId !== "string" || !mediaId)
+      return { status: "invalid_media" };
+    const catalog2 = await listDiscoveredMedia(tabId);
+    const candidate = findDownloadCandidate(catalog2.items || [], mediaId);
+    if (!candidate) return { status: "media_not_found" };
+    if (!isPlayerOutputCanaryEligible(candidate)) {
+      return {
+        status: "not_eligible",
+        reason: "No custom-protected player output was detected for this item."
+      };
+    }
+    let frames = [{ frameId: 0 }];
+    try {
+      frames = await chrome.webNavigation?.getAllFrames?.({ tabId }) || frames;
+    } catch {
+    }
+    const responses = await Promise.all(
+      frames.slice(0, 24).map(async ({ frameId }) => {
+        try {
+          return frameId === 0 ? await chrome.tabs.sendMessage(tabId, {
+            type: "GET_PLAYER_OUTPUT_CANARY"
+          }) : await chrome.tabs.sendMessage(
+            tabId,
+            { type: "GET_PLAYER_OUTPUT_CANARY" },
+            { frameId }
+          );
+        } catch {
+          return null;
+        }
+      })
+    );
+    const canary = responses.map((response) => response?.canary).filter((value) => value?.status === "ready" && value.tracks?.length).sort(
+      (left, right) => (Number(right.capturedBytes) || 0) - (Number(left.capturedBytes) || 0)
+    )[0];
+    if (!canary) {
+      return {
+        status: "reload_required",
+        reason: "No bounded player-output sample is available yet. Reload the page, play the video briefly, then test again."
+      };
+    }
+    return validateMediaHelperPlayerOutputCanary(canary);
+  }
+  function isPlayerOutputCanaryEligible(candidate) {
+    if (candidate?.kind !== "blob") return false;
+    if (!candidate.blobTrace?.appendFormats?.length) return false;
+    const stream = candidate.resolvedStream || candidate;
+    if (candidate.eme?.confirmed === true || stream.drm === "confirmed")
+      return false;
+    return (stream.encryptionKeyFormats || []).some((format) => {
+      const value = String(format || "").toLowerCase();
+      return value && value !== "identity" && !value.includes("widevine") && !value.includes("playready") && !value.includes("fairplay");
+    });
   }
   async function createJob({ tabId, mediaId, connections, output } = {}) {
     if (!Number.isInteger(tabId) || tabId < 0) return { status: "invalid_tab" };
@@ -8358,6 +8500,7 @@ ${blobTitleKey(item.title)}`;
     SAVE_DECRYPTED_MEDIA_MANIFEST: CAPABILITIES.MEDIA_CATALOG,
     GET_MEDIA_HELPER_STATUS: CAPABILITIES.MEDIA_DOWNLOAD,
     PREFLIGHT_MEDIA_DOWNLOAD_QUALITIES: CAPABILITIES.MEDIA_DOWNLOAD,
+    VALIDATE_PLAYER_OUTPUT_CANARY: CAPABILITIES.MEDIA_DOWNLOAD,
     CREATE_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
     CANCEL_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
     PAUSE_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
@@ -8589,6 +8732,11 @@ ${blobTitleKey(item.title)}`;
       });
     if (message.type === "PREFLIGHT_MEDIA_DOWNLOAD_QUALITIES")
       return requestMediaDownloadQualityPreflight({
+        tabId: message.tabId,
+        mediaId: message.mediaId
+      });
+    if (message.type === "VALIDATE_PLAYER_OUTPUT_CANARY")
+      return requestPlayerOutputCanary({
         tabId: message.tabId,
         mediaId: message.mediaId
       });

@@ -28,6 +28,10 @@ import {
   rememberHlsKeyUris,
 } from "./aes-key-handoff.js";
 import { createYouTubeCandidateFromObservedSource } from "../media/youtube-track-profile.js";
+import {
+  armPlayerOutputCanary,
+  clearPlayerOutputCanary,
+} from "./blob-source-tracer.js";
 
 export function installNetworkCapture(policy) {
   const originalFetch = window.fetch;
@@ -95,6 +99,7 @@ export function installNetworkCapture(policy) {
     clearMediaObservations();
     clearEncryptedManifestEnvelopes();
     clearAesKeyHandoffs();
+    clearPlayerOutputCanary();
   };
 }
 
@@ -544,6 +549,13 @@ function inspectManifest(
       : parseHlsManifest(manifestUrl, body);
   if (manifestCandidate.kind === MEDIA_KINDS.HLS) {
     rememberHlsKeyUris(manifestUrl, body);
+    if (isCustomProtectedPlayerOutputCandidate(parsedProbe)) {
+      armPlayerOutputCanary({
+        mediaId: manifestCandidate.id,
+        manifestUrl,
+        keyFormats: parsedProbe.encryptionKeyFormats,
+      });
+    }
   }
   const probe = { kind: manifestCandidate.kind, ...parsedProbe };
   const diagnosticCode = parsedProbeDiagnosticCode(probe);
@@ -586,6 +598,23 @@ function inspectManifest(
     }),
   });
   return probe;
+}
+
+function isCustomProtectedPlayerOutputCandidate(probe) {
+  if (!probe || probe.drm === "confirmed") return false;
+  const formats = Array.isArray(probe.encryptionKeyFormats)
+    ? probe.encryptionKeyFormats
+    : [];
+  return formats.some((format) => {
+    const value = String(format || "").toLowerCase();
+    return (
+      value &&
+      value !== "identity" &&
+      !value.includes("widevine") &&
+      !value.includes("playready") &&
+      !value.includes("fairplay")
+    );
+  });
 }
 
 function reportProbeFailure(manifestUrl, candidate, error) {

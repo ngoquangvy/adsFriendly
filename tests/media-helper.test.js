@@ -58,6 +58,85 @@ test("built helper completes a framed Native Messaging handshake", async () => {
   );
 });
 
+test("built helper validates a bounded fMP4 player-output canary", async (t) => {
+  if (
+    !(await executableAvailable("ffmpeg")) ||
+    !(await executableAvailable("ffprobe"))
+  ) {
+    t.skip("FFmpeg integration tools are not installed.");
+    return;
+  }
+  const fixtureDirectory = await mkdtemp(
+    join(tmpdir(), "adsfriendly-player-output-"),
+  );
+  t.after(() => rm(fixtureDirectory, { recursive: true, force: true }));
+  const fixturePath = join(fixtureDirectory, "canary.mp4");
+  await execFileAsync(
+    "ffmpeg",
+    [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-f",
+      "lavfi",
+      "-i",
+      "testsrc=size=160x90:rate=10",
+      "-f",
+      "lavfi",
+      "-i",
+      "sine=frequency=880:sample_rate=44100",
+      "-t",
+      "0.5",
+      "-c:v",
+      "libx264",
+      "-preset",
+      "ultrafast",
+      "-pix_fmt",
+      "yuv420p",
+      "-c:a",
+      "aac",
+      "-movflags",
+      "frag_keyframe+empty_moov+default_base_moof",
+      fixturePath,
+    ],
+    { windowsHide: true },
+  );
+  const bytes = await readFile(fixturePath);
+  const child = spawnHelper();
+  t.after(() => child.kill());
+  const frames = createFrameReader(child.stdout);
+  child.stdin.write(
+    frame({
+      type: MEDIA_HELPER_REQUESTS.PLAYER_OUTPUT_CANARY,
+      requestId: "player-output-1",
+      protocolVersion: MEDIA_HELPER_PROTOCOL_VERSION,
+      payload: {
+        tracks: [
+          {
+            id: "source-buffer-1",
+            mimeType: "video/mp4",
+            appendFormats: ["iso-bmff"],
+            chunks: [bytes.toString("base64")],
+          },
+        ],
+      },
+    }),
+  );
+  const response = await frames.next(
+    (event) =>
+      event.type === MEDIA_HELPER_EVENTS.PLAYER_OUTPUT_CANARY &&
+      event.requestId === "player-output-1",
+  );
+  assert.equal(response.payload.status, "ready");
+  assert.equal(response.payload.hasVideo, true);
+  assert.equal(response.payload.hasAudio, true);
+  assert.equal(response.payload.timeline.status, "aligned");
+  assert.deepEqual(response.payload.tracks[0].streamTypes.sort(), [
+    "audio",
+    "video",
+  ]);
+});
+
 test("built helper times out a stalled HLS preflight with a precise stage", async (t) => {
   const server = createServer(() => {});
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));

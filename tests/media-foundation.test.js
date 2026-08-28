@@ -70,8 +70,11 @@ import {
   verifyMediaDeepInspectionProfiles,
 } from "../src/media/deep-inspection-profiles.js";
 import {
+  armPlayerOutputCanary,
   classifyAppendedMediaBuffer,
+  clearPlayerOutputCanary,
   installBlobSourceTracer,
+  readPlayerOutputCanary,
 } from "../src/main-world/blob-source-tracer.js";
 import {
   classifyEncryptedManifestEnvelope,
@@ -463,18 +466,12 @@ test("audio labels use English language names and compact region codes", () => {
     }),
     "Vietnamese (Original)",
   );
-  assert.equal(
-    formatAudioLanguageLabel({ language: "en-US" }),
-    "English (US)",
-  );
+  assert.equal(formatAudioLanguageLabel({ language: "en-US" }), "English (US)");
   assert.equal(
     formatAudioLanguageLabel({ language: "en-GB", role: "dubbed" }),
     "English (UK, Dubbed)",
   );
-  assert.equal(
-    formatAudioLanguageLabel({ language: "zh-CN" }),
-    "Chinese",
-  );
+  assert.equal(formatAudioLanguageLabel({ language: "zh-CN" }), "Chinese");
   assert.equal(
     formatAudioLanguageLabel({ language: "vi", name: "Vietnamese (original)" }),
     "Vietnamese (Original)",
@@ -1972,6 +1969,11 @@ test("blob source tracing links an appended network buffer to an adaptive manife
     },
   );
   try {
+    armPlayerOutputCanary({
+      mediaId: "manifest-hls",
+      manifestUrl: "https://cdn.example/master.m3u8",
+      keyFormats: ["urn:example:custom"],
+    });
     const mediaSource = new FakeMediaSource();
     URL.createObjectURL(mediaSource);
     const sourceBuffer = mediaSource.addSourceBuffer(
@@ -1996,7 +1998,14 @@ test("blob source tracing links an appended network buffer to an adaptive manife
     assert.equal(trace.observerDocumentState, "interactive");
     assert.equal("chunk" in trace, false);
     assert.equal("buffer" in trace, false);
+    const canary = readPlayerOutputCanary();
+    assert.equal(canary.status, "ready");
+    assert.equal(canary.evidence.mediaId, "manifest-hls");
+    assert.equal(canary.tracks.length, 1);
+    assert.deepEqual(canary.tracks[0].appendFormats, ["iso-bmff"]);
+    assert.equal(atob(canary.tracks[0].chunks[0]).length, 128);
   } finally {
+    clearPlayerOutputCanary();
     stop();
     clearMediaObservations();
     globalThis.Response = previous.Response;
@@ -2019,10 +2028,7 @@ test("appended media classifier identifies containers without retaining payloads
   assert.equal(classifyAppendedMediaBuffer(fmp4), "iso-bmff");
   assert.equal(classifyAppendedMediaBuffer(transportStream), "mpeg-ts");
   assert.equal(classifyAppendedMediaBuffer(webm), "webm");
-  assert.equal(
-    classifyAppendedMediaBuffer(new Uint8Array([1, 2, 3, 4])),
-    null,
-  );
+  assert.equal(classifyAppendedMediaBuffer(new Uint8Array([1, 2, 3, 4])), null);
 });
 
 test("recognizes a custom encrypted HLS envelope without retaining its payload", () => {
@@ -3952,13 +3958,21 @@ test("media popup groups Facebook representations into one quality asset", () =>
     grouped.variants.map((track) => track.qualityLabel),
     ["1080p", "480p"],
   );
-  assert.equal(grouped.variants.every((track) => !/byte(?:start|end)=/.test(track.sourceUrl)), true);
+  assert.equal(
+    grouped.variants.every(
+      (track) => !/byte(?:start|end)=/.test(track.sourceUrl),
+    ),
+    true,
+  );
   assert.equal(getMediaDownloadAvailability(grouped).supported, true);
 });
 
 test("Facebook byte fragments do not become duplicate quality tracks", () => {
   const efg = Buffer.from(
-    JSON.stringify({ xpv_asset_id: "asset-fragmented", vencode_tag: "dash_720p" }),
+    JSON.stringify({
+      xpv_asset_id: "asset-fragmented",
+      vencode_tag: "dash_720p",
+    }),
   ).toString("base64url");
   const fragments = Array.from({ length: 26 }, (_, index) => ({
     ...createMediaCandidateFromSource({
@@ -3978,8 +3992,14 @@ test("Facebook byte fragments do not become duplicate quality tracks", () => {
   assert.equal(visible[0].variants.length, 1);
   assert.equal(visible[0].variants[0].qualityLabel, "720p");
   assert.equal(visible[0].variants[0].contentLength, null);
-  assert.equal(new URL(visible[0].variants[0].sourceUrl).searchParams.has("bytestart"), false);
-  assert.equal(new URL(visible[0].variants[0].sourceUrl).searchParams.has("byteend"), false);
+  assert.equal(
+    new URL(visible[0].variants[0].sourceUrl).searchParams.has("bytestart"),
+    false,
+  );
+  assert.equal(
+    new URL(visible[0].variants[0].sourceUrl).searchParams.has("byteend"),
+    false,
+  );
 });
 
 test("Facebook DASH keeps video and audio in separate adaptive tracks", () => {
@@ -4005,7 +4025,10 @@ test("Facebook DASH keeps video and audio in separate adaptive tracks", () => {
   ]);
   assert.equal(visible.length, 1);
   assert.equal(visible[0].variants.length, 2);
-  assert.equal(visible[0].variants.every((item) => item.muxed === false), true);
+  assert.equal(
+    visible[0].variants.every((item) => item.muxed === false),
+    true,
+  );
   assert.equal(visible[0].audioTracks.length, 1);
   assert.equal(visible[0].audioTracks[0].type, "audio");
   assert.equal(visible[0].audioTracks[0].audioRole, "original");
