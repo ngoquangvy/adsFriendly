@@ -4547,7 +4547,8 @@ var AdsFriendlyBackground = (() => {
   var MEDIA_OUTPUT_CONTAINERS = Object.freeze({
     SOURCE: "source",
     MP4: "mp4",
-    MKV: "mkv"
+    MKV: "mkv",
+    OGG: "ogg"
   });
   function getMediaDownloadProfiles(candidate = {}, { canSelectContainer = true } = {}) {
     if (candidate.kind === "direct") {
@@ -4563,16 +4564,30 @@ var AdsFriendlyBackground = (() => {
       ];
     }
     if (!["hls", "dash", "adaptive"].includes(candidate.kind)) return [];
-    const profiles = [
-      Object.freeze({
-        id: "video-mp4",
-        container: MEDIA_OUTPUT_CONTAINERS.MP4,
-        extension: ".mp4",
-        label: "MP4 \xB7 compatible",
-        description: "Best compatibility for browsers, phones, and TVs."
-      })
-    ];
-    if (canSelectContainer) {
+    const profiles = [];
+    if (candidate.kind !== "adaptive" || (candidate.variants || []).length) {
+      profiles.push(
+        Object.freeze({
+          id: "video-mp4",
+          container: MEDIA_OUTPUT_CONTAINERS.MP4,
+          extension: ".mp4",
+          label: "MP4 \xB7 compatible",
+          description: "Best compatibility for browsers, phones, and TVs."
+        })
+      );
+    }
+    if (candidate.provider === "youtube" && (candidate.audioTracks || []).length) {
+      profiles.push(
+        Object.freeze({
+          id: "audio-ogg",
+          container: MEDIA_OUTPUT_CONTAINERS.OGG,
+          extension: ".ogg",
+          label: "Audio \xB7 OGG",
+          description: "Download the best available YouTube audio as an OGG file."
+        })
+      );
+    }
+    if (canSelectContainer && (candidate.kind !== "adaptive" || (candidate.variants || []).length)) {
       profiles.push(
         Object.freeze({
           id: "video-mkv",
@@ -4604,6 +4619,12 @@ var AdsFriendlyBackground = (() => {
     };
     if (candidate.kind === "adaptive") {
       normalized.allowEquivalentVideo = value?.allowEquivalentVideo === true;
+      if (profile.id === "audio-ogg") {
+        normalized.audioTrackId = normalizeAudioTrackId(
+          value?.audioTrackId,
+          candidate
+        );
+      }
     }
     return normalized;
   }
@@ -4618,6 +4639,19 @@ var AdsFriendlyBackground = (() => {
     if (!track || track.muxed !== true && !(candidate.audioTracks || []).length)
       throw new Error(
         "[MediaDownload] Selected video quality is no longer downloadable."
+      );
+    return value;
+  }
+  function normalizeAudioTrackId(value, candidate) {
+    if (value === null || value === void 0 || value === "") return null;
+    if (typeof value !== "string")
+      throw new Error("[MediaDownload] Invalid audio track selection.");
+    const track = (candidate.audioTracks || []).find(
+      (item) => item?.id === value && isAcquirableAdaptiveTrack(candidate, item)
+    );
+    if (!track)
+      throw new Error(
+        "[MediaDownload] Selected audio track is no longer downloadable."
       );
     return value;
   }
@@ -4943,7 +4977,8 @@ var AdsFriendlyBackground = (() => {
         };
       }
       const hasMuxedTrack = variants.some((track) => track.muxed === true);
-      if (!variants.length || !audioTracks.length && !hasMuxedTrack)
+      const audioOnlyYouTube = candidate.provider === "youtube" && !variants.length && audioTracks.length > 0;
+      if (!variants.length && !audioOnlyYouTube || !audioTracks.length && !hasMuxedTrack && !audioOnlyYouTube)
         return {
           supported: false,
           reason: "Adaptive media needs one resolved video and audio track."
@@ -5486,6 +5521,7 @@ var AdsFriendlyBackground = (() => {
       return {
         status: "not_required",
         videoOptions: [],
+        audioOption: null,
         reason: null
       };
     }
@@ -5497,6 +5533,7 @@ var AdsFriendlyBackground = (() => {
       return {
         status: "helper_unavailable",
         videoOptions: [],
+        audioOption: null,
         reason: helper.error || "Media Helper is unavailable."
       };
     }
@@ -5504,6 +5541,7 @@ var AdsFriendlyBackground = (() => {
       return {
         status: "helper_update",
         videoOptions: [],
+        audioOption: null,
         reason: "Update Media Helper to check YouTube quality compatibility."
       };
     }
@@ -5539,6 +5577,7 @@ var AdsFriendlyBackground = (() => {
       return {
         status: "unavailable",
         videoOptions: [],
+        audioOption: null,
         reason: messageOf(error)
       };
     }
@@ -5556,9 +5595,14 @@ var AdsFriendlyBackground = (() => {
       availability: item.availability,
       sourceLabel: item.sourceLabel.slice(0, 120)
     })) : [];
+    const audioOption = payload?.audioOption && typeof payload.audioOption.id === "string" ? {
+      id: payload.audioOption.id,
+      sourceLabel: typeof payload.audioOption.sourceLabel === "string" ? payload.audioOption.sourceLabel.slice(0, 120) : "Audio source"
+    } : null;
     return {
       status: payload?.status === "ready" ? "ready" : "unavailable",
       videoOptions,
+      audioOption,
       reason: typeof payload?.reason === "string" ? payload.reason.slice(0, 500) : null
     };
   }
@@ -6707,6 +6751,22 @@ ${body}`;
       return {
         status: "quality_unavailable",
         reason: result.reason || "No compatible YouTube quality is available through the current provider profile."
+      };
+    }
+    if (output.profileId === "audio-ogg") {
+      if (!result.audioOption) {
+        return {
+          status: "quality_unavailable",
+          reason: "No compatible YouTube audio track is available through the current provider profile."
+        };
+      }
+      return {
+        status: "ready",
+        output: {
+          ...output,
+          audioTrackId: result.audioOption.id,
+          allowEquivalentVideo: false
+        }
       };
     }
     if (!output.videoTrackId) {

@@ -92,10 +92,11 @@ export interface DownloadJob {
   accessStrategyPreferences: Record<string, Record<string, number>>;
   outputDirectory: string | null;
   output: {
-    profileId: "source" | "video-mp4" | "video-mkv";
-    container: "source" | "mp4" | "mkv";
+    profileId: "source" | "video-mp4" | "video-mkv" | "audio-ogg";
+    container: "source" | "mp4" | "mkv" | "ogg";
     extension: string | null;
     videoTrackId: string | null;
+    audioTrackId?: string | null;
     allowEquivalentVideo?: boolean;
   };
   candidate: DownloadCandidate;

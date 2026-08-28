@@ -548,6 +548,41 @@ test("YouTube quality preflight accepts only a normalized provider candidate", (
   );
 });
 
+test("YouTube adaptive output exposes an audio OGG profile", () => {
+  const payload = normalizeHelperDownloadPayload({
+    jobId: "youtube-audio-1",
+    output: { profileId: "audio-ogg", audioTrackId: "audio-140" },
+    candidate: {
+      id: "youtube-audio-candidate",
+      kind: "adaptive",
+      pageUrl: "https://www.youtube.com/watch?v=audio-1",
+      sourceUrl: "https://www.youtube.com/watch?v=audio-1",
+      provider: "youtube",
+      variants: [
+        {
+          id: "video-18",
+          type: "video",
+          sourceUrl: "https://video.example/video.mp4",
+          mimeType: "video/mp4",
+          muxed: true,
+        },
+      ],
+      audioTracks: [
+        {
+          id: "audio-140",
+          type: "audio",
+          sourceUrl: "https://audio.example/audio.m4a",
+          mimeType: "audio/mp4",
+        },
+      ],
+    },
+  });
+  assert.equal(payload.output.profileId, "audio-ogg");
+  assert.equal(payload.output.container, "ogg");
+  assert.equal(payload.output.extension, ".ogg");
+  assert.equal(payload.output.audioTrackId, "audio-140");
+});
+
 test("helper retains bounded YouTube signature cipher metadata", () => {
   const sourceUrl =
     "https://r1.googlevideo.com/videoplayback?id=asset-1&itag=137&mime=video%2Fmp4";

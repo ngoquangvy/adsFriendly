@@ -28,6 +28,8 @@ async function downloadAdaptiveHttp(
   job: DownloadJob,
   context: DownloadContext,
 ): Promise<DownloadResult> {
+  if (job.output.profileId === "audio-ogg")
+    return downloadAudioOnly(job, context);
   const requestedVideo = job.output.videoTrackId
     ? job.candidate.variants.find(
         (track) => track.id === job.output.videoTrackId,
@@ -263,6 +265,91 @@ async function downloadAdaptiveHttp(
   }
 }
 
+async function downloadAudioOnly(
+  job: DownloadJob,
+  context: DownloadContext,
+): Promise<DownloadResult> {
+  let audio = selectTrack(
+    job.candidate.audioTracks.filter(
+      (track) =>
+        !job.output.audioTrackId || track.id === job.output.audioTrackId,
+    ),
+    "audio",
+    job,
+  );
+  if (!audio)
+    throw new Error("A downloadable YouTube audio track is required.");
+  if (audio.urlResolution === "provider_client_pending") {
+    context.progress({
+      phase: "probing",
+      stage: "provider_resolution",
+      downloadedBytes: 0,
+      totalBytes: audio.contentLength,
+      bytesPerSecond: 0,
+      resumable: false,
+      resumedBytes: 0,
+      duration: job.candidate.duration,
+    });
+    audio = (
+      await resolveYouTubeProviderTracks([audio], job.candidate, {
+        allowEquivalentVideo: false,
+      })
+    )[0];
+  }
+  if (!audio.sourceUrl || audio.urlResolution !== "resolved")
+    throw new Error("YouTube audio track could not be resolved.");
+
+  const outputDirectory = resolveOutputDirectory(job.outputDirectory);
+  await mkdir(outputDirectory, { recursive: true });
+  const filename = sanitizeFilename(
+    job.candidate.title || "audio",
+    ".ogg",
+  ).replace(/\.[a-z0-9]{1,6}$/i, ".ogg");
+  const outputPath = await availableOutputPath(outputDirectory, filename);
+  const partialPath = `${outputPath}.${safeId(job.jobId)}.part.ogg`;
+  const cacheDirectory = await mkdtemp(
+    join(outputDirectory, ".adsfriendly-audio-"),
+  );
+  try {
+    const audioResult = await downloadDirectHttp(
+      directTrackJob(
+        job,
+        audio,
+        "audio-track",
+        cacheDirectory,
+        job.connections,
+      ),
+      childContext(context, (value) =>
+        context.progress({
+          ...value,
+          duration: job.candidate.duration,
+        }),
+      ),
+    );
+    context.progress({
+      phase: "finalizing",
+      stage: "local_processing",
+      downloadedBytes: audioResult.totalBytes || 0,
+      totalBytes: audioResult.totalBytes,
+      bytesPerSecond: 0,
+      resumable: false,
+      resumedBytes: 0,
+      duration: job.candidate.duration,
+    });
+    await transcodeAudioToOgg(
+      audioResult.outputPath,
+      partialPath,
+      context.signal,
+    );
+    await rename(partialPath, outputPath);
+    const output = await stat(outputPath);
+    return { outputPath, totalBytes: output.size, resumedBytes: 0 };
+  } finally {
+    await unlink(partialPath).catch(() => {});
+    await rm(cacheDirectory, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 async function downloadAdaptiveTrack(
   job: DownloadJob,
   track: AdaptiveHttpTrack,
@@ -480,6 +567,58 @@ function muxTracks(
         reject(
           new Error(
             `FFmpeg could not mux the resolved video and audio tracks${detail ? `: ${detail}` : "."}`,
+          ),
+        );
+      }
+    });
+  });
+}
+
+function transcodeAudioToOgg(
+  inputPath: string,
+  outputPath: string,
+  signal: AbortSignal,
+) {
+  return new Promise<void>((resolve, reject) => {
+    const args = [
+      "-hide_banner",
+      "-nostdin",
+      "-loglevel",
+      "warning",
+      "-y",
+      "-i",
+      inputPath,
+      "-vn",
+      "-c:a",
+      "libopus",
+      "-b:a",
+      "160k",
+      outputPath,
+    ];
+    const child = spawn("ffmpeg", args, {
+      windowsHide: true,
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    const errors: Buffer[] = [];
+    const abort = () => child.kill();
+    signal.addEventListener("abort", abort, { once: true });
+    child.stderr.on("data", (chunk: Buffer) => {
+      errors.push(chunk);
+      while (Buffer.concat(errors).byteLength > 64 * 1024) errors.shift();
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      signal.removeEventListener("abort", abort);
+      if (signal.aborted) {
+        reject(signal.reason || new Error("Download cancelled."));
+        return;
+      }
+      if (code === 0) resolve();
+      else {
+        const detail = Buffer.concat(errors).toString("utf8").trim();
+        reject(
+          new Error(
+            `FFmpeg could not convert audio to OGG${detail ? `: ${detail}` : "."}`,
           ),
         );
       }

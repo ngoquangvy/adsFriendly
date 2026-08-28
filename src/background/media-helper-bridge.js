@@ -221,6 +221,7 @@ export async function preflightMediaHelperYouTubeQualities(candidate) {
     return {
       status: "not_required",
       videoOptions: [],
+      audioOption: null,
       reason: null,
     };
   }
@@ -232,6 +233,7 @@ export async function preflightMediaHelperYouTubeQualities(candidate) {
     return {
       status: "helper_unavailable",
       videoOptions: [],
+      audioOption: null,
       reason: helper.error || "Media Helper is unavailable.",
     };
   }
@@ -243,6 +245,7 @@ export async function preflightMediaHelperYouTubeQualities(candidate) {
     return {
       status: "helper_update",
       videoOptions: [],
+      audioOption: null,
       reason: "Update Media Helper to check YouTube quality compatibility.",
     };
   }
@@ -281,6 +284,7 @@ export async function preflightMediaHelperYouTubeQualities(candidate) {
     return {
       status: "unavailable",
       videoOptions: [],
+      audioOption: null,
       reason: messageOf(error),
     };
   }
@@ -313,9 +317,20 @@ function normalizeYouTubeQualityPreflight(payload) {
           sourceLabel: item.sourceLabel.slice(0, 120),
         }))
     : [];
+  const audioOption =
+    payload?.audioOption && typeof payload.audioOption.id === "string"
+      ? {
+          id: payload.audioOption.id,
+          sourceLabel:
+            typeof payload.audioOption.sourceLabel === "string"
+              ? payload.audioOption.sourceLabel.slice(0, 120)
+              : "Audio source",
+        }
+      : null;
   return {
     status: payload?.status === "ready" ? "ready" : "unavailable",
     videoOptions,
+    audioOption,
     reason:
       typeof payload?.reason === "string" ? payload.reason.slice(0, 500) : null,
   };

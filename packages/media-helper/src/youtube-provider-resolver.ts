@@ -44,6 +44,10 @@ export type YouTubeQualityPreflight = {
     availability: "exact" | "equivalent";
     sourceLabel: string;
   }>;
+  audioOption: {
+    id: string;
+    sourceLabel: string;
+  } | null;
   reason: string | null;
 };
 
@@ -108,10 +112,20 @@ export async function preflightYouTubeProviderQualities(
     );
   try {
     const { formats } = await loadProviderFormats(videoId, profile);
-    const preferredAudio = selectPreferredAudioTrack(candidate.audioTracks);
-    const hasRequiredAudio = !preferredAudio
-      ? true
-      : Boolean(selectProviderFormat(preferredAudio, formats, false));
+    const audioOptions = (candidate.audioTracks || [])
+      .filter((track) => track.type === "audio")
+      .map((track) => ({
+        track,
+        format: selectProviderFormat(track, formats, false),
+      }))
+      .filter((item) => item.format);
+    const preferredAudio = audioOptions.sort(
+      (left, right) =>
+        mp4AudioScore(right.track) - mp4AudioScore(left.track) ||
+        (right.track.averageBandwidth || right.track.bandwidth || 0) -
+          (left.track.averageBandwidth || left.track.bandwidth || 0),
+    )[0];
+    const hasRequiredAudio = audioOptions.length > 0;
     const videoOptions = candidate.variants.flatMap((track) => {
       if (track.type !== "video") return [];
       const exact = selectProviderFormat(track, formats, false);
@@ -125,18 +139,28 @@ export async function preflightYouTubeProviderQualities(
         },
       ];
     });
-    if (!videoOptions.length)
+    if (!videoOptions.length && !preferredAudio)
       return unavailableQualityPreflight(
-        "No selected YouTube quality is available through the token-capable profile.",
+        "No selected YouTube video or audio track is available through the token-capable profile.",
       );
-    return { status: "ready", videoOptions, reason: null };
+    return {
+      status: "ready",
+      videoOptions,
+      audioOption: preferredAudio
+        ? {
+            id: preferredAudio.track.id,
+            sourceLabel: sourceFormatLabel(preferredAudio.format),
+          }
+        : null,
+      reason: null,
+    };
   } catch (error) {
     return unavailableQualityPreflight(messageOf(error));
   }
 }
 
 function unavailableQualityPreflight(reason: string): YouTubeQualityPreflight {
-  return { status: "unavailable", videoOptions: [], reason };
+  return { status: "unavailable", videoOptions: [], audioOption: null, reason };
 }
 
 async function resolveTrackFromFormats(
@@ -215,31 +239,28 @@ function formatCompatibilityScore(
   return targetContainer && targetContainer === actualContainer ? 1 : 0;
 }
 
-function selectPreferredAudioTrack(tracks: AdaptiveHttpTrack[]) {
-  return [...(tracks || [])]
-    .filter((track) => track.type === "audio")
-    .sort(
-      (left, right) =>
-        mp4AudioScore(right) - mp4AudioScore(left) ||
-        (right.averageBandwidth || right.bandwidth || 0) -
-          (left.averageBandwidth || left.bandwidth || 0),
-    )[0];
-}
-
 function mp4AudioScore(track: AdaptiveHttpTrack) {
   return /\/(?:mp4|m4a)(?:$|;)/i.test(track.mimeType || "") ? 1 : 0;
 }
 
 function sourceFormatLabel(format: ProviderFormat) {
   const mime = String(format.mime_type || "").toLowerCase();
-  const container = mime.includes("video/webm") ? "WebM" : "MP4";
+  const container = mime.includes("webm")
+    ? "WebM"
+    : mime.includes("ogg")
+      ? "OGG"
+      : "MP4";
   const codec = mime.includes("av01")
     ? "AV1"
     : mime.includes("vp9") || mime.includes("vp09")
       ? "VP9"
       : mime.includes("avc1") || mime.includes("avc3")
         ? "H.264"
-        : null;
+        : mime.includes("opus")
+          ? "Opus"
+          : mime.includes("mp4a") || mime.includes("aac")
+            ? "AAC"
+            : null;
   return [format.quality_label, container, codec].filter(Boolean).join(" · ");
 }
 

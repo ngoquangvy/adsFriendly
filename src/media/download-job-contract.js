@@ -244,7 +244,14 @@ export function getMediaDownloadAvailability(candidate = {}) {
       };
     }
     const hasMuxedTrack = variants.some((track) => track.muxed === true);
-    if (!variants.length || (!audioTracks.length && !hasMuxedTrack))
+    const audioOnlyYouTube =
+      candidate.provider === "youtube" &&
+      !variants.length &&
+      audioTracks.length > 0;
+    if (
+      (!variants.length && !audioOnlyYouTube) ||
+      (!audioTracks.length && !hasMuxedTrack && !audioOnlyYouTube)
+    )
       return {
         supported: false,
         reason: "Adaptive media needs one resolved video and audio track.",

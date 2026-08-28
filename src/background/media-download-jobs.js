@@ -174,6 +174,23 @@ async function normalizeYouTubeQualityCheck(candidate, output) {
         "No compatible YouTube quality is available through the current provider profile.",
     };
   }
+  if (output.profileId === "audio-ogg") {
+    if (!result.audioOption) {
+      return {
+        status: "quality_unavailable",
+        reason:
+          "No compatible YouTube audio track is available through the current provider profile.",
+      };
+    }
+    return {
+      status: "ready",
+      output: {
+        ...output,
+        audioTrackId: result.audioOption.id,
+        allowEquivalentVideo: false,
+      },
+    };
+  }
   if (!output.videoTrackId) {
     return {
       status: "ready",

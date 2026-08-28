@@ -826,7 +826,8 @@ var AdsFriendlyOptions = (() => {
   var MEDIA_OUTPUT_CONTAINERS = Object.freeze({
     SOURCE: "source",
     MP4: "mp4",
-    MKV: "mkv"
+    MKV: "mkv",
+    OGG: "ogg"
   });
 
   // src/media/download-job-contract.js
