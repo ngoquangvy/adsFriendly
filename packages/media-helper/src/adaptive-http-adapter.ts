@@ -408,12 +408,64 @@ async function downloadAdaptiveTrack(
           `${messageOf(error)}; initial ${providerTrackDiagnostic(track)}; fresh ${providerTrackDiagnostic(freshTrack)} retry failed: ${messageOf(refreshError)}`,
         );
       }
+      if (allowEquivalentVideo && track.type === "video") {
+        const alternatives = equivalentVideoTracks(job, track);
+        const alternativeFailures: string[] = [];
+        for (const alternative of alternatives) {
+          try {
+            const [resolvedAlternative] = await resolveYouTubeProviderTracks(
+              [alternative],
+              job.candidate,
+              { allowEquivalentVideo: true, force: true },
+            );
+            if (!resolvedAlternative?.sourceUrl) continue;
+            return await downloadDirectHttp(
+              directTrackJob(
+                job,
+                resolvedAlternative,
+                title,
+                outputDirectory,
+                connections,
+              ),
+              context,
+            );
+          } catch (alternativeError) {
+            alternativeFailures.push(
+              `${providerTrackDiagnostic(alternative)}: ${messageOf(alternativeError)}`,
+            );
+          }
+        }
+        if (alternativeFailures.length) {
+          error = new Error(
+            `${messageOf(error)}; equivalent track retries: ${alternativeFailures.join(" | ")}`,
+          );
+        }
+      }
     }
     const provider = job.candidate.provider === "youtube" ? "YouTube " : "";
     throw new Error(
       `${provider}${track.type} track (${adaptiveTrackLabel(track)}) failed: ${messageOf(error)}`,
     );
   }
+}
+
+function equivalentVideoTracks(job: DownloadJob, track: AdaptiveHttpTrack) {
+  return [...(job.candidate.variants || [])]
+    .filter(
+      (candidate) =>
+        candidate.type === "video" &&
+        candidate.id !== track.id &&
+        ((track.height && candidate.height === track.height) ||
+          (track.qualityLabel &&
+            candidate.qualityLabel === track.qualityLabel)),
+    )
+    .sort(
+      (left, right) =>
+        mp4Score(right) - mp4Score(left) ||
+        (right.height || 0) - (left.height || 0) ||
+        (right.averageBandwidth || right.bandwidth || 0) -
+          (left.averageBandwidth || left.bandwidth || 0),
+    );
 }
 
 function providerTrackDiagnostic(track: AdaptiveHttpTrack | null | undefined) {
