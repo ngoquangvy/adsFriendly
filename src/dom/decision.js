@@ -1,4 +1,5 @@
 import { createDecision, DECISION_ACTIONS } from "../shared/decision.js";
+import { isExplicitFullscreenAdOverlay } from "./features.js";
 
 export function decideDomCandidate(features) {
   const reasons = [];
@@ -15,6 +16,13 @@ export function decideDomCandidate(features) {
     return createDecision(DECISION_ACTIONS.OBSERVE, {
       confidence: 0.1,
       reasons: ["protected_area"],
+    });
+  }
+
+  if (isExplicitFullscreenAdOverlay(features)) {
+    return createDecision(DECISION_ACTIONS.BLOCK, {
+      confidence: 0.99,
+      reasons: ["explicit_fullscreen_ad_overlay"],
     });
   }
 

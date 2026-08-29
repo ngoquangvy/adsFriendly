@@ -271,7 +271,7 @@ function normalizeElementException(rule) {
     id:
       cleanText(rule.id, 160) ||
       `not-ad-${stableTextId(
-        `${selector}|${fingerprint.linkDomain}|${fingerprint.srcHost}|${fingerprint.id}`,
+        `${selector}|${fingerprint.linkDomain}|${fingerprint.srcHost}|${fingerprint.id}|${fingerprint.descendantLinkHosts.join(",")}|${fingerprint.descendantSrcHosts.join(",")}`,
       )}`,
     selector,
     fingerprint,
@@ -291,7 +291,9 @@ function hasElementExceptionIdentity(fingerprint) {
       fingerprint.linkDomain ||
       fingerprint.srcHost ||
       fingerprint.idTokens.length ||
-      fingerprint.classTokens.length),
+      fingerprint.classTokens.length ||
+      fingerprint.descendantLinkHosts.length ||
+      fingerprint.descendantSrcHosts.length),
   );
 }
 
@@ -323,7 +325,21 @@ function normalizeFingerprint(fingerprint) {
     srcHost: normalizeHostname(fingerprint.srcHost) || null,
     idTokens: normalizeTokens(fingerprint.idTokens),
     classTokens: normalizeTokens(fingerprint.classTokens),
+    descendantLinkHosts: normalizeHostList(fingerprint.descendantLinkHosts),
+    descendantSrcHosts: normalizeHostList(fingerprint.descendantSrcHosts),
   };
+}
+
+function normalizeHostList(values) {
+  return [
+    ...new Set(
+      (Array.isArray(values) ? values : [])
+        .map((value) => normalizeHostname(value))
+        .filter(Boolean),
+    ),
+  ]
+    .sort()
+    .slice(0, 12);
 }
 
 function normalizeTrustedPaths(paths) {

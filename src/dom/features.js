@@ -3,6 +3,7 @@ const AD_TOKEN_RE =
 const PROTECTED_SELECTOR =
   'nav, [role="navigation"], form, [data-testid*="login" i]';
 const NAV_SELECTOR = 'nav, [role="navigation"]';
+const NON_ACTIONABLE_SELECTORS = new Set(["html", "body", ":root", "*"]);
 
 export function extractDomFeatures(element) {
   const rect = element.getBoundingClientRect();
@@ -131,6 +132,26 @@ export function buildDomSelector(element) {
   const labelledSelector = buildLabelSelector(element, tag);
   if (labelledSelector) return labelledSelector;
   return buildStructuralSelector(element);
+}
+
+export function isReusableDomSelector(selector) {
+  if (typeof selector !== "string" || !selector.trim()) return false;
+  return !NON_ACTIONABLE_SELECTORS.has(selector.trim().toLowerCase());
+}
+
+export function isExplicitFullscreenAdOverlay(features = {}) {
+  const zIndex = Number.parseInt(features.style?.zIndex, 10);
+  return Boolean(
+    features.visible &&
+    features.fixedOrSticky &&
+    features.rect?.areaRatio >= 0.6 &&
+    Number.isFinite(zIndex) &&
+    zIndex >= 1000 &&
+    (features.signals?.idHasAdToken ||
+      features.signals?.classHasAdToken ||
+      features.signals?.idLooksAdSlot) &&
+    features.descendants?.externalAdLinkCount > 0,
+  );
 }
 
 export function buildDynamicAdIdSelector(element) {

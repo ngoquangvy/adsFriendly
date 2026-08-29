@@ -46,7 +46,11 @@ const examplePackage = {
         {
           id: "not-ad-header",
           selector: "#site-header",
-          fingerprint: { tag: "header", id: "site-header" },
+          fingerprint: {
+            tag: "header",
+            id: "site-header",
+            descendantSrcHosts: ["Static.Example"],
+          },
           confidence: 0.72,
           layout: "wide",
         },
@@ -73,6 +77,11 @@ test("normalizes a shareable settings package", () => {
   assert.equal(
     result.settings.element_exceptions["video.example"][0].id,
     "not-ad-header",
+  );
+  assert.deepEqual(
+    result.settings.element_exceptions["video.example"][0].fingerprint
+      .descendantSrcHosts,
+    ["static.example"],
   );
   assert.equal(result.settings.trusted_paths[0].isManual, true);
 });

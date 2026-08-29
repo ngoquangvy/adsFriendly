@@ -211,116 +211,11 @@ var AdsFriendlyContent = (() => {
     return Math.max(0, Math.min(1, value));
   }
 
-  // src/dom/decision.js
-  function decideDomCandidate(features) {
-    const reasons = [];
-    let score = 0;
-    if (!features.visible) {
-      return createDecision(DECISION_ACTIONS.OBSERVE, {
-        confidence: 0,
-        reasons: ["not_visible"]
-      });
-    }
-    if (features.inProtectedArea) {
-      return createDecision(DECISION_ACTIONS.OBSERVE, {
-        confidence: 0.1,
-        reasons: ["protected_area"]
-      });
-    }
-    if (features.signals.classHasAdToken) {
-      score += 0.35;
-      reasons.push("class_ad_token");
-    }
-    if (features.signals.idHasAdToken) {
-      score += 0.35;
-      reasons.push("id_ad_token");
-    }
-    if (features.signals.idLooksAdSlot) {
-      score += 0.24;
-      reasons.push("ad_slot_id");
-    }
-    if (features.signals.classHasAdToken && features.signals.idHasAdToken) {
-      score += 0.08;
-      reasons.push("class_and_id_ad_tokens");
-    }
-    if (features.signals.hrefLooksAdLike) {
-      score += 0.25;
-      reasons.push("ad_like_href");
-    }
-    if (features.signals.hrefHostLooksCommercial) {
-      score += 0.18;
-      reasons.push("commercial_or_tracking_host");
-    }
-    if (features.linkExternal) {
-      score += 0.12;
-      reasons.push("external_link");
-    }
-    if (features.linkExternal && (features.signals.classHasAdToken || features.signals.idHasAdToken)) {
-      score += 0.2;
-      reasons.push("external_link_with_ad_token");
-    }
-    if (features.fixedOrSticky) {
-      score += 0.15;
-      reasons.push("fixed_or_sticky");
-    }
-    if (features.rect.areaRatio > 0.08 && features.rect.areaRatio < 0.45) {
-      score += 0.12;
-      reasons.push("banner_sized_area");
-    }
-    if (features.compactBannerShape) {
-      score += 0.12;
-      reasons.push("compact_banner_shape");
-    }
-    if (features.billboardShape) {
-      score += 0.12;
-      reasons.push("billboard_ad_shape");
-    }
-    if (features.tallSidebarShape) {
-      score += 0.12;
-      reasons.push("sidebar_ad_shape");
-    }
-    if (features.tag === "iframe" && (features.signals.idHasAdToken || features.signals.idLooksAdSlot)) {
-      score += 0.18;
-      reasons.push("iframe_with_ad_slot_id");
-    }
-    if (features.signals.srcIsImageCdn && features.signals.classHasAdToken) {
-      score += 0.12;
-      reasons.push("cdn_image_with_ad_class");
-    }
-    if (features.descendants.externalAdLinkCount > 0) {
-      score += 0.22;
-      reasons.push("descendant_external_ad_link");
-    }
-    if (features.descendants.imageCdnCount > 0 && (features.signals.classHasAdToken || features.signals.idHasAdToken)) {
-      score += 0.12;
-      reasons.push("descendant_cdn_media_with_ad_token");
-    }
-    if (features.descendants.iframeCount > 0 && (features.signals.classHasAdToken || features.signals.idHasAdToken)) {
-      score += 0.12;
-      reasons.push("descendant_iframe_with_ad_token");
-    }
-    if (features.inNavigationArea && features.navAdLinkRatio >= 0.8) {
-      score += 0.2;
-      reasons.push("ad_heavy_navigation_area");
-    }
-    if (features.textLength > 500) {
-      score -= 0.25;
-      reasons.push("large_text_content");
-    }
-    const confidence = Math.max(0, Math.min(1, score));
-    if (confidence >= 0.78) {
-      return createDecision(DECISION_ACTIONS.BLOCK, { confidence, reasons });
-    }
-    if (confidence >= 0.55) {
-      return createDecision(DECISION_ACTIONS.TOAST, { confidence, reasons });
-    }
-    return createDecision(DECISION_ACTIONS.OBSERVE, { confidence, reasons });
-  }
-
   // src/dom/features.js
   var AD_TOKEN_RE = /(^|[-_])(?:ad|ads|adv|advert|banner|promo|sponsor|popup|preload)([-_]|$)/i;
   var PROTECTED_SELECTOR = 'nav, [role="navigation"], form, [data-testid*="login" i]';
   var NAV_SELECTOR = 'nav, [role="navigation"]';
+  var NON_ACTIONABLE_SELECTORS = /* @__PURE__ */ new Set(["html", "body", ":root", "*"]);
   function extractDomFeatures(element) {
     const rect = element.getBoundingClientRect();
     const style = getComputedStyle(element);
@@ -422,6 +317,16 @@ var AdsFriendlyContent = (() => {
     const labelledSelector = buildLabelSelector(element, tag);
     if (labelledSelector) return labelledSelector;
     return buildStructuralSelector(element);
+  }
+  function isReusableDomSelector(selector) {
+    if (typeof selector !== "string" || !selector.trim()) return false;
+    return !NON_ACTIONABLE_SELECTORS.has(selector.trim().toLowerCase());
+  }
+  function isExplicitFullscreenAdOverlay(features = {}) {
+    const zIndex = Number.parseInt(features.style?.zIndex, 10);
+    return Boolean(
+      features.visible && features.fixedOrSticky && features.rect?.areaRatio >= 0.6 && Number.isFinite(zIndex) && zIndex >= 1e3 && (features.signals?.idHasAdToken || features.signals?.classHasAdToken || features.signals?.idLooksAdSlot) && features.descendants?.externalAdLinkCount > 0
+    );
   }
   function buildDynamicAdIdSelector(element) {
     if (!element?.tagName || !element.id) return null;
@@ -629,6 +534,118 @@ var AdsFriendlyContent = (() => {
     };
   }
 
+  // src/dom/decision.js
+  function decideDomCandidate(features) {
+    const reasons = [];
+    let score = 0;
+    if (!features.visible) {
+      return createDecision(DECISION_ACTIONS.OBSERVE, {
+        confidence: 0,
+        reasons: ["not_visible"]
+      });
+    }
+    if (features.inProtectedArea) {
+      return createDecision(DECISION_ACTIONS.OBSERVE, {
+        confidence: 0.1,
+        reasons: ["protected_area"]
+      });
+    }
+    if (isExplicitFullscreenAdOverlay(features)) {
+      return createDecision(DECISION_ACTIONS.BLOCK, {
+        confidence: 0.99,
+        reasons: ["explicit_fullscreen_ad_overlay"]
+      });
+    }
+    if (features.signals.classHasAdToken) {
+      score += 0.35;
+      reasons.push("class_ad_token");
+    }
+    if (features.signals.idHasAdToken) {
+      score += 0.35;
+      reasons.push("id_ad_token");
+    }
+    if (features.signals.idLooksAdSlot) {
+      score += 0.24;
+      reasons.push("ad_slot_id");
+    }
+    if (features.signals.classHasAdToken && features.signals.idHasAdToken) {
+      score += 0.08;
+      reasons.push("class_and_id_ad_tokens");
+    }
+    if (features.signals.hrefLooksAdLike) {
+      score += 0.25;
+      reasons.push("ad_like_href");
+    }
+    if (features.signals.hrefHostLooksCommercial) {
+      score += 0.18;
+      reasons.push("commercial_or_tracking_host");
+    }
+    if (features.linkExternal) {
+      score += 0.12;
+      reasons.push("external_link");
+    }
+    if (features.linkExternal && (features.signals.classHasAdToken || features.signals.idHasAdToken)) {
+      score += 0.2;
+      reasons.push("external_link_with_ad_token");
+    }
+    if (features.fixedOrSticky) {
+      score += 0.15;
+      reasons.push("fixed_or_sticky");
+    }
+    if (features.rect.areaRatio > 0.08 && features.rect.areaRatio < 0.45) {
+      score += 0.12;
+      reasons.push("banner_sized_area");
+    }
+    if (features.compactBannerShape) {
+      score += 0.12;
+      reasons.push("compact_banner_shape");
+    }
+    if (features.billboardShape) {
+      score += 0.12;
+      reasons.push("billboard_ad_shape");
+    }
+    if (features.tallSidebarShape) {
+      score += 0.12;
+      reasons.push("sidebar_ad_shape");
+    }
+    if (features.tag === "iframe" && (features.signals.idHasAdToken || features.signals.idLooksAdSlot)) {
+      score += 0.18;
+      reasons.push("iframe_with_ad_slot_id");
+    }
+    if (features.signals.srcIsImageCdn && features.signals.classHasAdToken) {
+      score += 0.12;
+      reasons.push("cdn_image_with_ad_class");
+    }
+    if (features.descendants.externalAdLinkCount > 0) {
+      score += 0.22;
+      reasons.push("descendant_external_ad_link");
+    }
+    if (features.descendants.imageCdnCount > 0 && (features.signals.classHasAdToken || features.signals.idHasAdToken)) {
+      score += 0.12;
+      reasons.push("descendant_cdn_media_with_ad_token");
+    }
+    if (features.descendants.iframeCount > 0 && (features.signals.classHasAdToken || features.signals.idHasAdToken)) {
+      score += 0.12;
+      reasons.push("descendant_iframe_with_ad_token");
+    }
+    if (features.inNavigationArea && features.navAdLinkRatio >= 0.8) {
+      score += 0.2;
+      reasons.push("ad_heavy_navigation_area");
+    }
+    if (features.textLength > 500) {
+      score -= 0.25;
+      reasons.push("large_text_content");
+    }
+    const confidence = Math.max(0, Math.min(1, score));
+    if (confidence >= 0.78) {
+      return createDecision(DECISION_ACTIONS.BLOCK, { confidence, reasons });
+    }
+    if (confidence >= 0.55) {
+      return createDecision(DECISION_ACTIONS.TOAST, { confidence, reasons });
+    }
+    return createDecision(DECISION_ACTIONS.OBSERVE, { confidence, reasons });
+  }
+
   // src/dom/toast.js
   var TOAST_ID = "adsfriendly-dom-toast";
   var HIGHLIGHT_ID = "adsfriendly-dom-highlight";
@@ -681,7 +698,7 @@ var AdsFriendlyContent = (() => {
       allowButton.disabled = false;
       clearHighlight();
     } else if (active.state === "allow-error") {
-      message.textContent = "Not saved \xB7 retry";
+      message.textContent = allowFailureMessage(active.error);
       message.title = active.error?.message || "Could not save this decision";
       hideButton.hidden = true;
       allowButton.textContent = "Retry";
@@ -937,6 +954,19 @@ var AdsFriendlyContent = (() => {
     if (/ignored|outdated|could not save settings/.test(message))
       return "Hidden once \xB7 background outdated";
     return "Hidden once \xB7 save failed";
+  }
+  function allowFailureMessage(error) {
+    const value = String(error?.message || error || "").toLowerCase();
+    if (/no stable identity|reusable selector/.test(value))
+      return "Cannot remember safely \xB7 dismiss once";
+    if (/quota|storage is full|bytes/.test(value))
+      return "Not saved \xB7 storage full";
+    if (/invalidated/.test(value)) return "Reload this page \xB7 extension updated";
+    if (/receiving end|message port|could not establish/.test(value))
+      return "Reload extension and page";
+    if (/capability_disabled|disabled/.test(value))
+      return "Not saved \xB7 feature unavailable";
+    return "Not saved \xB7 retry";
   }
   function highlightCandidate(candidate) {
     clearHighlight();
@@ -1485,13 +1515,16 @@ var AdsFriendlyContent = (() => {
   // src/dom/element-exceptions.js
   var VALID_LAYOUTS = /* @__PURE__ */ new Set(["any", "compact", "wide"]);
   function createElementException(candidate, { id = randomId(), timestamp = Date.now(), layout = "any" } = {}) {
-    if (!candidate?.selector) {
-      throw new Error("This element does not have a reusable selector.");
-    }
+    const selector = candidate?.selector;
+    const fingerprint = elementExceptionFingerprint(candidate?.features);
+    if (!isReusableDomSelector(selector) || !hasStableElementIdentity(fingerprint))
+      throw new Error(
+        "This element has no stable identity to remember safely. Dismiss it once with \xD7."
+      );
     return {
       id,
-      selector: candidate.selector,
-      fingerprint: elementExceptionFingerprint(candidate.features),
+      selector,
+      fingerprint,
       timestamp,
       confidence: clampConfidence2(candidate.decision?.confidence),
       source: "user_not_ad",
@@ -1500,20 +1533,23 @@ var AdsFriendlyContent = (() => {
   }
   function elementExceptionFingerprint(features = {}) {
     return {
-      tag: clean(features.tag),
-      id: clean(features.id),
-      className: clean(features.className),
-      alt: clean(features.alt),
-      title: clean(features.title),
-      linkDomain: clean(features.hrefHost).toLowerCase(),
-      srcHost: clean(features.srcHost).toLowerCase(),
+      tag: clean(features.tag, 30),
+      id: clean(features.id, 160),
+      className: clean(features.className, 300),
+      alt: clean(features.alt, 300),
+      title: clean(features.title, 300),
+      linkDomain: clean(features.hrefHost, 253).toLowerCase(),
+      srcHost: clean(features.srcHost, 253).toLowerCase(),
       idTokens: normalizedTokens(features.idTokens),
-      classTokens: normalizedTokens(features.classTokens)
+      classTokens: normalizedTokens(features.classTokens),
+      descendantLinkHosts: normalizedHosts(features.descendants?.hrefHosts),
+      descendantSrcHosts: normalizedHosts(features.descendants?.srcHosts)
     };
   }
   function matchesElementException(rule, { selector, features, layout } = {}) {
     if (!rule || typeof rule !== "object") return false;
-    if (!selector || rule.selector !== selector) return false;
+    if (!isReusableDomSelector(selector) || rule.selector !== selector)
+      return false;
     if (!ruleMatchesResponsiveLayout(rule, layout)) return false;
     const expected = rule.fingerprint;
     if (!expected || typeof expected !== "object") return false;
@@ -1527,12 +1563,16 @@ var AdsFriendlyContent = (() => {
     }
     if (expected.className) {
       if (expected.className === actual.className) identityScore += 1;
-      else if (!tokenOverlap(expected.classTokens, actual.classTokens))
-        return false;
+      else return false;
     }
     if (tokenOverlap(expected.idTokens, actual.idTokens)) identityScore += 2;
     if (tokenOverlap(expected.classTokens, actual.classTokens))
       identityScore += 1;
+    for (const key of ["descendantLinkHosts", "descendantSrcHosts"]) {
+      if (!Array.isArray(expected[key]) || !expected[key].length) continue;
+      if (!sameValues(expected[key], actual[key])) return false;
+      identityScore += 3;
+    }
     return identityScore > 0 || isIdentitySelector(selector);
   }
   function elementExceptionKey(rule) {
@@ -1560,12 +1600,28 @@ var AdsFriendlyContent = (() => {
   function normalizedTokens(values) {
     return [
       ...new Set(
-        (Array.isArray(values) ? values : []).map((value) => clean(value).toLowerCase()).filter(Boolean)
+        (Array.isArray(values) ? values : []).map((value) => clean(value, 80).toLowerCase()).filter(Boolean)
       )
     ].slice(0, 40);
   }
-  function clean(value) {
-    return String(value || "").trim();
+  function normalizedHosts(values) {
+    return [
+      ...new Set(
+        (Array.isArray(values) ? values : []).map((value) => clean(value, 253).toLowerCase()).filter((value) => /^[a-z0-9.-]+$/.test(value))
+      )
+    ].sort().slice(0, 12);
+  }
+  function sameValues(expected, actual) {
+    if (!Array.isArray(actual) || expected.length !== actual.length) return false;
+    return expected.every((value, index) => value === actual[index]);
+  }
+  function hasStableElementIdentity(fingerprint) {
+    return Boolean(
+      fingerprint.id || fingerprint.className || fingerprint.alt || fingerprint.title || fingerprint.linkDomain || fingerprint.srcHost || fingerprint.idTokens.length || fingerprint.classTokens.length || fingerprint.descendantLinkHosts.length || fingerprint.descendantSrcHosts.length
+    );
+  }
+  function clean(value, maximumLength = 300) {
+    return String(value || "").trim().slice(0, maximumLength);
   }
   function clampConfidence2(value) {
     const number = Number(value);
@@ -1671,6 +1727,7 @@ var AdsFriendlyContent = (() => {
     const target = getSmallestSafeDomTarget(element, features);
     if (isHiddenByAdsFriendly(target)) return;
     const selector = buildDomSelector(target);
+    if (!isReusableDomSelector(selector)) return;
     if (selector && allowedSelectors.has(selector)) return;
     const layout = getResponsiveLayout();
     if (elementExceptions.some(
@@ -1887,7 +1944,8 @@ var AdsFriendlyContent = (() => {
     'img[src*="googleusercontent.com"][alt*="bet"]',
     'img[src*="googleusercontent.com"][alt*="win"]',
     'div[class*="popup-ad"]',
-    'div[id*="popup-ad"]'
+    'div[id*="popup-ad"]',
+    'div[id^="_preload-ads-"][time-click-close][time-click-image-to-hide]'
   ];
   var DANGEROUS_SELECTOR_TAGS = [
     "div",

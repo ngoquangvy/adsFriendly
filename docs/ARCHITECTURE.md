@@ -68,6 +68,13 @@ DOM review decisions are also separated by intent. `userCustomRules` contains
 elements the user chose to hide; `userElementExceptions` contains narrow,
 fingerprinted `Not an ad` decisions. The latter suppresses a future suggestion
 only when selector, responsive layout, and stable element identity still match.
+Candidates without a bounded reusable selector are discarded before suggestion
+or auto-hide; they are not converted into `Not an ad` rules because that would
+turn an uncertain detector result into permanent configuration.
+The Magic Wand keeps its large-area safety limit, but a unique fixed fullscreen
+overlay may pass it when it has a high z-index, an explicit ad identity, and an
+external ad link. The selected element and generated selector must always refer
+to the same node.
 The review outline is transient UI and appears only while its toast is hovered
 or keyboard-focused. Explicit labels may produce separate training samples,
 but removing a setting never depends on training storage.

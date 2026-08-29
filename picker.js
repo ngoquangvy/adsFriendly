@@ -677,6 +677,12 @@ var AdsFriendlyPicker = (() => {
   }
 
   // src/dom/features.js
+  function isExplicitFullscreenAdOverlay(features = {}) {
+    const zIndex = Number.parseInt(features.style?.zIndex, 10);
+    return Boolean(
+      features.visible && features.fixedOrSticky && features.rect?.areaRatio >= 0.6 && Number.isFinite(zIndex) && zIndex >= 1e3 && (features.signals?.idHasAdToken || features.signals?.classHasAdToken || features.signals?.idLooksAdSlot) && features.descendants?.externalAdLinkCount > 0
+    );
+  }
   function buildDynamicAdIdSelector(element) {
     if (!element?.tagName || !element.id) return null;
     const match = element.id.match(
@@ -699,6 +705,24 @@ var AdsFriendlyPicker = (() => {
     return (Number(width) || 1024) <= 767 ? RESPONSIVE_LAYOUTS.COMPACT : RESPONSIVE_LAYOUTS.WIDE;
   }
 
+  // src/picker/save-flow.js
+  async function finalizePickerSave({
+    persist,
+    apply,
+    close,
+    syncLearning,
+    onSyncError = () => {
+    }
+  }) {
+    await persist();
+    try {
+      apply();
+    } finally {
+      close();
+    }
+    void Promise.resolve().then(() => syncLearning?.()).catch(onSyncError);
+  }
+
   // src/picker/index.js
   function startPickerController(policy) {
     (function() {
@@ -706,6 +730,7 @@ var AdsFriendlyPicker = (() => {
       let hoveredElement = null;
       let selectedItems = [];
       let overlays = [];
+      let isConfirming = false;
       let activeOverlay = null;
       let controlPanel = null;
       const GENERIC_CLASSES = [
@@ -782,7 +807,9 @@ var AdsFriendlyPicker = (() => {
         const color = errorMsg ? "#ef4444" : "#10b981";
         let videoContext = false;
         if (hoveredElement) {
-          videoContext = hoveredElement.tagName === "VIDEO" || hoveredElement.querySelector("video") || hoveredElement.closest(".jw-video, .video-js, .fluid_player_instance");
+          videoContext = hoveredElement.tagName === "VIDEO" || hoveredElement.querySelector("video") || hoveredElement.closest(
+            ".jw-video, .video-js, .fluid_player_instance"
+          );
         }
         controlPanel.innerHTML = `
             <div style="font-weight: bold; font-size: 1rem; color: ${color};">${errorMsg ? "!" : videoContext ? "VIDEO" : "TARGET"}</div>
@@ -885,6 +912,7 @@ Reason: ${reasons.join(", ")}`,
       };
       const stopPicker = () => {
         isActive = false;
+        isConfirming = false;
         if (activeOverlay) activeOverlay.style.display = "none";
         if (controlPanel) controlPanel.style.display = "none";
         clearOverlays();
@@ -970,7 +998,10 @@ Reason: ${reasons.join(", ")}`,
         controlPanel.style.top = panelTop + "px";
         controlPanel.style.left = Math.max(
           12,
-          Math.min(window.innerWidth - controlPanel.offsetWidth - 12, rect.left)
+          Math.min(
+            window.innerWidth - controlPanel.offsetWidth - 12,
+            rect.left
+          )
         ) + "px";
       };
       const handleClick = (e) => {
@@ -986,9 +1017,9 @@ Reason: ${reasons.join(", ")}`,
         }
         e.preventDefault();
         e.stopPropagation();
-        const el = document.elementFromPoint(e.clientX, e.clientY);
-        if (el && !selectedItems.some((item) => item.element === el)) {
-          markElement(el, selector);
+        const selectedElement = hoveredElement;
+        if (selectedElement && !selectedItems.some((item) => item.element === selectedElement)) {
+          markElement(selectedElement, selector);
         }
       };
       const markElement = (el, selector) => {
@@ -1021,12 +1052,34 @@ Reason: ${reasons.join(", ")}`,
         }
       };
       const handleKeyDown = (e) => {
-        if (e.key === "Escape") stopPicker();
-        if (e.key === "Enter" && selectedItems.length > 0) confirmAllZaps();
+        if (e.key === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          stopPicker();
+          return;
+        }
+        if (e.key === "Enter" && selectedItems.length > 0) {
+          e.preventDefault();
+          e.stopPropagation();
+          void confirmAllZaps();
+        }
       };
       const confirmAllZaps = async () => {
+        if (!isActive || isConfirming) return;
+        isConfirming = true;
         const hostname = window.location.hostname;
-        const { userCustomRules = {}, siteResetHistory = {} } = await chrome.storage.local.get(["userCustomRules", "siteResetHistory"]);
+        let stored;
+        try {
+          stored = await chrome.storage.local.get([
+            "userCustomRules",
+            "siteResetHistory"
+          ]);
+        } catch (error) {
+          isConfirming = false;
+          updatePanelUI(`Save failed: ${error.message}`);
+          return;
+        }
+        const { userCustomRules = {}, siteResetHistory = {} } = stored;
         if (!userCustomRules[hostname]) userCustomRules[hostname] = [];
         let addedCount = 0;
         const rulesToSave = [];
@@ -1089,22 +1142,34 @@ Reason: ${reasons.join(", ")}`,
         });
         if (addedCount > 0) {
           try {
-            const response = await chrome.runtime.sendMessage({
-              type: "UPSERT_CUSTOM_RULES",
-              hostname,
-              rules: rulesToSave
+            await finalizePickerSave({
+              persist: async () => {
+                const response = await chrome.runtime.sendMessage({
+                  type: "UPSERT_CUSTOM_RULES",
+                  hostname,
+                  rules: rulesToSave
+                });
+                if (response?.status !== "saved")
+                  throw new Error(
+                    response?.error || "Could not save selected rules."
+                  );
+              },
+              apply: () => {
+                selectedItems.forEach((item) => {
+                  item.element.style.opacity = "0";
+                  item.element.style.pointerEvents = "none";
+                });
+              },
+              close: stopPicker,
+              syncLearning: () => chrome.runtime.sendMessage({ type: "SYNC_LEARNING" }),
+              onSyncError: (error) => console.warn("[AdsFriendly Picker] Learning sync failed", error)
             });
-            if (response?.status !== "saved")
-              throw new Error(response?.error || "Could not save selected rules.");
-            selectedItems.forEach((item) => {
-              item.element.style.opacity = "0";
-              item.element.style.pointerEvents = "none";
-            });
-            await chrome.runtime.sendMessage({ type: "SYNC_LEARNING" });
           } catch (error) {
+            isConfirming = false;
             updatePanelUI(`Save failed: ${error.message}`);
             return;
           }
+          return;
         }
         stopPicker();
       };
@@ -1124,7 +1189,9 @@ Reason: ${reasons.join(", ")}`,
           "aside"
         ];
         const isSafeId = (id) => id && !GENERIC_CLASSES.some((gc) => id.includes(gc)) && !/[0-9]{5,}/.test(id);
-        const isSafeClass = (cls) => cls && typeof cls === "string" && cls.split(/\s+/).some((c) => c && !GENERIC_CLASSES.includes(c) && !/[0-9]{5,}/.test(c));
+        const isSafeClass = (cls) => cls && typeof cls === "string" && cls.split(/\s+/).some(
+          (c) => c && !GENERIC_CLASSES.includes(c) && !/[0-9]{5,}/.test(c)
+        );
         const dynamicAdIdSelector = buildDynamicAdIdSelector(el);
         if (dynamicAdIdSelector) return dynamicAdIdSelector;
         if (tag === "a" && el.href && el.href.includes("javascript:")) {
@@ -1180,12 +1247,46 @@ Reason: ${reasons.join(", ")}`,
             const r = m.getBoundingClientRect();
             totalArea += r.width * r.height;
           });
-          if (totalArea > viewportArea * 0.35)
+          const explicitLargeAdOverlay = matches.length === 1 && isExplicitFullscreenAdOverlay(
+            inspectExplicitOverlay(matches[0], viewportArea)
+          );
+          if (totalArea > viewportArea * 0.35 && !explicitLargeAdOverlay)
             return { valid: false, reason: "Selector area is too large (>35%)" };
           return { valid: true };
         } catch (e) {
           return { valid: false, reason: "Invalid selector logic" };
         }
+      };
+      const inspectExplicitOverlay = (element, viewportArea) => {
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        const hasAdIdentity = (value) => /(^|[-_\s])(?:ad|ads|adv|advert|banner|promo|sponsor|popup|preload)([-_\s]|$)/i.test(
+          String(value || "")
+        );
+        const externalAdLinkCount = Array.from(
+          element.querySelectorAll("a[href]")
+        ).filter((link) => {
+          try {
+            const url = new URL(link.href, location.href);
+            return url.hostname !== location.hostname && hasAdIdentity(`${link.id} ${link.className} ${url.href}`);
+          } catch {
+            return false;
+          }
+        }).length;
+        return {
+          visible: rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden",
+          fixedOrSticky: style.position === "fixed" || style.position === "sticky",
+          rect: {
+            areaRatio: viewportArea ? rect.width * rect.height / viewportArea : 0
+          },
+          style: { zIndex: style.zIndex },
+          signals: {
+            idHasAdToken: hasAdIdentity(element.id),
+            classHasAdToken: hasAdIdentity(element.className),
+            idLooksAdSlot: false
+          },
+          descendants: { externalAdLinkCount }
+        };
       };
       const generateFingerprint = (el) => {
         const cleanId = (id) => id && !/(_[a-z0-9]{1,3}_|[0-9]{5,})/.test(id) ? id : null;

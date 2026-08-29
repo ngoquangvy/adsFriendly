@@ -13,6 +13,29 @@ import {
   getEventDefinition,
 } from "../src/runtime/event-catalog.js";
 import { accelerate, restore } from "../src/video/actions.js";
+import { finalizePickerSave } from "../src/picker/save-flow.js";
+
+test("picker closes overlays before non-critical learning sync completes", async () => {
+  const events = [];
+  let finishSync;
+  const pendingSync = new Promise((resolve) => {
+    finishSync = resolve;
+  });
+  await finalizePickerSave({
+    persist: async () => events.push("persisted"),
+    apply: () => events.push("applied"),
+    close: () => events.push("closed"),
+    syncLearning: async () => {
+      events.push("sync-started");
+      await pendingSync;
+      events.push("sync-finished");
+    },
+  });
+  await Promise.resolve();
+  assert.deepEqual(events, ["persisted", "applied", "closed", "sync-started"]);
+  finishSync();
+  await pendingSync;
+});
 
 test("action broker enforces the capability declared by the registry", async () => {
   const calls = [];

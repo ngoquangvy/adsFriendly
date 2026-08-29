@@ -9,6 +9,7 @@ import {
   buildDomSelector,
   extractDomFeatures,
   getSmallestSafeDomTarget,
+  isReusableDomSelector,
 } from "./features.js";
 import { showDomCandidateToast } from "./toast.js";
 import { CAPABILITIES } from "../runtime/feature-catalog.js";
@@ -127,6 +128,11 @@ function evaluateElement(element) {
   const target = getSmallestSafeDomTarget(element, features);
   if (isHiddenByAdsFriendly(target)) return;
   const selector = buildDomSelector(target);
+  // If the element cannot be addressed again with a bounded selector, neither
+  // auto-hide it nor ask the user to classify it. Those candidates are usually
+  // page shells or transient layout nodes, and feedback cannot be applied
+  // safely on the next load.
+  if (!isReusableDomSelector(selector)) return;
   if (selector && allowedSelectors.has(selector)) return;
   const layout = getResponsiveLayout();
   if (

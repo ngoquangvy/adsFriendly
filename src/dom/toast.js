@@ -58,7 +58,7 @@ function renderActiveToast() {
     allowButton.disabled = false;
     clearHighlight();
   } else if (active.state === "allow-error") {
-    message.textContent = "Not saved · retry";
+    message.textContent = allowFailureMessage(active.error);
     message.title = active.error?.message || "Could not save this decision";
     hideButton.hidden = true;
     allowButton.textContent = "Retry";
@@ -339,6 +339,20 @@ function saveFailureMessage(error) {
   if (/ignored|outdated|could not save settings/.test(message))
     return "Hidden once · background outdated";
   return "Hidden once · save failed";
+}
+
+function allowFailureMessage(error) {
+  const value = String(error?.message || error || "").toLowerCase();
+  if (/no stable identity|reusable selector/.test(value))
+    return "Cannot remember safely · dismiss once";
+  if (/quota|storage is full|bytes/.test(value))
+    return "Not saved · storage full";
+  if (/invalidated/.test(value)) return "Reload this page · extension updated";
+  if (/receiving end|message port|could not establish/.test(value))
+    return "Reload extension and page";
+  if (/capability_disabled|disabled/.test(value))
+    return "Not saved · feature unavailable";
+  return "Not saved · retry";
 }
 
 function highlightCandidate(candidate) {

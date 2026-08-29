@@ -42,7 +42,10 @@
       import {
         buildDomSelector,
         buildDynamicAdIdSelector,
+        extractDomFeatures,
+        isExplicitFullscreenAdOverlay,
       } from "../src/dom/features.js";
+      import { decideDomCandidate } from "../src/dom/decision.js";
       import { createSettingsMutationStore } from "../src/background/settings-mutations.js";
       import {
         CAPABILITIES,
@@ -468,6 +471,27 @@
             telemetry[0]?.sample_id === "journey-telemetry",
         );
         await clearAllTrainingData();
+
+        const fullscreenAd = document.createElement("div");
+        fullscreenAd.id = "_preload-ads-2";
+        fullscreenAd.setAttribute("time-click-close", "1");
+        fullscreenAd.setAttribute("time-click-image-to-hide", "1");
+        fullscreenAd.style.cssText =
+          "display:flex;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99999;justify-content:center";
+        fullscreenAd.innerHTML =
+          '<a class="ads-banner" href="https://uk88chinhhang.com/animevietsubapp-popup"><img class="ads-banner" src="https://lh3.googleusercontent.com/banner=s0"></a>';
+        document.body.appendChild(fullscreenAd);
+        await tick();
+        const fullscreenFeatures = extractDomFeatures(fullscreenAd);
+        record(
+          "explicit_fullscreen_ad_is_actionable",
+          fullscreenAd.matches(
+            'div[id^="_preload-ads-"][time-click-close][time-click-image-to-hide]',
+          ) &&
+            isExplicitFullscreenAdOverlay(fullscreenFeatures) &&
+            decideDomCandidate(fullscreenFeatures).action === "block",
+        );
+        fullscreenAd.remove();
 
         finish();
       } catch (error) {

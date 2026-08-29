@@ -8,9 +8,13 @@ import {
 } from "../src/dom/actions.js";
 import {
   buildDomSelector,
+  isExplicitFullscreenAdOverlay,
+  isReusableDomSelector,
   looksAdLikeUrl,
   normalizeUrlText,
 } from "../src/dom/features.js";
+import { decideDomCandidate } from "../src/dom/decision.js";
+import { STATIC_AD_SELECTORS } from "../src/dom/ad-selectors.js";
 import {
   createElementException,
   matchesElementException,
@@ -67,6 +71,48 @@ test("uses a resource host or accessible label before structure", () => {
   assert.equal(
     buildDomSelector(button),
     'button[aria-label="Close promotion"]',
+  );
+});
+
+test("recognizes the reported preload fullscreen banner as an explicit ad", () => {
+  const overlay = element("div", {
+    id: "_preload-ads-2",
+    "time-click-close": "1",
+    "time-click-image-to-hide": "1",
+  });
+  assert.equal(buildDomSelector(overlay), "#_preload-ads-2");
+  assert.equal(
+    STATIC_AD_SELECTORS.includes(
+      'div[id^="_preload-ads-"][time-click-close][time-click-image-to-hide]',
+    ),
+    true,
+  );
+
+  const features = {
+    visible: true,
+    inProtectedArea: false,
+    fixedOrSticky: true,
+    rect: { areaRatio: 1 },
+    style: { zIndex: "99999" },
+    signals: {
+      idHasAdToken: true,
+      classHasAdToken: false,
+      idLooksAdSlot: false,
+    },
+    descendants: { externalAdLinkCount: 1 },
+  };
+  assert.equal(isExplicitFullscreenAdOverlay(features), true);
+  assert.equal(decideDomCandidate(features).action, "block");
+  assert.equal(
+    isExplicitFullscreenAdOverlay({
+      ...features,
+      signals: {
+        idHasAdToken: false,
+        classHasAdToken: false,
+        idLooksAdSlot: false,
+      },
+    }),
+    false,
   );
 });
 
@@ -128,6 +174,56 @@ test("not-ad decisions match the same identity but not replacement ad content", 
       layout: "compact",
     }),
     false,
+  );
+});
+
+test("selectorless page shells are excluded from review and auto-hide", () => {
+  const body = element("body");
+  const content = element("div", { class: "reader-shell" }, body);
+  const selector = buildDomSelector(content);
+  assert.equal(selector, null);
+  assert.equal(isReusableDomSelector(selector), false);
+  assert.throws(
+    () =>
+      createElementException({
+        selector,
+        target: content,
+        features: {
+          tag: "div",
+          className: "reader-shell",
+          classTokens: ["reader", "shell"],
+        },
+        decision: { confidence: 0.65 },
+      }),
+    /no stable identity/i,
+  );
+  for (const broadSelector of ["body", "html", ":root", "*"]) {
+    assert.equal(
+      isReusableDomSelector(broadSelector),
+      false,
+      `${broadSelector} should not become an actionable DOM rule`,
+    );
+  }
+});
+
+test("not-ad decisions require both stable identity and a reusable selector", () => {
+  assert.throws(
+    () =>
+      createElementException({
+        selector: null,
+        features: { tag: "div", id: "stable-content" },
+        decision: { confidence: 0.65 },
+      }),
+    /no stable identity/i,
+  );
+  assert.throws(
+    () =>
+      createElementException({
+        selector: "#content",
+        features: { tag: "div" },
+        decision: { confidence: 0.65 },
+      }),
+    /no stable identity/i,
   );
 });
 

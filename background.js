@@ -10011,7 +10011,7 @@ ${blobTitleKey(item.title)}`;
       return null;
     return {
       id: cleanText(rule.id, 160) || `not-ad-${stableTextId2(
-        `${selector}|${fingerprint.linkDomain}|${fingerprint.srcHost}|${fingerprint.id}`
+        `${selector}|${fingerprint.linkDomain}|${fingerprint.srcHost}|${fingerprint.id}|${fingerprint.descendantLinkHosts.join(",")}|${fingerprint.descendantSrcHosts.join(",")}`
       )}`,
       selector,
       fingerprint,
@@ -10022,7 +10022,7 @@ ${blobTitleKey(item.title)}`;
   }
   function hasElementExceptionIdentity(fingerprint) {
     return Boolean(
-      fingerprint.tag && (fingerprint.id || fingerprint.className || fingerprint.alt || fingerprint.title || fingerprint.linkDomain || fingerprint.srcHost || fingerprint.idTokens.length || fingerprint.classTokens.length)
+      fingerprint.tag && (fingerprint.id || fingerprint.className || fingerprint.alt || fingerprint.title || fingerprint.linkDomain || fingerprint.srcHost || fingerprint.idTokens.length || fingerprint.classTokens.length || fingerprint.descendantLinkHosts.length || fingerprint.descendantSrcHosts.length)
     );
   }
   function normalizeRule(rule) {
@@ -10051,8 +10051,17 @@ ${blobTitleKey(item.title)}`;
       linkDomain: normalizeHostname3(fingerprint.linkDomain) || null,
       srcHost: normalizeHostname3(fingerprint.srcHost) || null,
       idTokens: normalizeTokens(fingerprint.idTokens),
-      classTokens: normalizeTokens(fingerprint.classTokens)
+      classTokens: normalizeTokens(fingerprint.classTokens),
+      descendantLinkHosts: normalizeHostList(fingerprint.descendantLinkHosts),
+      descendantSrcHosts: normalizeHostList(fingerprint.descendantSrcHosts)
     };
+  }
+  function normalizeHostList(values) {
+    return [
+      ...new Set(
+        (Array.isArray(values) ? values : []).map((value) => normalizeHostname3(value)).filter(Boolean)
+      )
+    ].sort().slice(0, 12);
   }
   function normalizeTrustedPaths(paths) {
     if (!Array.isArray(paths)) return [];

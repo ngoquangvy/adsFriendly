@@ -13,6 +13,7 @@
   'img[src*="googleusercontent.com"][alt*="win"]',
   'div[class*="popup-ad"]',
   'div[id*="popup-ad"]',
+  'div[id^="_preload-ads-"][time-click-close][time-click-image-to-hide]',
 ];
 export const DANGEROUS_SELECTOR_TAGS = [
   "div",

@@ -1,4 +1,5 @@
 import { ruleMatchesResponsiveLayout } from "./layout-context.js";
+import { isReusableDomSelector } from "./features.js";
 
 const VALID_LAYOUTS = new Set(["any", "compact", "wide"]);
 
@@ -6,13 +7,19 @@ export function createElementException(
   candidate,
   { id = randomId(), timestamp = Date.now(), layout = "any" } = {},
 ) {
-  if (!candidate?.selector) {
-    throw new Error("This element does not have a reusable selector.");
-  }
+  const selector = candidate?.selector;
+  const fingerprint = elementExceptionFingerprint(candidate?.features);
+  if (
+    !isReusableDomSelector(selector) ||
+    !hasStableElementIdentity(fingerprint)
+  )
+    throw new Error(
+      "This element has no stable identity to remember safely. Dismiss it once with ×.",
+    );
   return {
     id,
-    selector: candidate.selector,
-    fingerprint: elementExceptionFingerprint(candidate.features),
+    selector,
+    fingerprint,
     timestamp,
     confidence: clampConfidence(candidate.decision?.confidence),
     source: "user_not_ad",
@@ -22,15 +29,17 @@ export function createElementException(
 
 export function elementExceptionFingerprint(features = {}) {
   return {
-    tag: clean(features.tag),
-    id: clean(features.id),
-    className: clean(features.className),
-    alt: clean(features.alt),
-    title: clean(features.title),
-    linkDomain: clean(features.hrefHost).toLowerCase(),
-    srcHost: clean(features.srcHost).toLowerCase(),
+    tag: clean(features.tag, 30),
+    id: clean(features.id, 160),
+    className: clean(features.className, 300),
+    alt: clean(features.alt, 300),
+    title: clean(features.title, 300),
+    linkDomain: clean(features.hrefHost, 253).toLowerCase(),
+    srcHost: clean(features.srcHost, 253).toLowerCase(),
     idTokens: normalizedTokens(features.idTokens),
     classTokens: normalizedTokens(features.classTokens),
+    descendantLinkHosts: normalizedHosts(features.descendants?.hrefHosts),
+    descendantSrcHosts: normalizedHosts(features.descendants?.srcHosts),
   };
 }
 
@@ -39,7 +48,8 @@ export function matchesElementException(
   { selector, features, layout } = {},
 ) {
   if (!rule || typeof rule !== "object") return false;
-  if (!selector || rule.selector !== selector) return false;
+  if (!isReusableDomSelector(selector) || rule.selector !== selector)
+    return false;
   if (!ruleMatchesResponsiveLayout(rule, layout)) return false;
   const expected = rule.fingerprint;
   if (!expected || typeof expected !== "object") return false;
@@ -54,12 +64,16 @@ export function matchesElementException(
   }
   if (expected.className) {
     if (expected.className === actual.className) identityScore += 1;
-    else if (!tokenOverlap(expected.classTokens, actual.classTokens))
-      return false;
+    else return false;
   }
   if (tokenOverlap(expected.idTokens, actual.idTokens)) identityScore += 2;
   if (tokenOverlap(expected.classTokens, actual.classTokens))
     identityScore += 1;
+  for (const key of ["descendantLinkHosts", "descendantSrcHosts"]) {
+    if (!Array.isArray(expected[key]) || !expected[key].length) continue;
+    if (!sameValues(expected[key], actual[key])) return false;
+    identityScore += 3;
+  }
 
   // Host-, label-, id-, or class-derived selectors are stable enough when the
   // stored fingerprint has no contradiction. Structural selectors require a
@@ -100,14 +114,48 @@ function normalizedTokens(values) {
   return [
     ...new Set(
       (Array.isArray(values) ? values : [])
-        .map((value) => clean(value).toLowerCase())
+        .map((value) => clean(value, 80).toLowerCase())
         .filter(Boolean),
     ),
   ].slice(0, 40);
 }
 
-function clean(value) {
-  return String(value || "").trim();
+function normalizedHosts(values) {
+  return [
+    ...new Set(
+      (Array.isArray(values) ? values : [])
+        .map((value) => clean(value, 253).toLowerCase())
+        .filter((value) => /^[a-z0-9.-]+$/.test(value)),
+    ),
+  ]
+    .sort()
+    .slice(0, 12);
+}
+
+function sameValues(expected, actual) {
+  if (!Array.isArray(actual) || expected.length !== actual.length) return false;
+  return expected.every((value, index) => value === actual[index]);
+}
+
+function hasStableElementIdentity(fingerprint) {
+  return Boolean(
+    fingerprint.id ||
+    fingerprint.className ||
+    fingerprint.alt ||
+    fingerprint.title ||
+    fingerprint.linkDomain ||
+    fingerprint.srcHost ||
+    fingerprint.idTokens.length ||
+    fingerprint.classTokens.length ||
+    fingerprint.descendantLinkHosts.length ||
+    fingerprint.descendantSrcHosts.length,
+  );
+}
+
+function clean(value, maximumLength = 300) {
+  return String(value || "")
+    .trim()
+    .slice(0, maximumLength);
 }
 
 function clampConfidence(value) {
