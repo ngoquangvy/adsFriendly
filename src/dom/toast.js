@@ -43,7 +43,42 @@ function renderActiveToast() {
   toast.querySelector(".adsfriendly-dom-scope").textContent = isSavedRuleSummary
     ? "PAGE"
     : "ELEMENT";
-  if (active.state === "error") {
+  if (active.state === "allow-saving") {
+    message.textContent = `${label} · saving decision…`;
+    message.title = "Waiting for settings storage confirmation";
+    hideButton.hidden = true;
+    allowButton.textContent = "Saving…";
+    allowButton.disabled = true;
+    clearHighlight();
+  } else if (active.state === "allowed") {
+    message.textContent = "Marked as not an ad";
+    message.title = "This matching element will not be suggested again";
+    hideButton.hidden = true;
+    allowButton.textContent = "Undo";
+    allowButton.disabled = false;
+    clearHighlight();
+  } else if (active.state === "allow-error") {
+    message.textContent = "Not saved · retry";
+    message.title = active.error?.message || "Could not save this decision";
+    hideButton.hidden = true;
+    allowButton.textContent = "Retry";
+    allowButton.disabled = false;
+    clearHighlight();
+  } else if (active.state === "allow-undoing") {
+    message.textContent = "Forgetting decision…";
+    message.title = "Waiting for settings storage confirmation";
+    hideButton.hidden = true;
+    allowButton.textContent = "Undoing…";
+    allowButton.disabled = true;
+    clearHighlight();
+  } else if (active.state === "allow-undo-error") {
+    message.textContent = "Undo failed · decision kept";
+    message.title = active.error?.message || "Could not forget this decision";
+    hideButton.hidden = true;
+    allowButton.textContent = "Retry";
+    allowButton.disabled = false;
+    clearHighlight();
+  } else if (active.state === "error") {
     message.textContent = saveFailureMessage(active.error);
     message.title = active.error?.message || "Could not save this rule";
     hideButton.hidden = true;
@@ -92,9 +127,9 @@ function renderActiveToast() {
       active.candidate.decision.reasons?.join(", ") || "Heuristic DOM signals";
     hideButton.hidden = false;
     hideButton.textContent = "Hide";
-    allowButton.textContent = "Keep";
+    allowButton.textContent = "Not an ad";
     allowButton.disabled = false;
-    highlightCandidate(active.candidate);
+    clearHighlight();
   }
   toast.classList.remove("adsfriendly-dom-hidden");
   scheduleHide();
@@ -113,8 +148,8 @@ function ensureToast() {
     <span class="adsfriendly-dom-scope">ELEMENT</span>
     <span class="adsfriendly-dom-message"></span>
     <button class="adsfriendly-dom-hide" type="button">Hide</button>
-    <button class="adsfriendly-dom-allow" type="button">Keep</button>
-    <button class="adsfriendly-dom-close" type="button">x</button>
+    <button class="adsfriendly-dom-allow" type="button">Not an ad</button>
+    <button class="adsfriendly-dom-close" type="button" aria-label="Dismiss once">×</button>
   `;
 
   const style = document.createElement("style");
@@ -211,18 +246,48 @@ function ensureToast() {
   toast.querySelector(".adsfriendly-dom-allow").onclick = () => {
     if (!active) return;
     const current = active;
-    if (current.state === "restoring") return;
+    if (["restoring", "allow-saving", "allow-undoing"].includes(current.state))
+      return;
+    if (["review", "allow-error"].includes(current.state)) {
+      current.state = "allow-saving";
+      current.error = null;
+      renderActiveToast();
+      current.pendingAllow = Promise.resolve(
+        current.handlers?.onAllow?.(current.candidate),
+      )
+        .then(() => {
+          current.state = "allowed";
+          if (active === current) renderActiveToast();
+          else finalizeAllowedEntry(current);
+        })
+        .catch((error) => {
+          current.error = error;
+          current.state = "allow-error";
+          if (active === current) renderActiveToast();
+        });
+      return;
+    }
+    if (["allowed", "allow-undo-error"].includes(current.state)) {
+      current.state = "allow-undoing";
+      current.error = null;
+      renderActiveToast();
+      Promise.resolve(current.pendingAllow)
+        .then(() => current.handlers?.onUndoAllow?.(current.candidate))
+        .then(() => {
+          if (active === current) hideDomToast({ finalizeAllow: false });
+        })
+        .catch((error) => {
+          current.error = error;
+          current.state = "allow-undo-error";
+          if (active === current) renderActiveToast();
+        });
+      return;
+    }
     const isRestore = ["saving", "hidden", "error", "restore-error"].includes(
       current.state,
     );
-    const handler = isRestore
-      ? current.handlers?.onShow
-      : current.handlers?.onAllow;
-    if (!isRestore) {
-      Promise.resolve(handler?.(current.candidate)).catch(() => {});
-      hideDomToast();
-      return;
-    }
+    if (!isRestore) return;
+    const handler = current.handlers?.onShow;
     current.state = "restoring";
     current.error = null;
     renderActiveToast();
@@ -238,10 +303,25 @@ function ensureToast() {
       });
   };
   toast.querySelector(".adsfriendly-dom-close").onclick = hideDomToast;
-  toast.addEventListener("mouseenter", pauseHide);
-  toast.addEventListener("mouseleave", scheduleHide);
-  toast.addEventListener("focusin", pauseHide);
-  toast.addEventListener("focusout", scheduleHide);
+  toast.addEventListener("mouseenter", () => {
+    pauseHide();
+    highlightActiveReview();
+  });
+  toast.addEventListener("mouseleave", () => {
+    clearHighlight();
+    scheduleHide();
+  });
+  toast.addEventListener("focusin", () => {
+    pauseHide();
+    highlightActiveReview();
+  });
+  toast.addEventListener("focusout", () => {
+    setTimeout(() => {
+      if (toast.contains(document.activeElement)) return;
+      clearHighlight();
+      scheduleHide();
+    });
+  });
 
   (document.head || document.documentElement).appendChild(style);
   (document.body || document.documentElement).appendChild(toast);
@@ -294,8 +374,13 @@ function highlightCandidate(candidate) {
   update();
 }
 
+function highlightActiveReview() {
+  if (active?.state === "review") highlightCandidate(active.candidate);
+}
+
 function isEntryReviewable(entry) {
   if (entry.state !== "review") return true;
+  if (entry.handlers?.isSuppressed?.(entry.candidate)) return false;
   const target = entry.candidate.target || entry.candidate.element;
   if (!target?.isConnected || isHiddenByAdsFriendly(target)) return false;
   const rect = target.getBoundingClientRect();
@@ -325,8 +410,9 @@ function scheduleHide() {
   pauseHide();
   if (active) {
     if (active.state === "restoring") return;
-    const timeout =
-      active.state === "hidden" ? HIDDEN_TOAST_TIMEOUT_MS : TOAST_TIMEOUT_MS;
+    const timeout = ["hidden", "allowed"].includes(active.state)
+      ? HIDDEN_TOAST_TIMEOUT_MS
+      : TOAST_TIMEOUT_MS;
     hideTimer = setTimeout(hideDomToast, timeout);
   }
 }
@@ -336,12 +422,23 @@ function pauseHide() {
   hideTimer = null;
 }
 
-function hideDomToast() {
+function hideDomToast({ finalizeAllow = true } = {}) {
   const toast = document.getElementById(TOAST_ID);
   if (toast) toast.classList.add("adsfriendly-dom-hidden");
   pauseHide();
   clearHighlight();
+  const current = active;
   active = null;
+  if (finalizeAllow && current?.state === "allowed")
+    finalizeAllowedEntry(current);
   const next = queuedCandidates.shift();
   if (next) setTimeout(() => enqueueOrShow(next), 180);
+}
+
+function finalizeAllowedEntry(entry) {
+  if (entry.allowFinalized) return;
+  entry.allowFinalized = true;
+  Promise.resolve(entry.handlers?.onAllowConfirmed?.(entry.candidate)).catch(
+    () => {},
+  );
 }

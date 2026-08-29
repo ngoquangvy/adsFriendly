@@ -177,6 +177,28 @@ var AdsFriendlyBackground = (() => {
     );
   }
 
+  // src/dom/layout-context.js
+  var RESPONSIVE_LAYOUTS = Object.freeze({
+    ANY: "any",
+    COMPACT: "compact",
+    WIDE: "wide"
+  });
+
+  // src/dom/element-exceptions.js
+  function elementExceptionKey(rule) {
+    if (typeof rule?.id === "string" && rule.id.trim()) return rule.id.trim();
+    return [
+      rule?.selector || "",
+      rule?.layout || "any",
+      rule?.fingerprint?.linkDomain || "",
+      rule?.fingerprint?.srcHost || "",
+      rule?.fingerprint?.id || "",
+      rule?.fingerprint?.alt || "",
+      rule?.fingerprint?.title || "",
+      ...rule?.fingerprint?.classTokens || []
+    ].join("|");
+  }
+
   // src/background/settings-mutations.js
   var MAX_RULES_PER_SITE = 250;
   var defaultStore = null;
@@ -276,6 +298,88 @@ var AdsFriendlyBackground = (() => {
           };
         });
       },
+      upsertElementExceptions(hostname, incomingRules) {
+        return serial(async () => {
+          const host = normalizeHostname(hostname);
+          const additions = normalizeElementExceptions(incomingRules);
+          if (!host || !additions.length)
+            throw new Error("No valid element exceptions to save.");
+          const { userElementExceptions = {} } = await storage.get(
+            "userElementExceptions"
+          );
+          const existing = Array.isArray(userElementExceptions[host]) ? userElementExceptions[host] : [];
+          const byIdentity = new Map(
+            existing.map((rule) => [elementExceptionKey(rule), rule])
+          );
+          additions.forEach(
+            (rule) => byIdentity.set(elementExceptionKey(rule), rule)
+          );
+          userElementExceptions[host] = [...byIdentity.values()].slice(
+            -MAX_RULES_PER_SITE
+          );
+          await setAndVerify(storage, { userElementExceptions });
+          return {
+            status: "saved",
+            hostname: host,
+            ruleCount: userElementExceptions[host].length
+          };
+        });
+      },
+      removeElementExceptions(hostname, ids) {
+        return serial(async () => {
+          const host = normalizeHostname(hostname);
+          const identitySet = normalizeIdentitySet(ids);
+          if (!host || !identitySet.size)
+            throw new Error("No valid element exceptions to remove.");
+          const { userElementExceptions = {} } = await storage.get(
+            "userElementExceptions"
+          );
+          const existing = Array.isArray(userElementExceptions[host]) ? userElementExceptions[host] : [];
+          const remaining = existing.filter(
+            (rule) => !identitySet.has(elementExceptionKey(rule))
+          );
+          if (remaining.length) userElementExceptions[host] = remaining;
+          else delete userElementExceptions[host];
+          await setAndVerify(storage, { userElementExceptions });
+          return { status: "saved", hostname: host, ruleCount: remaining.length };
+        });
+      },
+      resetElementDecisions(hostname) {
+        return serial(async () => {
+          const host = normalizeHostname(hostname);
+          if (!host) throw new Error("Invalid hostname for site reset.");
+          const {
+            userCustomRules = {},
+            userElementExceptions = {},
+            siteResetHistory = {}
+          } = await storage.get([
+            "userCustomRules",
+            "userElementExceptions",
+            "siteResetHistory"
+          ]);
+          const hiddenRules = Array.isArray(userCustomRules[host]) ? userCustomRules[host] : [];
+          const exceptions = Array.isArray(userElementExceptions[host]) ? userElementExceptions[host] : [];
+          delete userCustomRules[host];
+          delete userElementExceptions[host];
+          if (hiddenRules.length) {
+            siteResetHistory[host] = {
+              oldRules: hiddenRules,
+              timestamp: Date.now()
+            };
+          }
+          await setAndVerify(storage, {
+            userCustomRules,
+            userElementExceptions,
+            siteResetHistory
+          });
+          return {
+            status: "saved",
+            hostname: host,
+            restoredCount: hiddenRules.length,
+            forgottenCount: exceptions.length
+          };
+        });
+      },
       saveDomainDecision(action2, domain) {
         return serial(async () => {
           const hostname = normalizeHostname(domain);
@@ -351,6 +455,18 @@ var AdsFriendlyBackground = (() => {
   }
   function normalizeRules(rules) {
     return (Array.isArray(rules) ? rules : [rules]).filter((rule) => rule && typeof rule === "object").filter((rule) => selectorOf(rule));
+  }
+  function normalizeElementExceptions(rules) {
+    return (Array.isArray(rules) ? rules : [rules]).filter((rule) => rule && typeof rule === "object").map((rule) => ({
+      ...rule,
+      id: String(rule.id || "").trim() || `not-ad-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      selector: String(rule.selector || "").trim()
+    })).filter((rule) => rule.selector && rule.fingerprint);
+  }
+  function normalizeIdentitySet(values) {
+    return new Set(
+      (Array.isArray(values) ? values : [values]).map((value) => String(value || "").trim()).filter(Boolean)
+    );
   }
   function normalizeSelectorSet(selectors) {
     if (selectors == null) return /* @__PURE__ */ new Set();
@@ -2249,6 +2365,28 @@ var AdsFriendlyBackground = (() => {
     NETWORK_RESPONSE: "network_response",
     DECRYPTED_BLOB: "decrypted_blob"
   });
+  var MEDIA_PLAYBACK_STATES = Object.freeze({
+    IDLE: "idle",
+    PLAYING: "playing",
+    PAUSED: "paused",
+    WAITING: "waiting",
+    SEEKING: "seeking",
+    ENDED: "ended"
+  });
+  var MEDIA_PLAYBACK_TRIGGERS = Object.freeze([
+    "initial",
+    "loadedmetadata",
+    "durationchange",
+    "play",
+    "pause",
+    "ended",
+    "waiting",
+    "seeking",
+    "seeked",
+    "ratechange",
+    "timeupdate",
+    "visibility"
+  ]);
   function normalizeMediaCandidate(value = {}) {
     const candidate = {
       id: requiredString(value.id, "id"),
@@ -2336,6 +2474,30 @@ var AdsFriendlyBackground = (() => {
       muted: value.muted === true,
       currentTime: optionalFiniteNumber(value.currentTime),
       observedAt: optionalNonNegativeInteger(value.observedAt)
+    };
+  }
+  function normalizeMediaPlaybackObservation(value = {}) {
+    return {
+      sessionId: requiredString(value.sessionId, "sessionId").slice(0, 160),
+      pageUrl: requiredString(value.pageUrl, "pageUrl"),
+      mediaId: optionalString(value.mediaId)?.slice(0, 200) || null,
+      state: enumValue(
+        value.state,
+        Object.values(MEDIA_PLAYBACK_STATES),
+        "playback.state"
+      ),
+      trigger: enumValue(
+        value.trigger,
+        MEDIA_PLAYBACK_TRIGGERS,
+        "playback.trigger"
+      ),
+      currentTime: optionalNonNegativeNumber(value.currentTime),
+      duration: optionalPositiveNumber(value.duration),
+      playbackRate: optionalPositiveNumber(value.playbackRate) || 1,
+      muted: value.muted === true,
+      visible: value.visible === true,
+      readyState: optionalBoundedInteger(value.readyState, 0, 4),
+      observedAt: optionalNonNegativeInteger(value.observedAt) || Date.now()
     };
   }
   function normalizeMediaAcquisitionDiagnostic(value) {
@@ -2749,6 +2911,24 @@ var AdsFriendlyBackground = (() => {
     }
     return number;
   }
+  function optionalNonNegativeNumber(value) {
+    if (value === null || value === void 0) return null;
+    const number = Number(value);
+    if (!Number.isFinite(number) || number < 0) {
+      throw new Error("[MediaContract] Expected a non-negative number.");
+    }
+    return number;
+  }
+  function optionalBoundedInteger(value, minimum, maximum) {
+    if (value === null || value === void 0) return null;
+    const number = Number(value);
+    if (!Number.isInteger(number) || number < minimum || number > maximum) {
+      throw new Error(
+        `[MediaContract] Expected an integer from ${minimum} to ${maximum}.`
+      );
+    }
+    return number;
+  }
 
   // src/runtime/event-catalog.js
   var EVENTS = Object.freeze({
@@ -2758,6 +2938,7 @@ var AdsFriendlyBackground = (() => {
     MEDIA_BLOB_TRACED: "media.blob_traced",
     MEDIA_MANIFEST_HANDOFF_READY: "media.manifest_handoff_ready",
     MEDIA_EME_OBSERVED: "media.eme_observed",
+    MEDIA_PLAYBACK_OBSERVED: "media.playback_observed",
     MEDIA_CATALOG_UPDATED: "media.catalog.updated",
     VIDEO_AD_EVIDENCE_FOUND: "video_ad.evidence_found",
     VIDEO_AD_LABELLED: "video_ad.labelled"
@@ -2799,6 +2980,12 @@ var AdsFriendlyBackground = (() => {
       "media.eme-observer",
       ["media.catalog"],
       normalizeEmeObservation
+    ),
+    [E.MEDIA_PLAYBACK_OBSERVED]: event(
+      E.MEDIA_PLAYBACK_OBSERVED,
+      "media.playback-observer",
+      ["media.catalog", "video-ad.evidence-collector"],
+      normalizeMediaPlaybackObservation
     ),
     [E.MEDIA_CATALOG_UPDATED]: event(
       E.MEDIA_CATALOG_UPDATED,
@@ -3458,6 +3645,107 @@ var AdsFriendlyBackground = (() => {
     ].some((track) => isYouTubeProviderResolvableTrack(candidate, track));
   }
 
+  // src/media/session-timeline.js
+  var DEFAULT_MAXIMUM_SESSIONS = 16;
+  var DEFAULT_MAXIMUM_OBSERVATIONS = 64;
+  function createMediaSessionTimeline({
+    maximumSessions = DEFAULT_MAXIMUM_SESSIONS,
+    maximumObservations = DEFAULT_MAXIMUM_OBSERVATIONS
+  } = {}) {
+    const sessions = /* @__PURE__ */ new Map();
+    return Object.freeze({
+      add(observation, { frameId = null, frameUrl = null } = {}) {
+        const existing = sessions.get(observation.sessionId);
+        const session = existing || {
+          id: observation.sessionId,
+          lineageId: lineageId(frameId, observation.sessionId),
+          pageUrl: observation.pageUrl,
+          frameId: normalizedFrameId(frameId),
+          frameUrl: normalizedHttpUrl(frameUrl),
+          mediaIds: [],
+          firstSeenAt: observation.observedAt,
+          lastSeenAt: observation.observedAt,
+          current: null,
+          timeline: []
+        };
+        if (observation.mediaId && !session.mediaIds.includes(observation.mediaId))
+          session.mediaIds = [...session.mediaIds, observation.mediaId].slice(
+            -16
+          );
+        session.frameId = session.frameId ?? normalizedFrameId(frameId);
+        session.frameUrl = session.frameUrl || normalizedHttpUrl(frameUrl);
+        session.lastSeenAt = Math.max(session.lastSeenAt, observation.observedAt);
+        const point = timelinePoint(observation);
+        const previous = session.timeline.at(-1);
+        if (canCoalesce(previous, point))
+          session.timeline[session.timeline.length - 1] = point;
+        else session.timeline.push(point);
+        session.timeline = session.timeline.slice(-maximumObservations);
+        session.current = point;
+        sessions.set(session.id, session);
+        trimSessions(sessions, maximumSessions);
+        return cloneSession(session);
+      },
+      list() {
+        return [...sessions.values()].sort((left, right) => right.lastSeenAt - left.lastSeenAt).map(cloneSession);
+      },
+      forMedia(mediaId) {
+        return [...sessions.values()].filter((session) => session.mediaIds.includes(mediaId)).sort((left, right) => right.lastSeenAt - left.lastSeenAt).map(cloneSession);
+      },
+      clear() {
+        sessions.clear();
+      }
+    });
+  }
+  function timelinePoint(observation) {
+    return {
+      mediaId: observation.mediaId,
+      state: observation.state,
+      trigger: observation.trigger,
+      currentTime: observation.currentTime,
+      duration: observation.duration,
+      playbackRate: observation.playbackRate,
+      muted: observation.muted,
+      visible: observation.visible,
+      readyState: observation.readyState,
+      observedAt: observation.observedAt
+    };
+  }
+  function canCoalesce(previous, next) {
+    return previous?.trigger === "timeupdate" && next.trigger === "timeupdate" && previous.mediaId === next.mediaId && previous.state === next.state && previous.visible === next.visible && previous.muted === next.muted && previous.playbackRate === next.playbackRate;
+  }
+  function cloneSession(session) {
+    return {
+      ...session,
+      mediaIds: [...session.mediaIds],
+      current: session.current ? { ...session.current } : null,
+      timeline: session.timeline.map((point) => ({ ...point }))
+    };
+  }
+  function trimSessions(sessions, maximum) {
+    while (sessions.size > maximum) {
+      const oldest = [...sessions.values()].sort(
+        (left, right) => left.lastSeenAt - right.lastSeenAt
+      )[0];
+      if (!oldest) return;
+      sessions.delete(oldest.id);
+    }
+  }
+  function lineageId(frameId, sessionId) {
+    return `frame-${normalizedFrameId(frameId) ?? "unknown"}:${sessionId}`;
+  }
+  function normalizedFrameId(value) {
+    return Number.isInteger(value) && value >= 0 ? value : null;
+  }
+  function normalizedHttpUrl(value) {
+    try {
+      const url = new URL(value);
+      return ["http:", "https:"].includes(url.protocol) ? url.href : null;
+    } catch {
+      return null;
+    }
+  }
+
   // src/media/catalog.js
   function createMediaCatalog({ maximumPerTab = 50 } = {}) {
     const tabs = /* @__PURE__ */ new Map();
@@ -3477,7 +3765,7 @@ var AdsFriendlyBackground = (() => {
           tabCatalog = null;
         }
         if (!tabCatalog) {
-          tabCatalog = { pageUrl: candidate.pageUrl, items: /* @__PURE__ */ new Map() };
+          tabCatalog = createTabCatalog(candidate.pageUrl);
           tabs.set(tabId, tabCatalog);
         }
         const now = event2.timestamp;
@@ -3501,7 +3789,7 @@ var AdsFriendlyBackground = (() => {
           probeCount: existing?.probeCount || 0,
           lastProbeAt: existing?.lastProbeAt || null,
           lastUsableProbeAt: existing?.lastUsableProbeAt || null,
-          frameId: normalizedFrameId(event2.metadata?.frameId, existing?.frameId),
+          frameId: normalizedFrameId2(event2.metadata?.frameId, existing?.frameId),
           frameUrl: normalizedFrameUrl(event2.metadata?.frameUrl) || existing?.frameUrl || null,
           playerAdapters: uniqueStrings([
             ...existing?.playerAdapters || [],
@@ -3514,6 +3802,7 @@ var AdsFriendlyBackground = (() => {
           firstSeenAt: existing?.firstSeenAt || now,
           lastSeenAt: now
         };
+        attachKnownSessions(item, tabCatalog.sessions);
         applyEmeToItem(item, tabCatalog.eme);
         tabCatalog.items.set(candidate.id, item);
         trimOldest(tabCatalog.items, maximumPerTab);
@@ -3534,7 +3823,7 @@ var AdsFriendlyBackground = (() => {
           tabCatalog = null;
         }
         if (!tabCatalog) {
-          tabCatalog = { pageUrl: probe.pageUrl, items: /* @__PURE__ */ new Map() };
+          tabCatalog = createTabCatalog(probe.pageUrl);
           tabs.set(tabId, tabCatalog);
         }
         const existing = tabCatalog.items.get(probe.mediaId);
@@ -3558,7 +3847,7 @@ var AdsFriendlyBackground = (() => {
           probeCount: (existing?.probeCount || 0) + 1,
           lastProbeAt: event2.timestamp,
           lastUsableProbeAt: acceptProbe && probeQuality(probe) > 0 ? event2.timestamp : existing?.lastUsableProbeAt || existing?.lastProbeAt || null,
-          frameId: normalizedFrameId(event2.metadata?.frameId, existing?.frameId),
+          frameId: normalizedFrameId2(event2.metadata?.frameId, existing?.frameId),
           frameUrl: normalizedFrameUrl(event2.metadata?.frameUrl) || existing?.frameUrl || null,
           playerAdapters: [...existing?.playerAdapters || []],
           detectionSources: uniqueStrings([
@@ -3568,6 +3857,7 @@ var AdsFriendlyBackground = (() => {
           firstSeenAt: existing?.firstSeenAt || event2.timestamp,
           lastSeenAt: event2.timestamp
         };
+        attachKnownSessions(item, tabCatalog.sessions);
         applyEmeToItem(item, tabCatalog.eme);
         tabCatalog.items.set(probe.mediaId, item);
         trimOldest(tabCatalog.items, maximumPerTab);
@@ -3588,7 +3878,7 @@ var AdsFriendlyBackground = (() => {
           tabCatalog = null;
         }
         if (!tabCatalog) {
-          tabCatalog = { pageUrl: diagnostic2.pageUrl, items: /* @__PURE__ */ new Map() };
+          tabCatalog = createTabCatalog(diagnostic2.pageUrl);
           tabs.set(tabId, tabCatalog);
         }
         const existing = tabCatalog.items.get(diagnostic2.mediaId);
@@ -3607,7 +3897,7 @@ var AdsFriendlyBackground = (() => {
           ...base,
           probeDiagnostic: probeDiagnostics[0] || null,
           probeDiagnostics,
-          frameId: normalizedFrameId(event2.metadata?.frameId, existing?.frameId),
+          frameId: normalizedFrameId2(event2.metadata?.frameId, existing?.frameId),
           frameUrl: normalizedFrameUrl(event2.metadata?.frameUrl) || existing?.frameUrl || null,
           playerAdapters: [...existing?.playerAdapters || []],
           detectionSources: uniqueStrings([
@@ -3620,6 +3910,7 @@ var AdsFriendlyBackground = (() => {
           firstSeenAt: existing?.firstSeenAt || event2.timestamp,
           lastSeenAt: event2.timestamp
         };
+        attachKnownSessions(item, tabCatalog.sessions);
         applyEmeToItem(item, tabCatalog.eme);
         tabCatalog.items.set(diagnostic2.mediaId, item);
         trimOldest(tabCatalog.items, maximumPerTab);
@@ -3640,7 +3931,7 @@ var AdsFriendlyBackground = (() => {
           tabCatalog = null;
         }
         if (!tabCatalog) {
-          tabCatalog = { pageUrl: trace.pageUrl, items: /* @__PURE__ */ new Map() };
+          tabCatalog = createTabCatalog(trace.pageUrl);
           tabs.set(tabId, tabCatalog);
         }
         const existing = tabCatalog.items.get(trace.mediaId);
@@ -3655,7 +3946,7 @@ var AdsFriendlyBackground = (() => {
         const item = {
           ...base,
           blobTrace,
-          frameId: normalizedFrameId(event2.metadata?.frameId, existing?.frameId),
+          frameId: normalizedFrameId2(event2.metadata?.frameId, existing?.frameId),
           frameUrl: normalizedFrameUrl(event2.metadata?.frameUrl) || existing?.frameUrl || null,
           playerAdapters: [...existing?.playerAdapters || []],
           detectionSources: uniqueStrings([
@@ -3668,6 +3959,7 @@ var AdsFriendlyBackground = (() => {
           firstSeenAt: existing?.firstSeenAt || event2.timestamp,
           lastSeenAt: event2.timestamp
         };
+        attachKnownSessions(item, tabCatalog.sessions);
         applyEmeToItem(item, tabCatalog.eme);
         tabCatalog.items.set(trace.mediaId, item);
         trimOldest(tabCatalog.items, maximumPerTab);
@@ -3696,6 +3988,40 @@ var AdsFriendlyBackground = (() => {
         tabCatalog.items.set(handoff.mediaId, item);
         return cloneItem(item);
       },
+      applyPlayback(tabId, rawEvent) {
+        assertTabId(tabId);
+        const event2 = normalizeRegisteredEvent(rawEvent);
+        if (event2.type !== EVENTS.MEDIA_PLAYBACK_OBSERVED) {
+          throw new Error(
+            `[MediaCatalog] Cannot apply playback event "${event2.type}".`
+          );
+        }
+        const observation = event2.payload;
+        let tabCatalog = tabs.get(tabId);
+        if (tabCatalog && !samePageUrl(tabCatalog.pageUrl, observation.pageUrl)) {
+          tabs.delete(tabId);
+          tabCatalog = null;
+        }
+        if (!tabCatalog) {
+          tabCatalog = createTabCatalog(observation.pageUrl);
+          tabs.set(tabId, tabCatalog);
+        }
+        const session = tabCatalog.sessions.add(observation, {
+          frameId: event2.metadata?.frameId,
+          frameUrl: event2.metadata?.frameUrl
+        });
+        for (const mediaId of session.mediaIds) {
+          const item = tabCatalog.items.get(mediaId);
+          if (!item) continue;
+          item.playerSessionIds = uniqueStrings([
+            ...item.playerSessionIds || [],
+            session.id
+          ]).slice(-16);
+          item.playback = playbackFromSessionPoint(session.current);
+          item.lastSeenAt = Math.max(item.lastSeenAt || 0, event2.timestamp);
+        }
+        return session;
+      },
       applyEme(tabId, rawEvent) {
         assertTabId(tabId);
         const event2 = normalizeRegisteredEvent(rawEvent);
@@ -3711,11 +4037,7 @@ var AdsFriendlyBackground = (() => {
           tabCatalog = null;
         }
         if (!tabCatalog) {
-          tabCatalog = {
-            pageUrl: observation.pageUrl,
-            items: /* @__PURE__ */ new Map(),
-            eme: null
-          };
+          tabCatalog = createTabCatalog(observation.pageUrl);
           tabs.set(tabId, tabCatalog);
         }
         tabCatalog.eme = mergeEmeMetadata(tabCatalog.eme, observation);
@@ -3728,17 +4050,25 @@ var AdsFriendlyBackground = (() => {
         const tabCatalog = tabs.get(tabId);
         if (!tabCatalog || pageUrl && !samePageUrl(tabCatalog.pageUrl, pageUrl))
           return [];
-        const items = [...tabCatalog.items.values()].sort(
-          (left, right) => right.lastSeenAt - left.lastSeenAt
-        );
-        const resolutions = resolveHlsSources(items);
-        const blobResolutions = resolveBlobSources(items, resolutions);
-        return items.map(
-          (item) => cloneItem(
-            item,
-            blobResolutions.get(item.id) || resolutions.get(item.id)
-          )
-        );
+        return listTabItems(tabCatalog);
+      },
+      listSessions(tabId, pageUrl = null) {
+        assertTabId(tabId);
+        const tabCatalog = tabs.get(tabId);
+        if (!tabCatalog || pageUrl && !samePageUrl(tabCatalog.pageUrl, pageUrl))
+          return [];
+        return tabCatalog.sessions.list();
+      },
+      snapshot(tabId) {
+        assertTabId(tabId);
+        const tabCatalog = tabs.get(tabId);
+        if (!tabCatalog) return null;
+        return {
+          version: 2,
+          pageUrl: tabCatalog.pageUrl,
+          items: listTabItems(tabCatalog),
+          sessions: tabCatalog.sessions.list()
+        };
       },
       clear(tabId) {
         assertTabId(tabId);
@@ -3748,6 +4078,45 @@ var AdsFriendlyBackground = (() => {
         tabs.clear();
       }
     });
+  }
+  function createTabCatalog(pageUrl) {
+    return {
+      pageUrl,
+      items: /* @__PURE__ */ new Map(),
+      sessions: createMediaSessionTimeline(),
+      eme: null
+    };
+  }
+  function listTabItems(tabCatalog) {
+    const items = [...tabCatalog.items.values()].sort(
+      (left, right) => right.lastSeenAt - left.lastSeenAt
+    );
+    const resolutions = resolveHlsSources(items);
+    const blobResolutions = resolveBlobSources(items, resolutions);
+    return items.map(
+      (item) => cloneItem(item, blobResolutions.get(item.id) || resolutions.get(item.id))
+    );
+  }
+  function attachKnownSessions(item, sessions) {
+    const related = sessions.forMedia(item.id);
+    item.playerSessionIds = uniqueStrings([
+      ...item.playerSessionIds || [],
+      ...related.map((session) => session.id)
+    ]).slice(-16);
+    if (!item.playback && related[0]?.current)
+      item.playback = playbackFromSessionPoint(related[0].current);
+  }
+  function playbackFromSessionPoint(point) {
+    if (!point) return null;
+    return {
+      state: point.state,
+      playing: point.state === "playing",
+      visible: point.visible === true,
+      muted: point.muted === true,
+      currentTime: point.currentTime,
+      playbackRate: point.playbackRate,
+      observedAt: point.observedAt
+    };
   }
   function probeFields(item) {
     return {
@@ -4088,6 +4457,7 @@ var AdsFriendlyBackground = (() => {
       subtitles: item.subtitles.map((track) => ({ ...track })),
       detectionSources: [...item.detectionSources],
       playerAdapters: [...item.playerAdapters || []],
+      playerSessionIds: [...item.playerSessionIds || []],
       encryptionMethods: [...item.encryptionMethods || []],
       encryptionKeyFormats: [...item.encryptionKeyFormats || []],
       drmEvidence: [...item.drmEvidence || []],
@@ -4163,7 +4533,7 @@ var AdsFriendlyBackground = (() => {
       return left === right;
     }
   }
-  function normalizedFrameId(value, fallback = null) {
+  function normalizedFrameId2(value, fallback = null) {
     return Number.isInteger(value) && value >= 0 ? value : fallback ?? null;
   }
   function normalizedFrameUrl(value) {
@@ -4186,6 +4556,8 @@ var AdsFriendlyBackground = (() => {
 
   // src/background/media-catalog.js
   var catalog = createMediaCatalog();
+  var PLAYBACK_CHECKPOINT_INTERVAL_MS = 1e4;
+  var playbackCheckpointTimers = /* @__PURE__ */ new Map();
   var active = false;
   async function startBackgroundMediaCatalog() {
     await hydrateCatalog().catch(() => {
@@ -4205,6 +4577,8 @@ var AdsFriendlyBackground = (() => {
     chrome.tabs.onUpdated.addListener(onUpdated);
     return async () => {
       active = false;
+      for (const timer of playbackCheckpointTimers.values()) clearTimeout(timer);
+      playbackCheckpointTimers.clear();
       catalog.clearAll();
       chrome.tabs.onRemoved.removeListener(onRemoved);
       chrome.tabs.onUpdated.removeListener(onUpdated);
@@ -4255,17 +4629,31 @@ var AdsFriendlyBackground = (() => {
     });
     return { status: "recorded", items };
   }
+  async function recordMediaPlaybackObservation(tabId, event2) {
+    if (!active) return { status: "catalog_disabled" };
+    const session = catalog.applyPlayback(tabId, event2);
+    if (event2?.payload?.trigger === "timeupdate")
+      schedulePlaybackCheckpoint(tabId);
+    else await flushPlaybackCheckpoint(tabId).catch(() => {
+    });
+    return { status: "recorded", session };
+  }
   async function listDiscoveredMedia(tabId, pageUrl = null) {
     if (!active) return { status: "catalog_disabled", items: [] };
     return { status: "ok", items: catalog.list(tabId, pageUrl) };
+  }
+  async function listMediaPlaybackSessions(tabId, pageUrl = null) {
+    if (!active) return { status: "catalog_disabled", sessions: [] };
+    return { status: "ok", sessions: catalog.listSessions(tabId, pageUrl) };
   }
   async function hydrateCatalog() {
     const storage = chrome.storage.session;
     if (!storage) return;
     const snapshot = await storage.get(null);
-    for (const [key, items] of Object.entries(snapshot)) {
-      if (!key.startsWith(MEDIA_CATALOG_SESSION_PREFIX) || !Array.isArray(items))
-        continue;
+    for (const [key, stored] of Object.entries(snapshot)) {
+      if (!key.startsWith(MEDIA_CATALOG_SESSION_PREFIX)) continue;
+      const { items, sessions } = normalizeStoredMediaCatalogSnapshot(stored);
+      if (!items.length && !sessions.length) continue;
       const tabId = Number(key.slice(MEDIA_CATALOG_SESSION_PREFIX.length));
       if (!Number.isInteger(tabId)) continue;
       for (const item of items) {
@@ -4332,17 +4720,63 @@ var AdsFriendlyBackground = (() => {
           }
         }
       }
+      for (const session of sessions) {
+        for (const point of session.timeline || []) {
+          try {
+            catalog.applyPlayback(tabId, {
+              ...createRegisteredEvent(EVENTS.MEDIA_PLAYBACK_OBSERVED, {
+                ...point,
+                sessionId: session.id,
+                pageUrl: session.pageUrl || stored.pageUrl
+              }),
+              timestamp: point.observedAt || session.lastSeenAt || Date.now(),
+              metadata: {
+                frameId: session.frameId ?? null,
+                frameUrl: session.frameUrl || null
+              }
+            });
+          } catch {
+          }
+        }
+      }
       const cleanedItems = catalog.list(tabId);
-      if (cleanedItems.length) await storage.set({ [key]: cleanedItems });
+      if (cleanedItems.length || catalog.listSessions(tabId).length)
+        await storage.set({ [key]: catalog.snapshot(tabId) });
       else await storage.remove(key);
     }
+  }
+  function normalizeStoredMediaCatalogSnapshot(stored) {
+    return {
+      items: Array.isArray(stored) ? stored : Array.isArray(stored?.items) ? stored.items : [],
+      sessions: Array.isArray(stored?.sessions) ? stored.sessions : []
+    };
   }
   async function persistTab(tabId) {
     const storage = chrome.storage.session;
     if (!storage) return;
-    await storage.set({ [mediaCatalogSessionKey(tabId)]: catalog.list(tabId) });
+    const snapshot = catalog.snapshot(tabId);
+    if (snapshot)
+      await storage.set({ [mediaCatalogSessionKey(tabId)]: snapshot });
+  }
+  function schedulePlaybackCheckpoint(tabId) {
+    if (playbackCheckpointTimers.has(tabId)) return;
+    const timer = setTimeout(() => {
+      playbackCheckpointTimers.delete(tabId);
+      if (active) persistTab(tabId).catch(() => {
+      });
+    }, PLAYBACK_CHECKPOINT_INTERVAL_MS);
+    playbackCheckpointTimers.set(tabId, timer);
+  }
+  async function flushPlaybackCheckpoint(tabId) {
+    const timer = playbackCheckpointTimers.get(tabId);
+    if (timer) clearTimeout(timer);
+    playbackCheckpointTimers.delete(tabId);
+    await persistTab(tabId);
   }
   async function clearTab(tabId) {
+    const timer = playbackCheckpointTimers.get(tabId);
+    if (timer) clearTimeout(timer);
+    playbackCheckpointTimers.delete(tabId);
     catalog.clear(tabId);
     if (chrome.storage.session)
       await chrome.storage.session.remove(mediaCatalogSessionKey(tabId));
@@ -8874,6 +9308,9 @@ ${blobTitleKey(item.title)}`;
     REMOVE_CUSTOM_RULES: CAPABILITIES.CORE_MAINTENANCE,
     RESTORE_CUSTOM_RULES: CAPABILITIES.CORE_MAINTENANCE,
     RESET_CUSTOM_RULES: CAPABILITIES.CORE_MAINTENANCE,
+    UPSERT_ELEMENT_EXCEPTIONS: CAPABILITIES.CORE_MAINTENANCE,
+    REMOVE_ELEMENT_EXCEPTIONS: CAPABILITIES.CORE_MAINTENANCE,
+    RESET_ELEMENT_DECISIONS: CAPABILITIES.CORE_MAINTENANCE,
     SAVE_DOMAIN_DECISION: CAPABILITIES.CORE_MAINTENANCE,
     REMOVE_DOMAIN_DECISION: CAPABILITIES.CORE_MAINTENANCE,
     GET_STORAGE_HEALTH: CAPABILITIES.CORE_MAINTENANCE,
@@ -8883,8 +9320,10 @@ ${blobTitleKey(item.title)}`;
     MEDIA_PROBE_DIAGNOSTIC: CAPABILITIES.MEDIA_CATALOG,
     MEDIA_BLOB_TRACED: CAPABILITIES.MEDIA_CATALOG,
     MEDIA_EME_OBSERVED: CAPABILITIES.MEDIA_CATALOG,
+    MEDIA_PLAYBACK_OBSERVED: CAPABILITIES.MEDIA_CATALOG,
     PREPARE_MEDIA_CONTEXTUAL_PROBE: CAPABILITIES.MEDIA_CATALOG,
     GET_MEDIA_CATALOG: CAPABILITIES.MEDIA_CATALOG,
+    GET_MEDIA_SESSIONS: CAPABILITIES.MEDIA_CATALOG,
     SAVE_MEDIA_DEBUG_MANIFEST: CAPABILITIES.MEDIA_CATALOG,
     GET_MEDIA_DEBUG_MANIFEST: CAPABILITIES.MEDIA_CATALOG,
     SAVE_DECRYPTED_MEDIA_MANIFEST: CAPABILITIES.MEDIA_CATALOG,
@@ -8959,6 +9398,18 @@ ${blobTitleKey(item.title)}`;
       );
     if (message.type === "RESET_CUSTOM_RULES")
       return getSettingsMutationStore().resetCustomRules(message.hostname);
+    if (message.type === "UPSERT_ELEMENT_EXCEPTIONS")
+      return getSettingsMutationStore().upsertElementExceptions(
+        message.hostname,
+        message.rules
+      );
+    if (message.type === "REMOVE_ELEMENT_EXCEPTIONS")
+      return getSettingsMutationStore().removeElementExceptions(
+        message.hostname,
+        message.ids
+      );
+    if (message.type === "RESET_ELEMENT_DECISIONS")
+      return getSettingsMutationStore().resetElementDecisions(message.hostname);
     if (message.type === "SAVE_DOMAIN_DECISION")
       return getSettingsMutationStore().saveDomainDecision(
         message.action,
@@ -9059,6 +9510,22 @@ ${blobTitleKey(item.title)}`;
         }
       });
     }
+    if (message.type === "MEDIA_PLAYBACK_OBSERVED") {
+      const tabId = sender?.tab?.id;
+      if (!Number.isInteger(tabId)) return { status: "ignored" };
+      return recordMediaPlaybackObservation(tabId, {
+        ...message.event,
+        payload: {
+          ...message.event?.payload,
+          pageUrl: sender.tab.url || message.event?.payload?.pageUrl
+        },
+        metadata: {
+          ...message.event?.metadata,
+          frameId: sender.frameId ?? null,
+          frameUrl: message.event?.payload?.pageUrl || null
+        }
+      });
+    }
     if (message.type === "PREPARE_MEDIA_CONTEXTUAL_PROBE") {
       const tabId = sender?.tab?.id;
       const frameId = sender?.frameId;
@@ -9083,6 +9550,10 @@ ${blobTitleKey(item.title)}`;
     if (message.type === "GET_MEDIA_CATALOG") {
       if (!Number.isInteger(message.tabId)) return { status: "invalid_tab" };
       return listDiscoveredMedia(message.tabId, message.pageUrl || null);
+    }
+    if (message.type === "GET_MEDIA_SESSIONS") {
+      if (!Number.isInteger(message.tabId)) return { status: "invalid_tab" };
+      return listMediaPlaybackSessions(message.tabId, message.pageUrl || null);
     }
     if (message.type === "SAVE_MEDIA_DEBUG_MANIFEST") {
       const tabId = sender?.tab?.id;
@@ -9411,11 +9882,18 @@ ${blobTitleKey(item.title)}`;
     const metadata = normalizeMetadata(input.metadata);
     const rawSettings = input.settings || {};
     const customRules = normalizeCustomRules(rawSettings.custom_rules);
+    const elementExceptions = normalizeElementExceptions2(
+      rawSettings.element_exceptions
+    );
     const totalRules = Object.values(customRules).reduce(
       (count, rules) => count + rules.length,
       0
     );
-    if (totalRules > MAX_RULES) {
+    const totalExceptions = Object.values(elementExceptions).reduce(
+      (count, rules) => count + rules.length,
+      0
+    );
+    if (totalRules + totalExceptions > MAX_RULES) {
       throw new Error(`Package exceeds the ${MAX_RULES} rule limit.`);
     }
     return {
@@ -9426,6 +9904,7 @@ ${blobTitleKey(item.title)}`;
         whitelist: normalizeDomainList(rawSettings.whitelist, false),
         blacklist: normalizeDomainList(rawSettings.blacklist, true),
         custom_rules: customRules,
+        element_exceptions: elementExceptions,
         trusted_paths: normalizeTrustedPaths(rawSettings.trusted_paths)
       }
     };
@@ -9439,7 +9918,8 @@ ${blobTitleKey(item.title)}`;
       friendlyMode: appSettings.protectionMode === "safe",
       whitelist: settingsPackage.settings.whitelist,
       blacklist: settingsPackage.settings.blacklist,
-      userCustomRules: settingsPackage.settings.custom_rules
+      userCustomRules: settingsPackage.settings.custom_rules,
+      userElementExceptions: settingsPackage.settings.element_exceptions
     };
     for (const path of settingsPackage.settings.trusted_paths) {
       updates[`p:${path.source}>${path.target}`] = path;
@@ -9481,7 +9961,7 @@ ${blobTitleKey(item.title)}`;
   function hasMeaningfulExistingSettings(snapshot = {}) {
     const settings = normalizeSettings(snapshot.appSettings);
     const settingsDiffer = settings.enabled !== DEFAULT_SETTINGS.enabled || settings.protectionMode !== DEFAULT_SETTINGS.protectionMode || settings.mediaDownloadConnections !== DEFAULT_SETTINGS.mediaDownloadConnections || Object.keys(settings.featureOverrides).length > 0;
-    return settingsDiffer || !snapshot.appSettings && (snapshot.isEnabled === false || snapshot.friendlyMode === false) || (snapshot.whitelist?.length || 0) > 0 || (snapshot.blacklist?.length || 0) > 0 || Object.keys(snapshot.userCustomRules || {}).length > 0 || Object.keys(snapshot).some((key) => key.startsWith("p:"));
+    return settingsDiffer || !snapshot.appSettings && (snapshot.isEnabled === false || snapshot.friendlyMode === false) || (snapshot.whitelist?.length || 0) > 0 || (snapshot.blacklist?.length || 0) > 0 || Object.keys(snapshot.userCustomRules || {}).length > 0 || Object.keys(snapshot.userElementExceptions || {}).length > 0 || Object.keys(snapshot).some((key) => key.startsWith("p:"));
   }
   function normalizeMetadata(metadata = {}) {
     return {
@@ -9511,6 +9991,39 @@ ${blobTitleKey(item.title)}`;
       if (rules.length) result[hostname] = dedupeRules(rules);
     }
     return result;
+  }
+  function normalizeElementExceptions2(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    const result = {};
+    for (const [rawHostname, rawRules] of Object.entries(value)) {
+      const hostname = normalizeHostname3(rawHostname);
+      if (!hostname || !Array.isArray(rawRules)) continue;
+      const rules = rawRules.slice(0, MAX_RULES_PER_SITE2).map(normalizeElementException).filter(Boolean);
+      if (rules.length) result[hostname] = dedupeElementExceptions(rules);
+    }
+    return result;
+  }
+  function normalizeElementException(rule) {
+    if (!rule || typeof rule !== "object" || Array.isArray(rule)) return null;
+    const selector = cleanText(rule.selector, MAX_SELECTOR_LENGTH);
+    const fingerprint = normalizeFingerprint(rule.fingerprint);
+    if (!isSafeSelector(selector) || !fingerprint || !hasElementExceptionIdentity(fingerprint))
+      return null;
+    return {
+      id: cleanText(rule.id, 160) || `not-ad-${stableTextId2(
+        `${selector}|${fingerprint.linkDomain}|${fingerprint.srcHost}|${fingerprint.id}`
+      )}`,
+      selector,
+      fingerprint,
+      confidence: clampNumber(rule.confidence, 0, 1, 0.5),
+      source: cleanText(rule.source || "user_not_ad", 80),
+      layout: VALID_RULE_LAYOUTS.has(rule.layout) ? rule.layout : "any"
+    };
+  }
+  function hasElementExceptionIdentity(fingerprint) {
+    return Boolean(
+      fingerprint.tag && (fingerprint.id || fingerprint.className || fingerprint.alt || fingerprint.title || fingerprint.linkDomain || fingerprint.srcHost || fingerprint.idTokens.length || fingerprint.classTokens.length)
+    );
   }
   function normalizeRule(rule) {
     const rawSelector = typeof rule === "string" ? rule : rule?.selector;
@@ -9589,6 +10102,22 @@ ${blobTitleKey(item.title)}`;
       seen.add(selector);
       return true;
     });
+  }
+  function dedupeElementExceptions(rules) {
+    const seen = /* @__PURE__ */ new Set();
+    return rules.filter((rule) => {
+      if (seen.has(rule.id)) return false;
+      seen.add(rule.id);
+      return true;
+    });
+  }
+  function stableTextId2(value) {
+    let hash = 2166136261;
+    for (const character of String(value)) {
+      hash ^= character.charCodeAt(0);
+      hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(36);
   }
   function normalizeTokens(values) {
     if (!Array.isArray(values)) return [];

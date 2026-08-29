@@ -262,17 +262,43 @@
           {
             element: keepTarget,
             target: keepTarget,
+            selector: "#keep-candidate",
             features: { tag: "div" },
             decision: { confidence: 0.65, reasons: ["fixture"] },
           },
           { onAllow: () => (kept = true) },
         );
+        const candidateToast = document.querySelector("#adsfriendly-dom-toast");
+        const idleHighlight = document.querySelector(
+          "#adsfriendly-dom-highlight",
+        );
+        candidateToast.dispatchEvent(new MouseEvent("mouseenter"));
+        await tick();
+        const hoverHighlight = document.querySelector(
+          "#adsfriendly-dom-highlight",
+        );
+        candidateToast.dispatchEvent(new MouseEvent("mouseleave"));
+        await tick();
+        const departedHighlight = document.querySelector(
+          "#adsfriendly-dom-highlight",
+        );
+        record(
+          "candidate_highlight_only_on_toast_hover",
+          !idleHighlight && Boolean(hoverHighlight) && !departedHighlight,
+        );
         document.querySelector(".adsfriendly-dom-allow").click();
         await tick();
         record(
-          "keep_leaves_content_visible",
-          kept && !isHiddenByAdsFriendly(keepTarget),
+          "not_an_ad_leaves_content_visible",
+          kept &&
+            !isHiddenByAdsFriendly(keepTarget) &&
+            document
+              .querySelector(".adsfriendly-dom-message")
+              .textContent.includes("Marked as not an ad") &&
+            document.querySelector(".adsfriendly-dom-allow").textContent ===
+              "Undo",
         );
+        document.querySelector(".adsfriendly-dom-close").click();
 
         await mutations.upsertCustomRules("127.0.0.1", [
           { selector: "#first" },

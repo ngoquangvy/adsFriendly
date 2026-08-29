@@ -64,6 +64,14 @@ Runtime rules and AI training samples must stay separate:
 - Settings Packages are editable configuration snapshots. They contain protection settings, site lists, manual element rules, and trusted workflows, but never telemetry, history, counters, identifiers, or training samples.
 - The separation is physical as well as logical: large training arrays cannot consume the settings bucket and prevent Hide, Magic Wand, whitelist, or blacklist writes.
 
+DOM review decisions are also separated by intent. `userCustomRules` contains
+elements the user chose to hide; `userElementExceptions` contains narrow,
+fingerprinted `Not an ad` decisions. The latter suppresses a future suggestion
+only when selector, responsive layout, and stable element identity still match.
+The review outline is transient UI and appears only while its toast is hovered
+or keyboard-focused. Explicit labels may produce separate training samples,
+but removing a setting never depends on training storage.
+
 ## Navigation Protection Pipeline
 
 New-tab ads and reverse pop-unders are two detectors, not two independent rule

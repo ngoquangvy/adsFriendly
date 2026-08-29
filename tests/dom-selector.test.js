@@ -11,6 +11,10 @@ import {
   looksAdLikeUrl,
   normalizeUrlText,
 } from "../src/dom/features.js";
+import {
+  createElementException,
+  matchesElementException,
+} from "../src/dom/element-exceptions.js";
 
 function element(tag, attributes = {}, parentElement = null) {
   const node = {
@@ -73,6 +77,58 @@ test("falls back to a narrow structural selector", () => {
   const second = element("div", {}, section);
   assert.equal(buildDomSelector(second), "section > div:nth-of-type(2)");
   assert.notEqual(buildDomSelector(first), "div");
+});
+
+test("not-ad decisions match the same identity but not replacement ad content", () => {
+  const candidate = {
+    selector: 'a[href*="//docs.example"]',
+    features: {
+      tag: "img",
+      id: "site-logo",
+      className: "header-banner",
+      idTokens: ["site", "logo"],
+      classTokens: ["header", "banner"],
+      hrefHost: "docs.example",
+      srcHost: "static.example",
+      alt: "Documentation",
+      title: "",
+    },
+    decision: { confidence: 0.72 },
+  };
+  const rule = createElementException(candidate, {
+    id: "not-ad-1",
+    layout: "wide",
+    timestamp: 1,
+  });
+  assert.equal(
+    matchesElementException(rule, {
+      selector: candidate.selector,
+      features: candidate.features,
+      layout: "wide",
+    }),
+    true,
+  );
+  assert.equal(
+    matchesElementException(rule, {
+      selector: candidate.selector,
+      features: {
+        ...candidate.features,
+        hrefHost: "casino.example",
+        srcHost: "ads.example",
+        alt: "Sponsored",
+      },
+      layout: "wide",
+    }),
+    false,
+  );
+  assert.equal(
+    matchesElementException(rule, {
+      selector: candidate.selector,
+      features: candidate.features,
+      layout: "compact",
+    }),
+    false,
+  );
 });
 
 test("marks hidden rule regions and restores their previous state", () => {

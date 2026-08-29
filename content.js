@@ -666,7 +666,42 @@ var AdsFriendlyContent = (() => {
     const allowButton = toast.querySelector(".adsfriendly-dom-allow");
     const isSavedRuleSummary = active.candidate.isSavedRuleSummary === true;
     toast.querySelector(".adsfriendly-dom-scope").textContent = isSavedRuleSummary ? "PAGE" : "ELEMENT";
-    if (active.state === "error") {
+    if (active.state === "allow-saving") {
+      message.textContent = `${label} \xB7 saving decision\u2026`;
+      message.title = "Waiting for settings storage confirmation";
+      hideButton.hidden = true;
+      allowButton.textContent = "Saving\u2026";
+      allowButton.disabled = true;
+      clearHighlight();
+    } else if (active.state === "allowed") {
+      message.textContent = "Marked as not an ad";
+      message.title = "This matching element will not be suggested again";
+      hideButton.hidden = true;
+      allowButton.textContent = "Undo";
+      allowButton.disabled = false;
+      clearHighlight();
+    } else if (active.state === "allow-error") {
+      message.textContent = "Not saved \xB7 retry";
+      message.title = active.error?.message || "Could not save this decision";
+      hideButton.hidden = true;
+      allowButton.textContent = "Retry";
+      allowButton.disabled = false;
+      clearHighlight();
+    } else if (active.state === "allow-undoing") {
+      message.textContent = "Forgetting decision\u2026";
+      message.title = "Waiting for settings storage confirmation";
+      hideButton.hidden = true;
+      allowButton.textContent = "Undoing\u2026";
+      allowButton.disabled = true;
+      clearHighlight();
+    } else if (active.state === "allow-undo-error") {
+      message.textContent = "Undo failed \xB7 decision kept";
+      message.title = active.error?.message || "Could not forget this decision";
+      hideButton.hidden = true;
+      allowButton.textContent = "Retry";
+      allowButton.disabled = false;
+      clearHighlight();
+    } else if (active.state === "error") {
       message.textContent = saveFailureMessage(active.error);
       message.title = active.error?.message || "Could not save this rule";
       hideButton.hidden = true;
@@ -708,9 +743,9 @@ var AdsFriendlyContent = (() => {
       message.title = active.candidate.decision.reasons?.join(", ") || "Heuristic DOM signals";
       hideButton.hidden = false;
       hideButton.textContent = "Hide";
-      allowButton.textContent = "Keep";
+      allowButton.textContent = "Not an ad";
       allowButton.disabled = false;
-      highlightCandidate(active.candidate);
+      clearHighlight();
     }
     toast.classList.remove("adsfriendly-dom-hidden");
     scheduleHide();
@@ -727,8 +762,8 @@ var AdsFriendlyContent = (() => {
     <span class="adsfriendly-dom-scope">ELEMENT</span>
     <span class="adsfriendly-dom-message"></span>
     <button class="adsfriendly-dom-hide" type="button">Hide</button>
-    <button class="adsfriendly-dom-allow" type="button">Keep</button>
-    <button class="adsfriendly-dom-close" type="button">x</button>
+    <button class="adsfriendly-dom-allow" type="button">Not an ad</button>
+    <button class="adsfriendly-dom-close" type="button" aria-label="Dismiss once">\xD7</button>
   `;
     const style = document.createElement("style");
     style.textContent = `
@@ -821,17 +856,43 @@ var AdsFriendlyContent = (() => {
     toast.querySelector(".adsfriendly-dom-allow").onclick = () => {
       if (!active) return;
       const current = active;
-      if (current.state === "restoring") return;
+      if (["restoring", "allow-saving", "allow-undoing"].includes(current.state))
+        return;
+      if (["review", "allow-error"].includes(current.state)) {
+        current.state = "allow-saving";
+        current.error = null;
+        renderActiveToast();
+        current.pendingAllow = Promise.resolve(
+          current.handlers?.onAllow?.(current.candidate)
+        ).then(() => {
+          current.state = "allowed";
+          if (active === current) renderActiveToast();
+          else finalizeAllowedEntry(current);
+        }).catch((error) => {
+          current.error = error;
+          current.state = "allow-error";
+          if (active === current) renderActiveToast();
+        });
+        return;
+      }
+      if (["allowed", "allow-undo-error"].includes(current.state)) {
+        current.state = "allow-undoing";
+        current.error = null;
+        renderActiveToast();
+        Promise.resolve(current.pendingAllow).then(() => current.handlers?.onUndoAllow?.(current.candidate)).then(() => {
+          if (active === current) hideDomToast({ finalizeAllow: false });
+        }).catch((error) => {
+          current.error = error;
+          current.state = "allow-undo-error";
+          if (active === current) renderActiveToast();
+        });
+        return;
+      }
       const isRestore = ["saving", "hidden", "error", "restore-error"].includes(
         current.state
       );
-      const handler = isRestore ? current.handlers?.onShow : current.handlers?.onAllow;
-      if (!isRestore) {
-        Promise.resolve(handler?.(current.candidate)).catch(() => {
-        });
-        hideDomToast();
-        return;
-      }
+      if (!isRestore) return;
+      const handler = current.handlers?.onShow;
       current.state = "restoring";
       current.error = null;
       renderActiveToast();
@@ -844,10 +905,25 @@ var AdsFriendlyContent = (() => {
       });
     };
     toast.querySelector(".adsfriendly-dom-close").onclick = hideDomToast;
-    toast.addEventListener("mouseenter", pauseHide);
-    toast.addEventListener("mouseleave", scheduleHide);
-    toast.addEventListener("focusin", pauseHide);
-    toast.addEventListener("focusout", scheduleHide);
+    toast.addEventListener("mouseenter", () => {
+      pauseHide();
+      highlightActiveReview();
+    });
+    toast.addEventListener("mouseleave", () => {
+      clearHighlight();
+      scheduleHide();
+    });
+    toast.addEventListener("focusin", () => {
+      pauseHide();
+      highlightActiveReview();
+    });
+    toast.addEventListener("focusout", () => {
+      setTimeout(() => {
+        if (toast.contains(document.activeElement)) return;
+        clearHighlight();
+        scheduleHide();
+      });
+    });
     (document.head || document.documentElement).appendChild(style);
     (document.body || document.documentElement).appendChild(toast);
     return toast;
@@ -893,8 +969,12 @@ var AdsFriendlyContent = (() => {
     };
     update();
   }
+  function highlightActiveReview() {
+    if (active?.state === "review") highlightCandidate(active.candidate);
+  }
   function isEntryReviewable(entry) {
     if (entry.state !== "review") return true;
+    if (entry.handlers?.isSuppressed?.(entry.candidate)) return false;
     const target = entry.candidate.target || entry.candidate.element;
     if (!target?.isConnected || isHiddenByAdsFriendly(target)) return false;
     const rect = target.getBoundingClientRect();
@@ -915,7 +995,7 @@ var AdsFriendlyContent = (() => {
     pauseHide();
     if (active) {
       if (active.state === "restoring") return;
-      const timeout = active.state === "hidden" ? HIDDEN_TOAST_TIMEOUT_MS : TOAST_TIMEOUT_MS;
+      const timeout = ["hidden", "allowed"].includes(active.state) ? HIDDEN_TOAST_TIMEOUT_MS : TOAST_TIMEOUT_MS;
       hideTimer = setTimeout(hideDomToast, timeout);
     }
   }
@@ -923,14 +1003,25 @@ var AdsFriendlyContent = (() => {
     if (hideTimer) clearTimeout(hideTimer);
     hideTimer = null;
   }
-  function hideDomToast() {
+  function hideDomToast({ finalizeAllow = true } = {}) {
     const toast = document.getElementById(TOAST_ID);
     if (toast) toast.classList.add("adsfriendly-dom-hidden");
     pauseHide();
     clearHighlight();
+    const current = active;
     active = null;
+    if (finalizeAllow && current?.state === "allowed")
+      finalizeAllowedEntry(current);
     const next = queuedCandidates.shift();
     if (next) setTimeout(() => enqueueOrShow(next), 180);
+  }
+  function finalizeAllowedEntry(entry) {
+    if (entry.allowFinalized) return;
+    entry.allowFinalized = true;
+    Promise.resolve(entry.handlers?.onAllowConfirmed?.(entry.candidate)).catch(
+      () => {
+      }
+    );
   }
 
   // src/runtime/ecosystem-catalog.js
@@ -1391,12 +1482,108 @@ var AdsFriendlyContent = (() => {
     return !rule.layout || rule.layout === RESPONSIVE_LAYOUTS.ANY || rule.layout === layout;
   }
 
+  // src/dom/element-exceptions.js
+  var VALID_LAYOUTS = /* @__PURE__ */ new Set(["any", "compact", "wide"]);
+  function createElementException(candidate, { id = randomId(), timestamp = Date.now(), layout = "any" } = {}) {
+    if (!candidate?.selector) {
+      throw new Error("This element does not have a reusable selector.");
+    }
+    return {
+      id,
+      selector: candidate.selector,
+      fingerprint: elementExceptionFingerprint(candidate.features),
+      timestamp,
+      confidence: clampConfidence2(candidate.decision?.confidence),
+      source: "user_not_ad",
+      layout: VALID_LAYOUTS.has(layout) ? layout : "any"
+    };
+  }
+  function elementExceptionFingerprint(features = {}) {
+    return {
+      tag: clean(features.tag),
+      id: clean(features.id),
+      className: clean(features.className),
+      alt: clean(features.alt),
+      title: clean(features.title),
+      linkDomain: clean(features.hrefHost).toLowerCase(),
+      srcHost: clean(features.srcHost).toLowerCase(),
+      idTokens: normalizedTokens(features.idTokens),
+      classTokens: normalizedTokens(features.classTokens)
+    };
+  }
+  function matchesElementException(rule, { selector, features, layout } = {}) {
+    if (!rule || typeof rule !== "object") return false;
+    if (!selector || rule.selector !== selector) return false;
+    if (!ruleMatchesResponsiveLayout(rule, layout)) return false;
+    const expected = rule.fingerprint;
+    if (!expected || typeof expected !== "object") return false;
+    const actual = elementExceptionFingerprint(features);
+    if (expected.tag && expected.tag !== actual.tag) return false;
+    let identityScore = 0;
+    for (const key of ["linkDomain", "srcHost", "id", "alt", "title"]) {
+      if (!expected[key]) continue;
+      if (!actual[key] || expected[key] !== actual[key]) return false;
+      identityScore += ["linkDomain", "srcHost"].includes(key) ? 3 : 2;
+    }
+    if (expected.className) {
+      if (expected.className === actual.className) identityScore += 1;
+      else if (!tokenOverlap(expected.classTokens, actual.classTokens))
+        return false;
+    }
+    if (tokenOverlap(expected.idTokens, actual.idTokens)) identityScore += 2;
+    if (tokenOverlap(expected.classTokens, actual.classTokens))
+      identityScore += 1;
+    return identityScore > 0 || isIdentitySelector(selector);
+  }
+  function elementExceptionKey(rule) {
+    if (typeof rule?.id === "string" && rule.id.trim()) return rule.id.trim();
+    return [
+      rule?.selector || "",
+      rule?.layout || "any",
+      rule?.fingerprint?.linkDomain || "",
+      rule?.fingerprint?.srcHost || "",
+      rule?.fingerprint?.id || "",
+      rule?.fingerprint?.alt || "",
+      rule?.fingerprint?.title || "",
+      ...rule?.fingerprint?.classTokens || []
+    ].join("|");
+  }
+  function tokenOverlap(expected, actual) {
+    if (!Array.isArray(expected) || !expected.length || !Array.isArray(actual))
+      return false;
+    const actualTokens = new Set(actual);
+    return expected.some((token) => actualTokens.has(token));
+  }
+  function isIdentitySelector(selector) {
+    return /^#[^\s>+~]+$/.test(selector) || /^[a-z][a-z0-9-]*\.[^\s>+~]+$/i.test(selector) || /\[(?:href|src|alt|title|aria-label)[*^$]?=/i.test(selector);
+  }
+  function normalizedTokens(values) {
+    return [
+      ...new Set(
+        (Array.isArray(values) ? values : []).map((value) => clean(value).toLowerCase()).filter(Boolean)
+      )
+    ].slice(0, 40);
+  }
+  function clean(value) {
+    return String(value || "").trim();
+  }
+  function clampConfidence2(value) {
+    const number = Number(value);
+    return Number.isFinite(number) ? Math.max(0, Math.min(1, number)) : 0;
+  }
+  function randomId() {
+    return globalThis.crypto?.randomUUID?.() || `not-ad-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+
   // src/dom/collector.js
   var observed = /* @__PURE__ */ new WeakSet();
   var allowedSelectors = /* @__PURE__ */ new Set();
   var activePolicy = null;
   var scanIntervalId = null;
   var bodyObserver = null;
+  var elementExceptions = [];
+  var elementExceptionsReady = false;
+  var storageListener = null;
   var DOM_CANDIDATE_SELECTOR = [
     "img",
     "iframe",
@@ -1414,6 +1601,18 @@ var AdsFriendlyContent = (() => {
   ].join(",");
   function startDomCandidateCollector(policy) {
     activePolicy = policy;
+    elementExceptionsReady = false;
+    loadElementExceptions().finally(() => {
+      elementExceptionsReady = true;
+      scanDomCandidates();
+    });
+    storageListener = (changes, areaName) => {
+      if (areaName !== "local" || !changes.userElementExceptions) return;
+      elementExceptions = exceptionsForCurrentSite(
+        changes.userElementExceptions.newValue
+      );
+    };
+    chrome.storage.onChanged.addListener(storageListener);
     scanIntervalId = setInterval(scanDomCandidates, 2500);
     if (document.readyState === "loading") {
       document.addEventListener(
@@ -1444,11 +1643,17 @@ var AdsFriendlyContent = (() => {
       scanIntervalId = null;
       bodyObserver?.disconnect();
       bodyObserver = null;
+      if (storageListener)
+        chrome.storage.onChanged.removeListener(storageListener);
+      storageListener = null;
+      elementExceptions = [];
+      elementExceptionsReady = false;
       activePolicy = null;
     };
   }
   function scanDomCandidates() {
-    if (!activePolicy?.can(CAPABILITIES.DOM_OBSERVE)) return;
+    if (!elementExceptionsReady || !activePolicy?.can(CAPABILITIES.DOM_OBSERVE))
+      return;
     scanNode(document);
   }
   function scanNode(root) {
@@ -1467,7 +1672,12 @@ var AdsFriendlyContent = (() => {
     if (isHiddenByAdsFriendly(target)) return;
     const selector = buildDomSelector(target);
     if (selector && allowedSelectors.has(selector)) return;
-    const candidate = { element, target, selector, features, decision };
+    const layout = getResponsiveLayout();
+    if (elementExceptions.some(
+      (rule) => matchesElementException(rule, { selector, features, layout })
+    ))
+      return;
+    const candidate = { element, target, selector, features, decision, layout };
     if (decision.action === "block") {
       if (activePolicy?.can(CAPABILITIES.DOM_AUTO_HIDE)) {
         hideCandidate(candidate, "heuristic_block");
@@ -1482,9 +1692,21 @@ var AdsFriendlyContent = (() => {
   function showCandidate(candidate) {
     showDomCandidateToast(candidate, {
       onHide: (item) => hideCandidate(item, "user_hide"),
-      onAllow: allowCandidate,
+      onAllow: rememberNotAdCandidate,
+      onUndoAllow: forgetNotAdCandidate,
+      onAllowConfirmed: confirmNotAdCandidate,
+      isSuppressed: isCandidateSuppressed,
       onShow: restoreCandidate
     });
+  }
+  function isCandidateSuppressed(candidate) {
+    return elementExceptions.some(
+      (rule) => matchesElementException(rule, {
+        selector: candidate.selector,
+        features: candidate.features,
+        layout: candidate.layout || getResponsiveLayout()
+      })
+    );
   }
   async function hideCandidate(candidate, outcome) {
     candidate.previousInlineVisibility ||= captureInlineVisibility(
@@ -1507,8 +1729,38 @@ var AdsFriendlyContent = (() => {
     } catch {
     }
   }
-  function allowCandidate(candidate) {
-    if (candidate.selector) allowedSelectors.add(candidate.selector);
+  async function rememberNotAdCandidate(candidate) {
+    const rule = createElementException(candidate, {
+      layout: candidate.layout || getResponsiveLayout()
+    });
+    const response = await chrome.runtime.sendMessage({
+      type: "UPSERT_ELEMENT_EXCEPTIONS",
+      hostname: location.hostname,
+      rules: [rule]
+    });
+    assertSaved(response);
+    candidate.elementException = rule;
+    elementExceptions = [
+      ...elementExceptions.filter(
+        (existing) => elementExceptionKey(existing) !== elementExceptionKey(rule)
+      ),
+      rule
+    ];
+  }
+  async function forgetNotAdCandidate(candidate) {
+    const rule = candidate.elementException;
+    if (!rule) throw new Error("The saved element exception is unavailable.");
+    const response = await chrome.runtime.sendMessage({
+      type: "REMOVE_ELEMENT_EXCEPTIONS",
+      hostname: location.hostname,
+      ids: [elementExceptionKey(rule)]
+    });
+    assertSaved(response);
+    elementExceptions = elementExceptions.filter(
+      (existing) => elementExceptionKey(existing) !== elementExceptionKey(rule)
+    );
+  }
+  function confirmNotAdCandidate(candidate) {
     if (activePolicy?.can(CAPABILITIES.LEARNING_FEEDBACK))
       recordDomSample(candidate, "user_allow", "content");
   }
@@ -1539,7 +1791,7 @@ var AdsFriendlyContent = (() => {
       timesZapped: 1,
       confidence: candidate.decision.confidence,
       source: outcome,
-      layout: getResponsiveLayout()
+      layout: candidate.layout || getResponsiveLayout()
     };
     const response = await chrome.runtime.sendMessage({
       type: "UPSERT_CUSTOM_RULES",
@@ -1548,6 +1800,20 @@ var AdsFriendlyContent = (() => {
     });
     assertSaved(response);
     await chrome.runtime.sendMessage({ type: "SYNC_LEARNING" });
+  }
+  async function loadElementExceptions() {
+    try {
+      const { userElementExceptions = {} } = await chrome.storage.local.get(
+        "userElementExceptions"
+      );
+      elementExceptions = exceptionsForCurrentSite(userElementExceptions);
+    } catch {
+      elementExceptions = [];
+    }
+  }
+  function exceptionsForCurrentSite(value) {
+    const rules = value?.[location.hostname];
+    return Array.isArray(rules) ? rules : [];
   }
   async function removeCustomRule(selector) {
     const response = await chrome.runtime.sendMessage({
@@ -1566,7 +1832,7 @@ var AdsFriendlyContent = (() => {
     try {
       const sample = {
         schema_version: "dataset.v1",
-        sample_id: randomId(),
+        sample_id: randomId2(),
         unit: "dom_element",
         label,
         label_source: outcome,
@@ -1602,7 +1868,7 @@ var AdsFriendlyContent = (() => {
     } catch {
     }
   }
-  function randomId() {
+  function randomId2() {
     return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   }
 
@@ -1777,7 +2043,7 @@ var AdsFriendlyContent = (() => {
       type: "RECORD_TELEMETRY",
       event: {
         schema_version: "dataset.v1",
-        sample_id: randomId2(),
+        sample_id: randomId3(),
         unit: "dom_element",
         label: "content",
         label_source: "user_show",
@@ -1806,7 +2072,7 @@ var AdsFriendlyContent = (() => {
     });
     chrome.runtime.sendMessage({ type: "SYNC_LEARNING" });
   }
-  function randomId2() {
+  function randomId3() {
     return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   }
 
@@ -2509,6 +2775,28 @@ var AdsFriendlyContent = (() => {
     NETWORK_RESPONSE: "network_response",
     DECRYPTED_BLOB: "decrypted_blob"
   });
+  var MEDIA_PLAYBACK_STATES = Object.freeze({
+    IDLE: "idle",
+    PLAYING: "playing",
+    PAUSED: "paused",
+    WAITING: "waiting",
+    SEEKING: "seeking",
+    ENDED: "ended"
+  });
+  var MEDIA_PLAYBACK_TRIGGERS = Object.freeze([
+    "initial",
+    "loadedmetadata",
+    "durationchange",
+    "play",
+    "pause",
+    "ended",
+    "waiting",
+    "seeking",
+    "seeked",
+    "ratechange",
+    "timeupdate",
+    "visibility"
+  ]);
   function normalizeMediaCandidate(value = {}) {
     const candidate = {
       id: requiredString(value.id, "id"),
@@ -2596,6 +2884,30 @@ var AdsFriendlyContent = (() => {
       muted: value.muted === true,
       currentTime: optionalFiniteNumber(value.currentTime),
       observedAt: optionalNonNegativeInteger(value.observedAt)
+    };
+  }
+  function normalizeMediaPlaybackObservation(value = {}) {
+    return {
+      sessionId: requiredString(value.sessionId, "sessionId").slice(0, 160),
+      pageUrl: requiredString(value.pageUrl, "pageUrl"),
+      mediaId: optionalString(value.mediaId)?.slice(0, 200) || null,
+      state: enumValue(
+        value.state,
+        Object.values(MEDIA_PLAYBACK_STATES),
+        "playback.state"
+      ),
+      trigger: enumValue(
+        value.trigger,
+        MEDIA_PLAYBACK_TRIGGERS,
+        "playback.trigger"
+      ),
+      currentTime: optionalNonNegativeNumber(value.currentTime),
+      duration: optionalPositiveNumber(value.duration),
+      playbackRate: optionalPositiveNumber(value.playbackRate) || 1,
+      muted: value.muted === true,
+      visible: value.visible === true,
+      readyState: optionalBoundedInteger(value.readyState, 0, 4),
+      observedAt: optionalNonNegativeInteger(value.observedAt) || Date.now()
     };
   }
   function normalizeMediaAcquisitionDiagnostic(value) {
@@ -3009,6 +3321,24 @@ var AdsFriendlyContent = (() => {
     }
     return number;
   }
+  function optionalNonNegativeNumber(value) {
+    if (value === null || value === void 0) return null;
+    const number = Number(value);
+    if (!Number.isFinite(number) || number < 0) {
+      throw new Error("[MediaContract] Expected a non-negative number.");
+    }
+    return number;
+  }
+  function optionalBoundedInteger(value, minimum, maximum) {
+    if (value === null || value === void 0) return null;
+    const number = Number(value);
+    if (!Number.isInteger(number) || number < minimum || number > maximum) {
+      throw new Error(
+        `[MediaContract] Expected an integer from ${minimum} to ${maximum}.`
+      );
+    }
+    return number;
+  }
 
   // src/media/detection.js
   var HLS_MIME_TYPES = /* @__PURE__ */ new Set([
@@ -3100,6 +3430,7 @@ var AdsFriendlyContent = (() => {
     MEDIA_BLOB_TRACED: "media.blob_traced",
     MEDIA_MANIFEST_HANDOFF_READY: "media.manifest_handoff_ready",
     MEDIA_EME_OBSERVED: "media.eme_observed",
+    MEDIA_PLAYBACK_OBSERVED: "media.playback_observed",
     MEDIA_CATALOG_UPDATED: "media.catalog.updated",
     VIDEO_AD_EVIDENCE_FOUND: "video_ad.evidence_found",
     VIDEO_AD_LABELLED: "video_ad.labelled"
@@ -3142,6 +3473,12 @@ var AdsFriendlyContent = (() => {
       ["media.catalog"],
       normalizeEmeObservation
     ),
+    [E.MEDIA_PLAYBACK_OBSERVED]: event(
+      E.MEDIA_PLAYBACK_OBSERVED,
+      "media.playback-observer",
+      ["media.catalog", "video-ad.evidence-collector"],
+      normalizeMediaPlaybackObservation
+    ),
     [E.MEDIA_CATALOG_UPDATED]: event(
       E.MEDIA_CATALOG_UPDATED,
       "media.catalog",
@@ -3174,7 +3511,7 @@ var AdsFriendlyContent = (() => {
   function createRegisteredEvent(eventId, payload, metadata = {}) {
     const definition = getEventDefinition(eventId);
     return {
-      eventId: randomId3(),
+      eventId: randomId4(),
       type: eventId,
       timestamp: Date.now(),
       producer: definition.producer,
@@ -3185,7 +3522,7 @@ var AdsFriendlyContent = (() => {
   function normalizeRegisteredEvent(value = {}) {
     const definition = getEventDefinition(value.type);
     return {
-      eventId: typeof value.eventId === "string" && value.eventId ? value.eventId : randomId3(),
+      eventId: typeof value.eventId === "string" && value.eventId ? value.eventId : randomId4(),
       type: definition.id,
       timestamp: Number.isFinite(Number(value.timestamp)) ? Number(value.timestamp) : Date.now(),
       producer: definition.producer,
@@ -3232,7 +3569,7 @@ var AdsFriendlyContent = (() => {
       }
     }
   }
-  function randomId3() {
+  function randomId4() {
     return globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   }
 
@@ -3430,7 +3767,113 @@ var AdsFriendlyContent = (() => {
     return Number.isFinite(number) && number > 0 ? number : null;
   }
 
+  // src/media/playback-observation.js
+  var PLAYBACK_EVENT_TYPES = Object.freeze([
+    "initial",
+    "loadedmetadata",
+    "durationchange",
+    "play",
+    "pause",
+    "ended",
+    "waiting",
+    "seeking",
+    "seeked",
+    "ratechange",
+    "timeupdate",
+    "visibility"
+  ]);
+  var TIMEUPDATE_INTERVAL_MS = 1e3;
+  function createPlaybackObservationTracker({
+    scopeId = randomScopeId(),
+    now = () => Date.now()
+  } = {}) {
+    const sessions = /* @__PURE__ */ new WeakMap();
+    let nextSession = 1;
+    return Object.freeze({
+      observe(mediaElement, { pageUrl, mediaId = null, trigger = "initial", visible = false } = {}) {
+        if (!mediaElement || typeof mediaElement !== "object") return null;
+        if (!PLAYBACK_EVENT_TYPES.includes(trigger)) return null;
+        let session = sessions.get(mediaElement);
+        if (!session) {
+          session = {
+            id: `${scopeId}:player-${nextSession++}`,
+            lastObservedAt: 0,
+            lastSignature: null
+          };
+          sessions.set(mediaElement, session);
+        }
+        const observedAt = now();
+        if (trigger === "timeupdate" && observedAt - session.lastObservedAt < TIMEUPDATE_INTERVAL_MS)
+          return null;
+        const observation = {
+          sessionId: session.id,
+          pageUrl,
+          mediaId,
+          state: playbackState(mediaElement, trigger),
+          trigger,
+          currentTime: finiteOrNull(mediaElement.currentTime),
+          duration: positiveFiniteOrNull(mediaElement.duration),
+          playbackRate: positiveFiniteOrNull(mediaElement.playbackRate) || 1,
+          muted: mediaElement.muted === true,
+          visible: visible === true,
+          readyState: boundedReadyState(mediaElement.readyState),
+          observedAt
+        };
+        const signature = [
+          observation.mediaId,
+          observation.state,
+          observation.trigger,
+          observation.visible,
+          observation.muted,
+          observation.playbackRate,
+          Math.floor((observation.currentTime || 0) * 2)
+        ].join(":");
+        if (trigger !== "timeupdate" && signature === session.lastSignature && observedAt - session.lastObservedAt < 250)
+          return null;
+        session.lastObservedAt = observedAt;
+        session.lastSignature = signature;
+        return observation;
+      }
+    });
+  }
+  function playbackState(mediaElement, trigger) {
+    if (trigger === "waiting") return "waiting";
+    if (trigger === "seeking") return "seeking";
+    if (mediaElement.ended === true || trigger === "ended") return "ended";
+    if (mediaElement.paused === false) return "playing";
+    if (finiteOrNull(mediaElement.currentTime) > 0) return "paused";
+    return "idle";
+  }
+  function boundedReadyState(value) {
+    const number = Number(value);
+    return Number.isInteger(number) && number >= 0 && number <= 4 ? number : null;
+  }
+  function finiteOrNull(value) {
+    const number = Number(value);
+    return Number.isFinite(number) && number >= 0 ? number : null;
+  }
+  function positiveFiniteOrNull(value) {
+    const number = Number(value);
+    return Number.isFinite(number) && number > 0 ? number : null;
+  }
+  function randomScopeId() {
+    return globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+
   // src/content/media-observer.js
+  var VIDEO_OBSERVATION_EVENTS = Object.freeze([
+    "loadedmetadata",
+    "durationchange",
+    "play",
+    "pause",
+    "ended",
+    "waiting",
+    "seeking",
+    "seeked",
+    "ratechange",
+    "timeupdate"
+  ]);
+  var MAX_REPORTED_EVENT_KEYS = 2e3;
   function startMediaObserver() {
     let stopped = false;
     const reported = /* @__PURE__ */ new Set();
@@ -3441,8 +3884,11 @@ var AdsFriendlyContent = (() => {
     const requestedProbes = /* @__PURE__ */ new Set();
     const contextualProbeRetries = /* @__PURE__ */ new Set();
     const videoListeners = /* @__PURE__ */ new Map();
+    const playbackTracker = createPlaybackObservationTracker();
     const videoVisibilityObserver = typeof IntersectionObserver === "function" ? new IntersectionObserver(
-      (entries) => entries.forEach((entry) => reportElementSource(entry.target)),
+      (entries) => entries.forEach(
+        (entry) => reportElementSource(entry.target, "visibility")
+      ),
       { threshold: [0, 0.25, 0.6] }
     ) : null;
     const aesKeyHandoffRequests = /* @__PURE__ */ new Map();
@@ -3568,7 +4014,8 @@ var AdsFriendlyContent = (() => {
         EVENTS.MEDIA_PROBED,
         EVENTS.MEDIA_PROBE_DIAGNOSTIC,
         EVENTS.MEDIA_BLOB_TRACED,
-        EVENTS.MEDIA_EME_OBSERVED
+        EVENTS.MEDIA_EME_OBSERVED,
+        EVENTS.MEDIA_PLAYBACK_OBSERVED
       ].includes(messageEvent.data.event?.type))
         return;
       try {
@@ -3634,11 +4081,8 @@ var AdsFriendlyContent = (() => {
       window.removeEventListener("message", onMainWorldMessage);
       chrome.runtime.onMessage.removeListener(onBackgroundMessage);
       for (const [video, listener] of videoListeners) {
-        video.removeEventListener("loadedmetadata", listener);
-        video.removeEventListener("durationchange", listener);
-        video.removeEventListener("play", listener);
-        video.removeEventListener("pause", listener);
-        video.removeEventListener("ended", listener);
+        for (const eventType of VIDEO_OBSERVATION_EVENTS)
+          video.removeEventListener(eventType, listener);
       }
       videoListeners.clear();
       videoVisibilityObserver?.disconnect();
@@ -3818,20 +4262,17 @@ var AdsFriendlyContent = (() => {
     }
     function observeVideo(video) {
       if (videoListeners.has(video)) return;
-      const listener = () => {
-        reportElementSource(video);
+      const listener = (event2) => {
+        reportElementSource(video, event2?.type || "initial");
         video.querySelectorAll("source").forEach(reportElementSource);
       };
       videoListeners.set(video, listener);
-      video.addEventListener("loadedmetadata", listener);
-      video.addEventListener("durationchange", listener);
-      video.addEventListener("play", listener);
-      video.addEventListener("pause", listener);
-      video.addEventListener("ended", listener);
+      for (const eventType of VIDEO_OBSERVATION_EVENTS)
+        video.addEventListener(eventType, listener);
       videoVisibilityObserver?.observe(video);
-      listener();
+      listener({ type: "initial" });
     }
-    function reportElementSource(element) {
+    function reportElementSource(element, playbackTrigger = null) {
       const sourceUrl = element.currentSrc || element.src || element.getAttribute?.("src");
       const mimeType = element.currentType || element.type || element.getAttribute?.("type");
       const duration = element.matches?.("video") && Number.isFinite(element.duration) ? element.duration : null;
@@ -3846,7 +4287,7 @@ var AdsFriendlyContent = (() => {
         currentTime: Number.isFinite(element.currentTime) ? element.currentTime : null,
         observedAt: Date.now()
       } : null;
-      reportSource(
+      const candidate = reportSource(
         sourceUrl,
         mimeType,
         MEDIA_DETECTION_SOURCES.DOM,
@@ -3854,6 +4295,13 @@ var AdsFriendlyContent = (() => {
         resolution,
         playback
       );
+      if (element.matches?.("video")) {
+        reportPlaybackObservation(
+          element,
+          candidate?.id || null,
+          playbackTrigger || "initial"
+        );
+      }
     }
     function reportSource(sourceUrl, mimeType, detectedBy, duration = null, resolution = null, playback = null) {
       const candidate = createYouTubeCandidateFromObservedSource({
@@ -3871,8 +4319,21 @@ var AdsFriendlyContent = (() => {
         playback,
         detectedBy
       });
-      if (!candidate) return;
+      if (!candidate) return null;
       reportEvent(createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, candidate));
+      return candidate;
+    }
+    function reportPlaybackObservation(video, mediaId, trigger) {
+      const observation = playbackTracker.observe(video, {
+        pageUrl: location.href,
+        mediaId,
+        trigger,
+        visible: isVisibleVideo(video)
+      });
+      if (!observation) return;
+      reportEvent(
+        createRegisteredEvent(EVENTS.MEDIA_PLAYBACK_OBSERVED, observation)
+      );
     }
     function isVisibleVideo(video) {
       try {
@@ -3898,12 +4359,12 @@ var AdsFriendlyContent = (() => {
       if (reported.has(reportKey) || pending.has(reportKey)) return;
       pending.add(reportKey);
       chrome.runtime.sendMessage({
-        type: event2.type === EVENTS.MEDIA_PROBED ? "MEDIA_PROBED" : event2.type === EVENTS.MEDIA_PROBE_DIAGNOSTIC ? "MEDIA_PROBE_DIAGNOSTIC" : event2.type === EVENTS.MEDIA_BLOB_TRACED ? "MEDIA_BLOB_TRACED" : event2.type === EVENTS.MEDIA_EME_OBSERVED ? "MEDIA_EME_OBSERVED" : "MEDIA_DISCOVERED",
+        type: event2.type === EVENTS.MEDIA_PROBED ? "MEDIA_PROBED" : event2.type === EVENTS.MEDIA_PROBE_DIAGNOSTIC ? "MEDIA_PROBE_DIAGNOSTIC" : event2.type === EVENTS.MEDIA_BLOB_TRACED ? "MEDIA_BLOB_TRACED" : event2.type === EVENTS.MEDIA_EME_OBSERVED ? "MEDIA_EME_OBSERVED" : event2.type === EVENTS.MEDIA_PLAYBACK_OBSERVED ? "MEDIA_PLAYBACK_OBSERVED" : "MEDIA_DISCOVERED",
         event: event2
       }).then((response) => {
         pending.delete(reportKey);
         if (response?.status === "recorded") {
-          reported.add(reportKey);
+          rememberReportedKey(reported, reportKey);
           retryCounts.delete(reportKey);
           if (event2.type === EVENTS.MEDIA_DISCOVERED)
             scheduleManifestProbe(event2.payload);
@@ -4057,6 +4518,17 @@ var AdsFriendlyContent = (() => {
         ...payload.keyStatuses || []
       ].join(":");
     }
+    if (event2?.type === EVENTS.MEDIA_PLAYBACK_OBSERVED) {
+      return [
+        event2.type,
+        payload.sessionId,
+        payload.mediaId || "unlinked",
+        payload.state,
+        payload.trigger,
+        payload.visible ? "visible" : "hidden",
+        Math.floor((payload.currentTime || 0) / 5)
+      ].join(":");
+    }
     if (event2?.type === EVENTS.MEDIA_PROBE_DIAGNOSTIC) {
       return [
         event2.type,
@@ -4087,6 +4559,14 @@ var AdsFriendlyContent = (() => {
       payload.encryptionScheme || "none",
       (payload.encryptionMethods || []).join(",")
     ].join(":");
+  }
+  function rememberReportedKey(reported, reportKey) {
+    reported.add(reportKey);
+    while (reported.size > MAX_REPORTED_EVENT_KEYS) {
+      const oldest = reported.values().next().value;
+      if (oldest === void 0) return;
+      reported.delete(oldest);
+    }
   }
   function startPerformanceObserver(onEntry) {
     if (typeof PerformanceObserver === "undefined") return null;

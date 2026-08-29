@@ -1,3 +1,5 @@
+import { elementExceptionKey } from "../dom/element-exceptions.js";
+
 const MAX_RULES_PER_SITE = 250;
 
 let defaultStore = null;
@@ -118,6 +120,99 @@ export function createSettingsMutationStore(storage) {
       });
     },
 
+    upsertElementExceptions(hostname, incomingRules) {
+      return serial(async () => {
+        const host = normalizeHostname(hostname);
+        const additions = normalizeElementExceptions(incomingRules);
+        if (!host || !additions.length)
+          throw new Error("No valid element exceptions to save.");
+        const { userElementExceptions = {} } = await storage.get(
+          "userElementExceptions",
+        );
+        const existing = Array.isArray(userElementExceptions[host])
+          ? userElementExceptions[host]
+          : [];
+        const byIdentity = new Map(
+          existing.map((rule) => [elementExceptionKey(rule), rule]),
+        );
+        additions.forEach((rule) =>
+          byIdentity.set(elementExceptionKey(rule), rule),
+        );
+        userElementExceptions[host] = [...byIdentity.values()].slice(
+          -MAX_RULES_PER_SITE,
+        );
+        await setAndVerify(storage, { userElementExceptions });
+        return {
+          status: "saved",
+          hostname: host,
+          ruleCount: userElementExceptions[host].length,
+        };
+      });
+    },
+
+    removeElementExceptions(hostname, ids) {
+      return serial(async () => {
+        const host = normalizeHostname(hostname);
+        const identitySet = normalizeIdentitySet(ids);
+        if (!host || !identitySet.size)
+          throw new Error("No valid element exceptions to remove.");
+        const { userElementExceptions = {} } = await storage.get(
+          "userElementExceptions",
+        );
+        const existing = Array.isArray(userElementExceptions[host])
+          ? userElementExceptions[host]
+          : [];
+        const remaining = existing.filter(
+          (rule) => !identitySet.has(elementExceptionKey(rule)),
+        );
+        if (remaining.length) userElementExceptions[host] = remaining;
+        else delete userElementExceptions[host];
+        await setAndVerify(storage, { userElementExceptions });
+        return { status: "saved", hostname: host, ruleCount: remaining.length };
+      });
+    },
+
+    resetElementDecisions(hostname) {
+      return serial(async () => {
+        const host = normalizeHostname(hostname);
+        if (!host) throw new Error("Invalid hostname for site reset.");
+        const {
+          userCustomRules = {},
+          userElementExceptions = {},
+          siteResetHistory = {},
+        } = await storage.get([
+          "userCustomRules",
+          "userElementExceptions",
+          "siteResetHistory",
+        ]);
+        const hiddenRules = Array.isArray(userCustomRules[host])
+          ? userCustomRules[host]
+          : [];
+        const exceptions = Array.isArray(userElementExceptions[host])
+          ? userElementExceptions[host]
+          : [];
+        delete userCustomRules[host];
+        delete userElementExceptions[host];
+        if (hiddenRules.length) {
+          siteResetHistory[host] = {
+            oldRules: hiddenRules,
+            timestamp: Date.now(),
+          };
+        }
+        await setAndVerify(storage, {
+          userCustomRules,
+          userElementExceptions,
+          siteResetHistory,
+        });
+        return {
+          status: "saved",
+          hostname: host,
+          restoredCount: hiddenRules.length,
+          forgottenCount: exceptions.length,
+        };
+      });
+    },
+
     saveDomainDecision(action, domain) {
       return serial(async () => {
         const hostname = normalizeHostname(domain);
@@ -201,6 +296,27 @@ function normalizeRules(rules) {
   return (Array.isArray(rules) ? rules : [rules])
     .filter((rule) => rule && typeof rule === "object")
     .filter((rule) => selectorOf(rule));
+}
+
+function normalizeElementExceptions(rules) {
+  return (Array.isArray(rules) ? rules : [rules])
+    .filter((rule) => rule && typeof rule === "object")
+    .map((rule) => ({
+      ...rule,
+      id:
+        String(rule.id || "").trim() ||
+        `not-ad-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      selector: String(rule.selector || "").trim(),
+    }))
+    .filter((rule) => rule.selector && rule.fingerprint);
+}
+
+function normalizeIdentitySet(values) {
+  return new Set(
+    (Array.isArray(values) ? values : [values])
+      .map((value) => String(value || "").trim())
+      .filter(Boolean),
+  );
 }
 
 function normalizeSelectorSet(selectors) {

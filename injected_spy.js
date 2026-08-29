@@ -76,6 +76,28 @@ var AdsFriendlyMainWorld = (() => {
     NETWORK_RESPONSE: "network_response",
     DECRYPTED_BLOB: "decrypted_blob"
   });
+  var MEDIA_PLAYBACK_STATES = Object.freeze({
+    IDLE: "idle",
+    PLAYING: "playing",
+    PAUSED: "paused",
+    WAITING: "waiting",
+    SEEKING: "seeking",
+    ENDED: "ended"
+  });
+  var MEDIA_PLAYBACK_TRIGGERS = Object.freeze([
+    "initial",
+    "loadedmetadata",
+    "durationchange",
+    "play",
+    "pause",
+    "ended",
+    "waiting",
+    "seeking",
+    "seeked",
+    "ratechange",
+    "timeupdate",
+    "visibility"
+  ]);
   function normalizeMediaCandidate(value = {}) {
     const candidate = {
       id: requiredString(value.id, "id"),
@@ -163,6 +185,30 @@ var AdsFriendlyMainWorld = (() => {
       muted: value.muted === true,
       currentTime: optionalFiniteNumber(value.currentTime),
       observedAt: optionalNonNegativeInteger(value.observedAt)
+    };
+  }
+  function normalizeMediaPlaybackObservation(value = {}) {
+    return {
+      sessionId: requiredString(value.sessionId, "sessionId").slice(0, 160),
+      pageUrl: requiredString(value.pageUrl, "pageUrl"),
+      mediaId: optionalString(value.mediaId)?.slice(0, 200) || null,
+      state: enumValue(
+        value.state,
+        Object.values(MEDIA_PLAYBACK_STATES),
+        "playback.state"
+      ),
+      trigger: enumValue(
+        value.trigger,
+        MEDIA_PLAYBACK_TRIGGERS,
+        "playback.trigger"
+      ),
+      currentTime: optionalNonNegativeNumber(value.currentTime),
+      duration: optionalPositiveNumber(value.duration),
+      playbackRate: optionalPositiveNumber(value.playbackRate) || 1,
+      muted: value.muted === true,
+      visible: value.visible === true,
+      readyState: optionalBoundedInteger(value.readyState, 0, 4),
+      observedAt: optionalNonNegativeInteger(value.observedAt) || Date.now()
     };
   }
   function normalizeMediaAcquisitionDiagnostic(value) {
@@ -573,6 +619,24 @@ var AdsFriendlyMainWorld = (() => {
     const number = Number(value);
     if (!Number.isFinite(number) || number <= 0) {
       throw new Error("[MediaContract] Expected a positive number.");
+    }
+    return number;
+  }
+  function optionalNonNegativeNumber(value) {
+    if (value === null || value === void 0) return null;
+    const number = Number(value);
+    if (!Number.isFinite(number) || number < 0) {
+      throw new Error("[MediaContract] Expected a non-negative number.");
+    }
+    return number;
+  }
+  function optionalBoundedInteger(value, minimum, maximum) {
+    if (value === null || value === void 0) return null;
+    const number = Number(value);
+    if (!Number.isInteger(number) || number < minimum || number > maximum) {
+      throw new Error(
+        `[MediaContract] Expected an integer from ${minimum} to ${maximum}.`
+      );
     }
     return number;
   }
@@ -1415,6 +1479,7 @@ ${body}`;
     MEDIA_BLOB_TRACED: "media.blob_traced",
     MEDIA_MANIFEST_HANDOFF_READY: "media.manifest_handoff_ready",
     MEDIA_EME_OBSERVED: "media.eme_observed",
+    MEDIA_PLAYBACK_OBSERVED: "media.playback_observed",
     MEDIA_CATALOG_UPDATED: "media.catalog.updated",
     VIDEO_AD_EVIDENCE_FOUND: "video_ad.evidence_found",
     VIDEO_AD_LABELLED: "video_ad.labelled"
@@ -1456,6 +1521,12 @@ ${body}`;
       "media.eme-observer",
       ["media.catalog"],
       normalizeEmeObservation
+    ),
+    [E.MEDIA_PLAYBACK_OBSERVED]: event(
+      E.MEDIA_PLAYBACK_OBSERVED,
+      "media.playback-observer",
+      ["media.catalog", "video-ad.evidence-collector"],
+      normalizeMediaPlaybackObservation
     ),
     [E.MEDIA_CATALOG_UPDATED]: event(
       E.MEDIA_CATALOG_UPDATED,

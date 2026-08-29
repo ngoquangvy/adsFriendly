@@ -88,6 +88,9 @@ const MESSAGE_CAPABILITIES = Object.freeze({
   REMOVE_CUSTOM_RULES: CAPABILITIES.CORE_MAINTENANCE,
   RESTORE_CUSTOM_RULES: CAPABILITIES.CORE_MAINTENANCE,
   RESET_CUSTOM_RULES: CAPABILITIES.CORE_MAINTENANCE,
+  UPSERT_ELEMENT_EXCEPTIONS: CAPABILITIES.CORE_MAINTENANCE,
+  REMOVE_ELEMENT_EXCEPTIONS: CAPABILITIES.CORE_MAINTENANCE,
+  RESET_ELEMENT_DECISIONS: CAPABILITIES.CORE_MAINTENANCE,
   SAVE_DOMAIN_DECISION: CAPABILITIES.CORE_MAINTENANCE,
   REMOVE_DOMAIN_DECISION: CAPABILITIES.CORE_MAINTENANCE,
   GET_STORAGE_HEALTH: CAPABILITIES.CORE_MAINTENANCE,
@@ -180,6 +183,18 @@ async function route(message, sender) {
     );
   if (message.type === "RESET_CUSTOM_RULES")
     return getSettingsMutationStore().resetCustomRules(message.hostname);
+  if (message.type === "UPSERT_ELEMENT_EXCEPTIONS")
+    return getSettingsMutationStore().upsertElementExceptions(
+      message.hostname,
+      message.rules,
+    );
+  if (message.type === "REMOVE_ELEMENT_EXCEPTIONS")
+    return getSettingsMutationStore().removeElementExceptions(
+      message.hostname,
+      message.ids,
+    );
+  if (message.type === "RESET_ELEMENT_DECISIONS")
+    return getSettingsMutationStore().resetElementDecisions(message.hostname);
   if (message.type === "SAVE_DOMAIN_DECISION")
     return getSettingsMutationStore().saveDomainDecision(
       message.action,

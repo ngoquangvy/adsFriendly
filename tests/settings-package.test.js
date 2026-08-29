@@ -41,6 +41,17 @@ const examplePackage = {
         },
       ],
     },
+    element_exceptions: {
+      "Video.Example": [
+        {
+          id: "not-ad-header",
+          selector: "#site-header",
+          fingerprint: { tag: "header", id: "site-header" },
+          confidence: 0.72,
+          layout: "wide",
+        },
+      ],
+    },
     trusted_paths: [
       {
         source: "video.example",
@@ -59,6 +70,10 @@ test("normalizes a shareable settings package", () => {
   assert.deepEqual(result.settings.blacklist, ["||ads.example^"]);
   assert.equal(result.settings.custom_rules["video.example"].length, 1);
   assert.equal(result.settings.custom_rules["video.example"][0].layout, "wide");
+  assert.equal(
+    result.settings.element_exceptions["video.example"][0].id,
+    "not-ad-header",
+  );
   assert.equal(result.settings.trusted_paths[0].isManual, true);
 });
 
@@ -86,6 +101,7 @@ test("exports only shareable settings and trusted paths", () => {
       whitelist: ["docs.example"],
       blacklist: ["||ads.example^"],
       userCustomRules: examplePackage.settings.custom_rules,
+      userElementExceptions: examplePackage.settings.element_exceptions,
       "p:video.example>player.example":
         examplePackage.settings.trusted_paths[0],
       domTrainingSamples: [{ private: true }],
@@ -97,6 +113,7 @@ test("exports only shareable settings and trusted paths", () => {
   assert.equal(result.settings.trusted_paths.length, 1);
   assert.equal("domTrainingSamples" in result.settings, false);
   assert.equal("blockedLogs" in result.settings, false);
+  assert.equal(result.settings.element_exceptions["video.example"].length, 1);
 });
 
 test("replaces managed settings without deleting diagnostics", async () => {
@@ -112,6 +129,7 @@ test("replaces managed settings without deleting diagnostics", async () => {
   assert.equal(snapshot["p:video.example>player.example"].isManual, true);
   assert.deepEqual(snapshot.blockedLogs, [{ keep: true }]);
   assert.equal(summarizeSettingsPackage(examplePackage).ruleCount, 1);
+  assert.equal(summarizeSettingsPackage(examplePackage).exceptionCount, 1);
 });
 
 test("failed package write does not delete existing trusted paths", async () => {

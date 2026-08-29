@@ -17,6 +17,7 @@
     "whitelist": [],
     "blacklist": [],
     "custom_rules": {},
+    "element_exceptions": {},
     "trusted_paths": []
   }
 }

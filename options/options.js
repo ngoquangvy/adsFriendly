@@ -522,6 +522,7 @@ var AdsFriendlyOptions = (() => {
         whitelist: storageSnapshot.whitelist || [],
         blacklist: storageSnapshot.blacklist || [],
         custom_rules: storageSnapshot.userCustomRules || {},
+        element_exceptions: storageSnapshot.userElementExceptions || {},
         trusted_paths: trustedPaths
       }
     });
@@ -538,11 +539,18 @@ var AdsFriendlyOptions = (() => {
     const metadata = normalizeMetadata(input.metadata);
     const rawSettings = input.settings || {};
     const customRules = normalizeCustomRules(rawSettings.custom_rules);
+    const elementExceptions = normalizeElementExceptions(
+      rawSettings.element_exceptions
+    );
     const totalRules = Object.values(customRules).reduce(
       (count, rules) => count + rules.length,
       0
     );
-    if (totalRules > MAX_RULES) {
+    const totalExceptions = Object.values(elementExceptions).reduce(
+      (count, rules) => count + rules.length,
+      0
+    );
+    if (totalRules + totalExceptions > MAX_RULES) {
       throw new Error(`Package exceeds the ${MAX_RULES} rule limit.`);
     }
     return {
@@ -553,6 +561,7 @@ var AdsFriendlyOptions = (() => {
         whitelist: normalizeDomainList(rawSettings.whitelist, false),
         blacklist: normalizeDomainList(rawSettings.blacklist, true),
         custom_rules: customRules,
+        element_exceptions: elementExceptions,
         trusted_paths: normalizeTrustedPaths(rawSettings.trusted_paths)
       }
     };
@@ -566,7 +575,8 @@ var AdsFriendlyOptions = (() => {
       friendlyMode: appSettings.protectionMode === "safe",
       whitelist: settingsPackage.settings.whitelist,
       blacklist: settingsPackage.settings.blacklist,
-      userCustomRules: settingsPackage.settings.custom_rules
+      userCustomRules: settingsPackage.settings.custom_rules,
+      userElementExceptions: settingsPackage.settings.element_exceptions
     };
     for (const path of settingsPackage.settings.trusted_paths) {
       updates[`p:${path.source}>${path.target}`] = path;
@@ -607,17 +617,24 @@ var AdsFriendlyOptions = (() => {
   }
   function summarizeSettingsPackage(packageInput) {
     const settingsPackage = normalizeSettingsPackage(packageInput);
+    const hiddenSites = Object.keys(settingsPackage.settings.custom_rules);
+    const exceptionSites = Object.keys(
+      settingsPackage.settings.element_exceptions
+    );
     return {
       name: settingsPackage.metadata.name,
       author: settingsPackage.metadata.author,
       version: settingsPackage.metadata.version,
       whitelistCount: settingsPackage.settings.whitelist.length,
       blacklistCount: settingsPackage.settings.blacklist.length,
-      siteCount: Object.keys(settingsPackage.settings.custom_rules).length,
+      siteCount: (/* @__PURE__ */ new Set([...hiddenSites, ...exceptionSites])).size,
       ruleCount: Object.values(settingsPackage.settings.custom_rules).reduce(
         (count, rules) => count + rules.length,
         0
       ),
+      exceptionCount: Object.values(
+        settingsPackage.settings.element_exceptions
+      ).reduce((count, rules) => count + rules.length, 0),
       trustedPathCount: settingsPackage.settings.trusted_paths.length
     };
   }
@@ -649,6 +666,39 @@ var AdsFriendlyOptions = (() => {
       if (rules.length) result[hostname] = dedupeRules(rules);
     }
     return result;
+  }
+  function normalizeElementExceptions(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    const result = {};
+    for (const [rawHostname, rawRules] of Object.entries(value)) {
+      const hostname = normalizeHostname(rawHostname);
+      if (!hostname || !Array.isArray(rawRules)) continue;
+      const rules = rawRules.slice(0, MAX_RULES_PER_SITE).map(normalizeElementException).filter(Boolean);
+      if (rules.length) result[hostname] = dedupeElementExceptions(rules);
+    }
+    return result;
+  }
+  function normalizeElementException(rule) {
+    if (!rule || typeof rule !== "object" || Array.isArray(rule)) return null;
+    const selector = cleanText(rule.selector, MAX_SELECTOR_LENGTH);
+    const fingerprint = normalizeFingerprint(rule.fingerprint);
+    if (!isSafeSelector(selector) || !fingerprint || !hasElementExceptionIdentity(fingerprint))
+      return null;
+    return {
+      id: cleanText(rule.id, 160) || `not-ad-${stableTextId(
+        `${selector}|${fingerprint.linkDomain}|${fingerprint.srcHost}|${fingerprint.id}`
+      )}`,
+      selector,
+      fingerprint,
+      confidence: clampNumber(rule.confidence, 0, 1, 0.5),
+      source: cleanText(rule.source || "user_not_ad", 80),
+      layout: VALID_RULE_LAYOUTS.has(rule.layout) ? rule.layout : "any"
+    };
+  }
+  function hasElementExceptionIdentity(fingerprint) {
+    return Boolean(
+      fingerprint.tag && (fingerprint.id || fingerprint.className || fingerprint.alt || fingerprint.title || fingerprint.linkDomain || fingerprint.srcHost || fingerprint.idTokens.length || fingerprint.classTokens.length)
+    );
   }
   function normalizeRule(rule) {
     const rawSelector = typeof rule === "string" ? rule : rule?.selector;
@@ -727,6 +777,22 @@ var AdsFriendlyOptions = (() => {
       seen.add(selector);
       return true;
     });
+  }
+  function dedupeElementExceptions(rules) {
+    const seen = /* @__PURE__ */ new Set();
+    return rules.filter((rule) => {
+      if (seen.has(rule.id)) return false;
+      seen.add(rule.id);
+      return true;
+    });
+  }
+  function stableTextId(value) {
+    let hash = 2166136261;
+    for (const character of String(value)) {
+      hash ^= character.charCodeAt(0);
+      hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(36);
   }
   function normalizeTokens(values) {
     if (!Array.isArray(values)) return [];
@@ -1064,6 +1130,17 @@ var AdsFriendlyOptions = (() => {
     await renderDownloads();
     if (location.hash === "#downloads")
       $("downloads").scrollIntoView({ behavior: "smooth", block: "start" });
+    if (location.hash === "#element-decisions") {
+      $("element-decisions")?.scrollIntoView({
+        behavior: "smooth",
+        block: "start"
+      });
+      const site = new URLSearchParams(location.search).get("site");
+      const siteCard = site ? [...document.querySelectorAll(".rule-site")].find(
+        (card) => card.dataset.host === site
+      ) : null;
+      siteCard?.querySelector(".toggle-details")?.click();
+    }
   }
   function handleStorageChange(changes, areaName) {
     if (areaName === "session" && Object.keys(changes).some((key) => key.startsWith(DOWNLOAD_JOB_PREFIX))) {
@@ -1081,6 +1158,7 @@ var AdsFriendlyOptions = (() => {
         "whitelist",
         "blacklist",
         "userCustomRules",
+        "userElementExceptions",
         SETTINGS_PACKAGE_STATE_KEY
       ].includes(key) || key.startsWith("p:")
     );
@@ -1475,7 +1553,7 @@ var AdsFriendlyOptions = (() => {
       state?.source || "local"
     ).toUpperCase();
     showPackageStatus(
-      `${summary.siteCount} sites \xB7 ${summary.ruleCount} element rules \xB7 ${summary.whitelistCount} trusted \xB7 ${summary.blacklistCount} blocked \xB7 ${summary.trustedPathCount} workflows`
+      `${summary.siteCount} sites \xB7 ${summary.ruleCount} hidden \xB7 ${summary.exceptionCount} not ads \xB7 ${summary.whitelistCount} trusted \xB7 ${summary.blacklistCount} blocked \xB7 ${summary.trustedPathCount} workflows`
     );
   }
   async function saveProtectionControls() {
@@ -1513,7 +1591,7 @@ var AdsFriendlyOptions = (() => {
       const accepted = confirm(
         `Install \u201C${summary.name}\u201D by ${summary.author}?
 
-${summary.ruleCount} element rules across ${summary.siteCount} sites
+${summary.ruleCount} hidden rules and ${summary.exceptionCount} not-ad decisions across ${summary.siteCount} sites
 ${summary.whitelistCount} trusted domains
 ${summary.blacklistCount} blocked domains
 ${summary.trustedPathCount} trusted workflows
@@ -1606,20 +1684,25 @@ This replaces the current shareable settings. Diagnostics and training samples a
   function renderCustomRules() {
     const container = $("custom-rules-container");
     const rulesByHost = currentSnapshot.userCustomRules || {};
-    const hostnames = Object.keys(rulesByHost).sort();
+    const exceptionsByHost = currentSnapshot.userElementExceptions || {};
+    const hostnames = [
+      .../* @__PURE__ */ new Set([...Object.keys(rulesByHost), ...Object.keys(exceptionsByHost)])
+    ].sort();
     if (!hostnames.length) {
-      container.innerHTML = '<div class="empty-msg">No custom rules found yet.</div>';
+      container.innerHTML = '<div class="empty-msg">No page element decisions found yet.</div>';
       return;
     }
     container.innerHTML = hostnames.map((hostname) => {
       const rules = rulesByHost[hostname] || [];
-      const details = rules.map((rule, index) => {
+      const exceptions = exceptionsByHost[hostname] || [];
+      const hiddenDetails = rules.map((rule, index) => {
         const selector = typeof rule === "string" ? rule : rule.selector;
         const fingerprint = typeof rule === "object" && rule.fingerprint ? JSON.stringify(rule.fingerprint) : "Simple selector";
         const layout = typeof rule === "object" ? rule.layout || "any" : "any";
         return `
             <div style="display:flex; justify-content:space-between; gap:0.75rem; padding:8px 0; border-top:1px solid rgba(255,255,255,0.05); font-size:0.75rem;">
               <div style="min-width:0">
+                <span class="sample-chip" style="margin-right:6px; color:#fca5a5">HIDDEN</span>
                 <code style="word-break:break-all; color:#93c5fd">${safeText(selector)}</code>
                 <span class="sample-chip" style="margin-left:6px">${safeText(layout.toUpperCase())}</span>
                 <div style="color:#64748b; margin-top:3px; word-break:break-all">${safeText(fingerprint)}</div>
@@ -1627,12 +1710,26 @@ This replaces the current shareable settings. Diagnostics and training samples a
               <button class="btn-delete-rule-item btn-delete" data-host="${safeText(hostname)}" data-index="${index}" title="Delete rule">Delete</button>
             </div>`;
       }).join("");
+      const exceptionDetails = exceptions.map((rule) => {
+        const fingerprint = rule?.fingerprint ? JSON.stringify(rule.fingerprint) : "Fingerprint unavailable";
+        return `
+            <div style="display:flex; justify-content:space-between; gap:0.75rem; padding:8px 0; border-top:1px solid rgba(255,255,255,0.05); font-size:0.75rem;">
+              <div style="min-width:0">
+                <span class="sample-chip" style="margin-right:6px; color:#86efac">NOT AD</span>
+                <code style="word-break:break-all; color:#93c5fd">${safeText(rule.selector)}</code>
+                <span class="sample-chip" style="margin-left:6px">${safeText((rule.layout || "any").toUpperCase())}</span>
+                <div style="color:#64748b; margin-top:3px; word-break:break-all">${safeText(fingerprint)}</div>
+              </div>
+              <button class="btn-delete-exception-item btn-delete" data-host="${safeText(hostname)}" data-id="${safeText(rule.id)}" title="Forget decision">Forget</button>
+            </div>`;
+      }).join("");
+      const details = `${hiddenDetails}${exceptionDetails}`;
       return `
-        <div class="rule-site" style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.05); padding:12px; border-radius:12px; margin-bottom:10px;">
+        <div class="rule-site" data-host="${safeText(hostname)}" style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.05); padding:12px; border-radius:12px; margin-bottom:10px;">
           <div style="display:flex; justify-content:space-between; align-items:center; gap:1rem">
             <div>
               <div style="font-weight:bold; color:#e2e8f0">${safeText(hostname)}</div>
-              <div style="font-size:0.75rem; color:#64748b">${rules.length} active rules</div>
+              <div style="font-size:0.75rem; color:#64748b">${rules.length} hidden \xB7 ${exceptions.length} not ads</div>
             </div>
             <div style="display:flex; gap:8px">
               <button class="toggle-details btn-secondary">Details</button>
@@ -1662,13 +1759,25 @@ This replaces the current shareable settings. Diagnostics and training samples a
         await loadPage();
       };
     });
+    container.querySelectorAll(".btn-delete-exception-item").forEach((button) => {
+      button.onclick = async () => {
+        const response = await chrome.runtime.sendMessage({
+          type: "REMOVE_ELEMENT_EXCEPTIONS",
+          hostname: button.dataset.host,
+          ids: [button.dataset.id]
+        });
+        if (response?.status !== "saved")
+          throw new Error(response?.error || "Could not forget decision.");
+        await loadPage();
+      };
+    });
     container.querySelectorAll(".reset-site-rules").forEach((button) => {
       button.onclick = async () => {
         const hostname = button.dataset.host;
-        if (!confirm(`Remove all packaged and personal rules for ${hostname}?`))
+        if (!confirm(`Remove all hidden and not-ad decisions for ${hostname}?`))
           return;
         const response = await chrome.runtime.sendMessage({
-          type: "RESET_CUSTOM_RULES",
+          type: "RESET_ELEMENT_DECISIONS",
           hostname
         });
         if (response?.status !== "saved")

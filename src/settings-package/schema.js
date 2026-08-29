@@ -53,6 +53,7 @@ export function createSettingsPackage(storageSnapshot = {}, metadata = {}) {
       whitelist: storageSnapshot.whitelist || [],
       blacklist: storageSnapshot.blacklist || [],
       custom_rules: storageSnapshot.userCustomRules || {},
+      element_exceptions: storageSnapshot.userElementExceptions || {},
       trusted_paths: trustedPaths,
     },
   });
@@ -71,11 +72,18 @@ export function normalizeSettingsPackage(input) {
   const metadata = normalizeMetadata(input.metadata);
   const rawSettings = input.settings || {};
   const customRules = normalizeCustomRules(rawSettings.custom_rules);
+  const elementExceptions = normalizeElementExceptions(
+    rawSettings.element_exceptions,
+  );
   const totalRules = Object.values(customRules).reduce(
     (count, rules) => count + rules.length,
     0,
   );
-  if (totalRules > MAX_RULES) {
+  const totalExceptions = Object.values(elementExceptions).reduce(
+    (count, rules) => count + rules.length,
+    0,
+  );
+  if (totalRules + totalExceptions > MAX_RULES) {
     throw new Error(`Package exceeds the ${MAX_RULES} rule limit.`);
   }
 
@@ -87,6 +95,7 @@ export function normalizeSettingsPackage(input) {
       whitelist: normalizeDomainList(rawSettings.whitelist, false),
       blacklist: normalizeDomainList(rawSettings.blacklist, true),
       custom_rules: customRules,
+      element_exceptions: elementExceptions,
       trusted_paths: normalizeTrustedPaths(rawSettings.trusted_paths),
     },
   };
@@ -102,6 +111,7 @@ export function packageToStorage(packageInput) {
     whitelist: settingsPackage.settings.whitelist,
     blacklist: settingsPackage.settings.blacklist,
     userCustomRules: settingsPackage.settings.custom_rules,
+    userElementExceptions: settingsPackage.settings.element_exceptions,
   };
   for (const path of settingsPackage.settings.trusted_paths) {
     updates[`p:${path.source}>${path.target}`] = path;
@@ -152,17 +162,24 @@ function createPackageTransactionId() {
 
 export function summarizeSettingsPackage(packageInput) {
   const settingsPackage = normalizeSettingsPackage(packageInput);
+  const hiddenSites = Object.keys(settingsPackage.settings.custom_rules);
+  const exceptionSites = Object.keys(
+    settingsPackage.settings.element_exceptions,
+  );
   return {
     name: settingsPackage.metadata.name,
     author: settingsPackage.metadata.author,
     version: settingsPackage.metadata.version,
     whitelistCount: settingsPackage.settings.whitelist.length,
     blacklistCount: settingsPackage.settings.blacklist.length,
-    siteCount: Object.keys(settingsPackage.settings.custom_rules).length,
+    siteCount: new Set([...hiddenSites, ...exceptionSites]).size,
     ruleCount: Object.values(settingsPackage.settings.custom_rules).reduce(
       (count, rules) => count + rules.length,
       0,
     ),
+    exceptionCount: Object.values(
+      settingsPackage.settings.element_exceptions,
+    ).reduce((count, rules) => count + rules.length, 0),
     trustedPathCount: settingsPackage.settings.trusted_paths.length,
   };
 }
@@ -182,6 +199,7 @@ export function hasMeaningfulExistingSettings(snapshot = {}) {
     (snapshot.whitelist?.length || 0) > 0 ||
     (snapshot.blacklist?.length || 0) > 0 ||
     Object.keys(snapshot.userCustomRules || {}).length > 0 ||
+    Object.keys(snapshot.userElementExceptions || {}).length > 0 ||
     Object.keys(snapshot).some((key) => key.startsWith("p:"))
   );
 }
@@ -222,6 +240,59 @@ function normalizeCustomRules(value) {
     if (rules.length) result[hostname] = dedupeRules(rules);
   }
   return result;
+}
+
+function normalizeElementExceptions(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const result = {};
+  for (const [rawHostname, rawRules] of Object.entries(value)) {
+    const hostname = normalizeHostname(rawHostname);
+    if (!hostname || !Array.isArray(rawRules)) continue;
+    const rules = rawRules
+      .slice(0, MAX_RULES_PER_SITE)
+      .map(normalizeElementException)
+      .filter(Boolean);
+    if (rules.length) result[hostname] = dedupeElementExceptions(rules);
+  }
+  return result;
+}
+
+function normalizeElementException(rule) {
+  if (!rule || typeof rule !== "object" || Array.isArray(rule)) return null;
+  const selector = cleanText(rule.selector, MAX_SELECTOR_LENGTH);
+  const fingerprint = normalizeFingerprint(rule.fingerprint);
+  if (
+    !isSafeSelector(selector) ||
+    !fingerprint ||
+    !hasElementExceptionIdentity(fingerprint)
+  )
+    return null;
+  return {
+    id:
+      cleanText(rule.id, 160) ||
+      `not-ad-${stableTextId(
+        `${selector}|${fingerprint.linkDomain}|${fingerprint.srcHost}|${fingerprint.id}`,
+      )}`,
+    selector,
+    fingerprint,
+    confidence: clampNumber(rule.confidence, 0, 1, 0.5),
+    source: cleanText(rule.source || "user_not_ad", 80),
+    layout: VALID_RULE_LAYOUTS.has(rule.layout) ? rule.layout : "any",
+  };
+}
+
+function hasElementExceptionIdentity(fingerprint) {
+  return Boolean(
+    fingerprint.tag &&
+    (fingerprint.id ||
+      fingerprint.className ||
+      fingerprint.alt ||
+      fingerprint.title ||
+      fingerprint.linkDomain ||
+      fingerprint.srcHost ||
+      fingerprint.idTokens.length ||
+      fingerprint.classTokens.length),
+  );
 }
 
 function normalizeRule(rule) {
@@ -309,6 +380,24 @@ function dedupeRules(rules) {
     seen.add(selector);
     return true;
   });
+}
+
+function dedupeElementExceptions(rules) {
+  const seen = new Set();
+  return rules.filter((rule) => {
+    if (seen.has(rule.id)) return false;
+    seen.add(rule.id);
+    return true;
+  });
+}
+
+function stableTextId(value) {
+  let hash = 2166136261;
+  for (const character of String(value)) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
 }
 
 function normalizeTokens(values) {

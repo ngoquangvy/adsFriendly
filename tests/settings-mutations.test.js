@@ -78,6 +78,72 @@ test("removes a domain through the serialized settings store", async () => {
   assert.deepEqual((await storage.get("blacklist")).blacklist, []);
 });
 
+test("persists, forgets, and resets not-ad element decisions independently", async () => {
+  const storage = createStorage({
+    userCustomRules: { "example.test": [{ selector: ".hidden-ad" }] },
+    userElementExceptions: {},
+  });
+  const store = createSettingsMutationStore(storage);
+  const rule = {
+    id: "not-ad-1",
+    selector: "#site-header",
+    fingerprint: { tag: "header", id: "site-header" },
+  };
+  await store.upsertElementExceptions("example.test", [rule]);
+  assert.equal(
+    (await storage.get("userElementExceptions")).userElementExceptions[
+      "example.test"
+    ][0].id,
+    "not-ad-1",
+  );
+  await store.removeElementExceptions("example.test", ["not-ad-1"]);
+  assert.equal(
+    (await storage.get("userElementExceptions")).userElementExceptions[
+      "example.test"
+    ],
+    undefined,
+  );
+
+  await store.upsertElementExceptions("example.test", [rule]);
+  const result = await store.resetElementDecisions("example.test");
+  const snapshot = await storage.get([
+    "userCustomRules",
+    "userElementExceptions",
+    "siteResetHistory",
+  ]);
+  assert.equal(result.restoredCount, 1);
+  assert.equal(result.forgottenCount, 1);
+  assert.equal(snapshot.userCustomRules["example.test"], undefined);
+  assert.equal(snapshot.userElementExceptions["example.test"], undefined);
+  assert.equal(snapshot.siteResetHistory["example.test"].oldRules.length, 1);
+});
+
+test("serializes concurrent not-ad decisions without losing either fingerprint", async () => {
+  const storage = createStorage({ userElementExceptions: {} }, 4);
+  const store = createSettingsMutationStore(storage);
+  await Promise.all([
+    store.upsertElementExceptions("example.test", [
+      {
+        id: "not-ad-one",
+        selector: "#header-one",
+        fingerprint: { tag: "header", id: "header-one" },
+      },
+    ]),
+    store.upsertElementExceptions("example.test", [
+      {
+        id: "not-ad-two",
+        selector: "#header-two",
+        fingerprint: { tag: "header", id: "header-two" },
+      },
+    ]),
+  ]);
+  const { userElementExceptions } = await storage.get("userElementExceptions");
+  assert.deepEqual(
+    userElementExceptions["example.test"].map((rule) => rule.id),
+    ["not-ad-one", "not-ad-two"],
+  );
+});
+
 function createStorage(initial = {}, delayMs = 0, setError = null) {
   const data = structuredClone(initial);
   return {

@@ -532,7 +532,7 @@
         <button
           class="settings-btn protection-action"
           id="reset-rules-btn"
-          title="Reset hidden element rules for this site"
+          title="Reset hidden and not-ad decisions for this site"
           style="
             background: rgba(239, 68, 68, 0.05);
             border: 1px solid rgba(239, 68, 68, 0.2);
@@ -542,6 +542,26 @@
           Reset site
         </button>
       </div>
+
+      <button
+        class="settings-btn"
+        id="page-decisions-btn"
+        type="button"
+        hidden
+        style="
+          width: 100%;
+          margin-top: 8px;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+        "
+      >
+        <span>Page decisions</span>
+        <span
+          id="page-decisions-count"
+          style="font-size: 0.68rem; color: #94a3b8"
+        ></span>
+      </button>
 
       <div id="undo-section" class="undo-section">
         <div

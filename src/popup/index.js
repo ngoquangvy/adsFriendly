@@ -49,6 +49,8 @@ const mediaHelperAction = document.getElementById("media-helper-action");
 const mediaList = document.getElementById("media-list");
 const mediaJobList = document.getElementById("media-job-list");
 const mediaManagerLink = document.getElementById("media-manager-link");
+const pageDecisionsButton = document.getElementById("page-decisions-btn");
+const pageDecisionsCount = document.getElementById("page-decisions-count");
 
 const MODE_DESCRIPTIONS = Object.freeze({
   safe: "Verified rules; no predictive DOM actions",
@@ -113,6 +115,17 @@ document.getElementById("settings-btn").addEventListener("click", () => {
   chrome.runtime.openOptionsPage();
 });
 
+pageDecisionsButton.addEventListener("click", async () => {
+  const tab = await getActiveHttpTab();
+  if (!tab) return;
+  const hostname = new URL(tab.url).hostname;
+  void chrome.tabs.create({
+    url:
+      chrome.runtime.getURL("options/options.html") +
+      `?site=${encodeURIComponent(hostname)}#element-decisions`,
+  });
+});
+
 document
   .getElementById("magic-wand-btn")
   .addEventListener("click", async () => {
@@ -146,19 +159,13 @@ document
       const tab = await getActiveHttpTab();
       if (!tab) return false;
       const hostname = new URL(tab.url).hostname;
-      const { userCustomRules = {} } =
-        await chrome.storage.local.get("userCustomRules");
-      const selectors = (userCustomRules[hostname] || [])
-        .map((rule) => (typeof rule === "string" ? rule : rule?.selector))
-        .filter(Boolean);
-      if (!selectors.length) return false;
       const response = await chrome.runtime.sendMessage({
-        type: "REMOVE_CUSTOM_RULES",
+        type: "RESET_ELEMENT_DECISIONS",
         hostname,
-        selectors,
       });
       if (response?.status !== "saved")
-        throw new Error(response?.error || "Could not remove site rules.");
+        throw new Error(response?.error || "Could not reset page decisions.");
+      if (!response.restoredCount && !response.forgottenCount) return false;
       await chrome.tabs.reload(tab.id);
       window.close();
     });
@@ -232,10 +239,19 @@ async function render() {
   await updateMediaJobs();
   if (!tab) return;
   const hostname = new URL(tab.url).hostname;
-  const { userCustomRules = {} } =
-    await chrome.storage.local.get("userCustomRules");
+  const { userCustomRules = {}, userElementExceptions = {} } =
+    await chrome.storage.local.get([
+      "userCustomRules",
+      "userElementExceptions",
+    ]);
   document.getElementById("undo-section").style.display =
     userCustomRules[hostname]?.length > 0 ? "block" : "none";
+  const hiddenCount = userCustomRules[hostname]?.length || 0;
+  const notAdCount = userElementExceptions[hostname]?.length || 0;
+  pageDecisionsButton.hidden = hiddenCount + notAdCount === 0;
+  pageDecisionsButton.style.display =
+    hiddenCount + notAdCount === 0 ? "none" : "flex";
+  pageDecisionsCount.textContent = `${hiddenCount} hidden · ${notAdCount} not ads`;
 }
 
 async function renderMode() {

@@ -1751,6 +1751,28 @@ var AdsFriendlyPopup = (() => {
     NETWORK_RESPONSE: "network_response",
     DECRYPTED_BLOB: "decrypted_blob"
   });
+  var MEDIA_PLAYBACK_STATES = Object.freeze({
+    IDLE: "idle",
+    PLAYING: "playing",
+    PAUSED: "paused",
+    WAITING: "waiting",
+    SEEKING: "seeking",
+    ENDED: "ended"
+  });
+  var MEDIA_PLAYBACK_TRIGGERS = Object.freeze([
+    "initial",
+    "loadedmetadata",
+    "durationchange",
+    "play",
+    "pause",
+    "ended",
+    "waiting",
+    "seeking",
+    "seeked",
+    "ratechange",
+    "timeupdate",
+    "visibility"
+  ]);
 
   // src/media/detection.js
   function stableMediaId(kind, sourceUrl) {
@@ -2873,6 +2895,8 @@ ${blobTitleKey(item.title)}`;
   var mediaList = document.getElementById("media-list");
   var mediaJobList = document.getElementById("media-job-list");
   var mediaManagerLink = document.getElementById("media-manager-link");
+  var pageDecisionsButton = document.getElementById("page-decisions-btn");
+  var pageDecisionsCount = document.getElementById("page-decisions-count");
   var MODE_DESCRIPTIONS = Object.freeze({
     safe: "Verified rules; no predictive DOM actions",
     assist: "Detect and ask before hiding",
@@ -2929,6 +2953,14 @@ ${blobTitleKey(item.title)}`;
   document.getElementById("settings-btn").addEventListener("click", () => {
     chrome.runtime.openOptionsPage();
   });
+  pageDecisionsButton.addEventListener("click", async () => {
+    const tab = await getActiveHttpTab();
+    if (!tab) return;
+    const hostname = new URL(tab.url).hostname;
+    void chrome.tabs.create({
+      url: chrome.runtime.getURL("options/options.html") + `?site=${encodeURIComponent(hostname)}#element-decisions`
+    });
+  });
   document.getElementById("magic-wand-btn").addEventListener("click", async () => {
     if (!settings.enabled || !getCapabilitiesForMode(settings.protectionMode).includes(
       CAPABILITIES.DOM_MANUAL_PICKER
@@ -2954,16 +2986,13 @@ ${blobTitleKey(item.title)}`;
       const tab = await getActiveHttpTab();
       if (!tab) return false;
       const hostname = new URL(tab.url).hostname;
-      const { userCustomRules = {} } = await chrome.storage.local.get("userCustomRules");
-      const selectors = (userCustomRules[hostname] || []).map((rule) => typeof rule === "string" ? rule : rule?.selector).filter(Boolean);
-      if (!selectors.length) return false;
       const response = await chrome.runtime.sendMessage({
-        type: "REMOVE_CUSTOM_RULES",
-        hostname,
-        selectors
+        type: "RESET_ELEMENT_DECISIONS",
+        hostname
       });
       if (response?.status !== "saved")
-        throw new Error(response?.error || "Could not remove site rules.");
+        throw new Error(response?.error || "Could not reset page decisions.");
+      if (!response.restoredCount && !response.forgottenCount) return false;
       await chrome.tabs.reload(tab.id);
       window.close();
     });
@@ -3030,8 +3059,16 @@ ${blobTitleKey(item.title)}`;
     await updateMediaJobs();
     if (!tab) return;
     const hostname = new URL(tab.url).hostname;
-    const { userCustomRules = {} } = await chrome.storage.local.get("userCustomRules");
+    const { userCustomRules = {}, userElementExceptions = {} } = await chrome.storage.local.get([
+      "userCustomRules",
+      "userElementExceptions"
+    ]);
     document.getElementById("undo-section").style.display = userCustomRules[hostname]?.length > 0 ? "block" : "none";
+    const hiddenCount = userCustomRules[hostname]?.length || 0;
+    const notAdCount = userElementExceptions[hostname]?.length || 0;
+    pageDecisionsButton.hidden = hiddenCount + notAdCount === 0;
+    pageDecisionsButton.style.display = hiddenCount + notAdCount === 0 ? "none" : "flex";
+    pageDecisionsCount.textContent = `${hiddenCount} hidden \xB7 ${notAdCount} not ads`;
   }
   async function renderMode() {
     modeSelect.disabled = !settings.enabled;

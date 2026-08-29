@@ -13,12 +13,20 @@ import {
 import { showDomCandidateToast } from "./toast.js";
 import { CAPABILITIES } from "../runtime/feature-catalog.js";
 import { getResponsiveLayout } from "./layout-context.js";
+import {
+  createElementException,
+  elementExceptionKey,
+  matchesElementException,
+} from "./element-exceptions.js";
 
 const observed = new WeakSet();
 const allowedSelectors = new Set();
 let activePolicy = null;
 let scanIntervalId = null;
 let bodyObserver = null;
+let elementExceptions = [];
+let elementExceptionsReady = false;
+let storageListener = null;
 const DOM_CANDIDATE_SELECTOR = [
   "img",
   "iframe",
@@ -37,6 +45,18 @@ const DOM_CANDIDATE_SELECTOR = [
 
 export function startDomCandidateCollector(policy) {
   activePolicy = policy;
+  elementExceptionsReady = false;
+  loadElementExceptions().finally(() => {
+    elementExceptionsReady = true;
+    scanDomCandidates();
+  });
+  storageListener = (changes, areaName) => {
+    if (areaName !== "local" || !changes.userElementExceptions) return;
+    elementExceptions = exceptionsForCurrentSite(
+      changes.userElementExceptions.newValue,
+    );
+  };
+  chrome.storage.onChanged.addListener(storageListener);
   scanIntervalId = setInterval(scanDomCandidates, 2500);
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", () =>
@@ -68,12 +88,18 @@ export function startDomCandidateCollector(policy) {
     scanIntervalId = null;
     bodyObserver?.disconnect();
     bodyObserver = null;
+    if (storageListener)
+      chrome.storage.onChanged.removeListener(storageListener);
+    storageListener = null;
+    elementExceptions = [];
+    elementExceptionsReady = false;
     activePolicy = null;
   };
 }
 
 function scanDomCandidates() {
-  if (!activePolicy?.can(CAPABILITIES.DOM_OBSERVE)) return;
+  if (!elementExceptionsReady || !activePolicy?.can(CAPABILITIES.DOM_OBSERVE))
+    return;
   scanNode(document);
 }
 
@@ -102,8 +128,15 @@ function evaluateElement(element) {
   if (isHiddenByAdsFriendly(target)) return;
   const selector = buildDomSelector(target);
   if (selector && allowedSelectors.has(selector)) return;
+  const layout = getResponsiveLayout();
+  if (
+    elementExceptions.some((rule) =>
+      matchesElementException(rule, { selector, features, layout }),
+    )
+  )
+    return;
 
-  const candidate = { element, target, selector, features, decision };
+  const candidate = { element, target, selector, features, decision, layout };
   if (decision.action === "block") {
     if (activePolicy?.can(CAPABILITIES.DOM_AUTO_HIDE)) {
       hideCandidate(candidate, "heuristic_block");
@@ -119,9 +152,22 @@ function evaluateElement(element) {
 function showCandidate(candidate) {
   showDomCandidateToast(candidate, {
     onHide: (item) => hideCandidate(item, "user_hide"),
-    onAllow: allowCandidate,
+    onAllow: rememberNotAdCandidate,
+    onUndoAllow: forgetNotAdCandidate,
+    onAllowConfirmed: confirmNotAdCandidate,
+    isSuppressed: isCandidateSuppressed,
     onShow: restoreCandidate,
   });
+}
+
+function isCandidateSuppressed(candidate) {
+  return elementExceptions.some((rule) =>
+    matchesElementException(rule, {
+      selector: candidate.selector,
+      features: candidate.features,
+      layout: candidate.layout || getResponsiveLayout(),
+    }),
+  );
 }
 
 async function hideCandidate(candidate, outcome) {
@@ -145,8 +191,40 @@ async function hideCandidate(candidate, outcome) {
   } catch {}
 }
 
-function allowCandidate(candidate) {
-  if (candidate.selector) allowedSelectors.add(candidate.selector);
+async function rememberNotAdCandidate(candidate) {
+  const rule = createElementException(candidate, {
+    layout: candidate.layout || getResponsiveLayout(),
+  });
+  const response = await chrome.runtime.sendMessage({
+    type: "UPSERT_ELEMENT_EXCEPTIONS",
+    hostname: location.hostname,
+    rules: [rule],
+  });
+  assertSaved(response);
+  candidate.elementException = rule;
+  elementExceptions = [
+    ...elementExceptions.filter(
+      (existing) => elementExceptionKey(existing) !== elementExceptionKey(rule),
+    ),
+    rule,
+  ];
+}
+
+async function forgetNotAdCandidate(candidate) {
+  const rule = candidate.elementException;
+  if (!rule) throw new Error("The saved element exception is unavailable.");
+  const response = await chrome.runtime.sendMessage({
+    type: "REMOVE_ELEMENT_EXCEPTIONS",
+    hostname: location.hostname,
+    ids: [elementExceptionKey(rule)],
+  });
+  assertSaved(response);
+  elementExceptions = elementExceptions.filter(
+    (existing) => elementExceptionKey(existing) !== elementExceptionKey(rule),
+  );
+}
+
+function confirmNotAdCandidate(candidate) {
   if (activePolicy?.can(CAPABILITIES.LEARNING_FEEDBACK))
     recordDomSample(candidate, "user_allow", "content");
 }
@@ -179,7 +257,7 @@ async function persistCustomRule(candidate, outcome) {
     timesZapped: 1,
     confidence: candidate.decision.confidence,
     source: outcome,
-    layout: getResponsiveLayout(),
+    layout: candidate.layout || getResponsiveLayout(),
   };
   const response = await chrome.runtime.sendMessage({
     type: "UPSERT_CUSTOM_RULES",
@@ -188,6 +266,22 @@ async function persistCustomRule(candidate, outcome) {
   });
   assertSaved(response);
   await chrome.runtime.sendMessage({ type: "SYNC_LEARNING" });
+}
+
+async function loadElementExceptions() {
+  try {
+    const { userElementExceptions = {} } = await chrome.storage.local.get(
+      "userElementExceptions",
+    );
+    elementExceptions = exceptionsForCurrentSite(userElementExceptions);
+  } catch {
+    elementExceptions = [];
+  }
+}
+
+function exceptionsForCurrentSite(value) {
+  const rules = value?.[location.hostname];
+  return Array.isArray(rules) ? rules : [];
 }
 
 async function removeCustomRule(selector) {

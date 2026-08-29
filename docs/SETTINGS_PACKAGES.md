@@ -4,9 +4,9 @@ A Settings Package is a portable, editable snapshot of user-managed behavior.
 It is separate from the built-in heuristic code and from training data.
 
 An installed package is a starting point, not a locked policy. Users can keep
-adding personal Hide, Magic Wand, whitelist, blacklist, and trusted-workflow
-choices. Those changes are stored locally, appear in Settings immediately, and
-are included the next time the user exports a package.
+adding personal Hide, Magic Wand, Not an ad, whitelist, blacklist, and
+trusted-workflow choices. Those changes are stored locally, appear in Settings
+immediately, and are included the next time the user exports a package.
 
 ## Included
 
@@ -14,6 +14,7 @@ are included the next time the user exports a package.
 - Safe, Assist, or Auto mode and feature overrides.
 - Whitelist and blacklist domains.
 - Magic Wand and Hide element rules grouped by hostname.
+- Fingerprinted Not an ad element exceptions grouped by hostname.
 - Trusted navigation workflows.
 
 ## Excluded
@@ -31,7 +32,7 @@ DOM training samples and the telemetry upload queue use the extension's
 IndexedDB database (`adsfriendly-training`). On upgrade, legacy training arrays
 are migrated out of settings storage and then removed from that shared bucket.
 This prevents a large dataset from blocking user actions such as Hide, Magic
-Wand, whitelist, or blacklist.
+Wand, Not an ad, whitelist, or blacklist.
 
 ## Bundled Default
 
@@ -42,7 +43,8 @@ rules or overwrite user changes.
 
 To create a release default:
 
-1. Configure AdsFriendly through the popup, Settings, Magic Wand, and Hide.
+1. Configure AdsFriendly through the popup, Settings, Magic Wand, Hide, and Not
+   an ad decisions.
 2. Open Settings and export a package.
 3. Review the domains, selectors, fingerprints, and trusted workflows.
 4. Replace `packages/default-settings-package.json` with the reviewed export.
@@ -52,4 +54,5 @@ To create a release default:
 
 Importing replaces the shareable settings so the Settings page matches the
 package. Local diagnostics and training samples remain intact. The import
-preview reports rule, site, list, and workflow counts before confirmation.
+preview reports hidden rule, Not an ad, site, list, and workflow counts before
+confirmation.

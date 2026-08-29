@@ -50,6 +50,28 @@ var AdsFriendlyMediaFrame = (() => {
     NETWORK_RESPONSE: "network_response",
     DECRYPTED_BLOB: "decrypted_blob"
   });
+  var MEDIA_PLAYBACK_STATES = Object.freeze({
+    IDLE: "idle",
+    PLAYING: "playing",
+    PAUSED: "paused",
+    WAITING: "waiting",
+    SEEKING: "seeking",
+    ENDED: "ended"
+  });
+  var MEDIA_PLAYBACK_TRIGGERS = Object.freeze([
+    "initial",
+    "loadedmetadata",
+    "durationchange",
+    "play",
+    "pause",
+    "ended",
+    "waiting",
+    "seeking",
+    "seeked",
+    "ratechange",
+    "timeupdate",
+    "visibility"
+  ]);
   function normalizeMediaCandidate(value = {}) {
     const candidate = {
       id: requiredString(value.id, "id"),
@@ -137,6 +159,30 @@ var AdsFriendlyMediaFrame = (() => {
       muted: value.muted === true,
       currentTime: optionalFiniteNumber(value.currentTime),
       observedAt: optionalNonNegativeInteger(value.observedAt)
+    };
+  }
+  function normalizeMediaPlaybackObservation(value = {}) {
+    return {
+      sessionId: requiredString(value.sessionId, "sessionId").slice(0, 160),
+      pageUrl: requiredString(value.pageUrl, "pageUrl"),
+      mediaId: optionalString(value.mediaId)?.slice(0, 200) || null,
+      state: enumValue(
+        value.state,
+        Object.values(MEDIA_PLAYBACK_STATES),
+        "playback.state"
+      ),
+      trigger: enumValue(
+        value.trigger,
+        MEDIA_PLAYBACK_TRIGGERS,
+        "playback.trigger"
+      ),
+      currentTime: optionalNonNegativeNumber(value.currentTime),
+      duration: optionalPositiveNumber(value.duration),
+      playbackRate: optionalPositiveNumber(value.playbackRate) || 1,
+      muted: value.muted === true,
+      visible: value.visible === true,
+      readyState: optionalBoundedInteger(value.readyState, 0, 4),
+      observedAt: optionalNonNegativeInteger(value.observedAt) || Date.now()
     };
   }
   function normalizeMediaAcquisitionDiagnostic(value) {
@@ -550,6 +596,24 @@ var AdsFriendlyMediaFrame = (() => {
     }
     return number;
   }
+  function optionalNonNegativeNumber(value) {
+    if (value === null || value === void 0) return null;
+    const number = Number(value);
+    if (!Number.isFinite(number) || number < 0) {
+      throw new Error("[MediaContract] Expected a non-negative number.");
+    }
+    return number;
+  }
+  function optionalBoundedInteger(value, minimum, maximum) {
+    if (value === null || value === void 0) return null;
+    const number = Number(value);
+    if (!Number.isInteger(number) || number < minimum || number > maximum) {
+      throw new Error(
+        `[MediaContract] Expected an integer from ${minimum} to ${maximum}.`
+      );
+    }
+    return number;
+  }
 
   // src/media/detection.js
   var HLS_MIME_TYPES = /* @__PURE__ */ new Set([
@@ -641,6 +705,7 @@ var AdsFriendlyMediaFrame = (() => {
     MEDIA_BLOB_TRACED: "media.blob_traced",
     MEDIA_MANIFEST_HANDOFF_READY: "media.manifest_handoff_ready",
     MEDIA_EME_OBSERVED: "media.eme_observed",
+    MEDIA_PLAYBACK_OBSERVED: "media.playback_observed",
     MEDIA_CATALOG_UPDATED: "media.catalog.updated",
     VIDEO_AD_EVIDENCE_FOUND: "video_ad.evidence_found",
     VIDEO_AD_LABELLED: "video_ad.labelled"
@@ -682,6 +747,12 @@ var AdsFriendlyMediaFrame = (() => {
       "media.eme-observer",
       ["media.catalog"],
       normalizeEmeObservation
+    ),
+    [E.MEDIA_PLAYBACK_OBSERVED]: event(
+      E.MEDIA_PLAYBACK_OBSERVED,
+      "media.playback-observer",
+      ["media.catalog", "video-ad.evidence-collector"],
+      normalizeMediaPlaybackObservation
     ),
     [E.MEDIA_CATALOG_UPDATED]: event(
       E.MEDIA_CATALOG_UPDATED,
@@ -976,7 +1047,113 @@ var AdsFriendlyMediaFrame = (() => {
     return Number.isFinite(number) && number > 0 ? number : null;
   }
 
+  // src/media/playback-observation.js
+  var PLAYBACK_EVENT_TYPES = Object.freeze([
+    "initial",
+    "loadedmetadata",
+    "durationchange",
+    "play",
+    "pause",
+    "ended",
+    "waiting",
+    "seeking",
+    "seeked",
+    "ratechange",
+    "timeupdate",
+    "visibility"
+  ]);
+  var TIMEUPDATE_INTERVAL_MS = 1e3;
+  function createPlaybackObservationTracker({
+    scopeId = randomScopeId(),
+    now = () => Date.now()
+  } = {}) {
+    const sessions = /* @__PURE__ */ new WeakMap();
+    let nextSession = 1;
+    return Object.freeze({
+      observe(mediaElement, { pageUrl, mediaId = null, trigger = "initial", visible = false } = {}) {
+        if (!mediaElement || typeof mediaElement !== "object") return null;
+        if (!PLAYBACK_EVENT_TYPES.includes(trigger)) return null;
+        let session = sessions.get(mediaElement);
+        if (!session) {
+          session = {
+            id: `${scopeId}:player-${nextSession++}`,
+            lastObservedAt: 0,
+            lastSignature: null
+          };
+          sessions.set(mediaElement, session);
+        }
+        const observedAt = now();
+        if (trigger === "timeupdate" && observedAt - session.lastObservedAt < TIMEUPDATE_INTERVAL_MS)
+          return null;
+        const observation = {
+          sessionId: session.id,
+          pageUrl,
+          mediaId,
+          state: playbackState(mediaElement, trigger),
+          trigger,
+          currentTime: finiteOrNull(mediaElement.currentTime),
+          duration: positiveFiniteOrNull(mediaElement.duration),
+          playbackRate: positiveFiniteOrNull(mediaElement.playbackRate) || 1,
+          muted: mediaElement.muted === true,
+          visible: visible === true,
+          readyState: boundedReadyState(mediaElement.readyState),
+          observedAt
+        };
+        const signature = [
+          observation.mediaId,
+          observation.state,
+          observation.trigger,
+          observation.visible,
+          observation.muted,
+          observation.playbackRate,
+          Math.floor((observation.currentTime || 0) * 2)
+        ].join(":");
+        if (trigger !== "timeupdate" && signature === session.lastSignature && observedAt - session.lastObservedAt < 250)
+          return null;
+        session.lastObservedAt = observedAt;
+        session.lastSignature = signature;
+        return observation;
+      }
+    });
+  }
+  function playbackState(mediaElement, trigger) {
+    if (trigger === "waiting") return "waiting";
+    if (trigger === "seeking") return "seeking";
+    if (mediaElement.ended === true || trigger === "ended") return "ended";
+    if (mediaElement.paused === false) return "playing";
+    if (finiteOrNull(mediaElement.currentTime) > 0) return "paused";
+    return "idle";
+  }
+  function boundedReadyState(value) {
+    const number = Number(value);
+    return Number.isInteger(number) && number >= 0 && number <= 4 ? number : null;
+  }
+  function finiteOrNull(value) {
+    const number = Number(value);
+    return Number.isFinite(number) && number >= 0 ? number : null;
+  }
+  function positiveFiniteOrNull(value) {
+    const number = Number(value);
+    return Number.isFinite(number) && number > 0 ? number : null;
+  }
+  function randomScopeId() {
+    return globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+
   // src/content/media-observer.js
+  var VIDEO_OBSERVATION_EVENTS = Object.freeze([
+    "loadedmetadata",
+    "durationchange",
+    "play",
+    "pause",
+    "ended",
+    "waiting",
+    "seeking",
+    "seeked",
+    "ratechange",
+    "timeupdate"
+  ]);
+  var MAX_REPORTED_EVENT_KEYS = 2e3;
   function startMediaObserver() {
     let stopped = false;
     const reported = /* @__PURE__ */ new Set();
@@ -987,8 +1164,11 @@ var AdsFriendlyMediaFrame = (() => {
     const requestedProbes = /* @__PURE__ */ new Set();
     const contextualProbeRetries = /* @__PURE__ */ new Set();
     const videoListeners = /* @__PURE__ */ new Map();
+    const playbackTracker = createPlaybackObservationTracker();
     const videoVisibilityObserver = typeof IntersectionObserver === "function" ? new IntersectionObserver(
-      (entries) => entries.forEach((entry) => reportElementSource(entry.target)),
+      (entries) => entries.forEach(
+        (entry) => reportElementSource(entry.target, "visibility")
+      ),
       { threshold: [0, 0.25, 0.6] }
     ) : null;
     const aesKeyHandoffRequests = /* @__PURE__ */ new Map();
@@ -1114,7 +1294,8 @@ var AdsFriendlyMediaFrame = (() => {
         EVENTS.MEDIA_PROBED,
         EVENTS.MEDIA_PROBE_DIAGNOSTIC,
         EVENTS.MEDIA_BLOB_TRACED,
-        EVENTS.MEDIA_EME_OBSERVED
+        EVENTS.MEDIA_EME_OBSERVED,
+        EVENTS.MEDIA_PLAYBACK_OBSERVED
       ].includes(messageEvent.data.event?.type))
         return;
       try {
@@ -1180,11 +1361,8 @@ var AdsFriendlyMediaFrame = (() => {
       window.removeEventListener("message", onMainWorldMessage);
       chrome.runtime.onMessage.removeListener(onBackgroundMessage);
       for (const [video, listener] of videoListeners) {
-        video.removeEventListener("loadedmetadata", listener);
-        video.removeEventListener("durationchange", listener);
-        video.removeEventListener("play", listener);
-        video.removeEventListener("pause", listener);
-        video.removeEventListener("ended", listener);
+        for (const eventType of VIDEO_OBSERVATION_EVENTS)
+          video.removeEventListener(eventType, listener);
       }
       videoListeners.clear();
       videoVisibilityObserver?.disconnect();
@@ -1364,20 +1542,17 @@ var AdsFriendlyMediaFrame = (() => {
     }
     function observeVideo(video) {
       if (videoListeners.has(video)) return;
-      const listener = () => {
-        reportElementSource(video);
+      const listener = (event2) => {
+        reportElementSource(video, event2?.type || "initial");
         video.querySelectorAll("source").forEach(reportElementSource);
       };
       videoListeners.set(video, listener);
-      video.addEventListener("loadedmetadata", listener);
-      video.addEventListener("durationchange", listener);
-      video.addEventListener("play", listener);
-      video.addEventListener("pause", listener);
-      video.addEventListener("ended", listener);
+      for (const eventType of VIDEO_OBSERVATION_EVENTS)
+        video.addEventListener(eventType, listener);
       videoVisibilityObserver?.observe(video);
-      listener();
+      listener({ type: "initial" });
     }
-    function reportElementSource(element) {
+    function reportElementSource(element, playbackTrigger = null) {
       const sourceUrl = element.currentSrc || element.src || element.getAttribute?.("src");
       const mimeType = element.currentType || element.type || element.getAttribute?.("type");
       const duration = element.matches?.("video") && Number.isFinite(element.duration) ? element.duration : null;
@@ -1392,7 +1567,7 @@ var AdsFriendlyMediaFrame = (() => {
         currentTime: Number.isFinite(element.currentTime) ? element.currentTime : null,
         observedAt: Date.now()
       } : null;
-      reportSource(
+      const candidate = reportSource(
         sourceUrl,
         mimeType,
         MEDIA_DETECTION_SOURCES.DOM,
@@ -1400,6 +1575,13 @@ var AdsFriendlyMediaFrame = (() => {
         resolution,
         playback
       );
+      if (element.matches?.("video")) {
+        reportPlaybackObservation(
+          element,
+          candidate?.id || null,
+          playbackTrigger || "initial"
+        );
+      }
     }
     function reportSource(sourceUrl, mimeType, detectedBy, duration = null, resolution = null, playback = null) {
       const candidate = createYouTubeCandidateFromObservedSource({
@@ -1417,8 +1599,21 @@ var AdsFriendlyMediaFrame = (() => {
         playback,
         detectedBy
       });
-      if (!candidate) return;
+      if (!candidate) return null;
       reportEvent(createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, candidate));
+      return candidate;
+    }
+    function reportPlaybackObservation(video, mediaId, trigger) {
+      const observation = playbackTracker.observe(video, {
+        pageUrl: location.href,
+        mediaId,
+        trigger,
+        visible: isVisibleVideo(video)
+      });
+      if (!observation) return;
+      reportEvent(
+        createRegisteredEvent(EVENTS.MEDIA_PLAYBACK_OBSERVED, observation)
+      );
     }
     function isVisibleVideo(video) {
       try {
@@ -1444,12 +1639,12 @@ var AdsFriendlyMediaFrame = (() => {
       if (reported.has(reportKey) || pending.has(reportKey)) return;
       pending.add(reportKey);
       chrome.runtime.sendMessage({
-        type: event2.type === EVENTS.MEDIA_PROBED ? "MEDIA_PROBED" : event2.type === EVENTS.MEDIA_PROBE_DIAGNOSTIC ? "MEDIA_PROBE_DIAGNOSTIC" : event2.type === EVENTS.MEDIA_BLOB_TRACED ? "MEDIA_BLOB_TRACED" : event2.type === EVENTS.MEDIA_EME_OBSERVED ? "MEDIA_EME_OBSERVED" : "MEDIA_DISCOVERED",
+        type: event2.type === EVENTS.MEDIA_PROBED ? "MEDIA_PROBED" : event2.type === EVENTS.MEDIA_PROBE_DIAGNOSTIC ? "MEDIA_PROBE_DIAGNOSTIC" : event2.type === EVENTS.MEDIA_BLOB_TRACED ? "MEDIA_BLOB_TRACED" : event2.type === EVENTS.MEDIA_EME_OBSERVED ? "MEDIA_EME_OBSERVED" : event2.type === EVENTS.MEDIA_PLAYBACK_OBSERVED ? "MEDIA_PLAYBACK_OBSERVED" : "MEDIA_DISCOVERED",
         event: event2
       }).then((response) => {
         pending.delete(reportKey);
         if (response?.status === "recorded") {
-          reported.add(reportKey);
+          rememberReportedKey(reported, reportKey);
           retryCounts.delete(reportKey);
           if (event2.type === EVENTS.MEDIA_DISCOVERED)
             scheduleManifestProbe(event2.payload);
@@ -1603,6 +1798,17 @@ var AdsFriendlyMediaFrame = (() => {
         ...payload.keyStatuses || []
       ].join(":");
     }
+    if (event2?.type === EVENTS.MEDIA_PLAYBACK_OBSERVED) {
+      return [
+        event2.type,
+        payload.sessionId,
+        payload.mediaId || "unlinked",
+        payload.state,
+        payload.trigger,
+        payload.visible ? "visible" : "hidden",
+        Math.floor((payload.currentTime || 0) / 5)
+      ].join(":");
+    }
     if (event2?.type === EVENTS.MEDIA_PROBE_DIAGNOSTIC) {
       return [
         event2.type,
@@ -1633,6 +1839,14 @@ var AdsFriendlyMediaFrame = (() => {
       payload.encryptionScheme || "none",
       (payload.encryptionMethods || []).join(",")
     ].join(":");
+  }
+  function rememberReportedKey(reported, reportKey) {
+    reported.add(reportKey);
+    while (reported.size > MAX_REPORTED_EVENT_KEYS) {
+      const oldest = reported.values().next().value;
+      if (oldest === void 0) return;
+      reported.delete(oldest);
+    }
   }
   function startPerformanceObserver(onEntry) {
     if (typeof PerformanceObserver === "undefined") return null;
