@@ -1,121 +1,124 @@
 (function () {
-  var bgApi = typeof browser !== "undefined" ? browser : chrome;
-  var storage = bgApi.storage.local;
-  var runtimeSnapshot = {
-    appSettings: { enabled: true, protectionMode: "safe", featureOverrides: {} },
+  var api = typeof browser !== "undefined" ? browser : chrome;
+  var storage = AFShared.storageAdapter();
+  var snapshot = {
+    appSettings: AFSettingsPackage.normalizeApp({}),
     whitelist: [],
     blacklist: [],
-    userCustomRules: {},
-    blockedCount: 0,
-    afsBlockedByHost: {}
+    afsBlockedByHost: {},
   };
-
-  function refresh(callback) {
-    storage.get([
-      "appSettings", "whitelist", "blacklist", "userCustomRules",
-      "blockedCount", "afsBlockedByHost", "settingsPackageState"
-    ], function (result) {
-      result = result || {};
-      runtimeSnapshot.appSettings = AFSettingsPackage.normalizeApp(result.appSettings);
-      runtimeSnapshot.whitelist = result.whitelist || [];
-      runtimeSnapshot.blacklist = result.blacklist || [];
-      runtimeSnapshot.userCustomRules = result.userCustomRules || {};
-      runtimeSnapshot.blockedCount = Number(result.blockedCount) || 0;
-      runtimeSnapshot.afsBlockedByHost = result.afsBlockedByHost || {};
-      runtimeSnapshot.settingsPackageState = result.settingsPackageState || null;
-      if (callback) callback(runtimeSnapshot);
-    });
+  async function refresh() {
+    snapshot = await storage.get(["appSettings", "whitelist", "blacklist", "blockedCount", "afsBlockedByHost", "settingsPackageState"]);
+    snapshot.appSettings = AFSettingsPackage.normalizeApp(snapshot.appSettings);
+    snapshot.afsBlockedByHost = snapshot.afsBlockedByHost || {};
+    return snapshot;
   }
-
-  function normalizeDecisionLists(hostname, policy, snapshot) {
-    var whitelist = (snapshot.whitelist || []).filter(function (entry) {
-      return AFSettingsPackage.normalizeHost(entry) !== hostname;
+  window.AFSettingsReady = new Promise(function (resolve) {
+    AFSettingsPackage.initialize(api.storage.local, function (error) {
+      if (error) console.error("[AdsFriendly] initialization failed", error);
+      refresh().then(resolve, resolve);
     });
-    var blacklist = (snapshot.blacklist || []).filter(function (entry) {
-      return AFSettingsPackage.normalizeHost(entry) !== hostname;
-    });
-    if (policy === "allow") whitelist.push(hostname);
-    if (policy === "block") blacklist.push("||" + hostname + "^");
-    return { whitelist: whitelist, blacklist: blacklist };
-  }
-
+  });
   window.bgIsProtectionEnabled = function () {
-    return runtimeSnapshot.appSettings.enabled !== false;
+    return AFShared.iosFeatureEnabled(
+      snapshot.appSettings,
+      "background.navigation-guard",
+    );
   };
-
   window.bgGetRuntimeSnapshot = function (callback) {
-    refresh(callback);
-  };
-
-  window.bgGetSitePolicy = function (hostname) {
-    hostname = AFSettingsPackage.normalizeHost(hostname);
-    var allowed = runtimeSnapshot.whitelist.some(function (entry) {
-      return AFSettingsPackage.normalizeHost(entry) === hostname;
+    window.AFSettingsReady.then(refresh).then(callback, function (error) {
+      callback({ error: error.message });
     });
-    var blocked = runtimeSnapshot.blacklist.some(function (entry) {
-      return AFSettingsPackage.normalizeHost(entry) === hostname;
-    });
-    return blocked ? "block" : (allowed ? "allow" : "default");
   };
-
+  window.bgGetSitePolicy = function (host) {
+    function matches(entry) {
+      var domain = AFSettingsPackage.normalizeHost(entry);
+      return !!domain && (host === domain || host.endsWith("." + domain));
+    }
+    return (snapshot.blacklist || []).some(matches)
+      ? "block"
+      : (snapshot.whitelist || []).some(matches)
+        ? "allow"
+        : "default";
+  };
   window.bgSetSitePolicy = function (hostname, policy, callback) {
-    hostname = AFSettingsPackage.normalizeHost(hostname);
-    if (!hostname || ["default", "allow", "block"].indexOf(policy) < 0) {
+    var host = AFSettingsPackage.normalizeHost(hostname);
+    if (!host || !["allow", "block", "default"].includes(policy)) {
       callback(new Error("Invalid site policy."));
       return;
     }
-    storage.get(["whitelist", "blacklist", "afsAllowedPopupHosts", "afsBlockedPopupHosts"], function (snapshot) {
-      var lists = normalizeDecisionLists(hostname, policy, snapshot || {});
-      var allowed = Object.assign({}, snapshot.afsAllowedPopupHosts || {});
-      var blocked = Object.assign({}, snapshot.afsBlockedPopupHosts || {});
-      delete allowed[hostname];
-      delete blocked[hostname];
-      storage.set({
-        whitelist: lists.whitelist,
-        blacklist: lists.blacklist,
+    AFShared.serialMutation(async function () {
+      await window.AFSettingsReady;
+      var data = await storage.get(["whitelist", "blacklist", "afsAllowedPopupHosts", "afsBlockedPopupHosts"]);
+      var whitelist = (data.whitelist || []).filter(
+        (entry) => AFSettingsPackage.normalizeHost(entry) !== host,
+      );
+      var blacklist = (data.blacklist || []).filter(
+        (entry) => AFSettingsPackage.normalizeHost(entry) !== host,
+      );
+      if (policy === "allow") whitelist.push(host);
+      if (policy === "block") blacklist.push("||" + host + "^");
+      var allowed = data.afsAllowedPopupHosts || {},
+        blocked = data.afsBlockedPopupHosts || {};
+      delete allowed[host];
+      delete blocked[host];
+      await storage.set({
+        whitelist,
+        blacklist,
         afsAllowedPopupHosts: allowed,
-        afsBlockedPopupHosts: blocked
-      }, function () {
-        refresh(function () { callback(null, policy); });
+        afsBlockedPopupHosts: blocked,
       });
-    });
+      await refresh();
+      return policy;
+    }).then((value) => callback(null, value), callback);
   };
-
   window.bgSetAppSettings = function (next, callback) {
-    var settings = AFSettingsPackage.normalizeApp(next);
-    storage.set({
-      appSettings: settings,
-      isEnabled: settings.enabled,
-      friendlyMode: settings.protectionMode === "safe"
-    }, function () {
-      refresh(function () { callback(null, settings); });
-    });
+    AFShared.serialMutation(async function () {
+      await window.AFSettingsReady;
+      var appSettings = AFSettingsPackage.normalizeApp(next);
+      await storage.set({
+        appSettings,
+        isEnabled: appSettings.enabled,
+        friendlyMode: appSettings.protectionMode === "safe",
+      });
+      await refresh();
+      return appSettings;
+    }).then((value) => callback(null, value), callback);
   };
-
-  window.bgRecordBlock = function (pageUrl, kind, amount) {
-    var hostname = "unknown";
-    try { hostname = new URL(pageUrl).hostname.toLowerCase(); } catch (e) {}
-    amount = Math.max(1, Math.min(100, Number(amount) || 1));
-    storage.get(["blockedCount", "afsBlockedByHost"], function (snapshot) {
-      var total = (Number(snapshot.blockedCount) || 0) + amount;
-      var byHost = snapshot.afsBlockedByHost || {};
-      var current = byHost[hostname] || { total: 0, popup: 0, banner: 0, dom: 0 };
-      current.total += amount;
-      current[kind] = (Number(current[kind]) || 0) + amount;
+  window.bgRecordBlock = function (url, kind, amount) {
+    AFShared.serialMutation(async function () {
+      await window.AFSettingsReady;
+      var host = AFShared.httpUrl(url)?.hostname || "unknown";
+      var data = await storage.get(["blockedCount", "afsBlockedByHost"]);
+      var byHost = data.afsBlockedByHost || {},
+        current = byHost[host] || { total: 0 };
+      var count = Math.max(1, Math.min(100, Number(amount) || 1));
+      current.total = (Number(current.total) || 0) + count;
+      current[kind] = (Number(current[kind]) || 0) + count;
       current.updatedAt = Date.now();
-      byHost[hostname] = current;
-      storage.set({ blockedCount: total, afsBlockedByHost: byHost });
-      runtimeSnapshot.blockedCount = total;
-      runtimeSnapshot.afsBlockedByHost = byHost;
-    });
+      byHost[host] = current;
+      var hosts = Object.keys(byHost).sort(
+        (a, b) => byHost[b].updatedAt - byHost[a].updatedAt,
+      );
+      hosts.slice(250).forEach((key) => delete byHost[key]);
+      await storage.set({
+        blockedCount: (Number(data.blockedCount) || 0) + count,
+        afsBlockedByHost: byHost,
+      });
+    }).catch(console.error);
   };
-
-  bgApi.storage.onChanged.addListener(function (changes, areaName) {
-    if (areaName === "local") refresh();
-  });
-
-  AFSettingsPackage.initialize(storage, function (error) {
-    if (error) console.error("[AdsFriendly iOS] Settings package init failed", error);
-    refresh();
+  window.bgRecordDiagnostic = function (event) {
+    AFShared.serialMutation(async function () {
+      var data = await storage.get("afsDiagnostics");
+      await storage.set({
+        afsDiagnostics: [
+          ...(data.afsDiagnostics || []),
+          { ...event, time: Date.now() },
+        ].slice(-50),
+      });
+    }).catch(console.error);
+  };
+  api.storage.onChanged.addListener(function (changes, area) {
+    if (area === "local" && ["appSettings", "whitelist", "blacklist", "blockedCount", "afsBlockedByHost", "settingsPackageState"].some(key => key in changes)) refresh().catch(console.error);
   });
 })();

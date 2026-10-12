@@ -8,46 +8,65 @@ on:
       - codex/**
       - product/**
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: macos-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install build tools
+        run: pnpm install --frozen-lockfile
+      - name: Validate iOS before compiling
+        run: |
+          set -euo pipefail
+          pnpm ios:check
+          pnpm ios:settings:check
+          pnpm test:ios
+      - name: Browser smoke checks
+        run: pnpm test:ios:browser
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
-
       - name: Show Xcode version
         run: xcodebuild -version
-
-      - name: Sync Settings Package
-        run: node scripts/sync-ios-settings-package.mjs
-
-      - name: Build unsigned IPA for device
+      - name: Build unsigned IPA for Sideloadly
+        working-directory: ios/AdsFriendly_iOS
         run: |
-          cd ios/AdsFriendly_iOS
+          set -euo pipefail
           xcodebuild -project AdsFriendly_iOS.xcodeproj \
             -scheme AdsFriendly_iOS \
             -sdk iphoneos \
             -configuration Debug \
+            -derivedDataPath build/DerivedData \
+            CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
+            MARKETING_VERSION=1.1.0 \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
             build
-
-          # Locate .app
-          APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -name "AdsFriendly_iOS.app" -path "*/Debug-iphoneos/*" | head -1)
-          echo "App found at: $APP_PATH"
-
-          # Create IPA structure
-          mkdir -p Payload
-          cp -R "$APP_PATH" Payload/
-          mkdir -p build
-          zip -r build/AdsFriendly_iOS.ipa Payload/
-          rm -rf Payload
-
-      - name: Upload artifact
+          APP_PATH="build/DerivedData/Build/Products/Debug-iphoneos/AdsFriendly_iOS.app"
+          test -d "$APP_PATH"
+          EXT_PATH="$APP_PATH/PlugIns/AdsFriendly_iOS Extension.appex"
+          test -f "$EXT_PATH/utils/shared.js"
+          test -f "$EXT_PATH/packages/import.html"
+          test -f "$EXT_PATH/packages/default-settings-package.json"
+          mkdir -p build/Payload
+          cp -R "$APP_PATH" build/Payload/
+          cd build
+          zip -r AdsFriendly_iOS.ipa Payload/
+      - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
           name: AdsFriendly-iOS
           path: ios/AdsFriendly_iOS/build/AdsFriendly_iOS.ipa
+          if-no-files-found: error
+          retention-days: 14

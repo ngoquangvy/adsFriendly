@@ -1,76 +1,22 @@
 (function() {
-  var hiddenBanners = new WeakSet();
-  var toggledElements = new WeakSet();
+  if (window.top !== window) return;
+  var hiddenBanners = { has: function(element) { return AF_DOM.isHidden(element); } };
   var reviewedBanners = new WeakSet();
 
-  function escapeCss(value) {
-    if (window.CSS && typeof window.CSS.escape === "function") return window.CSS.escape(value);
-    return String(value || "").replace(/[^a-zA-Z0-9_-]/g, "\\$&");
-  }
-
   function buildBannerSelector(el) {
-    if (!el || !el.tagName) return "";
-    var tag = el.tagName.toLowerCase();
-    if (isStableToken(el.id)) {
-      var idSelector = tag + "#" + escapeCss(el.id);
-      if (selectorMatchCount(idSelector) === 1) return idSelector;
-    }
-    var classes = String(el.className || "").split(/\s+/).filter(function(token) {
-      return isStableToken(token) && hasAdTokenSignal(token);
+    return AFShared.buildDomSelector(el) || "";
+  }
+
+  function isAllowedCandidate(selector, element) {
+    return !!selector && AF_DOM.isAllowed(element, selector);
+  }
+
+  async function saveDomDecision(selector, decision, element) {
+    var response = await AFShared.callApi(api.runtime, "sendMessage", {
+      action: "save_dom_decision", hostname: window.location.hostname, selector,
+      layout: getResponsiveLayout(), decision, features: AFShared.extractDomFeatures(element)
     });
-    if (classes.length) return tag + "." + escapeCss(classes[0]);
-    var stableClasses = String(el.className || "").split(/\s+/).filter(isStableToken);
-    for (var i = 0; i < stableClasses.length; i++) {
-      var classSelector = tag + "." + escapeCss(stableClasses[i]);
-      var count = selectorMatchCount(classSelector);
-      if (count > 0 && count <= 3) return classSelector;
-    }
-    var ariaLabel = el.getAttribute && el.getAttribute("aria-label");
-    var title = el.getAttribute && el.getAttribute("title");
-    var label = ariaLabel || title;
-    if (label && /ad|advert|banner|sponsor|promo/i.test(label) && label.length <= 100) {
-      var attribute = ariaLabel ? "aria-label" : "title";
-      return tag + '[' + attribute + '="' + String(label).replace(/"/g, '\\"') + '"]';
-    }
-    var adLink = findAdLink(el);
-    if (adLink) {
-      try {
-        var host = new URL(adLink.href).hostname;
-        if (host) return 'a[href*="//' + String(host).replace(/"/g, '\\"') + '"]';
-      } catch(e) {}
-    }
-    return "";
-  }
-
-  function isStableToken(value) {
-    value = String(value || "");
-    if (!/^[a-zA-Z][a-zA-Z0-9_-]{2,79}$/.test(value)) return false;
-    if (/\d{5,}|[a-f0-9]{12,}/i.test(value)) return false;
-    return ["container", "wrapper", "content", "item", "active", "show", "visible"].indexOf(value.toLowerCase()) < 0;
-  }
-
-  function selectorMatchCount(selector) {
-    try { return document.querySelectorAll(selector).length; } catch(e) { return 0; }
-  }
-
-  function isAllowedCandidate(selector) {
-    if (!selector) return false;
-    var hostname = window.location.hostname.toLowerCase();
-    var layout = getResponsiveLayout();
-    return (AF_CONFIG.allowedDomSelectors[hostname] || []).some(function(rule) {
-      return rule.selector === selector && (!rule.layout || rule.layout === "any" || rule.layout === layout);
-    });
-  }
-
-  function saveDomDecision(selector, decision) {
-    if (!selector) return;
-    api.runtime.sendMessage({
-      action: "save_dom_decision",
-      hostname: window.location.hostname,
-      selector: selector,
-      layout: getResponsiveLayout(),
-      decision: decision
-    });
+    if (!response || response.error) throw new Error(response?.error || "Could not save this choice.");
   }
 
   function isPositionedBanner(el) {
@@ -117,7 +63,7 @@
       } catch(e) {}
     }
     var allChildren = bannerEl.querySelectorAll('*');
-    for (var c = 0; c < allChildren.length; c++) {
+    for (var c = 0; c < allChildren.length && c < 100; c++) {
       if (textMatchesSignature(allChildren[c])) return true;
     }
     return false;
@@ -277,75 +223,28 @@
     return null;
   }
 
-  function hideBanner(el, reason, hideAction) {
-    if (!isProtectionEnabled() || isWhitelisted(window.location.href)) return;
-    if (hiddenBanners.has(el) || reviewedBanners.has(el)) return;
+  function hideBanner(el, reason) {
+    if (!isProtectionEnabled() || getCurrentSitePolicy() === "allow" || AF_DOM.isHidden(el)) return;
+    if (reviewedBanners.has(el) || isProtectedNavigation(el) || isLoginForm(el)) return;
     var selector = buildBannerSelector(el);
-    if (isAllowedCandidate(selector)) {
-      reviewedBanners.add(el);
-      return;
-    }
-    if (shouldAutoHide(el, reason)) {
-      hiddenBanners.add(el);
-      if (hideAction) hideAction();
-      else el.style.setProperty('display', 'none', 'important');
-      if (typeof afsRecordTelemetry === 'function') {
-        afsRecordTelemetry({
-          unit: "ui_overlay",
-          label: "ad",
-          label_source: getCurrentSitePolicy() === "block" ? "user_block" : "heuristic_blocked",
-          ad_type: "banner",
-          reason: reason,
-          element: el,
-          action: "hide",
-          outcome: "hidden_element",
-          evidence: { count: 1, layout: getResponsiveLayout(), automatic: true }
-        });
-      }
-      return;
-    }
+    if (isAllowedCandidate(selector, el)) return;
     if (typeof notifyBannerCandidate !== "function") return;
-    var accepted = notifyBannerCandidate(el, reason, {
-      hide: function() {
-        hiddenBanners.add(el);
-        if (hideAction) hideAction();
-        else el.style.setProperty('display', 'none', 'important');
-        saveDomDecision(selector, "hide");
-        if (typeof afsRecordTelemetry === 'function') {
-          afsRecordTelemetry({
-            unit: "ui_overlay",
-            label: "ad",
-            label_source: "user_hide",
-            ad_type: "banner",
-            reason: reason,
-            element: el,
-            action: "hide",
-            outcome: "hidden_element",
-            evidence: {
-              count: 1,
-              layout: getResponsiveLayout(),
-              has_close_button: hasCloseButton(el),
-              high_ad_link_ratio: hasHighAdLinkRatio(el),
-              large_overlay: isLargeOverlay(el)
-            }
-          });
-        }
+    notifyBannerCandidate(el, reason, {
+      hide: async function() {
+        await saveDomDecision(selector, "hide", el);
+        AF_DOM.hide(el, selector);
+        if (typeof afsRecordTelemetry === "function") afsRecordTelemetry({
+          unit: "ui_overlay", label: "ad", label_source: "user_hide", ad_type: "banner",
+          reason: reason, element: el, action: "hide", outcome: "hidden_element",
+          evidence: { count: 1, layout: getResponsiveLayout() }
+        });
       },
-      show: function() {
-        reviewedBanners.add(el);
-        saveDomDecision(selector, "show");
+      show: async function() {
+        await saveDomDecision(selector, "show", el);
+        AF_DOM.restore(el);
       },
       dismiss: function() { reviewedBanners.add(el); }
     });
-    if (accepted) reviewedBanners.add(el);
-  }
-
-  function shouldAutoHide(el, reason) {
-    if (getCurrentSitePolicy() === "block") return true;
-    if (reason === "invisible overlay") return true;
-    var directAdLink = !!findAdLink(el);
-    return (directAdLink && (hasCloseButton(el) || hasBannerCreativeGeometry(el) || isLargeOverlay(el))) ||
-      (hasAdContent(el) && hasCloseButton(el) && hasBannerCreativeGeometry(el));
   }
 
   function scanInlineCreatives() {
@@ -373,21 +272,17 @@
   }
 
   function toggleCollapse(el, toggleBtn) {
-    if (toggledElements.has(el)) return;
-    hideBanner(el, "toggle collapse", function() {
-      toggledElements.add(el);
-      toggleBtn.click();
-      log("Banner: collapsed via toggle");
-    });
+    hideBanner(el, "collapsible banner");
   }
 
   function scanBanners() {
-    if (!isProtectionEnabled() || isWhitelisted(window.location.href)) return;
+    if (!AFShared.iosFeatureEnabled(AF_CONFIG.appSettings, "content.dom-candidate-collector")) return;
+    if (document.hidden || !isProtectionEnabled() || isWhitelisted(window.location.href)) return;
     scanInlineCreatives();
     var allEls = document.querySelectorAll('body *');
     var positioned = [];
 
-    for (var i = 0; i < allEls.length; i++) {
+    for (var i = 0; i < allEls.length && i < 1500; i++) {
       var el = allEls[i];
       if (hiddenBanners.has(el) || reviewedBanners.has(el)) continue;
       if (!isPositionedBanner(el)) continue;
@@ -424,7 +319,6 @@
     for (var i = 0; i < positioned.length; i++) {
       var el = positioned[i];
       if (hiddenBanners.has(el)) continue;
-      if (toggledElements.has(el)) continue;
       if (isProtectedNavigation(el)) continue;
       if (hasCloseButton(el)) continue;
       var toggleBtn = hasToggleButton(el);
@@ -499,5 +393,10 @@
   }
 
   window.AF_scanBanners = scanBanners;
+  window.AF_resetBannerReviews = function() { reviewedBanners = new WeakSet(); };
+  api.storage.onChanged.addListener(function(changes, area) {
+    if (area === 'local' && ["appSettings", "whitelist", "blacklist", "userCustomRules", "userElementExceptions", "afsAllowedDomSelectors"].some(key => key in changes)) reviewedBanners = new WeakSet();
+  });
+  window.addEventListener('resize', function() { reviewedBanners = new WeakSet(); }, { passive: true });
   log("Banner detector started.");
 })();

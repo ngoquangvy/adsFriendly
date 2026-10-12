@@ -43,9 +43,7 @@ function getProtectionMode() {
 }
 
 function getResponsiveLayout() {
-  var screenWidth = typeof screen !== "undefined" && screen.width ? screen.width : 1024;
-  return Math.min(window.innerWidth || 1024, screenWidth) <= 767
-    ? "compact" : "wide";
+  return AFShared.getResponsiveLayout();
 }
 
 function normalizeHost(hostname) {
@@ -93,7 +91,7 @@ function getRootDomain(url) {
 }
 
 function areSameSite(url1, url2) {
-  return getRootDomain(url1) === getRootDomain(url2);
+  return AFShared.sameHostFamily(url1, url2);
 }
 
 function urlFromElement(el) {

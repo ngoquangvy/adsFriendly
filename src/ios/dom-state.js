@@ -1,0 +1,40 @@
+// Preserve only properties changed by us; don't overwrite newer page styles.
+export function createHiddenElements({ limit = 500 } = {}) {
+  const hidden = new Map();
+  return {
+    has: (element) => hidden.has(element),
+    hide(element, metadata) {
+      if (hidden.has(element) || hidden.size >= limit) return false;
+      hidden.set(element, {
+        value: element.style.getPropertyValue("display"),
+        priority: element.style.getPropertyPriority("display"),
+        metadata,
+      });
+      element.style.setProperty("display", "none", "important");
+      return true;
+    },
+    restore(element) {
+      const saved = hidden.get(element);
+      if (!saved) return false;
+      hidden.delete(element);
+      if (
+        element.style.getPropertyValue("display") === "none" &&
+        element.style.getPropertyPriority("display") === "important"
+      ) {
+        if (saved.value)
+          element.style.setProperty("display", saved.value, saved.priority);
+        else element.style.removeProperty("display");
+      }
+      return true;
+    },
+    reconcile(keep) {
+      for (const [element, saved] of hidden) {
+        if (element.isConnected === false) hidden.delete(element);
+        else if (!keep(element, saved.metadata)) this.restore(element);
+      }
+    },
+    get size() {
+      return hidden.size;
+    },
+  };
+}

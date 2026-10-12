@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AdsFriendly · Settings Package</title>
+  <link rel="stylesheet" href="../popup.css">
+  <link rel="stylesheet" href="import.css">
+</head>
+<body>
+  <main>
+    <h1>Settings Package</h1>
+    <p>Export your package from the desktop extension, save it to Files on iPhone, then select it here.</p>
+    <label for="package-file">Select JSON package (up to 2 MB)</label>
+    <input id="package-file" type="file" accept=".json,application/json">
+    <section id="preview" hidden>
+      <h2 id="package-name"></h2>
+      <p id="summary"></p>
+      <p>This replaces protection settings, Allow/Block lists, DOM rules, Keep exceptions and trusted paths. Desktop “wide” rules stay separate from “compact” mobile rules.</p>
+      <p>Settings for desktop-only features are preserved in the package but are not implemented by this iOS app.</p>
+      <button id="install" type="button">Replace current settings</button>
+    </section>
+    <p id="status" role="status" aria-live="polite"></p>
+    <p id="error" role="alert" hidden></p>
+    <button id="undo" type="button" hidden>Undo last import</button>
+    <details>
+      <summary>Protection diagnostics</summary>
+      <p>Recent injection and tab-guard events. Hosts only; no full browsing URLs.</p>
+      <button id="diagnostics" type="button">Refresh diagnostics</button>
+      <pre id="diagnostic-output"></pre>
+    </details>
+  </main>
+  <script src="../utils/shared.js"></script>
+  <script src="import.js"></script>
+</body>
+</html>

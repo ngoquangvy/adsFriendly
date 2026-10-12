@@ -1,23 +1,28 @@
 (function() {
   var injectionCode = [
     "(function() {",
+    "  if (window.__afsHookInstalled) { window.dispatchEvent(new CustomEvent('__AFS_ready__')); return; }",
+    "  window.__afsHookInstalled = true;",
     "  var _origOpen = window.open;",
     "  var _lastGestureAt = 0;",
     "  var _GESTURE_WIN = 1000;",
-    "  document.addEventListener('pointerdown', function() { _lastGestureAt = Date.now(); }, { capture: true, passive: true });",
-    "  document.addEventListener('touchstart', function() { _lastGestureAt = Date.now(); }, { capture: true, passive: true });",
-    "  document.addEventListener('keydown', function() { _lastGestureAt = Date.now(); }, { capture: true, passive: true });",
+    "  document.addEventListener('pointerdown', function(e) { if (e.isTrusted) _lastGestureAt = Date.now(); }, { capture: true, passive: true });",
+    "  document.addEventListener('touchstart', function(e) { if (e.isTrusted) _lastGestureAt = Date.now(); }, { capture: true, passive: true });",
+    "  document.addEventListener('keydown', function(e) { if (e.isTrusted) _lastGestureAt = Date.now(); }, { capture: true, passive: true });",
     "  function isUserInitiated() {",
     "    return !!(navigator.userActivation && navigator.userActivation.isActive) || Date.now() - _lastGestureAt < _GESTURE_WIN;",
     "  }",
     "  window.open = function(url, target, features) {",
+    "    if (['_self', '_top', '_parent'].indexOf(String(target).toLowerCase()) >= 0) return _origOpen.call(window, url, target, features);",
     "    try {",
+    "      document.documentElement.removeAttribute('__afs_allow__');",
+    "      document.documentElement.removeAttribute('__afs_decision__');",
     "      var ev = new CustomEvent('__AFS_popup__', {",
     "        detail: JSON.stringify({ url: url || '', target: target || '', userInitiated: isUserInitiated() })",
     "      });",
     "      window.dispatchEvent(ev);",
     "      var flag = document.documentElement.getAttribute('__afs_allow__');",
-    "      if (flag === 'yes') {",
+    "      if (flag === 'yes' || !document.documentElement.getAttribute('__afs_decision__')) {",
     "        document.documentElement.removeAttribute('__afs_allow__');",
     "        return _origOpen.call(window, url, target, features);",
     "      }",
@@ -25,6 +30,7 @@
       "      return { closed: false, close: noop, focus: noop, blur: noop, postMessage: noop, document: { write: noop, close: noop }, location: { href: '', replace: noop } };",
     "    } catch(e) { return null; }",
     "  };",
+    "  window.dispatchEvent(new CustomEvent('__AFS_ready__'));",
     "})();"
   ].join("\n");
 
@@ -40,14 +46,20 @@
         s.src = 'data:text/javascript;base64,' + btoa(injectionCode);
       }
       (document.documentElement || document.head).appendChild(s);
-      setTimeout(function() { s.remove(); }, 0);
+      setTimeout(function() { s.remove(); if (methodIndex === 1) URL.revokeObjectURL(s.src); }, 1000);
       return true;
     } catch(e) { return false; }
   }
 
   var injected = false;
-  for (var i = 0; i < 3; i++) {
-    if (tryInject(i)) { injected = true; break; }
+  window.addEventListener("__AFS_ready__", function() { injected = true; });
+  function attempt(index) {
+    if (injected) return;
+    tryInject(index);
+    setTimeout(function() {
+      if (!injected && index < 2) attempt(index + 1);
+      else api.runtime.sendMessage({ action: "injection_status", ready: injected }, function() {});
+    }, 150);
   }
-  log("Injector: script injected =", injected, "(method", i + ")");
+  attempt(0);
 })();

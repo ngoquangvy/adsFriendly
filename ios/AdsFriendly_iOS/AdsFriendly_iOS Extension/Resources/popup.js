@@ -4,7 +4,7 @@ var currentState = null;
 var POLICY_HELP = {
   default: "Default: block obvious ads and ask when uncertain.",
   allow: "Allow: do not hide banners or block tabs opened by this site.",
-  block: "Block: strictly hide ad-like banners and block untrusted new tabs from this site."
+  block: "Block untrusted new tabs from this site. Saved Hide/Keep banner choices still apply."
 };
 
 function hostFromUrl(url) {
@@ -79,6 +79,13 @@ document.querySelectorAll("[data-policy]").forEach(function(button) {
       if (response.error) { showError(response.error); return; }
       loadState(POLICY_HELP[policy]);
     });
+  });
+});
+
+document.getElementById("import-package").addEventListener("click", function() {
+  popupApi.tabs.create({ url: popupApi.runtime.getURL("packages/import.html"), active: true }, function() {
+    if (popupApi.runtime.lastError) { showError(popupApi.runtime.lastError.message); return; }
+    window.close();
   });
 });
 

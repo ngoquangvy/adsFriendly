@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
+import * as navigation from "../src/ios/navigation.js";
 
 const IOS_RESOURCES = new URL(
   "../ios/AdsFriendly_iOS/AdsFriendly_iOS Extension/Resources/",
@@ -97,6 +98,7 @@ async function testBackgroundNewTabPolicy() {
     },
   };
   const context = {
+    AFShared: { ...navigation, callApi: (object, method, ...args) => new Promise(resolve => object[method](...args, resolve)), storageAdapter: () => ({ get: async () => ({}) }) },
     browser,
     chrome: browser,
     console: { log() {} },
@@ -105,6 +107,8 @@ async function testBackgroundNewTabPolicy() {
     setTimeout: (callback, ms) => (ms > 1000 ? 0 : setTimeout(callback, ms)),
     clearTimeout,
     bgIsWhitelisted: () => false,
+    bgIsProtectionEnabled: () => true,
+    bgIsBlacklisted: () => false,
     bgIsUserBlockedPopup: () => false,
     bgIsUserAllowedPopup: () => false,
     bgIsTrustedInitiator: () => false,
@@ -128,8 +132,24 @@ async function testBackgroundNewTabPolicy() {
   await wait(240);
   assert.equal(
     neutralized.length,
-    0,
-    "an ambiguous cross-site tab must stay open",
+    1,
+    "an ambiguous cross-site tab is neutralized for user review",
+  );
+
+  listeners.messages[0](
+    { action: "trusted_click", url: "https://news.example/story" },
+    { tab: { id: 1 } },
+  );
+  onCreatedTarget({
+    tabId: 8,
+    sourceTabId: 1,
+    url: "https://news.example/story",
+  });
+  await wait(240);
+  assert.equal(
+    neutralized.length,
+    1,
+    "a newly opened tab matching the clicked link remains open",
   );
 
   onCreatedTarget({
@@ -138,7 +158,7 @@ async function testBackgroundNewTabPolicy() {
     url: "https://ads.doubleclick.net/ad/",
   });
   await wait(240);
-  assert.equal(neutralized.length, 1, "an unsolicited known ad tab is blocked");
+  assert.equal(neutralized.length, 2, "an unsolicited known ad tab is blocked");
 
   listeners.messages[0](
     { action: "trusted_popup", url: "https://ads.doubleclick.net/ad/" },
@@ -152,8 +172,8 @@ async function testBackgroundNewTabPolicy() {
   await wait(240);
   assert.equal(
     neutralized.length,
-    1,
-    "a popup opened during a real user gesture must stay open",
+    3,
+    "a trusted click must not exempt a known advertising destination",
   );
 
   sitePolicies.set("source.example", "block");
@@ -164,7 +184,7 @@ async function testBackgroundNewTabPolicy() {
     url: "https://unknown.example/popup",
   });
   await wait(240);
-  assert.equal(neutralized.length, 2, "Block applies strictly to the source site");
+  assert.equal(neutralized.length, 4, "Block applies strictly to the source site");
 
   sitePolicies.set("source.example", "allow");
   onCreatedTarget({
@@ -173,7 +193,20 @@ async function testBackgroundNewTabPolicy() {
     url: "https://ads.doubleclick.net/ad/",
   });
   await wait(240);
-  assert.equal(neutralized.length, 2, "Allow exempts tabs opened by the source site");
+  assert.equal(neutralized.length, 4, "Allow exempts tabs opened by the source site");
+
+  sitePolicies.clear();
+  onCreatedTarget({ tabId: 9, sourceTabId: 1, url: "about:blank" });
+  listeners.updated[0](9, { url: "https://source.example/redirect" }, { openerTabId: 1 });
+  await wait(240);
+  listeners.updated[0](9, { url: "https://ads.doubleclick.net/ad/" }, { openerTabId: 1 });
+  await wait(240);
+  assert.equal(neutralized.length, 5, "blank and same-host intermediary cannot lose redirect tracking");
+  onCreatedTarget({ tabId: 10, sourceTabId: 1, url: "about:blank" });
+  listeners.committed[0]({ tabId: 10, frameId: 0, transitionType: "typed", url: "https://personal.example/" });
+  listeners.updated[0](10, { url: "https://ads.doubleclick.net/ad/" }, { openerTabId: 1 });
+  await wait(240);
+  assert.equal(neutralized.length, 5, "address-bar navigation supersedes an old opener");
 }
 
 async function testMainWorldPopupPolicy() {
@@ -182,6 +215,7 @@ async function testMainWorldPopupPolicy() {
     "utf8",
   );
   let injectedCode = "";
+  const injectionReports = [];
   const outerDocument = {
     createElement() {
       return {
@@ -197,6 +231,8 @@ async function testMainWorldPopupPolicy() {
     head: null,
   };
   vm.runInNewContext(injector, {
+    window: { addEventListener() {} },
+    api: { runtime: { sendMessage(message) { injectionReports.push(message); } } },
     Blob,
     URL,
     btoa: (value) => Buffer.from(value).toString("base64"),
@@ -247,7 +283,7 @@ async function testMainWorldPopupPolicy() {
     document: innerDocument,
     navigator: { userActivation: { isActive: false } },
     CustomEvent: class {
-      constructor(type, options) {
+      constructor(type, options = {}) {
         this.type = type;
         this.detail = options.detail;
       }
@@ -255,16 +291,37 @@ async function testMainWorldPopupPolicy() {
     Date,
   };
   innerWindow.window = innerWindow;
+  innerWindow.dispatchEvent = event => {
+    if (event.type !== "__AFS_popup__") return;
+    const detail = JSON.parse(event.detail); popupDetails.push(detail);
+    documentElement.setAttribute("__afs_decision__", detail.userInitiated ? "allow" : "block");
+    if (detail.userInitiated) documentElement.setAttribute("__afs_allow__", "yes");
+  };
   vm.runInNewContext(injectedCode, mainWorld);
 
+  innerWindow.dispatchEvent = event => {
+    if (event.type !== "__AFS_popup__") return;
+    const detail = JSON.parse(event.detail); popupDetails.push(detail);
+    documentElement.setAttribute("__afs_decision__", detail.userInitiated ? "allow" : "block");
+    if (detail.userInitiated) documentElement.setAttribute("__afs_allow__", "yes");
+  };
   innerWindow.open("https://news.example/no-gesture", "_blank");
   assert.equal(opened, 0);
   assert.equal(popupDetails.at(-1).userInitiated, false);
 
-  handlers.pointerdown();
+  innerWindow.open("https://news.example/current-page", "_self");
+  assert.equal(opened, 1, "existing-context navigations are not treated as popup tabs");
+
+  handlers.pointerdown({ isTrusted: true });
   innerWindow.open("https://news.example/user-opened", "_blank");
-  assert.equal(opened, 1);
+  assert.equal(opened, 2);
   assert.equal(popupDetails.at(-1).userInitiated, true);
+  handlers.pointerdown({ isTrusted: false });
+  innerWindow.dispatchEvent = () => {};
+  innerWindow.open("https://news.example/no-listener", "_blank");
+  assert.equal(opened, 3, "if the content listener is unavailable, the native open and background guard remain usable");
+  await wait(500);
+  assert.equal(injectionReports.at(-1).ready, false, "appending a script does not imply that CSP allowed execution");
 }
 
 function wait(ms) {
@@ -272,24 +329,29 @@ function wait(ms) {
 }
 
 async function testIosDecisionUiContract() {
-  const [manifestSource, background, ui, popupBlocker, bannerDetector, canonicalPackage, iosPackage] =
+  const [manifestSource, background, ui, popupBlocker, bannerDetector, popupHtml, popupScript, canonicalPackage, iosPackage] =
     await Promise.all([
       readFile(new URL("manifest.json", IOS_RESOURCES), "utf8"),
       readFile(new URL("background.js", IOS_RESOURCES), "utf8"),
       readFile(new URL("content/ui.js", IOS_RESOURCES), "utf8"),
       readFile(new URL("content/popup-blocker.js", IOS_RESOURCES), "utf8"),
       readFile(new URL("content/banner-detector.js", IOS_RESOURCES), "utf8"),
+      readFile(new URL("popup.html", IOS_RESOURCES), "utf8"),
+      readFile(new URL("popup.js", IOS_RESOURCES), "utf8"),
       readFile(new URL("../packages/default-settings-package.json", import.meta.url), "utf8"),
       readFile(new URL("packages/default-settings-package.json", IOS_RESOURCES), "utf8"),
     ]);
   const manifest = JSON.parse(manifestSource);
-  assert.ok(manifest.background.scripts.includes("utils/settings-package.js"));
+  assert.ok(manifest.background.scripts.includes("utils/shared.js"));
   assert.ok(manifest.background.scripts.includes("background/settings-package.js"));
   assert.ok(manifest.content_scripts[0].js.includes("content/dom-rules.js"));
   assert.equal("options_ui" in manifest, false, "mobile keeps settings intentionally small");
   assert.equal(background.includes('request.action === "restore_tabs"'), false);
   assert.equal(background.includes('request.action === "open_tabs"'), false);
   assert.ok(background.includes('request.action === "open_once"'));
+  assert.ok(background.includes('request.action === "import_settings_package"'));
+  assert.ok(popupHtml.includes('id="import-package"'));
+  assert.ok(popupScript.includes('packages/import.html'));
   assert.ok(ui.includes('action: "allow_popups"'));
   assert.ok(ui.includes('action: "block_popups"'));
   assert.ok(ui.includes('action: "open_once"'));
@@ -297,7 +359,7 @@ async function testIosDecisionUiContract() {
   assert.ok(popupBlocker.includes("notifyBlocked(url, false)"));
   assert.ok(ui.includes("notifyBannerCandidate"));
   assert.ok(ui.includes("Possible banner ad"));
-  assert.ok(bannerDetector.includes('saveDomDecision(selector, "hide")'));
-  assert.ok(bannerDetector.includes('saveDomDecision(selector, "show")'));
+  assert.ok(bannerDetector.includes('saveDomDecision(selector, "hide", el)'));
+  assert.ok(bannerDetector.includes('saveDomDecision(selector, "show", el)'));
   assert.deepEqual(JSON.parse(iosPackage), JSON.parse(canonicalPackage));
 }

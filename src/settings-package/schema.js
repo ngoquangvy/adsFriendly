@@ -392,8 +392,9 @@ function dedupeRules(rules) {
   const seen = new Set();
   return rules.filter((rule) => {
     const selector = typeof rule === "string" ? rule : rule.selector;
-    if (seen.has(selector)) return false;
-    seen.add(selector);
+    const key = selector + "|" + (typeof rule === "string" ? "any" : rule.layout || "any");
+    if (seen.has(key)) return false;
+    seen.add(key);
     return true;
   });
 }

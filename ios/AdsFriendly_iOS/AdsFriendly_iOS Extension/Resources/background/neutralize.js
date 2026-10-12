@@ -1,53 +1,32 @@
-(function() {
-  var bgApi = (typeof browser !== 'undefined') ? browser : chrome;
-
-  window.neutralizeTab = function(tabId, openerTabId, url) {
-    console.log("[AdsFriendly BG] neutralizeTab:", tabId, "url:", url);
-    if (typeof bgRecordAdEvent === "function") {
-      bgRecordAdEvent({
-        unit: "navigation",
-        label: "ad",
-        label_source: "heuristic_blocked",
-        ad_type: "popup",
-        targetUrl: url,
-        action: "block",
-        outcome: "neutralized_tab",
-        surface: "background_tab_guard",
-        evidence: {
-          tab_id_present: !!tabId,
-          opener_tab_id_present: !!openerTabId
-        }
-      });
-    }
-    if (typeof bgRecordBlock === "function") {
-      if (openerTabId) {
-        bgApi.tabs.get(openerTabId, function(sourceTab) {
-          bgRecordBlock(sourceTab && sourceTab.url ? sourceTab.url : url, "popup", 1);
-        });
-      } else {
-        bgRecordBlock(url, "popup", 1);
-      }
-    }
-    bgApi.tabs.update(tabId, { url: 'about:blank' }, function() {
-      if (bgApi.runtime.lastError) {
-        console.log("[AdsFriendly BG] update to blank FAILED:", bgApi.runtime.lastError.message);
+(function () {
+  var api = typeof browser !== "undefined" ? browser : chrome;
+  window.neutralizeTab = function (tabId, openerTabId, url, remembered) {
+    (async function () {
+      try {
+        await AFShared.callApi(api.tabs, "update", tabId, { url: "about:blank" });
+      } catch (error) {
+        bgRecordDiagnostic({ reason: "neutralize_failed", host: AFShared.httpUrl(url)?.hostname || "",
+          error: String(error.message).slice(0, 120) });
         return;
       }
-      console.log("[AdsFriendly BG] Tab", tabId, "-> about:blank OK");
-      if (openerTabId && url) {
-        bgApi.tabs.sendMessage(openerTabId, { action: "popup_blocked", url: url });
+      if (typeof bgRecordAdEvent === "function") bgRecordAdEvent({
+        unit: "navigation", label: "ad", label_source: remembered ? "user_block" : "heuristic_blocked",
+        ad_type: "popup", targetUrl: url, action: "block", outcome: "neutralized_tab", surface: "background_tab_guard"
+      });
+      var source;
+      try { source = await AFShared.callApi(api.tabs, "get", openerTabId); } catch (_) {}
+      bgRecordBlock(source?.url || url, "popup", 1);
+      if (typeof openerTabId === "number") {
+        try {
+          await AFShared.callApi(api.tabs, "sendMessage", openerTabId,
+            { action: "popup_blocked", url, remembered: remembered === true }, { frameId: 0 });
+        } catch (_) { bgRecordDiagnostic({ reason: "toast_delivery_failed", host: AFShared.httpUrl(source?.url)?.hostname || "" }); }
       }
-      setTimeout(function() {
-        bgApi.tabs.remove(tabId, function() {
-          if (bgApi.runtime.lastError) {
-            console.log("[AdsFriendly BG] remove failed (tab already blank):", bgApi.runtime.lastError.message);
-          } else {
-            console.log("[AdsFriendly BG] Tab", tabId, "removed OK");
-          }
-        });
-      }, 100);
-    });
+      // Do not close a tab that the user has already navigated away from blank.
+      try {
+        var current = await AFShared.callApi(api.tabs, "get", tabId);
+        if (current?.url === "about:blank") await AFShared.callApi(api.tabs, "remove", tabId);
+      } catch (_) { bgRecordDiagnostic({ reason: "tab_close_failed", host: AFShared.httpUrl(url)?.hostname || "" }); }
+    })().catch(console.error);
   };
-
-  console.log("[AdsFriendly BG] neutralize.js loaded.");
 })();

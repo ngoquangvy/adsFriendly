@@ -1,197 +1,158 @@
-var blockedUrls = [];
-var hideTimeout = null;
-var container = null;
-var _throttleTimer = null;
-var rememberedBlock = false;
-var bannerReview = null;
-
-function createUI() {
-  if (container) return;
-
-  container = document.createElement("div");
-  container.id = "adsfriendly-popup-container";
-  container.className = "adsfriendly-hidden";
-
-  var messageSpan = document.createElement("span");
-  messageSpan.className = "adsfriendly-message";
-
-  var openBtn = document.createElement("button");
-  openBtn.className = "adsfriendly-btn adsfriendly-primary";
-  openBtn.innerText = "Allow";
-  openBtn.addEventListener("click", function(e) {
-    e.stopPropagation();
-    runPrimaryAction();
-  });
-
-  var blockBtn = document.createElement("button");
-  blockBtn.className = "adsfriendly-btn adsfriendly-danger";
-  blockBtn.innerText = "Block";
-  blockBtn.addEventListener("click", function(e) {
-    e.stopPropagation();
-    rememberBlocked();
-  });
-
-  var closeBtn = document.createElement("button");
-  closeBtn.className = "adsfriendly-btn close";
-  closeBtn.innerText = "\u2715";
-  closeBtn.addEventListener("click", function(e) {
-    e.stopPropagation();
-    hideUI();
-  });
-
-  container.appendChild(messageSpan);
-  container.appendChild(openBtn);
-  container.appendChild(blockBtn);
-  container.appendChild(closeBtn);
-
-  function appendToBody() {
-    if (document.body) {
-      document.body.appendChild(container);
-    } else {
-      document.addEventListener('DOMContentLoaded', function() {
-        document.body.appendChild(container);
-      });
-    }
+(function () {
+  var queue = AFShared.createReviewQueue(),
+    host = null,
+    shadow = null,
+    timeout = null,
+    busy = false;
+  var recentlyClosed = new Map();
+  function createUI() {
+    if (host?.isConnected) return true;
+    if (!document.body) return false;
+    host = document.createElement("div");
+    host.id = "adsfriendly-popup-container";
+    host.setAttribute("data-afs-ui", "true");
+    host.style.cssText =
+      "all:initial!important;position:fixed!important;inset:auto 12px calc(12px + env(safe-area-inset-bottom)) 12px!important;z-index:2147483647!important;pointer-events:none!important;";
+    shadow = host.attachShadow({ mode: "closed" });
+    var style = document.createElement("style");
+    style.textContent =
+      ":host{color-scheme:dark} .card{box-sizing:border-box;max-width:480px;margin:auto;padding:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;background:#162033;color:#fff;border:1px solid #4b5973;border-radius:14px;box-shadow:0 4px 20px #0005;pointer-events:auto;font:14px -apple-system,BlinkMacSystemFont,sans-serif} .message{flex:1 1 140px;overflow-wrap:anywhere} button{min-height:44px;padding:8px 12px;border:0;border-radius:8px;color:#fff;background:#28598e;font:inherit} button:last-child{background:transparent} button:disabled{opacity:.5} .error{flex-basis:100%;color:#ffbbad} [hidden]{display:none!important}";
+    shadow.appendChild(style);
+    document.body.appendChild(host);
+    return true;
   }
-  appendToBody();
-}
-
-function truncateHostname(hostname, maxLen) {
-  if (hostname.length <= maxLen) return hostname;
-  return hostname.substring(0, maxLen - 3) + "...";
-}
-
-function updateUI() {
-  if (!container) createUI();
-  if (!container) return;
-
-  if (!container.parentNode) {
-    if (document.body) {
-      document.body.appendChild(container);
-    } else {
+  function next() {
+    if (busy) return;
+    var item = queue.take();
+    if (!item) {
+      if (host) host.remove();
       return;
     }
-  }
-
-  var messageSpan = container.querySelector(".adsfriendly-message");
-  var primaryBtn = container.querySelector(".adsfriendly-primary");
-  var blockBtn = container.querySelector(".adsfriendly-danger");
-  var fullMsg = "";
-
-  if (rememberedBlock && blockedUrls.length === 1) {
-    try {
-      var hostname = new URL(blockedUrls[0]).hostname;
-      fullMsg = "Blocked " + truncateHostname(hostname, 20);
-    } catch(e) {
-      fullMsg = "Blocked popup";
+    if (item.element && !item.element.isConnected) {
+      queue.finish();
+      next();
+      return;
     }
-    primaryBtn.innerText = "Open once";
-    blockBtn.style.display = "none";
-  } else if (blockedUrls.length === 1) {
-    try {
-      var candidateHost = new URL(blockedUrls[0]).hostname;
-      fullMsg = "Popup from " + truncateHostname(candidateHost, 20);
-    } catch(e) {
-      fullMsg = "Allow this popup source?";
-    }
-    primaryBtn.innerText = "Allow";
-    blockBtn.style.display = "inline-block";
-  } else {
-    fullMsg = blockedUrls.length + " popup requests";
-    primaryBtn.innerText = "Allow";
-    blockBtn.style.display = "inline-block";
-  }
-
-  messageSpan.innerText = fullMsg;
-  messageSpan.title = fullMsg;
-  container.classList.remove("adsfriendly-hidden");
-
-  if (hideTimeout) clearTimeout(hideTimeout);
-  hideTimeout = setTimeout(hideUI, rememberedBlock ? 5000 : 8000);
-}
-
-function hideUI() {
-  if (container) {
-    container.classList.add("adsfriendly-hidden");
-  }
-  if (hideTimeout) clearTimeout(hideTimeout);
-  hideTimeout = null;
-  blockedUrls = [];
-  rememberedBlock = false;
-}
-
-function runPrimaryAction() {
-  if (rememberedBlock && blockedUrls.length === 1) {
-    api.runtime.sendMessage({ action: "open_once", url: blockedUrls[0] });
-  } else if (blockedUrls.length > 0) {
-    api.runtime.sendMessage({
-      action: "allow_popups",
-      urls: blockedUrls
+    if (!createUI()) return;
+    var previous = shadow.querySelector(".card");
+    if (previous) previous.remove();
+    var card = document.createElement("div");
+    card.className = "card";
+    card.setAttribute("role", "status");
+    card.setAttribute("aria-live", "polite");
+    var text = document.createElement("span");
+    text.className = "message";
+    text.textContent = item.message;
+    card.appendChild(text);
+    var failure = document.createElement("span");
+    failure.className = "error";
+    failure.hidden = true;
+    item.actions.forEach(function (action) {
+      var button = document.createElement("button");
+      button.type = "button";
+      button.textContent = action.label;
+      button.addEventListener("click", async function () {
+        clearTimeout(timeout);
+        busy = true;
+        card.querySelectorAll("button").forEach((value) => {
+          value.disabled = true;
+        });
+        try {
+          await action.run();
+          finish();
+        } catch (error) {
+          busy = false;
+          failure.textContent = error.message || "Could not save. Try again.";
+          failure.hidden = false;
+          card.querySelectorAll("button").forEach((value) => {
+            value.disabled = false;
+          });
+        }
+      });
+      card.appendChild(button);
     });
+    var close = document.createElement("button");
+    close.type = "button";
+    close.textContent = "×";
+    close.setAttribute("aria-label", "Dismiss");
+    close.onclick = finish;
+    card.appendChild(close);
+    card.appendChild(failure);
+    shadow.appendChild(card);
+    clearTimeout(timeout);
+    timeout = setTimeout(finish, item.remembered ? 6000 : 15000);
   }
-  hideUI();
-}
-
-function rememberBlocked() {
-  if (blockedUrls.length > 0) {
-    api.runtime.sendMessage({ action: "block_popups", urls: blockedUrls });
+  function finish() {
+    clearTimeout(timeout);
+    busy = false;
+    var item = queue.finish();
+    if (item) {
+      recentlyClosed.set(item.key, Date.now());
+      if (item.dismiss) item.dismiss();
+    }
+    while (recentlyClosed.size > 100)
+      recentlyClosed.delete(recentlyClosed.keys().next().value);
+    next();
   }
-  hideUI();
-}
-
-function notifyBlocked(url, wasRemembered) {
-  if (!url) return;
-  rememberedBlock = wasRemembered === true;
-  if (!blockedUrls.includes(url)) {
-    blockedUrls.push(url);
+  async function send(message) {
+    var result = await AFShared.callApi(api.runtime, "sendMessage", message);
+    if (!result || result.error)
+      throw new Error(
+        result?.error || "The extension did not respond. Try again.",
+      );
+    return result;
   }
-  if (_throttleTimer) return;
-  _throttleTimer = setTimeout(function() {
-    _throttleTimer = null;
-    updateUI();
-  }, 500);
-  updateUI();
-}
-
-function notifyBannerCandidate(element, reason, handlers) {
-  if (bannerReview || !element || !document.body) return false;
-  handlers = handlers || {};
-  var review = document.createElement("div");
-  review.id = "adsfriendly-banner-review";
-  review.innerHTML = '<span class="adsfriendly-message">Possible banner ad</span>' +
-    '<button class="adsfriendly-btn adsfriendly-primary" type="button">Hide</button>' +
-    '<button class="adsfriendly-btn adsfriendly-show" type="button">Keep</button>' +
-    '<button class="adsfriendly-btn close" type="button">\u2715</button>';
-  review.title = reason || "Suspected banner";
-  document.body.appendChild(review);
-  bannerReview = review;
-  var previousOutline = element.style.getPropertyValue("outline");
-  var previousOutlinePriority = element.style.getPropertyPriority("outline");
-  var previousOutlineOffset = element.style.getPropertyValue("outline-offset");
-  var previousOutlineOffsetPriority = element.style.getPropertyPriority("outline-offset");
-  element.style.setProperty("outline", "2px solid #f59e0b", "important");
-  element.style.setProperty("outline-offset", "-2px", "important");
-
-  function restoreOutline() {
-    if (previousOutline) element.style.setProperty("outline", previousOutline, previousOutlinePriority);
-    else element.style.removeProperty("outline");
-    if (previousOutlineOffset) element.style.setProperty("outline-offset", previousOutlineOffset, previousOutlineOffsetPriority);
-    else element.style.removeProperty("outline-offset");
+  function enqueue(item) {
+    if (Date.now() - (recentlyClosed.get(item.key) || 0) < 6000) return false;
+    var accepted = queue.enqueue(item);
+    if (accepted) next();
+    return accepted;
   }
-
-  function finish(action) {
-    if (!bannerReview) return;
-    bannerReview.remove();
-    bannerReview = null;
-    restoreOutline();
-    if (action === "hide" && handlers.hide) handlers.hide();
-    else if (action === "show" && handlers.show) handlers.show();
-    else if (handlers.dismiss) handlers.dismiss();
-  }
-
-  review.querySelector(".adsfriendly-primary").onclick = function() { finish("hide"); };
-  review.querySelector(".adsfriendly-show").onclick = function() { finish("show"); };
-  review.querySelector(".close").onclick = function() { finish("dismiss"); };
-  setTimeout(function() { if (bannerReview === review) finish("dismiss"); }, 8000);
-  return true;
-}
+  window.notifyBlocked = function (url, remembered) {
+    if (!AFShared.httpUrl(url)) return;
+    if (window.top !== window) {
+      api.runtime.sendMessage(
+        { action: "frame_popup_blocked", url, remembered: remembered === true },
+        function () {},
+      );
+      return;
+    }
+    var hostname = new URL(url).hostname;
+    enqueue({
+      key: "popup:" + hostname,
+      remembered,
+      message: (remembered ? "Blocked " : "Popup from ") + hostname,
+      actions: remembered
+        ? [
+            {
+              label: "Open once",
+              run: () => send({ action: "open_once", url }),
+            },
+          ]
+        : [
+            {
+              label: "Allow",
+              run: () => send({ action: "allow_popups", urls: [url] }),
+            },
+            {
+              label: "Block",
+              run: () => send({ action: "block_popups", urls: [url] }),
+            },
+          ],
+    });
+  };
+  window.notifyBannerCandidate = function (element, reason, handlers) {
+    if (window.top !== window || !element) return false;
+    return enqueue({
+      key: element,
+      element,
+      message: "Possible banner ad",
+      actions: [
+        { label: "Hide", run: handlers.hide },
+        { label: "Keep / Show", run: handlers.show },
+      ],
+      dismiss: handlers.dismiss,
+    });
+  };
+  document.addEventListener("DOMContentLoaded", next, { once: true });
+})();
