@@ -11,6 +11,24 @@ The iOS bundle imports the root Settings Package schema, navigation classifier,
 DOM selector/identity helpers and responsive-layout logic. Regenerate it with
 `pnpm ios:build` after changing those sources. Do not edit `utils/shared.js`.
 
+## Quiet banner review policy
+
+The single-row banner card says **Banner ad? / Hide / Keep / ×**, uses 44px
+touch targets, and dismisses after 8 seconds. A document gets at most two
+automatic banner prompts, spaced at least 60 seconds apart. Banner reviews do
+not queue behind other reviews. This budget does not limit blocked-navigation
+notifications or the application of saved Hide/Keep rules.
+
+Review history survives attribute mutations, storage updates, Safari toolbar
+resize, nested creative scans and replacement of the same identifiable ad slot.
+Dismissal/timeout is document-local and does not save a Keep exception; reloading
+starts a new review budget. Use Keep to remember a choice across visits.
+
+The browser gate checks 320, 375, 390, 768 and 980px viewports, single-row height,
+touch targets, active-card stability, mutation/resize/replacement deduplication,
+automatic dismissal, prompt flood limits and saved banner decisions. Physical
+Safari acceptance is still required.
+
 ## Device acceptance (required before claiming release quality)
 
 1. Download the **AdsFriendly-iOS** artifact from the workflow for the exact

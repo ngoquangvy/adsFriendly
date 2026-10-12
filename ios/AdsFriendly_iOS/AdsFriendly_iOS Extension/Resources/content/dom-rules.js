@@ -154,8 +154,6 @@
       new MutationObserver(function (changes) {
         changes.forEach(function (change) {
           if (change.target.closest?.("[data-afs-ui]")) return;
-          if (change.type === "attributes" && window.AF_resetBannerReviews)
-            AF_resetBannerReviews();
           schedule(change.target);
         });
       }).observe(target, {

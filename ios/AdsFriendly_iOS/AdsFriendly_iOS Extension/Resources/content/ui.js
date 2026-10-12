@@ -5,6 +5,7 @@
     timeout = null,
     busy = false;
   var recentlyClosed = new Map();
+  var bannerReviews = AFShared.createBannerReviewGate();
   function createUI() {
     if (host?.isConnected) return true;
     if (!document.body) return false;
@@ -15,14 +16,45 @@
       "all:initial!important;position:fixed!important;inset:auto 12px calc(12px + env(safe-area-inset-bottom)) 12px!important;z-index:2147483647!important;pointer-events:none!important;";
     shadow = host.attachShadow({ mode: "closed" });
     var style = document.createElement("style");
-    style.textContent =
-      ":host{color-scheme:dark} .card{box-sizing:border-box;max-width:480px;margin:auto;padding:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;background:#162033;color:#fff;border:1px solid #4b5973;border-radius:14px;box-shadow:0 4px 20px #0005;pointer-events:auto;font:14px -apple-system,BlinkMacSystemFont,sans-serif} .message{flex:1 1 140px;overflow-wrap:anywhere} button{min-height:44px;padding:8px 12px;border:0;border-radius:8px;color:#fff;background:#28598e;font:inherit} button:last-child{background:transparent} button:disabled{opacity:.5} .error{flex-basis:100%;color:#ffbbad} [hidden]{display:none!important}";
+    style.textContent = `
+      :host { color-scheme: dark; }
+      .card {
+        box-sizing: border-box; width: max-content; max-width: min(440px, 100%);
+        margin: auto; padding: 4px 4px 4px 12px; display: grid;
+        grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: center;
+        background: #172235f5; color: #f1f5f9; border: 1px solid #ffffff20;
+        border-radius: 14px; box-shadow: 0 4px 16px #0003; pointer-events: auto;
+        font: 13px -apple-system, BlinkMacSystemFont, sans-serif;
+      }
+      .message {
+        min-width: 0; max-width: 220px; overflow: hidden;
+        text-overflow: ellipsis; white-space: nowrap;
+      }
+      .actions { display: flex; gap: 3px; align-items: center; }
+      button {
+        box-sizing: border-box; min-height: 44px; min-width: 44px; padding: 6px 9px;
+        border: 0; border-radius: 10px; color: #e2e8f0; background: #ffffff0d;
+        font: inherit; font-weight: 600; white-space: nowrap; cursor: pointer;
+      }
+      button:first-child { background: #2563eb; color: #fff; }
+      button.close {
+        padding: 0; color: #94a3b8; background: transparent;
+        font-size: 20px; font-weight: 400;
+      }
+      button:focus-visible { outline: 2px solid #93c5fd; outline-offset: -2px; }
+      button:disabled { opacity: .5; }
+      .error {
+        grid-column: 1/-1; max-width: 100%; padding: 2px 4px 6px 0;
+        color: #ffbbad; overflow-wrap: anywhere;
+      }
+      [hidden] { display: none !important; }
+    `;
     shadow.appendChild(style);
     document.body.appendChild(host);
     return true;
   }
   function next() {
-    if (busy) return;
+    if (busy || (queue.active && host?.isConnected)) return;
     var item = queue.take();
     if (!item) {
       if (host) host.remove();
@@ -43,7 +75,10 @@
     var text = document.createElement("span");
     text.className = "message";
     text.textContent = item.message;
+    text.title = item.message;
     card.appendChild(text);
+    var actions = document.createElement("div");
+    actions.className = "actions";
     var failure = document.createElement("span");
     failure.className = "error";
     failure.hidden = true;
@@ -51,6 +86,8 @@
       var button = document.createElement("button");
       button.type = "button";
       button.textContent = action.label;
+      if (action.description)
+        button.setAttribute("aria-label", action.description);
       button.addEventListener("click", async function () {
         clearTimeout(timeout);
         busy = true;
@@ -69,18 +106,23 @@
           });
         }
       });
-      card.appendChild(button);
+      actions.appendChild(button);
     });
     var close = document.createElement("button");
     close.type = "button";
+    close.className = "close";
     close.textContent = "×";
     close.setAttribute("aria-label", "Dismiss");
     close.onclick = finish;
-    card.appendChild(close);
+    actions.appendChild(close);
+    card.appendChild(actions);
     card.appendChild(failure);
     shadow.appendChild(card);
     clearTimeout(timeout);
-    timeout = setTimeout(finish, item.remembered ? 6000 : 15000);
+    timeout = setTimeout(
+      finish,
+      item.banner ? 8000 : item.remembered ? 6000 : 15000,
+    );
   }
   function finish() {
     clearTimeout(timeout);
@@ -143,16 +185,34 @@
   };
   window.notifyBannerCandidate = function (element, reason, handlers) {
     if (window.top !== window || !element) return false;
-    return enqueue({
-      key: element,
+    // Never queue a train of speculative banners behind a navigation review.
+    // A future scan may retry, but only while the UI is idle and within budget.
+    if (busy || queue.size) return false;
+    var selector = handlers.selector || AFShared.buildDomSelector(element);
+    if (!selector) return false;
+    var key =
+      "banner:" +
+      getResponsiveLayout() +
+      ":" +
+      (handlers.reviewKey || selector);
+    if (!bannerReviews.canPrompt(key, element)) return false;
+    var accepted = enqueue({
+      key,
       element,
-      message: "Possible banner ad",
+      banner: true,
+      message: "Banner ad?",
       actions: [
         { label: "Hide", run: handlers.hide },
-        { label: "Keep / Show", run: handlers.show },
+        {
+          label: "Keep",
+          description: "Keep / show this banner",
+          run: handlers.show,
+        },
       ],
       dismiss: handlers.dismiss,
     });
+    if (accepted) bannerReviews.record(key, element);
+    return accepted;
   };
   document.addEventListener("DOMContentLoaded", next, { once: true });
 })();

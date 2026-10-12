@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { readFile, mkdtemp, rm, realpath } from "node:fs/promises";
+import { readFile, writeFile, mkdtemp, rm, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -138,7 +138,7 @@ try {
         sendMessage(message, callback) {
           testMessages.push(message);
           if (message.action === "get_popup_rules") { callback({ allowed: {}, blocked: {} }); return; }
-          if (testFailSave && ["allow_popups", "block_popups"].includes(message.action)) callback?.({error:"Storage full"});
+          if (testFailSave && ["allow_popups", "block_popups", "save_dom_decision"].includes(message.action)) callback?.({error:"Storage full"});
           else callback?.({ status: "saved" });
         }
       }
@@ -211,7 +211,17 @@ try {
     "open_once",
   );
   await session.evaluate(
-    "notifyBlocked('https://one.example/path', false); notifyBlocked('https://two.example/path', false); testFailSave=true; testShadows.at(-1).querySelector('button').click()",
+    "notifyBlocked('https://one.example/path', false); window.testActiveCard = testShadows.at(-1).querySelector('.card'); notifyBlocked('https://two.example/path', false)",
+  );
+  assert.equal(
+    await session.evaluate(
+      "testShadows.at(-1).querySelector('.card') === testActiveCard",
+    ),
+    true,
+    "Enqueuing another review must not replace the active card or restart its timeout",
+  );
+  await session.evaluate(
+    "testFailSave=true; testShadows.at(-1).querySelector('button').click()",
   );
   await new Promise((resolve) => setTimeout(resolve, 50));
   assert.match(
@@ -237,13 +247,241 @@ try {
   );
   assert.match(
     await session.evaluate("testShadows.at(-1).textContent"),
-    /Keep \/ Show/,
+    /Banner ad\?HideKeep/,
   );
   await session.evaluate("testShadows.at(-1).querySelector('button').click()");
   await new Promise((resolve) => setTimeout(resolve, 30));
   assert.equal(await session.evaluate("window.testBannerHidden"), true);
+
+  // Start a fresh document to test real detector/observer interactions rather
+  // than only calling the notification function directly.
+  await session.send("Emulation.setDeviceMetricsOverride", {
+    width: 320,
+    height: 700,
+    deviceScaleFactor: 1,
+    mobile: true,
+  });
+  await session.send("Page.navigate", {
+    url: "http://127.0.0.1:" + server.address().port + "/banner-regression",
+  });
+  await new Promise((resolve) => setTimeout(resolve, 650));
+  await session.evaluate(`
+    window.testNow = 100000; Date.now = () => testNow;
+    const realTimeout = window.setTimeout;
+    window.setTimeout = function(fn, ms, ...args) {
+      if (ms === 8000) window.testBannerTimeout = fn;
+      return realTimeout(fn, ms, ...args);
+    };
+    window.testSlot = document.createElement('div');
+    testSlot.id = 'ad-review-slot'; testSlot.className = 'ad-banner';
+    testSlot.style.cssText = 'position:fixed;top:120px;left:10px;width:300px;height:70px';
+    testSlot.innerHTML = '<a href="https://ads.example/ads/banner"><img alt="Advertisement" style="width:300px;height:70px"></a>';
+    document.body.appendChild(testSlot); AF_scanBanners();
+  `);
+  assert.match(
+    await session.evaluate("testShadows.at(-1).textContent"),
+    /Banner ad\?HideKeep/,
+  );
+  for (const width of [320, 375, 390, 768, 980]) {
+    await session.send("Emulation.setDeviceMetricsOverride", {
+      width,
+      height: 700,
+      deviceScaleFactor: 1,
+      mobile: width < 768,
+    });
+    const geometry = await session.evaluate(`(() => {
+      const root = testShadows.at(-1), card = root.querySelector('.card');
+      const rect = card.getBoundingClientRect();
+      const buttons = [...card.querySelectorAll('button')].map(b => b.getBoundingClientRect());
+      return { width: rect.width, height: rect.height, left: rect.left, right: rect.right,
+        viewport: innerWidth, aligned: buttons.every(b => b.top === buttons[0].top),
+        touch: buttons.every(b => b.height >= 44 && b.width >= 44),
+        whiteSpace: getComputedStyle(root.querySelector('.message')).whiteSpace };
+    })()`);
+    assert.ok(geometry.height <= 56, JSON.stringify(geometry));
+    assert.ok(
+      geometry.width <= 440 &&
+        geometry.left >= 0 &&
+        geometry.right <= geometry.viewport,
+      JSON.stringify(geometry),
+    );
+    assert.equal(geometry.aligned, true);
+    assert.equal(geometry.touch, true);
+    assert.equal(geometry.whiteSpace, "nowrap");
+  }
+  await session.send("Emulation.setDeviceMetricsOverride", {
+    width: 320,
+    height: 700,
+    deviceScaleFactor: 1,
+    mobile: true,
+  });
+  if (process.env.AF_IOS_SCREENSHOT) {
+    const screenshot = await session.send("Page.captureScreenshot", {
+      format: "png",
+    });
+    await writeFile(
+      process.env.AF_IOS_SCREENSHOT,
+      Buffer.from(screenshot.data, "base64"),
+    );
+  }
+  await session.evaluate(`
+    testBannerTimeout(); testNow += 70000;
+    document.body.classList.add('unrelated-site-animation');
+    testSlot.classList.add('refreshed');
+    testSlot.querySelector('img').setAttribute('src', '/new-creative.png');
+    window.dispatchEvent(new Event('resize'));
+    testChange('appSettings', {enabled:true}); AF_scanBanners();
+  `);
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  assert.equal(
+    await session.evaluate(
+      "document.getElementById('adsfriendly-popup-container') === null",
+    ),
+    true,
+    "Unrelated mutations, storage changes and height resize must not repeat a dismissed banner",
+  );
+  assert.equal(
+    await session.evaluate(
+      "testMessages.some(m => m.action === 'save_dom_decision')",
+    ),
+    false,
+    "Automatic dismissal must not silently save a persistent Hide/Keep choice",
+  );
+  await session.evaluate(`
+    const replacement = testSlot.cloneNode(true); testSlot.replaceWith(replacement);
+    testSlot = replacement; AF_scanBanners();
+  `);
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  assert.equal(
+    await session.evaluate(
+      "document.getElementById('adsfriendly-popup-container') === null",
+    ),
+    true,
+    "Replacing the ad slot must not ask again through a new link or wrapper node",
+  );
+  await session.evaluate(`
+    window.testOther = document.createElement('div');
+    testOther.id = 'ad-other-slot'; testOther.className = 'ad-banner';
+    testOther.style.cssText = 'position:fixed;top:220px;width:300px;height:70px';
+    testOther.textContent = 'Advertisement'; document.body.appendChild(testOther); AF_scanBanners();
+  `);
+  assert.equal(
+    await session.evaluate(
+      "document.getElementById('adsfriendly-popup-container') !== null",
+    ),
+    true,
+  );
+  await session.evaluate("testShadows.at(-1).querySelector('button').click()");
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(
+    await session.evaluate("testMessages.at(-1).action"),
+    "save_dom_decision",
+  );
+  assert.equal(await session.evaluate("testMessages.at(-1).decision"), "hide");
+  assert.equal(
+    await session.evaluate("getComputedStyle(testOther).display"),
+    "none",
+  );
+  await session.evaluate(`
+    testNow += 70000;
+    for (let i = 0; i < 30; i++) {
+      const el = document.createElement('div'); el.id = 'ad-flood-' + i;
+      el.style.cssText = 'width:300px;height:70px'; el.textContent = 'Advertisement';
+      document.body.appendChild(el);
+    }
+    AF_scanBanners();
+    notifyBlocked('https://navigation-still-works.example/path', true);
+  `);
+  assert.match(
+    await session.evaluate("testShadows.at(-1).textContent"),
+    /Blocked navigation-still-works.example/,
+    "Banner budget must not suppress real blocked-navigation notifications",
+  );
+  await session.evaluate(
+    "testShadows.at(-1).querySelector('.close').click(); AF_scanBanners()",
+  );
+  assert.equal(
+    await session.evaluate(
+      "document.getElementById('adsfriendly-popup-container') === null",
+    ),
+    true,
+    "A page flooding new ad slots must not start another automatic banner review",
+  );
+
+  await session.send("Page.navigate", {
+    url: "http://127.0.0.1:" + server.address().port + "/banner-keep",
+  });
+  await new Promise((resolve) => setTimeout(resolve, 650));
+  await session.evaluate(`
+    const el = document.createElement('div'); el.id = 'ad-keep-choice';
+    el.style.cssText = 'width:300px;height:70px'; el.textContent = 'Advertisement';
+    document.body.appendChild(el); AF_scanBanners();
+    testFailSave = true;
+    testShadows.at(-1).querySelectorAll('button')[1].click();
+  `);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.match(
+    await session.evaluate(
+      "testShadows.at(-1).querySelector('.error').textContent",
+    ),
+    /Storage full/,
+  );
+  assert.equal(
+    await session.evaluate(
+      "document.getElementById('adsfriendly-popup-container') !== null",
+    ),
+    true,
+  );
+  await session.evaluate(
+    "testFailSave = false; testShadows.at(-1).querySelectorAll('button')[1].click()",
+  );
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(await session.evaluate("testMessages.at(-1).decision"), "show");
+  assert.notEqual(
+    await session.evaluate(
+      "getComputedStyle(document.getElementById('ad-keep-choice')).display",
+    ),
+    "none",
+  );
+  await session.evaluate("AF_scanBanners()");
+  assert.equal(
+    await session.evaluate(
+      "document.getElementById('adsfriendly-popup-container') === null",
+    ),
+    true,
+  );
+  const earlyPopup = await session.send(
+    "Page.addScriptToEvaluateOnNewDocument",
+    {
+      source:
+        "notifyBlocked('https://a-very-long-blocked-advertising-domain.example/path', true)",
+    },
+  );
+  await session.send("Page.navigate", {
+    url: "http://127.0.0.1:" + server.address().port + "/early-popup",
+  });
+  await new Promise((resolve) => setTimeout(resolve, 650));
+  assert.match(
+    await session.evaluate(
+      "testShadows.at(-1).querySelector('.message').textContent",
+    ),
+    /Blocked a-very-long-blocked-advertising-domain.example/,
+    "A review received before document.body exists must render after DOMContentLoaded",
+  );
+  const longToast = await session.evaluate(`(() => {
+    const rect = testShadows.at(-1).querySelector('.card').getBoundingClientRect();
+    return { height: rect.height, left: rect.left, right: rect.right, viewport: innerWidth };
+  })()`);
+  assert.ok(
+    longToast.height <= 56 &&
+      longToast.left >= 0 &&
+      longToast.right <= longToast.viewport,
+  );
+  await session.send("Page.removeScriptToEvaluateOnNewDocument", {
+    identifier: earlyPopup.identifier,
+  });
   console.log(
-    "iOS browser smoke checks passed: compact/wide, Keep identity, restore, toast, queue, save failure and banner actions.",
+    "iOS browser checks passed: rules, toast stability, save retry, 320–980px single-row/touch layout, mutation/resize/replaced-slot dedupe, timeout, banner budget and Hide/Keep.",
   );
 } finally {
   session?.socket.close();

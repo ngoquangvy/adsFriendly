@@ -16,7 +16,7 @@ import {
 } from "../dom/element-exceptions.js";
 import * as navigation from "./navigation.js";
 import { createHiddenElements } from "./dom-state.js";
-import { createReviewQueue } from "./review-queue.js";
+import { createReviewQueue, createBannerReviewGate } from "./review-queue.js";
 
 const extensionApi = globalThis.browser || globalThis.chrome;
 export function safeDomSelector(selector) {
@@ -129,7 +129,8 @@ export async function importPackage(input, storage = storageAdapter()) {
       });
     } catch (error) {
       await restoreSnapshot(before, storage);
-      if (current[backupKey]) await storage.set({ [backupKey]: current[backupKey] });
+      if (current[backupKey])
+        await storage.set({ [backupKey]: current[backupKey] });
       else await storage.remove(backupKey);
       throw error;
     }
@@ -224,6 +225,7 @@ if (typeof window !== "undefined") {
     iosFeatureEnabled,
     createHiddenElements,
     createReviewQueue,
+    createBannerReviewGate,
     callApi,
     storageAdapter,
     serialMutation,

@@ -2,9 +2,21 @@
   if (window.top !== window) return;
   var hiddenBanners = { has: function(element) { return AF_DOM.isHidden(element); } };
   var reviewedBanners = new WeakSet();
+  var bannerSignals = '[class*="banner" i], [id*="banner" i], [class*="advert" i], [id*="advert" i], [class~="ad" i], [id^="ad-" i]';
 
   function buildBannerSelector(el) {
     return AFShared.buildDomSelector(el) || "";
+  }
+
+  function reviewSlotSelector(el) {
+    var slot = el;
+    var parent = el.parentElement;
+    // A link, image and its ad wrapper must share one review identity, including
+    // when a site replaces the entire creative subtree during an ad refresh.
+    for (var depth = 0; parent && parent !== document.body && depth < 5; depth++, parent = parent.parentElement) {
+      if (parent.matches(bannerSignals) && !isProtectedNavigation(parent) && hasBannerCreativeGeometry(parent)) slot = parent;
+    }
+    return buildBannerSelector(slot);
   }
 
   function isAllowedCandidate(selector, element) {
@@ -137,7 +149,8 @@
 
   function isProtectedNavigation(el) {
     if (!el || !el.closest) return false;
-    return !!el.closest('nav, header, [role="navigation"]');
+    return !!el.closest('nav, header, form, [role="navigation"], [data-afs-ui]') ||
+      ["HTML", "BODY", "HEAD", "MAIN"].includes(el.tagName);
   }
 
   function isLoginForm(el) {
@@ -227,9 +240,12 @@
     if (!isProtectionEnabled() || getCurrentSitePolicy() === "allow" || AF_DOM.isHidden(el)) return;
     if (reviewedBanners.has(el) || isProtectedNavigation(el) || isLoginForm(el)) return;
     var selector = buildBannerSelector(el);
+    if (!AFShared.safeDomSelector(selector)) return;
     if (isAllowedCandidate(selector, el)) return;
     if (typeof notifyBannerCandidate !== "function") return;
-    notifyBannerCandidate(el, reason, {
+    var accepted = notifyBannerCandidate(el, reason, {
+      selector: selector,
+      reviewKey: reviewSlotSelector(el),
       hide: async function() {
         await saveDomDecision(selector, "hide", el);
         AF_DOM.hide(el, selector);
@@ -245,6 +261,7 @@
       },
       dismiss: function() { reviewedBanners.add(el); }
     });
+    if (accepted) reviewedBanners.add(el);
   }
 
   function scanInlineCreatives() {
@@ -259,9 +276,7 @@
     }
     var signaled = [];
     try {
-      signaled = document.querySelectorAll(
-        '[class*="banner" i], [id*="banner" i], [class*="advert" i], [id*="advert" i], [class~="ad" i], [id^="ad-" i]'
-      );
+      signaled = document.querySelectorAll(bannerSignals);
     } catch(e) {}
     for (var j = 0; j < signaled.length && j < 300; j++) {
       var candidate = signaled[j];
@@ -393,10 +408,8 @@
   }
 
   window.AF_scanBanners = scanBanners;
-  window.AF_resetBannerReviews = function() { reviewedBanners = new WeakSet(); };
-  api.storage.onChanged.addListener(function(changes, area) {
-    if (area === 'local' && ["appSettings", "whitelist", "blacklist", "userCustomRules", "userElementExceptions", "afsAllowedDomSelectors"].some(key => key in changes)) reviewedBanners = new WeakSet();
-  });
-  window.addEventListener('resize', function() { reviewedBanners = new WeakSet(); }, { passive: true });
+  // Keep document-local review history across mutations, storage updates and
+  // Safari toolbar/keyboard resize events. Saved Hide/Keep rules still reconcile
+  // independently in AF_DOM; unrelated page churn must not ask the user again.
   log("Banner detector started.");
 })();

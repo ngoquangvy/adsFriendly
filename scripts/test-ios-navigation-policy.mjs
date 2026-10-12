@@ -358,7 +358,8 @@ async function testIosDecisionUiContract() {
   assert.ok(popupBlocker.includes("notifyBlocked(url, true)"));
   assert.ok(popupBlocker.includes("notifyBlocked(url, false)"));
   assert.ok(ui.includes("notifyBannerCandidate"));
-  assert.ok(ui.includes("Possible banner ad"));
+  assert.ok(ui.includes('message: "Banner ad?"'));
+  assert.ok(ui.includes("createBannerReviewGate"));
   assert.ok(bannerDetector.includes('saveDomDecision(selector, "hide", el)'));
   assert.ok(bannerDetector.includes('saveDomDecision(selector, "show", el)'));
   assert.deepEqual(JSON.parse(iosPackage), JSON.parse(canonicalPackage));
