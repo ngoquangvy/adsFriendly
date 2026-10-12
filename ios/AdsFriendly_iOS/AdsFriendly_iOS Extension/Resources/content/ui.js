@@ -6,6 +6,7 @@
     busy = false;
   var recentlyClosed = new Map();
   var bannerReviews = AFShared.createBannerReviewGate();
+  var reviewCleanup = null;
   function createUI() {
     if (host?.isConnected) return true;
     if (!document.body) return false;
@@ -65,6 +66,11 @@
       next();
       return;
     }
+    if (item.banner && !item.isValid()) {
+      queue.finish();
+      next();
+      return;
+    }
     if (!createUI()) return;
     var previous = shadow.querySelector(".card");
     if (previous) previous.remove();
@@ -89,16 +95,26 @@
       if (action.description)
         button.setAttribute("aria-label", action.description);
       button.addEventListener("click", async function () {
+        if (item.banner && !item.isValid()) {
+          finish();
+          return;
+        }
         clearTimeout(timeout);
         busy = true;
         card.querySelectorAll("button").forEach((value) => {
           value.disabled = true;
         });
         try {
+          if (item.banner) text.textContent = "Saving choice…";
           await action.run();
           finish();
         } catch (error) {
           busy = false;
+          if (item.banner && !item.isValid()) {
+            finish();
+            return;
+          }
+          text.textContent = item.message;
           failure.textContent = error.message || "Could not save. Try again.";
           failure.hidden = false;
           card.querySelectorAll("button").forEach((value) => {
@@ -118,6 +134,14 @@
     card.appendChild(actions);
     card.appendChild(failure);
     shadow.appendChild(card);
+    if (item.banner)
+      reviewCleanup = AFShared.watchReviewTarget(item.element, {
+        identity: item.identity,
+        isValid: item.isValid,
+        onInvalid: function () {
+          if (!busy) finish();
+        },
+      });
     clearTimeout(timeout);
     timeout = setTimeout(
       finish,
@@ -126,6 +150,8 @@
   }
   function finish() {
     clearTimeout(timeout);
+    if (reviewCleanup) reviewCleanup();
+    reviewCleanup = null;
     busy = false;
     var item = queue.finish();
     if (item) {
@@ -184,7 +210,8 @@
     });
   };
   window.notifyBannerCandidate = function (element, reason, handlers) {
-    if (window.top !== window || !element) return false;
+    if (window.top !== window || !AFShared.isReviewTarget(element))
+      return false;
     // Never queue a train of speculative banners behind a navigation review.
     // A future scan may retry, but only while the UI is idle and within budget.
     if (busy || queue.size) return false;
@@ -196,11 +223,20 @@
       ":" +
       (handlers.reviewKey || selector);
     if (!bannerReviews.canPrompt(key, element)) return false;
+    var identity = AFShared.reviewTargetIdentity(element);
     var accepted = enqueue({
       key,
       element,
       banner: true,
-      message: "Banner ad?",
+      identity,
+      isValid: function () {
+        return (
+          AFShared.isReviewTarget(element) &&
+          AFShared.reviewTargetIdentity(element) === identity &&
+          (!handlers.isValid || handlers.isValid())
+        );
+      },
+      message: "Marked area?",
       actions: [
         { label: "Hide", run: handlers.hide },
         {

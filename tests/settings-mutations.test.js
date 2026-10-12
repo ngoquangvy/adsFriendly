@@ -38,6 +38,38 @@ test("surfaces a shared-storage quota failure to the caller", async () => {
   );
 });
 
+test("storage verification ignores JSON object key ordering", async () => {
+  const storage = createStorage({});
+  const get = storage.get;
+  storage.get = async (keys) =>
+    JSON.parse(
+      JSON.stringify(await get(keys), (key, value) =>
+        value && typeof value === "object" && !Array.isArray(value)
+          ? Object.fromEntries(
+              Object.entries(value).sort(([a], [b]) => a.localeCompare(b)),
+            )
+          : value,
+      ),
+    );
+  await assert.doesNotReject(
+    createSettingsMutationStore(storage).upsertCustomRules("example.test", [
+      { selector: "#ad", fingerprint: { tag: "div", id: "ad" } },
+    ]),
+  );
+});
+
+test("a storage verification mismatch is not reported as a full quota", async () => {
+  const storage = createStorage({});
+  storage.set = async () => {};
+  await assert.rejects(
+    createSettingsMutationStore(storage).upsertCustomRules("example.test", [
+      { selector: "#ad" },
+    ]),
+    (error) =>
+      /verification/i.test(error.message) && !/full/i.test(error.message),
+  );
+});
+
 test("restore removes only the requested personal rule and verifies storage", async () => {
   const storage = createStorage({
     userCustomRules: {

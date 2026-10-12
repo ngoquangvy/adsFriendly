@@ -249,11 +249,15 @@ bgApi.runtime.onMessage.addListener(function (request, sender, sendResponse) {
         legacy[domHost] = (legacy[domHost] || []).filter(
           (rule) => !matches(rule),
         );
-        await storage.set({
+        var updates = {
           userCustomRules: custom,
           userElementExceptions: exceptions,
           afsAllowedDomSelectors: legacy,
-        });
+        };
+        await storage.set(updates);
+        var saved = await storage.get(Object.keys(updates));
+        if (!Object.keys(updates).every(key => AFShared.storageValuesEqual(saved[key], updates[key])))
+          throw new Error("Storage verification failed for this DOM choice.");
       });
       return { status: "saved", decision: request.decision };
     }

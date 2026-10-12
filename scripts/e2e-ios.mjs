@@ -4,6 +4,8 @@ import { readFile, writeFile, mkdtemp, rm, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { build } from "esbuild";
+import { fileURLToPath } from "node:url";
 const resources = new URL(
   "../ios/AdsFriendly_iOS/AdsFriendly_iOS Extension/Resources/",
   import.meta.url,
@@ -111,6 +113,26 @@ try {
     mobile: true,
   });
   const shared = await readFile(new URL("utils/shared.js", resources), "utf8");
+  const chromeToast = await build({
+    entryPoints: [
+      fileURLToPath(new URL("../src/dom/toast.js", import.meta.url)),
+    ],
+    bundle: true,
+    write: false,
+    format: "iife",
+    globalName: "AFDomToast",
+    target: ["chrome110"],
+  });
+  const chromeCollector = await build({
+    entryPoints: [
+      fileURLToPath(new URL("../src/dom/collector.js", import.meta.url)),
+    ],
+    bundle: true,
+    write: false,
+    format: "iife",
+    globalName: "AFDomCollector",
+    target: ["chrome110"],
+  });
   const scripts = [
     "utils/config.js",
     "utils/helpers.js",
@@ -122,7 +144,7 @@ try {
   const seed = `
     window.testMessages = []; window.testShadows = []; window.testFailSave = false;
     const originalShadow = Element.prototype.attachShadow;
-    Element.prototype.attachShadow = function(options) { const root = originalShadow.call(this, options); testShadows.push(root); return root; };
+    Element.prototype.attachShadow = function(options) { const root = originalShadow.call(this, options); if (this.id === 'adsfriendly-popup-container') testShadows.push(root); return root; };
     window.testData = {
       appSettings: { enabled: true }, whitelist: [], blacklist: [],
       userCustomRules: { "127.0.0.1": [
@@ -247,7 +269,7 @@ try {
   );
   assert.match(
     await session.evaluate("testShadows.at(-1).textContent"),
-    /Banner ad\?HideKeep/,
+    /Marked area\?HideKeep/,
   );
   await session.evaluate("testShadows.at(-1).querySelector('button').click()");
   await new Promise((resolve) => setTimeout(resolve, 30));
@@ -266,6 +288,26 @@ try {
   });
   await new Promise((resolve) => setTimeout(resolve, 650));
   await session.evaluate(`
+    for (const [id, style, content] of [
+      ['ad-empty', 'width:300px;height:70px', ''],
+      ['ad-broken', 'width:300px;height:70px', '<img src="/broken" width="300" height="70">'],
+      ['ad-offscreen', 'position:absolute;top:3000px;width:300px;height:70px', 'Advertisement'],
+      ['ad-hidden-parent', 'opacity:0;width:300px;height:70px', '<div class="ad-banner" style="opacity:1">Advertisement</div>'],
+      ['hero-banner', 'width:300px;height:70px', '<a class="banner" href="https://news.example/story">Normal featured story</a>'],
+    ]) {
+      const el = document.createElement('div'); el.id = id; el.style.cssText = style;
+      el.innerHTML = content; document.body.appendChild(el);
+    }
+    AF_scanBanners();
+  `);
+  assert.equal(
+    await session.evaluate(
+      "document.getElementById('adsfriendly-popup-container') === null",
+    ),
+    true,
+    "Empty slots, broken images, offscreen content, hidden ancestors and generic banners are not reviewable ads",
+  );
+  await session.evaluate(`
     window.testNow = 100000; Date.now = () => testNow;
     const realTimeout = window.setTimeout;
     window.setTimeout = function(fn, ms, ...args) {
@@ -276,11 +318,31 @@ try {
     testSlot.id = 'ad-review-slot'; testSlot.className = 'ad-banner';
     testSlot.style.cssText = 'position:fixed;top:120px;left:10px;width:300px;height:70px';
     testSlot.innerHTML = '<a href="https://ads.example/ads/banner"><img alt="Advertisement" style="width:300px;height:70px"></a>';
-    document.body.appendChild(testSlot); AF_scanBanners();
+    testSlot.querySelector('img').src = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="300" height="70"><rect width="300" height="70" fill="#eab308"/></svg>');
+    document.body.appendChild(testSlot);
+    testSlot.querySelector('img').decode().then(() => AF_scanBanners());
   `);
+  await new Promise((resolve) => setTimeout(resolve, 100));
   assert.match(
     await session.evaluate("testShadows.at(-1).textContent"),
-    /Banner ad\?HideKeep/,
+    /Marked area\?HideKeep/,
+  );
+  assert.equal(
+    await session.evaluate(
+      "document.getElementById('adsfriendly-review-target') !== null",
+    ),
+    true,
+    "The exact reviewed region must be marked without hover",
+  );
+  const markerGeometry = await session.evaluate(`(() => {
+    const marker = document.getElementById('adsfriendly-review-target').getBoundingClientRect();
+    const image = testSlot.querySelector('img').getBoundingClientRect();
+    return { markerHeight: marker.height, imageHeight: image.height, markerTop: marker.top, imageTop: image.top };
+  })()`);
+  assert.ok(
+    markerGeometry.markerHeight >= markerGeometry.imageHeight &&
+      markerGeometry.markerTop <= markerGeometry.imageTop,
+    "An inline link marker must cover its actual visible image, not just a 17px text box",
   );
   for (const width of [320, 375, 390, 768, 980]) {
     await session.send("Emulation.setDeviceMetricsOverride", {
@@ -339,6 +401,12 @@ try {
     ),
     true,
     "Unrelated mutations, storage changes and height resize must not repeat a dismissed banner",
+  );
+  assert.equal(
+    await session.evaluate(
+      "document.getElementById('adsfriendly-review-target') === null",
+    ),
+    true,
   );
   assert.equal(
     await session.evaluate(
@@ -406,6 +474,28 @@ try {
     ),
     true,
     "A page flooding new ad slots must not start another automatic banner review",
+  );
+
+  await session.send("Page.navigate", {
+    url: "http://127.0.0.1:" + server.address().port + "/ios-stale",
+  });
+  await new Promise((resolve) => setTimeout(resolve, 650));
+  await session.evaluate(`
+    const el = document.createElement('div'); el.id = 'ad-stale'; el.style.cssText = 'width:280px;height:70px';
+    el.textContent = 'Advertisement'; document.body.appendChild(el); AF_scanBanners();
+    const button = testShadows.at(-1).querySelector('button'); el.textContent = 'New unrelated content'; button.click();
+  `);
+  assert.equal(
+    await session.evaluate(
+      "testMessages.some(m => m.action === 'save_dom_decision')",
+    ),
+    false,
+  );
+  assert.equal(
+    await session.evaluate(
+      "document.getElementById('adsfriendly-review-target') === null",
+    ),
+    true,
   );
 
   await session.send("Page.navigate", {
@@ -480,8 +570,201 @@ try {
   await session.send("Page.removeScriptToEvaluateOnNewDocument", {
     identifier: earlyPopup.identifier,
   });
+
+  // Exercise the Chrome toast module itself, independently of Safari mocks.
+  await session.send("Page.navigate", {
+    url: "http://127.0.0.1:" + server.address().port + "/chrome-review",
+  });
+  await new Promise((resolve) => setTimeout(resolve, 650));
+  await session.evaluate("testChange('appSettings', {enabled:false})");
+  await session.evaluate(chromeToast.outputFiles[0].text);
+  await session.evaluate(`
+    window.testRootTarget = document.createElement('div'); testRootTarget.id = 'root-ad-target';
+    testRootTarget.style.cssText = 'width:280px;height:70px;outline:1px solid red';
+    testRootTarget.textContent = 'Advertisement to review'; document.body.appendChild(testRootTarget);
+    window.testRootShows = 0;
+    window.testRootCandidate = {target:testRootTarget, features:{tag:'div'}, decision:{confidence:0.81}};
+    AFDomToast.showDomCandidateToast(testRootCandidate, {
+      onHide: async () => {
+        testRootTarget.style.visibility = 'hidden';
+        throw new Error('Settings storage is full: Storage verification failed for userCustomRules.');
+      },
+      onShow: async () => { testRootShows++; testRootTarget.style.visibility = 'visible'; },
+    });
+  `);
+  assert.equal(
+    await session.evaluate(
+      "document.getElementById('adsfriendly-review-target') !== null",
+    ),
+    true,
+  );
+  await session.evaluate(
+    "document.querySelector('.adsfriendly-dom-hide').click()",
+  );
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(
+    await session.evaluate(
+      "document.querySelector('.adsfriendly-dom-message').textContent",
+    ),
+    "Hidden once · save not verified",
+  );
+  assert.equal(
+    await session.evaluate(
+      "document.getElementById('adsfriendly-review-target') === null",
+    ),
+    true,
+  );
+  await session.evaluate(
+    "document.querySelector('.adsfriendly-dom-allow').click()",
+  );
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(await session.evaluate("testRootShows"), 1);
+  assert.equal(
+    await session.evaluate("testRootTarget.style.outline"),
+    "red solid 1px",
+  );
+
+  await session.evaluate(`
+    AFDomToast.showDomCandidateToast({target:testRootTarget, features:{tag:'div'}, decision:{confidence:0.81}}, {
+      onHide: async () => { testRootTarget.style.visibility = 'hidden'; throw new Error('QUOTA_BYTES quota exceeded'); }
+    });
+    document.querySelector('.adsfriendly-dom-hide').click();
+  `);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(
+    await session.evaluate(
+      "document.querySelector('.adsfriendly-dom-message').textContent",
+    ),
+    "Hidden once · storage full",
+  );
+  await session.evaluate(
+    "document.querySelector('.adsfriendly-dom-close').click(); testRootTarget.style.visibility = 'visible'",
+  );
+  await session.evaluate(`
+    AFDomToast.showDomCandidateToast({target:testRootTarget, features:{tag:'div'}, decision:{confidence:0.81}}, {onHide:async()=>{testRootShows++}});
+    window.testStaleButton = document.querySelector('.adsfriendly-dom-hide');
+    testRootTarget.textContent = 'Different content'; testStaleButton.click();
+  `);
+  assert.equal(
+    await session.evaluate("testRootShows"),
+    1,
+    "Changing the reviewed content must not call Hide",
+  );
+  assert.equal(
+    await session.evaluate(
+      "document.getElementById('adsfriendly-review-target') === null",
+    ),
+    true,
+  );
+  await session.evaluate(`
+    const empty = document.createElement('div'); empty.style.cssText = 'width:280px;height:70px'; document.body.appendChild(empty);
+    AFDomToast.showDomCandidateToast({target:empty, features:{tag:'div'}, decision:{confidence:0.81}}, {});
+  `);
+  assert.equal(
+    await session.evaluate(
+      "document.getElementById('adsfriendly-review-target') === null",
+    ),
+    true,
+  );
+  await session.evaluate(`
+    AFDomToast.showDomCandidateToast({target:testRootTarget, features:{tag:'div'}, decision:{confidence:0.81}}, {});
+    testRootTarget.style.opacity = '0';
+  `);
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  assert.equal(
+    await session.evaluate(
+      "document.getElementById('adsfriendly-review-target') === null",
+    ),
+    true,
+    "A blocker hiding the reviewed target must also remove the prompt and marker",
+  );
+
+  await session.evaluate(chromeCollector.outputFiles[0].text);
+  await session.evaluate(`
+    document.querySelectorAll('body > div, body > form').forEach(el => el.remove());
+    window.testRootRequests = [];
+    chrome.storage.local.get = async () => ({userElementExceptions:{}});
+    chrome.storage.onChanged.removeListener = () => {};
+    chrome.runtime.sendMessage = async message => {
+      testRootRequests.push(message);
+      if (message.type === 'RESTORE_CUSTOM_RULES') throw new Error('QUOTA_BYTES exceeded');
+      if (message.type === 'UPSERT_CUSTOM_RULES' && window.testRootFailSave) throw new Error('QUOTA_BYTES exceeded');
+      if (message.type === 'SYNC_LEARNING') throw new Error('Learning service unavailable');
+      return {status:'saved'};
+    };
+    const link = document.createElement('a'); link.id = 'offer-link'; link.href = 'https://ads.example/ads/banner';
+    link.innerHTML = '<img id="ad-selected-image" class="ads" style="width:280px;height:70px">';
+    link.querySelector('img').src = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="280" height="70"><rect width="280" height="70" fill="gold"/></svg>');
+    document.body.appendChild(link); window.testActualLink = link;
+    link.querySelector('img').decode().then(() => {
+      window.testStopCollector = AFDomCollector.startDomCandidateCollector({can:id=>['dom.observe','dom.suggest'].includes(id)});
+    });
+  `);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.match(
+    await session.evaluate(
+      "document.querySelector('.adsfriendly-dom-message').textContent",
+    ),
+    /Marked A/,
+    "The review label/fingerprint must describe the selected link, not its child image",
+  );
+  await session.evaluate(
+    "document.querySelector('.adsfriendly-dom-hide').click()",
+  );
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(
+    await session.evaluate(
+      "testRootRequests.find(m=>m.type==='UPSERT_CUSTOM_RULES').rules[0].fingerprint.tag",
+    ),
+    "a",
+  );
+  assert.equal(
+    await session.evaluate("getComputedStyle(testActualLink).visibility"),
+    "hidden",
+  );
+  assert.match(
+    await session.evaluate(
+      "document.querySelector('.adsfriendly-dom-message').textContent",
+    ),
+    /hidden · saved/,
+    "A failed learning sync after a confirmed save must not report a settings error",
+  );
+  await session.evaluate(
+    "document.querySelector('.adsfriendly-dom-close').click()",
+  );
+  await session.evaluate(`
+    window.testRootFailSave = true;
+    const next = testActualLink.cloneNode(true); next.id = 'offer-next'; next.href = 'https://other-ads.example/ads/banner';
+    next.querySelector('img').id = 'ad-next-image'; next.removeAttribute('data-adsfriendly-rule-hidden');
+    next.style.cssText = ''; document.body.appendChild(next); window.testNextLink = next;
+  `);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  await session.evaluate(
+    "document.querySelector('.adsfriendly-dom-hide').click()",
+  );
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(
+    await session.evaluate(
+      "document.querySelector('.adsfriendly-dom-message').textContent",
+    ),
+    "Hidden once · storage full",
+  );
+  await session.evaluate(
+    "document.querySelector('.adsfriendly-dom-allow').click()",
+  );
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(
+    await session.evaluate("getComputedStyle(testNextLink).visibility"),
+    "visible",
+    "Show must restore an unsaved local hide even when storage remains unavailable",
+  );
+  assert.notEqual(
+    await session.evaluate("getComputedStyle(testNextLink).opacity"),
+    "0",
+  );
+  await session.evaluate("testStopCollector()");
   console.log(
-    "iOS browser checks passed: rules, toast stability, save retry, 320–980px single-row/touch layout, mutation/resize/replaced-slot dedupe, timeout, banner budget and Hide/Keep.",
+    "Chrome/iOS review browser checks passed: visible-content gates, automatic exact-region marker, stale-target cancellation, correct target fingerprint, storage verification vs quota errors, Show after quota failure, saved choices, dedupe and 320–980px layout.",
   );
 } finally {
   session?.socket.close();

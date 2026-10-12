@@ -199,6 +199,26 @@ var AdsFriendlyBackground = (() => {
     ].join("|");
   }
 
+  // src/shared/storage-verification.js
+  function storageValuesEqual(actual, expected) {
+    const normalize = (value) => {
+      if (Array.isArray(value)) return value.map(normalize);
+      if (value && typeof value === "object")
+        return Object.fromEntries(
+          Object.keys(value).sort().filter((key) => value[key] !== void 0).map((key) => [key, normalize(value[key])])
+        );
+      return value;
+    };
+    return JSON.stringify(normalize(actual)) === JSON.stringify(normalize(expected));
+  }
+  function isStorageQuotaError(error) {
+    const message = String(error?.message || error || "");
+    if (/verification failed/i.test(message)) return false;
+    return /\bquota(?:_bytes(?:_per_item)?)?\b.*(?:exceeded|exceeds|limit|full)|(?:storage|disk)(?:\s+is)?\s+full|(?:exceeded|exceeds).*(?:quota|storage.*limit)/i.test(
+      message
+    );
+  }
+
   // src/background/settings-mutations.js
   var MAX_RULES_PER_SITE = 250;
   var defaultStore = null;
@@ -441,13 +461,13 @@ var AdsFriendlyBackground = (() => {
       await storage.set(updates);
       const saved = await storage.get(Object.keys(updates));
       for (const [key, expected] of Object.entries(updates)) {
-        if (JSON.stringify(saved[key]) !== JSON.stringify(expected)) {
+        if (!storageValuesEqual(saved[key], expected)) {
           throw new Error(`Storage verification failed for ${key}.`);
         }
       }
     } catch (error) {
       const message = String(error?.message || error);
-      if (/quota|bytes|storage/i.test(message)) {
+      if (isStorageQuotaError(error)) {
         throw new Error(`Settings storage is full: ${message}`);
       }
       throw error;
@@ -10107,8 +10127,9 @@ ${blobTitleKey(item.title)}`;
     const seen = /* @__PURE__ */ new Set();
     return rules.filter((rule) => {
       const selector = typeof rule === "string" ? rule : rule.selector;
-      if (seen.has(selector)) return false;
-      seen.add(selector);
+      const key = selector + "|" + (typeof rule === "string" ? "any" : rule.layout || "any");
+      if (seen.has(key)) return false;
+      seen.add(key);
       return true;
     });
   }

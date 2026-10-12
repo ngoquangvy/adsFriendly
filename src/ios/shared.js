@@ -17,6 +17,15 @@ import {
 import * as navigation from "./navigation.js";
 import { createHiddenElements } from "./dom-state.js";
 import { createReviewQueue, createBannerReviewGate } from "./review-queue.js";
+import {
+  isReviewTarget,
+  reviewTargetIdentity,
+  watchReviewTarget,
+} from "../dom/review-target.js";
+import {
+  storageValuesEqual,
+  isStorageQuotaError,
+} from "../shared/storage-verification.js";
 
 const extensionApi = globalThis.browser || globalThis.chrome;
 export function safeDomSelector(selector) {
@@ -226,6 +235,11 @@ if (typeof window !== "undefined") {
     createHiddenElements,
     createReviewQueue,
     createBannerReviewGate,
+    isReviewTarget,
+    reviewTargetIdentity,
+    watchReviewTarget,
+    storageValuesEqual,
+    isStorageQuotaError,
     callApi,
     storageAdapter,
     serialMutation,

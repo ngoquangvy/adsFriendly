@@ -10,7 +10,7 @@ const canonical = `${JSON.stringify(JSON.parse(await readFile(source, "utf8")), 
 
 if (checkOnly) {
   const bundled = await readFile(target, "utf8");
-  if (bundled !== canonical) {
+  if (bundled.replace(/\r\n/g, "\n") !== canonical) {
     throw new Error("iOS bundled settings package is out of sync. Run pnpm ios:settings:sync.");
   }
   console.log("iOS settings package is in sync.");

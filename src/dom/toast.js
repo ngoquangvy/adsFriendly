@@ -1,4 +1,10 @@
 import { isHiddenByAdsFriendly } from "./actions.js";
+import {
+  isReviewTarget,
+  reviewTargetIdentity,
+  watchReviewTarget,
+} from "./review-target.js";
+import { isStorageQuotaError } from "../shared/storage-verification.js";
 
 const TOAST_ID = "adsfriendly-dom-toast";
 const HIGHLIGHT_ID = "adsfriendly-dom-highlight";
@@ -7,7 +13,7 @@ const HIDDEN_TOAST_TIMEOUT_MS = 5000;
 const queuedCandidates = [];
 let active = null;
 let hideTimer = null;
-let highlightFrame = null;
+let highlightCleanup = null;
 
 export function showDomCandidateToast(candidate, handlers) {
   enqueueOrShow({ candidate, handlers, state: "review" });
@@ -18,8 +24,26 @@ export function showDomHiddenToast(candidate, handlers) {
 }
 
 function enqueueOrShow(entry) {
+  if (entry.state === "review" && !entry.candidate.reviewIdentity)
+    entry.candidate.reviewIdentity = reviewTargetIdentity(
+      entry.candidate.target || entry.candidate.element,
+    );
   if (!isEntryReviewable(entry)) return;
   if (active) {
+    const target = entry.candidate.target || entry.candidate.element;
+    const overlaps = (previous) => {
+      const other = previous.candidate.target || previous.candidate.element;
+      return (
+        other === target ||
+        other?.contains?.(target) ||
+        target?.contains?.(other)
+      );
+    };
+    if (
+      entry.state === "review" &&
+      (overlaps(active) || queuedCandidates.some(overlaps))
+    )
+      return;
     if (queuedCandidates.length < 8) queuedCandidates.push(entry);
     return;
   }
@@ -122,7 +146,7 @@ function renderActiveToast() {
     clearHighlight();
   } else {
     const confidence = Math.round(active.candidate.decision.confidence * 100);
-    message.textContent = `${label} · ${confidence}%`;
+    message.textContent = `Marked ${label} · ${confidence}%`;
     message.title =
       active.candidate.decision.reasons?.join(", ") || "Heuristic DOM signals";
     hideButton.hidden = false;
@@ -132,6 +156,7 @@ function renderActiveToast() {
     clearHighlight();
   }
   toast.classList.remove("adsfriendly-dom-hidden");
+  highlightActiveReview();
   scheduleHide();
 }
 
@@ -141,6 +166,7 @@ function ensureToast() {
 
   toast = document.createElement("div");
   toast.id = TOAST_ID;
+  toast.setAttribute("data-afs-ui", "true");
   toast.className = "adsfriendly-dom-hidden";
   toast.setAttribute("role", "status");
   toast.setAttribute("aria-live", "polite");
@@ -220,13 +246,16 @@ function ensureToast() {
 
   toast.querySelector(".adsfriendly-dom-hide").onclick = () => {
     if (!active || active.state !== "review") return;
+    if (!isEntryReviewable(active)) {
+      hideDomToast();
+      return;
+    }
     const current = active;
     current.state = "saving";
     clearHighlight();
     renderActiveToast();
-    current.pendingHide = Promise.resolve(
-      current.handlers?.onHide?.(current.candidate),
-    )
+    current.pendingHide = Promise.resolve()
+      .then(() => current.handlers?.onHide?.(current.candidate))
       .then(() => {
         if (current.state === "saving") {
           current.state = "hidden";
@@ -249,12 +278,22 @@ function ensureToast() {
     if (["restoring", "allow-saving", "allow-undoing"].includes(current.state))
       return;
     if (["review", "allow-error"].includes(current.state)) {
+      if (
+        !isReviewTarget(
+          current.candidate.target || current.candidate.element,
+        ) ||
+        reviewTargetIdentity(
+          current.candidate.target || current.candidate.element,
+        ) !== current.candidate.reviewIdentity
+      ) {
+        hideDomToast();
+        return;
+      }
       current.state = "allow-saving";
       current.error = null;
       renderActiveToast();
-      current.pendingAllow = Promise.resolve(
-        current.handlers?.onAllow?.(current.candidate),
-      )
+      current.pendingAllow = Promise.resolve()
+        .then(() => current.handlers?.onAllow?.(current.candidate))
         .then(() => {
           current.state = "allowed";
           if (active === current) renderActiveToast();
@@ -308,7 +347,6 @@ function ensureToast() {
     highlightActiveReview();
   });
   toast.addEventListener("mouseleave", () => {
-    clearHighlight();
     scheduleHide();
   });
   toast.addEventListener("focusin", () => {
@@ -318,7 +356,6 @@ function ensureToast() {
   toast.addEventListener("focusout", () => {
     setTimeout(() => {
       if (toast.contains(document.activeElement)) return;
-      clearHighlight();
       scheduleHide();
     });
   });
@@ -330,8 +367,11 @@ function ensureToast() {
 
 function saveFailureMessage(error) {
   const message = String(error?.message || error || "").toLowerCase();
-  if (/quota|storage is full|bytes/.test(message))
-    return "Hidden once · storage full";
+  if (/nothing was hidden|reviewed area changed/.test(message))
+    return "Area changed · nothing hidden";
+  if (/verification failed/.test(message))
+    return "Hidden once · save not verified";
+  if (isStorageQuotaError(error)) return "Hidden once · storage full";
   if (
     /invalidated|receiving end|message port|could not establish/.test(message)
   )
@@ -345,8 +385,9 @@ function allowFailureMessage(error) {
   const value = String(error?.message || error || "").toLowerCase();
   if (/no stable identity|reusable selector/.test(value))
     return "Cannot remember safely · dismiss once";
-  if (/quota|storage is full|bytes/.test(value))
-    return "Not saved · storage full";
+  if (/verification failed/.test(value))
+    return "Not saved · verification failed";
+  if (isStorageQuotaError(error)) return "Not saved · storage full";
   if (/invalidated/.test(value)) return "Reload this page · extension updated";
   if (/receiving end|message port|could not establish/.test(value))
     return "Reload extension and page";
@@ -358,34 +399,11 @@ function allowFailureMessage(error) {
 function highlightCandidate(candidate) {
   clearHighlight();
   const target = candidate.target || candidate.element;
-  if (!target?.isConnected) return;
-  const highlight = document.createElement("div");
-  highlight.id = HIGHLIGHT_ID;
-  highlight.style.setProperty(
-    "--adsfriendly-highlight-color",
-    highlightColor(candidate.decision.confidence),
-  );
-  (document.body || document.documentElement).appendChild(highlight);
-
-  const update = () => {
-    if (!active || !target.isConnected || !highlight.isConnected) return;
-    if (isHiddenByAdsFriendly(target)) {
-      hideDomToast();
-      return;
-    }
-    const rect = target.getBoundingClientRect();
-    const left = Math.max(0, rect.left);
-    const top = Math.max(0, rect.top);
-    const right = Math.min(window.innerWidth, rect.right);
-    const bottom = Math.min(window.innerHeight, rect.bottom);
-    highlight.style.left = `${left}px`;
-    highlight.style.top = `${top}px`;
-    highlight.style.width = `${Math.max(0, right - left)}px`;
-    highlight.style.height = `${Math.max(0, bottom - top)}px`;
-    highlight.hidden = right <= left || bottom <= top;
-    highlightFrame = requestAnimationFrame(update);
-  };
-  update();
+  highlightCleanup = watchReviewTarget(target, {
+    identity: candidate.reviewIdentity,
+    isValid: () => active?.state === "review" && isEntryReviewable(active),
+    onInvalid: hideDomToast,
+  });
 }
 
 function highlightActiveReview() {
@@ -397,26 +415,16 @@ function isEntryReviewable(entry) {
   if (entry.handlers?.isSuppressed?.(entry.candidate)) return false;
   const target = entry.candidate.target || entry.candidate.element;
   if (!target?.isConnected || isHiddenByAdsFriendly(target)) return false;
-  const rect = target.getBoundingClientRect();
-  const style = getComputedStyle(target);
   return (
-    rect.width > 0 &&
-    rect.height > 0 &&
-    style.display !== "none" &&
-    style.visibility !== "hidden" &&
-    Number.parseFloat(style.opacity || "1") > 0.05
+    isReviewTarget(target) &&
+    (!entry.candidate.reviewIdentity ||
+      reviewTargetIdentity(target) === entry.candidate.reviewIdentity)
   );
 }
 
-function highlightColor(confidence) {
-  if (confidence >= 0.9) return "#ef4444";
-  if (confidence >= 0.75) return "#f59e0b";
-  return "#eab308";
-}
-
 function clearHighlight() {
-  if (highlightFrame) cancelAnimationFrame(highlightFrame);
-  highlightFrame = null;
+  if (highlightCleanup) highlightCleanup();
+  highlightCleanup = null;
   document.getElementById(HIGHLIGHT_ID)?.remove();
 }
 

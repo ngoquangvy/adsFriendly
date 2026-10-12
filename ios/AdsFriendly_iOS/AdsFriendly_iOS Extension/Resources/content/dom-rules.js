@@ -142,7 +142,7 @@
     isAllowed: exception,
     isHidden: (element) => hidden.has(element),
     hide: function (element, selector) {
-      if (safe(element)) hidden.hide(element, { selector });
+      return safe(element) && hidden.hide(element, { selector });
     },
     restore: (element) => hidden.restore(element),
     schedule,

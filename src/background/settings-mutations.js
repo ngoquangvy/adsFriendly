@@ -1,4 +1,8 @@
 import { elementExceptionKey } from "../dom/element-exceptions.js";
+import {
+  storageValuesEqual,
+  isStorageQuotaError,
+} from "../shared/storage-verification.js";
 
 const MAX_RULES_PER_SITE = 250;
 
@@ -279,13 +283,13 @@ async function setAndVerify(storage, updates) {
     await storage.set(updates);
     const saved = await storage.get(Object.keys(updates));
     for (const [key, expected] of Object.entries(updates)) {
-      if (JSON.stringify(saved[key]) !== JSON.stringify(expected)) {
+      if (!storageValuesEqual(saved[key], expected)) {
         throw new Error(`Storage verification failed for ${key}.`);
       }
     }
   } catch (error) {
     const message = String(error?.message || error);
-    if (/quota|bytes|storage/i.test(message)) {
+    if (isStorageQuotaError(error)) {
       throw new Error(`Settings storage is full: ${message}`);
     }
     throw error;

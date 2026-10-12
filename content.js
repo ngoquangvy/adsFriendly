@@ -646,6 +646,161 @@ var AdsFriendlyContent = (() => {
     return createDecision(DECISION_ACTIONS.OBSERVE, { confidence, reasons });
   }
 
+  // src/dom/review-target.js
+  var UI_SELECTOR = '[data-afs-ui], [id^="adsfriendly-"]';
+  var MEDIA_SELECTOR = "img, iframe, video, svg, canvas";
+  function visuallyPresent(element) {
+    if (!element?.isConnected || element.closest?.(UI_SELECTOR)) return false;
+    for (let node = element; node; node = node.parentElement) {
+      const style = getComputedStyle(node);
+      if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse" || style.contentVisibility === "hidden" || Number.parseFloat(style.opacity || "1") <= 0.05 || node.hasAttribute("data-adsfriendly-rule-hidden"))
+        return false;
+    }
+    return true;
+  }
+  function getReviewRect(element) {
+    if (!visuallyPresent(element)) return null;
+    const boxes = [
+      element,
+      ...Array.from(element.querySelectorAll(MEDIA_SELECTOR)).slice(0, 20)
+    ].filter(visuallyPresent).map((node) => node.getBoundingClientRect()).filter((rect) => rect.width > 0 && rect.height > 0);
+    if (!boxes.length) return null;
+    let left = Math.max(0, Math.min(...boxes.map((rect) => rect.left)));
+    let top = Math.max(0, Math.min(...boxes.map((rect) => rect.top)));
+    let right = Math.min(
+      innerWidth,
+      Math.max(...boxes.map((rect) => rect.right))
+    );
+    let bottom = Math.min(
+      innerHeight,
+      Math.max(...boxes.map((rect) => rect.bottom))
+    );
+    for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+      const style = getComputedStyle(parent), rect = parent.getBoundingClientRect();
+      if (/(hidden|clip|scroll|auto)/.test(style.overflowX)) {
+        left = Math.max(left, rect.left);
+        right = Math.min(right, rect.right);
+      }
+      if (/(hidden|clip|scroll|auto)/.test(style.overflowY)) {
+        top = Math.max(top, rect.top);
+        bottom = Math.min(bottom, rect.bottom);
+      }
+    }
+    if (right - left < 12 || bottom - top < 12) return null;
+    return {
+      left,
+      top,
+      right,
+      bottom,
+      width: right - left,
+      height: bottom - top
+    };
+  }
+  function hasReviewContent(element) {
+    const media = [
+      element,
+      ...Array.from(element.querySelectorAll(MEDIA_SELECTOR)).slice(0, 20)
+    ];
+    if (media.some((node) => {
+      if (!getReviewRect(node)) return false;
+      if (node.tagName === "IMG") return node.complete && node.naturalWidth > 0;
+      if (node.tagName === "IFRAME")
+        return !!node.getAttribute("srcdoc") || /^https?:/i.test(node.src || "");
+      if (node.tagName === "VIDEO") return node.readyState > 0;
+      if (node.tagName === "SVG")
+        return !!node.querySelector("path, rect, circle, image, use, text");
+      return false;
+    }))
+      return true;
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    for (let node, count = 0; (node = walker.nextNode()) && count < 80; count++) {
+      if (!(node.textContent || "").trim() || !getReviewRect(node.parentElement))
+        continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      if (Array.from(range.getClientRects()).some(
+        (rect) => rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.bottom > 0 && rect.left < innerWidth && rect.top < innerHeight
+      ))
+        return true;
+    }
+    return false;
+  }
+  function isReviewTarget(element) {
+    return !!element && !["HTML", "BODY", "HEAD", "MAIN"].includes(element.tagName) && !element.closest('nav, header, form, [role="navigation"]') && !!getReviewRect(element) && hasReviewContent(element);
+  }
+  function reviewTargetIdentity(element) {
+    if (!element) return "";
+    return JSON.stringify([
+      element.tagName,
+      element.id,
+      (element.innerText || "").trim().slice(0, 500),
+      [
+        element,
+        ...Array.from(
+          element.querySelectorAll("a[href], img, iframe, video")
+        ).slice(0, 20)
+      ].map((node) => [
+        node.tagName,
+        node.href || "",
+        node.currentSrc || node.src || ""
+      ])
+    ]);
+  }
+  function watchReviewTarget(element, {
+    identity = reviewTargetIdentity(element),
+    isValid = () => true,
+    onInvalid = () => {
+    }
+  } = {}) {
+    if (!isReviewTarget(element) || !isValid()) return null;
+    const marker = document.createElement("div");
+    marker.id = "adsfriendly-review-target";
+    marker.setAttribute("data-afs-ui", "true");
+    marker.setAttribute("aria-hidden", "true");
+    marker.style.cssText = "all:initial!important;position:fixed!important;z-index:2147483646!important;pointer-events:none!important;";
+    const shadow = marker.attachShadow({ mode: "closed" });
+    const frame = document.createElement("div");
+    frame.style.cssText = "box-sizing:border-box;width:100%;height:100%;border:2px solid #60a5fa;border-radius:5px;box-shadow:0 0 0 1px #0f172a66;";
+    const label = document.createElement("span");
+    label.textContent = "Reviewing this area";
+    label.style.cssText = "position:absolute;top:2px;left:2px;padding:2px 5px;background:#172235;color:#fff;border-radius:3px;font:11px -apple-system,BlinkMacSystemFont,sans-serif;white-space:nowrap;";
+    frame.appendChild(label);
+    shadow.appendChild(frame);
+    document.body.appendChild(marker);
+    let timer = null;
+    const cleanup = () => {
+      clearTimeout(timer);
+      marker.remove();
+    };
+    const update = () => {
+      if (!isValid() || !isReviewTarget(element) || reviewTargetIdentity(element) !== identity) {
+        cleanup();
+        onInvalid();
+        return;
+      }
+      const rect = getReviewRect(element);
+      for (const [key, value] of Object.entries({
+        left: rect.left,
+        top: rect.top,
+        width: rect.width,
+        height: rect.height
+      }))
+        marker.style.setProperty(key, value + "px", "important");
+      timer = setTimeout(update, 150);
+    };
+    update();
+    return cleanup;
+  }
+
+  // src/shared/storage-verification.js
+  function isStorageQuotaError(error) {
+    const message = String(error?.message || error || "");
+    if (/verification failed/i.test(message)) return false;
+    return /\bquota(?:_bytes(?:_per_item)?)?\b.*(?:exceeded|exceeds|limit|full)|(?:storage|disk)(?:\s+is)?\s+full|(?:exceeded|exceeds).*(?:quota|storage.*limit)/i.test(
+      message
+    );
+  }
+
   // src/dom/toast.js
   var TOAST_ID = "adsfriendly-dom-toast";
   var HIGHLIGHT_ID = "adsfriendly-dom-highlight";
@@ -654,7 +809,7 @@ var AdsFriendlyContent = (() => {
   var queuedCandidates = [];
   var active = null;
   var hideTimer = null;
-  var highlightFrame = null;
+  var highlightCleanup = null;
   function showDomCandidateToast(candidate, handlers) {
     enqueueOrShow({ candidate, handlers, state: "review" });
   }
@@ -662,8 +817,19 @@ var AdsFriendlyContent = (() => {
     enqueueOrShow({ candidate, handlers, state: "hidden" });
   }
   function enqueueOrShow(entry) {
+    if (entry.state === "review" && !entry.candidate.reviewIdentity)
+      entry.candidate.reviewIdentity = reviewTargetIdentity(
+        entry.candidate.target || entry.candidate.element
+      );
     if (!isEntryReviewable(entry)) return;
     if (active) {
+      const target = entry.candidate.target || entry.candidate.element;
+      const overlaps = (previous) => {
+        const other = previous.candidate.target || previous.candidate.element;
+        return other === target || other?.contains?.(target) || target?.contains?.(other);
+      };
+      if (entry.state === "review" && (overlaps(active) || queuedCandidates.some(overlaps)))
+        return;
       if (queuedCandidates.length < 8) queuedCandidates.push(entry);
       return;
     }
@@ -756,7 +922,7 @@ var AdsFriendlyContent = (() => {
       clearHighlight();
     } else {
       const confidence = Math.round(active.candidate.decision.confidence * 100);
-      message.textContent = `${label} \xB7 ${confidence}%`;
+      message.textContent = `Marked ${label} \xB7 ${confidence}%`;
       message.title = active.candidate.decision.reasons?.join(", ") || "Heuristic DOM signals";
       hideButton.hidden = false;
       hideButton.textContent = "Hide";
@@ -765,6 +931,7 @@ var AdsFriendlyContent = (() => {
       clearHighlight();
     }
     toast.classList.remove("adsfriendly-dom-hidden");
+    highlightActiveReview();
     scheduleHide();
   }
   function ensureToast() {
@@ -772,6 +939,7 @@ var AdsFriendlyContent = (() => {
     if (toast) return toast;
     toast = document.createElement("div");
     toast.id = TOAST_ID;
+    toast.setAttribute("data-afs-ui", "true");
     toast.className = "adsfriendly-dom-hidden";
     toast.setAttribute("role", "status");
     toast.setAttribute("aria-live", "polite");
@@ -849,13 +1017,15 @@ var AdsFriendlyContent = (() => {
   `;
     toast.querySelector(".adsfriendly-dom-hide").onclick = () => {
       if (!active || active.state !== "review") return;
+      if (!isEntryReviewable(active)) {
+        hideDomToast();
+        return;
+      }
       const current = active;
       current.state = "saving";
       clearHighlight();
       renderActiveToast();
-      current.pendingHide = Promise.resolve(
-        current.handlers?.onHide?.(current.candidate)
-      ).then(() => {
+      current.pendingHide = Promise.resolve().then(() => current.handlers?.onHide?.(current.candidate)).then(() => {
         if (current.state === "saving") {
           current.state = "hidden";
           if (active === current) renderActiveToast();
@@ -876,12 +1046,18 @@ var AdsFriendlyContent = (() => {
       if (["restoring", "allow-saving", "allow-undoing"].includes(current.state))
         return;
       if (["review", "allow-error"].includes(current.state)) {
+        if (!isReviewTarget(
+          current.candidate.target || current.candidate.element
+        ) || reviewTargetIdentity(
+          current.candidate.target || current.candidate.element
+        ) !== current.candidate.reviewIdentity) {
+          hideDomToast();
+          return;
+        }
         current.state = "allow-saving";
         current.error = null;
         renderActiveToast();
-        current.pendingAllow = Promise.resolve(
-          current.handlers?.onAllow?.(current.candidate)
-        ).then(() => {
+        current.pendingAllow = Promise.resolve().then(() => current.handlers?.onAllow?.(current.candidate)).then(() => {
           current.state = "allowed";
           if (active === current) renderActiveToast();
           else finalizeAllowedEntry(current);
@@ -927,7 +1103,6 @@ var AdsFriendlyContent = (() => {
       highlightActiveReview();
     });
     toast.addEventListener("mouseleave", () => {
-      clearHighlight();
       scheduleHide();
     });
     toast.addEventListener("focusin", () => {
@@ -937,7 +1112,6 @@ var AdsFriendlyContent = (() => {
     toast.addEventListener("focusout", () => {
       setTimeout(() => {
         if (toast.contains(document.activeElement)) return;
-        clearHighlight();
         scheduleHide();
       });
     });
@@ -947,8 +1121,11 @@ var AdsFriendlyContent = (() => {
   }
   function saveFailureMessage(error) {
     const message = String(error?.message || error || "").toLowerCase();
-    if (/quota|storage is full|bytes/.test(message))
-      return "Hidden once \xB7 storage full";
+    if (/nothing was hidden|reviewed area changed/.test(message))
+      return "Area changed \xB7 nothing hidden";
+    if (/verification failed/.test(message))
+      return "Hidden once \xB7 save not verified";
+    if (isStorageQuotaError(error)) return "Hidden once \xB7 storage full";
     if (/invalidated|receiving end|message port|could not establish/.test(message))
       return "Hidden once \xB7 reload extension";
     if (/ignored|outdated|could not save settings/.test(message))
@@ -959,8 +1136,9 @@ var AdsFriendlyContent = (() => {
     const value = String(error?.message || error || "").toLowerCase();
     if (/no stable identity|reusable selector/.test(value))
       return "Cannot remember safely \xB7 dismiss once";
-    if (/quota|storage is full|bytes/.test(value))
-      return "Not saved \xB7 storage full";
+    if (/verification failed/.test(value))
+      return "Not saved \xB7 verification failed";
+    if (isStorageQuotaError(error)) return "Not saved \xB7 storage full";
     if (/invalidated/.test(value)) return "Reload this page \xB7 extension updated";
     if (/receiving end|message port|could not establish/.test(value))
       return "Reload extension and page";
@@ -971,33 +1149,11 @@ var AdsFriendlyContent = (() => {
   function highlightCandidate(candidate) {
     clearHighlight();
     const target = candidate.target || candidate.element;
-    if (!target?.isConnected) return;
-    const highlight = document.createElement("div");
-    highlight.id = HIGHLIGHT_ID;
-    highlight.style.setProperty(
-      "--adsfriendly-highlight-color",
-      highlightColor(candidate.decision.confidence)
-    );
-    (document.body || document.documentElement).appendChild(highlight);
-    const update = () => {
-      if (!active || !target.isConnected || !highlight.isConnected) return;
-      if (isHiddenByAdsFriendly(target)) {
-        hideDomToast();
-        return;
-      }
-      const rect = target.getBoundingClientRect();
-      const left = Math.max(0, rect.left);
-      const top = Math.max(0, rect.top);
-      const right = Math.min(window.innerWidth, rect.right);
-      const bottom = Math.min(window.innerHeight, rect.bottom);
-      highlight.style.left = `${left}px`;
-      highlight.style.top = `${top}px`;
-      highlight.style.width = `${Math.max(0, right - left)}px`;
-      highlight.style.height = `${Math.max(0, bottom - top)}px`;
-      highlight.hidden = right <= left || bottom <= top;
-      highlightFrame = requestAnimationFrame(update);
-    };
-    update();
+    highlightCleanup = watchReviewTarget(target, {
+      identity: candidate.reviewIdentity,
+      isValid: () => active?.state === "review" && isEntryReviewable(active),
+      onInvalid: hideDomToast
+    });
   }
   function highlightActiveReview() {
     if (active?.state === "review") highlightCandidate(active.candidate);
@@ -1007,18 +1163,11 @@ var AdsFriendlyContent = (() => {
     if (entry.handlers?.isSuppressed?.(entry.candidate)) return false;
     const target = entry.candidate.target || entry.candidate.element;
     if (!target?.isConnected || isHiddenByAdsFriendly(target)) return false;
-    const rect = target.getBoundingClientRect();
-    const style = getComputedStyle(target);
-    return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden" && Number.parseFloat(style.opacity || "1") > 0.05;
-  }
-  function highlightColor(confidence) {
-    if (confidence >= 0.9) return "#ef4444";
-    if (confidence >= 0.75) return "#f59e0b";
-    return "#eab308";
+    return isReviewTarget(target) && (!entry.candidate.reviewIdentity || reviewTargetIdentity(target) === entry.candidate.reviewIdentity);
   }
   function clearHighlight() {
-    if (highlightFrame) cancelAnimationFrame(highlightFrame);
-    highlightFrame = null;
+    if (highlightCleanup) highlightCleanup();
+    highlightCleanup = null;
     document.getElementById(HIGHLIGHT_ID)?.remove();
   }
   function scheduleHide() {
@@ -1723,18 +1872,31 @@ var AdsFriendlyContent = (() => {
     const features = extractDomFeatures(element);
     const decision = decideDomCandidate(features);
     if (decision.action === "observe") return;
-    observed.add(element);
     const target = getSmallestSafeDomTarget(element, features);
-    if (isHiddenByAdsFriendly(target)) return;
+    if (isHiddenByAdsFriendly(target) || !isReviewTarget(target)) return;
+    const targetFeatures = target === element ? features : extractDomFeatures(target);
     const selector = buildDomSelector(target);
     if (!isReusableDomSelector(selector)) return;
     if (selector && allowedSelectors.has(selector)) return;
     const layout = getResponsiveLayout();
     if (elementExceptions.some(
-      (rule) => matchesElementException(rule, { selector, features, layout })
+      (rule) => matchesElementException(rule, {
+        selector,
+        features: targetFeatures,
+        layout
+      })
     ))
       return;
-    const candidate = { element, target, selector, features, decision, layout };
+    observed.add(element);
+    const candidate = {
+      element,
+      target,
+      selector,
+      features: targetFeatures,
+      decision,
+      layout,
+      reviewIdentity: reviewTargetIdentity(target)
+    };
     if (decision.action === "block") {
       if (activePolicy?.can(CAPABILITIES.DOM_AUTO_HIDE)) {
         hideCandidate(candidate, "heuristic_block");
@@ -1766,6 +1928,9 @@ var AdsFriendlyContent = (() => {
     );
   }
   async function hideCandidate(candidate, outcome) {
+    if (outcome === "user_hide" && (!isReviewTarget(candidate.target) || reviewTargetIdentity(candidate.target) !== candidate.reviewIdentity))
+      throw new Error("The reviewed area changed. Nothing was hidden or saved.");
+    candidate.layout = getResponsiveLayout();
     candidate.previousInlineVisibility ||= captureInlineVisibility(
       candidate.target
     );
@@ -1787,6 +1952,7 @@ var AdsFriendlyContent = (() => {
     }
   }
   async function rememberNotAdCandidate(candidate) {
+    candidate.layout = getResponsiveLayout();
     const rule = createElementException(candidate, {
       layout: candidate.layout || getResponsiveLayout()
     });
@@ -1823,7 +1989,18 @@ var AdsFriendlyContent = (() => {
   }
   async function restoreCandidate(candidate) {
     if (candidate.selector) {
-      await removeCustomRule(candidate.selector);
+      if (candidate.savedRuleConfirmed)
+        await removeCustomRule(candidate.selector);
+      else {
+        restoreInlineVisibility(
+          candidate.target,
+          candidate.previousInlineVisibility
+        );
+        try {
+          await removeCustomRule(candidate.selector);
+        } catch {
+        }
+      }
       allowedSelectors.add(candidate.selector);
     }
     restoreInlineVisibility(candidate.target, candidate.previousInlineVisibility);
@@ -1856,7 +2033,11 @@ var AdsFriendlyContent = (() => {
       rules: [rule]
     });
     assertSaved(response);
-    await chrome.runtime.sendMessage({ type: "SYNC_LEARNING" });
+    candidate.savedRuleConfirmed = true;
+    try {
+      await chrome.runtime.sendMessage({ type: "SYNC_LEARNING" });
+    } catch {
+    }
   }
   async function loadElementExceptions() {
     try {
@@ -1879,7 +2060,10 @@ var AdsFriendlyContent = (() => {
       selectors: [selector]
     });
     assertSaved(response);
-    await chrome.runtime.sendMessage({ type: "SYNC_LEARNING" });
+    try {
+      await chrome.runtime.sendMessage({ type: "SYNC_LEARNING" });
+    } catch {
+    }
   }
   function assertSaved(response) {
     if (response?.status !== "saved")

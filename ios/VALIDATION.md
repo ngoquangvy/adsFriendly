@@ -13,7 +13,7 @@ DOM selector/identity helpers and responsive-layout logic. Regenerate it with
 
 ## Quiet banner review policy
 
-The single-row banner card says **Banner ad? / Hide / Keep / ×**, uses 44px
+The single-row banner card says **Marked area? / Hide / Keep / ×**, uses 44px
 touch targets, and dismisses after 8 seconds. A document gets at most two
 automatic banner prompts, spaced at least 60 seconds apart. Banner reviews do
 not queue behind other reviews. This budget does not limit blocked-navigation
@@ -28,6 +28,24 @@ The browser gate checks 320, 375, 390, 768 and 980px viewports, single-row heigh
 touch targets, active-card stability, mutation/resize/replacement deduplication,
 automatic dismissal, prompt flood limits and saved banner decisions. Physical
 Safari acceptance is still required.
+
+## Actionable target and storage checks
+
+Chrome and iOS use the same visible-content guard and isolated blue target
+marker. Reviews require on-screen content, not just an ad-shaped DIV. Empty
+slots, broken images, hidden ancestors and off-screen targets are skipped.
+Inline-link markers include the image they contain. The marker never changes
+site outlines or scroll position. Content/resource changes, detachment or a
+blocker hiding the target cancel the pending review; actions revalidate before
+sending any decision. A cross-origin iframe's internal rendering cannot be
+verified by this guard, so iframe URL/geometry checks remain best-effort.
+
+Storage verification compares JSON values independently of object key order.
+Verification and transport failures must not be labelled as a full quota.
+Chrome's Hide applies locally before saving; Show still restores an unconfirmed
+local Hide if quota/storage writes fail. iOS saves first and reports a failed
+save without claiming to hide. Learning sync is best-effort after a verified
+Chrome save, not another settings-saving step.
 
 ## Device acceptance (required before claiming release quality)
 

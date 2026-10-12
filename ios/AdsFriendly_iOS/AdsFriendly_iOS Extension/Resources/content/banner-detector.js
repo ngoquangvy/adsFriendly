@@ -28,7 +28,7 @@
       action: "save_dom_decision", hostname: window.location.hostname, selector,
       layout: getResponsiveLayout(), decision, features: AFShared.extractDomFeatures(element)
     });
-    if (!response || response.error) throw new Error(response?.error || "Could not save this choice.");
+    if (!response || response.error || response.status !== "saved") throw new Error(response?.error || "Could not confirm this saved choice.");
   }
 
   function isPositionedBanner(el) {
@@ -85,10 +85,12 @@
     var text = String(el.textContent || "").toLowerCase();
     var adKeywords = AF_CONFIG.bannerDetection.adContentKeywords;
     for (var i = 0; i < adKeywords.length; i++) {
+      if (adKeywords[i] === "powered by") continue;
+      if (adKeywords[i] === "qc" && !/(^|[^a-z])qc([^a-z]|$)/i.test(text)) continue;
       if (text.indexOf(adKeywords[i]) !== -1) return true;
     }
     var cls = (String(el.className || "") + " " + String(el.id || "")).toLowerCase();
-    return hasAdTokenSignal(cls);
+    return /(^|[\s_-])(?:ad|ads|adv|advert|advertisement|sponsored|sponsor)(?=$|[\s_-])/i.test(cls);
   }
 
   function linkLooksLikeAd(a) {
@@ -101,7 +103,7 @@
       (a.getAttribute('aria-label') || '') + ' ' +
       (a.getAttribute('title') || '')
     ).toLowerCase();
-    if (hasAdTokenSignal(sig)) return true;
+    if (/(^|[\s_-])(?:ad|ads|adv|advert|advertisement|sponsored|sponsor)(?=$|[\s_-])/i.test(sig)) return true;
     var image = a.querySelector && a.querySelector("img");
     var imageSignal = image ? [
       image.getAttribute("alt") || "",
@@ -110,7 +112,7 @@
       image.id || "",
       image.getAttribute("src") || ""
     ].join(" ") : "";
-    return hasAdTokenSignal(imageSignal);
+    return /(^|[\s_-])(?:ad|ads|adv|advert|advertisement|sponsored|sponsor)(?=$|[\s_-])/i.test(imageSignal);
   }
 
   function findAdLink(el) {
@@ -207,8 +209,7 @@
   }
 
   function isLikelyAdContainer(el) {
-    return hasAdContent(el) || hasHighAdLinkRatio(el) ||
-      (getCurrentSitePolicy() === "block" && hasBannerCreativeGeometry(el) && hasCrossOriginLink(el));
+    return hasAdContent(el) || hasHighAdLinkRatio(el);
   }
 
   function isInvisibleOverlay(el) {
@@ -239,6 +240,7 @@
   function hideBanner(el, reason) {
     if (!isProtectionEnabled() || getCurrentSitePolicy() === "allow" || AF_DOM.isHidden(el)) return;
     if (reviewedBanners.has(el) || isProtectedNavigation(el) || isLoginForm(el)) return;
+    if (!AFShared.isReviewTarget(el)) return;
     var selector = buildBannerSelector(el);
     if (!AFShared.safeDomSelector(selector)) return;
     if (isAllowedCandidate(selector, el)) return;
@@ -246,9 +248,16 @@
     var accepted = notifyBannerCandidate(el, reason, {
       selector: selector,
       reviewKey: reviewSlotSelector(el),
+      isValid: function() {
+        return AFShared.iosFeatureEnabled(AF_CONFIG.appSettings, "content.dom-candidate-collector") &&
+          isProtectionEnabled() && getCurrentSitePolicy() !== "allow" &&
+          !AF_DOM.isHidden(el) && !isAllowedCandidate(selector, el);
+      },
       hide: async function() {
         await saveDomDecision(selector, "hide", el);
-        AF_DOM.hide(el, selector);
+        if (AF_DOM.isHidden(el)) return; // The saved-rule observer may apply first.
+        if (!AFShared.isReviewTarget(el) || !AF_DOM.hide(el, selector))
+          throw new Error("This area is no longer available to hide.");
         if (typeof afsRecordTelemetry === "function") afsRecordTelemetry({
           unit: "ui_overlay", label: "ad", label_source: "user_hide", ad_type: "banner",
           reason: reason, element: el, action: "hide", outcome: "hidden_element",
@@ -266,12 +275,11 @@
 
   function scanInlineCreatives() {
     var links = document.querySelectorAll('a[href]');
-    var strict = getCurrentSitePolicy() === "block";
     for (var i = 0; i < links.length && i < 500; i++) {
       var link = links[i];
       if (hiddenBanners.has(link) || reviewedBanners.has(link)) continue;
       if (isProtectedNavigation(link) || !hasBannerCreativeGeometry(link)) continue;
-      if (!linkLooksLikeAd(link) && !(strict && isCrossOrigin(link.href))) continue;
+      if (!linkLooksLikeAd(link)) continue;
       hideBanner(link, "linked banner creative");
     }
     var signaled = [];
@@ -325,8 +333,6 @@
         hideBanner(el, "ad (close + ad keywords)");
       } else if (isLoginForm(el)) {
         continue;
-      } else if (isLargeOverlay(el)) {
-        hideBanner(el, "ad (close + large overlay)");
       }
     }
 
@@ -355,6 +361,7 @@
 
   // Re-scan via direct close selectors (faster first pass)
   function scanCloseSelectors() {
+    if (!AFShared.iosFeatureEnabled(AF_CONFIG.appSettings, "content.dom-candidate-collector")) return;
     if (!isProtectionEnabled() || isWhitelisted(window.location.href)) return;
     var sel = AF_CONFIG.bannerDetection.closeSelectors.join(',');
     try {
@@ -366,8 +373,6 @@
             if (isProtectedNavigation(banner)) continue;
             if (isLikelyAdContainer(banner)) {
               hideBanner(banner, "ad (close selector)");
-            } else if (!isLoginForm(banner) && isLargeOverlay(banner)) {
-              hideBanner(banner, "ad (close selector, large)");
             }
           }
         }

@@ -14,6 +14,7 @@ import {
 import { showDomCandidateToast } from "./toast.js";
 import { CAPABILITIES } from "../runtime/feature-catalog.js";
 import { getResponsiveLayout } from "./layout-context.js";
+import { isReviewTarget, reviewTargetIdentity } from "./review-target.js";
 import {
   createElementException,
   elementExceptionKey,
@@ -124,9 +125,10 @@ function evaluateElement(element) {
   const decision = decideDomCandidate(features);
   if (decision.action === "observe") return;
 
-  observed.add(element);
   const target = getSmallestSafeDomTarget(element, features);
-  if (isHiddenByAdsFriendly(target)) return;
+  if (isHiddenByAdsFriendly(target) || !isReviewTarget(target)) return;
+  const targetFeatures =
+    target === element ? features : extractDomFeatures(target);
   const selector = buildDomSelector(target);
   // If the element cannot be addressed again with a bounded selector, neither
   // auto-hide it nor ask the user to classify it. Those candidates are usually
@@ -137,12 +139,25 @@ function evaluateElement(element) {
   const layout = getResponsiveLayout();
   if (
     elementExceptions.some((rule) =>
-      matchesElementException(rule, { selector, features, layout }),
+      matchesElementException(rule, {
+        selector,
+        features: targetFeatures,
+        layout,
+      }),
     )
   )
     return;
 
-  const candidate = { element, target, selector, features, decision, layout };
+  observed.add(element);
+  const candidate = {
+    element,
+    target,
+    selector,
+    features: targetFeatures,
+    decision,
+    layout,
+    reviewIdentity: reviewTargetIdentity(target),
+  };
   if (decision.action === "block") {
     if (activePolicy?.can(CAPABILITIES.DOM_AUTO_HIDE)) {
       hideCandidate(candidate, "heuristic_block");
@@ -177,6 +192,13 @@ function isCandidateSuppressed(candidate) {
 }
 
 async function hideCandidate(candidate, outcome) {
+  if (
+    outcome === "user_hide" &&
+    (!isReviewTarget(candidate.target) ||
+      reviewTargetIdentity(candidate.target) !== candidate.reviewIdentity)
+  )
+    throw new Error("The reviewed area changed. Nothing was hidden or saved.");
+  candidate.layout = getResponsiveLayout();
   candidate.previousInlineVisibility ||= captureInlineVisibility(
     candidate.target,
   );
@@ -198,6 +220,7 @@ async function hideCandidate(candidate, outcome) {
 }
 
 async function rememberNotAdCandidate(candidate) {
+  candidate.layout = getResponsiveLayout();
   const rule = createElementException(candidate, {
     layout: candidate.layout || getResponsiveLayout(),
   });
@@ -237,7 +260,19 @@ function confirmNotAdCandidate(candidate) {
 
 async function restoreCandidate(candidate) {
   if (candidate.selector) {
-    await removeCustomRule(candidate.selector);
+    if (candidate.savedRuleConfirmed)
+      await removeCustomRule(candidate.selector);
+    else {
+      // A failed/unverified save must not make Show depend on another write to
+      // the same unavailable storage. Restore this document regardless.
+      restoreInlineVisibility(
+        candidate.target,
+        candidate.previousInlineVisibility,
+      );
+      try {
+        await removeCustomRule(candidate.selector);
+      } catch {}
+    }
     allowedSelectors.add(candidate.selector);
   }
   restoreInlineVisibility(candidate.target, candidate.previousInlineVisibility);
@@ -271,7 +306,11 @@ async function persistCustomRule(candidate, outcome) {
     rules: [rule],
   });
   assertSaved(response);
-  await chrome.runtime.sendMessage({ type: "SYNC_LEARNING" });
+  candidate.savedRuleConfirmed = true;
+  // Sync is best-effort; failure after a verified save isn't a storage failure.
+  try {
+    await chrome.runtime.sendMessage({ type: "SYNC_LEARNING" });
+  } catch {}
 }
 
 async function loadElementExceptions() {
@@ -297,7 +336,9 @@ async function removeCustomRule(selector) {
     selectors: [selector],
   });
   assertSaved(response);
-  await chrome.runtime.sendMessage({ type: "SYNC_LEARNING" });
+  try {
+    await chrome.runtime.sendMessage({ type: "SYNC_LEARNING" });
+  } catch {}
 }
 
 function assertSaved(response) {
