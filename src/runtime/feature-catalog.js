@@ -194,6 +194,9 @@ export const FEATURE_CATALOG = Object.freeze([
     C.MEDIA_CATALOG,
   ]),
   feature("content.youtube-cleaner", "content", C.DOM_STATIC_RULES),
+  feature("content.player-download", "content", C.MEDIA_DOWNLOAD, [
+    C.MEDIA_CATALOG,
+  ]),
   feature("content.navigation-intent", "content", C.NAVIGATION_INTENT),
   feature("content.navigation-toast", "content", C.NAVIGATION_FEEDBACK),
   feature("content.dom-static-blocker", "content", C.DOM_STATIC_RULES, [
@@ -213,6 +216,9 @@ export const FEATURE_CATALOG = Object.freeze([
     C.MEDIA_CATALOG,
   ]),
   feature("media-frame.navigation-intent", "media-frame", C.NAVIGATION_INTENT),
+  feature("media-frame.player-download", "media-frame", C.MEDIA_DOWNLOAD, [
+    C.MEDIA_CATALOG,
+  ]),
 
   feature("video.surgeon", "video", C.VIDEO_OBSERVE, [
     C.VIDEO_RESTORE_STATE,

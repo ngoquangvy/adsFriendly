@@ -1,12 +1,12 @@
 import { recordTelemetry } from "./telemetry.js";
 
-export async function logBlockedNavigation(url, source) {
+export async function logBlockedNavigation(url, source, attribution = {}) {
   const { blockedLogs = [] } = await chrome.storage.local.get(["blockedLogs"]);
   await chrome.storage.local.set({
-    blockedLogs: [{ url, source, timestamp: Date.now() }, ...blockedLogs].slice(
-      0,
-      20,
-    ),
+    blockedLogs: [
+      { url, source, timestamp: Date.now(), attribution },
+      ...blockedLogs,
+    ].slice(0, 20),
   });
   await recordTelemetry({
     unit: "navigation",
@@ -22,6 +22,10 @@ export async function logBlockedNavigation(url, source) {
       source_host: source,
       target_host: safeHost(url),
       surface: "navigation_guard",
+    },
+    evidence: {
+      navigation: attribution,
+      interpretation: "policy_inference_not_user_label",
     },
   });
 }

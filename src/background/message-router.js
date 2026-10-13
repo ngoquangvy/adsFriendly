@@ -17,7 +17,6 @@ import { updateSiteReputation } from "./reputation.js";
 import { flushTelemetry, recordTelemetry } from "./telemetry.js";
 import { CAPABILITIES } from "../runtime/feature-catalog.js";
 import {
-  allowUserOpenedNavigation,
   deliverPendingNavigationReview,
   showAllowedSearchNavigation,
 } from "../navigation/background/guard.js";
@@ -28,6 +27,7 @@ import {
 import { addDomTrainingSample } from "../storage/training-store.js";
 import {
   listDiscoveredMedia,
+  preferDiscoveredMedia,
   listMediaPlaybackSessions,
   recordBlobSourceTrace,
   recordDiscoveredMedia,
@@ -43,6 +43,7 @@ import {
   requestMediaDownloadHistoryClear,
   requestMediaDownloadJob,
   requestMediaDownloadQualityPreflight,
+  requestMediaDownloadContext,
   requestPlayerOutputCanary,
   receivePlayerOutputCaptureChunk,
   receivePlayerOutputCaptureFailure,
@@ -64,6 +65,20 @@ import {
 import { saveMediaManifestHandoff } from "./media-manifest-handoff.js";
 import { EVENTS, createRegisteredEvent } from "../runtime/event-catalog.js";
 import { chooseMediaTitle } from "../media/media-title.js";
+import { navigationDiagnostics } from "../navigation/background/diagnostics.js";
+import { resolvePlayerDownloadTarget } from "../media/player-download-target.js";
+import {
+  navigationAttribution,
+  normalizeNavigationAttributionFacts,
+} from "../navigation/background/attribution.js";
+import { openExtensionManagedTab } from "../navigation/background/managed-tabs.js";
+
+const NAVIGATION_DIAGNOSTICS_MESSAGES = new Set([
+  "START_NAVIGATION_DIAGNOSTICS",
+  "STOP_NAVIGATION_DIAGNOSTICS",
+  "GET_NAVIGATION_DIAGNOSTICS",
+  "CLEAR_NAVIGATION_DIAGNOSTICS",
+]);
 
 const MESSAGE_CAPABILITIES = Object.freeze({
   TRUSTED_CLICK: CAPABILITIES.NAVIGATION_INTENT,
@@ -79,6 +94,10 @@ const MESSAGE_CAPABILITIES = Object.freeze({
   ALLOW_BLOCKED_SOURCE: CAPABILITIES.NAVIGATION_FEEDBACK,
   BLOCK_ALLOWED_SEARCH_SOURCE: CAPABILITIES.NAVIGATION_FEEDBACK,
   NAVIGATION_TOAST_READY: CAPABILITIES.NAVIGATION_FEEDBACK,
+  START_NAVIGATION_DIAGNOSTICS: CAPABILITIES.CORE_MESSAGING,
+  STOP_NAVIGATION_DIAGNOSTICS: CAPABILITIES.CORE_MESSAGING,
+  GET_NAVIGATION_DIAGNOSTICS: CAPABILITIES.CORE_MESSAGING,
+  CLEAR_NAVIGATION_DIAGNOSTICS: CAPABILITIES.CORE_MESSAGING,
   LEARN_VIDEO_AD: CAPABILITIES.LEARNING_FEEDBACK,
   SYNC_VIDEO_LEARNING: CAPABILITIES.LEARNING_FEEDBACK,
   REPORT_AD_DENSITY: CAPABILITIES.CORE_MAINTENANCE,
@@ -103,6 +122,11 @@ const MESSAGE_CAPABILITIES = Object.freeze({
   MEDIA_PLAYBACK_OBSERVED: CAPABILITIES.MEDIA_CATALOG,
   PREPARE_MEDIA_CONTEXTUAL_PROBE: CAPABILITIES.MEDIA_CATALOG,
   GET_MEDIA_CATALOG: CAPABILITIES.MEDIA_CATALOG,
+  GET_PLAYER_MEDIA_CONTEXT: CAPABILITIES.MEDIA_DOWNLOAD,
+  GET_PLAYER_DOWNLOAD_CONTEXT: CAPABILITIES.MEDIA_DOWNLOAD,
+  SELECT_PLAYER_MEDIA: CAPABILITIES.MEDIA_DOWNLOAD,
+  OPEN_PLAYER_DOWNLOAD_MANAGER: CAPABILITIES.MEDIA_DOWNLOAD,
+  OPEN_ELEMENT_DECISIONS: CAPABILITIES.CORE_MAINTENANCE,
   GET_MEDIA_SESSIONS: CAPABILITIES.MEDIA_CATALOG,
   SAVE_MEDIA_DEBUG_MANIFEST: CAPABILITIES.MEDIA_CATALOG,
   GET_MEDIA_DEBUG_MANIFEST: CAPABILITIES.MEDIA_CATALOG,
@@ -147,17 +171,35 @@ export function registerMessageRouter(policy) {
 }
 async function route(message, sender) {
   if (!message) return { status: "ignored" };
+  if (
+    NAVIGATION_DIAGNOSTICS_MESSAGES.has(message.type) &&
+    !sender?.url?.startsWith(chrome.runtime.getURL("options/"))
+  )
+    return { status: "ignored" };
+  if (message.type === "START_NAVIGATION_DIAGNOSTICS")
+    return navigationDiagnostics.startCapture({
+      durationMs: message.durationMs,
+      reason: "developer_test",
+    });
+  if (message.type === "STOP_NAVIGATION_DIAGNOSTICS")
+    return navigationDiagnostics.stopCapture();
+  if (message.type === "GET_NAVIGATION_DIAGNOSTICS")
+    return navigationDiagnostics.getSnapshot();
+  if (message.type === "CLEAR_NAVIGATION_DIAGNOSTICS")
+    return navigationDiagnostics.clear();
   if (message.type === "TRUSTED_CLICK") {
     runtimeState.lastTrustedClick = {
       timestamp: Date.now(),
       intentUrl: message.intentUrl,
-      sourceUrl: message.sourceUrl || sender?.tab?.url || null,
+      sourceUrl: sender?.tab?.url || message.sourceUrl || null,
       intentKind: message.intentKind || "navigation",
       intentReasons: Array.isArray(message.intentReasons)
         ? message.intentReasons
         : [],
       tabId: sender?.tab?.id || null,
+      sourceFrameId: sender?.frameId ?? null,
     };
+    navigationAttribution.rememberIntent(runtimeState.lastTrustedClick);
     return;
   }
   if (message.type === "NAVIGATION_TOAST_READY") {
@@ -342,6 +384,69 @@ async function route(message, sender) {
     if (!Number.isInteger(message.tabId)) return { status: "invalid_tab" };
     return listDiscoveredMedia(message.tabId, message.pageUrl || null);
   }
+  if (message.type === "GET_PLAYER_MEDIA_CONTEXT") {
+    if (!Number.isInteger(sender?.tab?.id)) return { status: "invalid_tab" };
+    const snapshot = await listDiscoveredMedia(sender.tab.id, sender.tab.url);
+    return {
+      ...snapshot,
+      tab: { id: sender.tab.id, url: sender.tab.url },
+      frameId: sender.frameId ?? 0,
+    };
+  }
+  if (message.type === "GET_PLAYER_DOWNLOAD_CONTEXT") {
+    if (!Number.isInteger(sender?.tab?.id)) return { status: "invalid_tab" };
+    const snapshot = await listDiscoveredMedia(sender.tab.id, sender.tab.url);
+    const target = resolvePlayerDownloadTarget({
+      sourceUrl: message.sourceUrl,
+      pageUrl: sender.url,
+      frameId: sender.frameId ?? 0,
+      items: snapshot.items,
+    });
+    if (!target) return { status: "unavailable" };
+    return requestMediaDownloadContext({
+      tabId: sender.tab.id,
+      mediaId: target.candidate.id,
+      output: message.output,
+      verifyFile: message.verifyFile === true,
+    });
+  }
+  if (message.type === "SELECT_PLAYER_MEDIA") {
+    if (!Number.isInteger(sender?.tab?.id)) return { status: "invalid_tab" };
+    const snapshot = await listDiscoveredMedia(sender.tab.id, sender.tab.url);
+    const target = resolvePlayerDownloadTarget({
+      sourceUrl: message.sourceUrl,
+      pageUrl: sender.url,
+      frameId: sender.frameId ?? 0,
+      items: snapshot.items,
+    });
+    if (!target) return { status: "unavailable" };
+    return preferDiscoveredMedia(sender.tab.id, target.presentation.id);
+  }
+  if (message.type === "OPEN_PLAYER_DOWNLOAD_MANAGER") {
+    await openExtensionManagedTab(
+      {
+        url: chrome.runtime.getURL("options/options.html#downloads"),
+      },
+      "download_manager",
+    );
+    return { status: "opened" };
+  }
+  if (message.type === "OPEN_ELEMENT_DECISIONS") {
+    if (!isExtensionPageSender(sender) || !Number.isInteger(message.tabId))
+      return { status: "forbidden" };
+    const tab = await chrome.tabs.get(message.tabId);
+    const page = new URL(tab.url);
+    if (!/^https?:$/.test(page.protocol)) return { status: "invalid_tab" };
+    await openExtensionManagedTab(
+      {
+        url:
+          chrome.runtime.getURL("options/options.html") +
+          `?site=${encodeURIComponent(page.hostname)}#element-decisions`,
+      },
+      "element_decisions",
+    );
+    return { status: "opened" };
+  }
   if (message.type === "GET_MEDIA_SESSIONS") {
     if (!Number.isInteger(message.tabId)) return { status: "invalid_tab" };
     return listMediaPlaybackSessions(message.tabId, message.pageUrl || null);
@@ -392,6 +497,7 @@ async function route(message, sender) {
       mediaId: message.mediaId,
       connections: message.connections,
       output: message.output,
+      repeatOf: typeof message.repeatOf === "string" ? message.repeatOf : null,
     });
   if (message.type === "PREFLIGHT_MEDIA_DOWNLOAD_QUALITIES")
     return requestMediaDownloadQualityPreflight({
@@ -466,7 +572,10 @@ async function route(message, sender) {
         surface: "navigation_toast",
       },
     });
-    await chrome.tabs.create({ url: message.url, active: true });
+    await openExtensionManagedTab(
+      { url: message.url, active: true },
+      "user_restore",
+    );
     return;
   }
   if (message.type === "BLOCK_GRAY_NAVIGATION") {
@@ -510,6 +619,12 @@ async function route(message, sender) {
       sourceUrl: `https://${message.source}/`,
       action: "allow",
       outcome: "user_kept_reviewed_tab",
+      evidence: {
+        navigation: normalizeNavigationAttributionFacts(
+          message.navigationAttribution,
+        ),
+        interpretation: "explicit_user_feedback",
+      },
       context: {
         source_host: message.source,
         target_host: message.target,
@@ -540,6 +655,12 @@ async function route(message, sender) {
       sourceUrl: `https://${message.source}/`,
       action: "block",
       outcome: "user_blocked_reviewed_tab",
+      evidence: {
+        navigation: normalizeNavigationAttributionFacts(
+          message.navigationAttribution,
+        ),
+        interpretation: "explicit_user_feedback",
+      },
       context: {
         source_host: message.source,
         target_host: message.target,
@@ -565,8 +686,10 @@ async function route(message, sender) {
       return { status: "invalid_url" };
     }
     if (!/^https?:$/.test(targetUrl.protocol)) return { status: "invalid_url" };
-    allowUserOpenedNavigation(targetUrl.href);
-    await chrome.tabs.create(tabCreateProperties(targetUrl.href, sender));
+    await openExtensionManagedTab(
+      tabCreateProperties(targetUrl.href, sender),
+      "user_open_once",
+    );
     return { status: "opened" };
   }
   if (message.type === "ALLOW_BLOCKED_SOURCE") {
@@ -574,9 +697,9 @@ async function route(message, sender) {
     const search = getPrefilledSearchNavigation(message.url);
     if (!source || !search) return { status: "invalid_navigation" };
     await syncTrustedPath(source, PREFILLED_SEARCH_TRUST_TARGET, true);
-    allowUserOpenedNavigation(message.url);
-    const tab = await chrome.tabs.create(
+    const tab = await openExtensionManagedTab(
       tabCreateProperties(message.url, sender),
+      "user_allow_source",
     );
     await showAllowedSearchNavigation({
       tabId: tab.id,

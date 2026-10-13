@@ -56,6 +56,7 @@ function startPickerController(policy) {
 
       activeOverlay = document.createElement("div");
       activeOverlay.id = "adsfriendly-picker-active-overlay";
+      activeOverlay.setAttribute("data-adsfriendly-ui", "picker-overlay");
       activeOverlay.style.cssText = `
             position: fixed;
             pointer-events: none;
@@ -71,6 +72,7 @@ function startPickerController(policy) {
 
       controlPanel = document.createElement("div");
       controlPanel.id = "adsfriendly-picker-panel";
+      controlPanel.setAttribute("data-adsfriendly-ui", "picker-controls");
       controlPanel.style.cssText = `
             position: fixed;
             z-index: 2147483647;

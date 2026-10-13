@@ -262,6 +262,9 @@ var AdsFriendlyOptions = (() => {
       C2.MEDIA_CATALOG
     ]),
     feature("content.youtube-cleaner", "content", C2.DOM_STATIC_RULES),
+    feature("content.player-download", "content", C2.MEDIA_DOWNLOAD, [
+      C2.MEDIA_CATALOG
+    ]),
     feature("content.navigation-intent", "content", C2.NAVIGATION_INTENT),
     feature("content.navigation-toast", "content", C2.NAVIGATION_FEEDBACK),
     feature("content.dom-static-blocker", "content", C2.DOM_STATIC_RULES, [
@@ -280,6 +283,9 @@ var AdsFriendlyOptions = (() => {
       C2.MEDIA_CATALOG
     ]),
     feature("media-frame.navigation-intent", "media-frame", C2.NAVIGATION_INTENT),
+    feature("media-frame.player-download", "media-frame", C2.MEDIA_DOWNLOAD, [
+      C2.MEDIA_CATALOG
+    ]),
     feature("video.surgeon", "video", C2.VIDEO_OBSERVE, [
       C2.VIDEO_RESTORE_STATE,
       C2.VIDEO_USER_ACTION,
@@ -475,6 +481,401 @@ var AdsFriendlyOptions = (() => {
         throw new Error(`Could not verify saved setting: ${key}.`);
     }
     return settings;
+  }
+
+  // src/options/section-catalog.js
+  var SETTINGS_SECTIONS = Object.freeze(
+    [
+      {
+        id: "protection",
+        title: "Protection",
+        description: "Choose how AdsFriendly protects your browsing.",
+        icon: "shield"
+      },
+      {
+        id: "sites",
+        title: "Sites & Rules",
+        description: "Manage allowed sites, blocked sites and personal page decisions.",
+        icon: "rules",
+        aliases: ["element-decisions"]
+      },
+      {
+        id: "packages",
+        title: "Settings Package",
+        description: "Save, share or install an editable settings snapshot.",
+        icon: "package"
+      },
+      {
+        id: "downloads",
+        title: "Downloads",
+        description: "Manage downloads and files without leaving Settings.",
+        icon: "download"
+      },
+      {
+        id: "activity",
+        title: "Activity",
+        description: "Review recent navigation blocks.",
+        icon: "activity"
+      },
+      {
+        id: "advanced",
+        title: "Advanced",
+        description: "Local training data, developer diagnostics and storage tools.",
+        icon: "tools"
+      }
+    ].map(
+      (section) => Object.freeze({
+        ...section,
+        aliases: Object.freeze(section.aliases || [])
+      })
+    )
+  );
+  function resolveSettingsSection(hash, remembered = null) {
+    const requested = String(hash || "").replace(/^#/, "");
+    const direct = SETTINGS_SECTIONS.find(
+      (section) => section.id === requested || section.aliases.includes(requested)
+    );
+    if (requested) return direct || SETTINGS_SECTIONS[0];
+    return SETTINGS_SECTIONS.find((section) => section.id === remembered) || SETTINGS_SECTIONS[0];
+  }
+  function matchesSettingsSearch(values, query) {
+    const needle = String(query || "").trim().toLocaleLowerCase();
+    return !needle || values.some(
+      (value) => String(value || "").toLocaleLowerCase().includes(needle)
+    );
+  }
+
+  // src/options/section-navigation.js
+  var LAST_SECTION_KEY = "adsfriendly.settings.lastSection";
+  var ICON_PATHS = {
+    shield: "M12 3l8 3v6c0 5-8 9-8 9s-8-4-8-9V6l8-3z",
+    rules: "M9 6h12M9 12h12M9 18h12M3 6h1M3 12h1M3 18h1",
+    package: "M12 3l9 5-9 5-9-5 9-5zm-9 5v10l9 5 9-5V8M12 13v10",
+    download: "M12 3v12m-5-5l5 5 5-5M4 17v4h16v-4",
+    activity: "M3 12h4l3-8 4 16 3-8h4",
+    tools: "M4 7h16M4 17h16M8 4v6m8 4v6"
+  };
+  function createSettingsNavigation({ document: document2, window: window2, onActivate }) {
+    const nav = document2.getElementById("settings-navigation");
+    const select = document2.getElementById("settings-section-select");
+    const title = document2.getElementById("settings-page-title");
+    const description = document2.getElementById("settings-page-description");
+    const links = /* @__PURE__ */ new Map();
+    const panels = /* @__PURE__ */ new Map();
+    let active = null;
+    let stopped = false;
+    for (const section of SETTINGS_SECTIONS) {
+      const panel = document2.getElementById(`settings-panel-${section.id}`);
+      if (!panel) throw new Error(`Missing Settings section: ${section.id}`);
+      panels.set(section.id, panel);
+      const link = document2.createElement("a");
+      link.href = `#${section.id}`;
+      link.className = "settings-nav-link";
+      const icon = document2.createElementNS("http://www.w3.org/2000/svg", "svg");
+      icon.setAttribute("viewBox", "0 0 24 24");
+      icon.setAttribute("aria-hidden", "true");
+      const path = document2.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("d", ICON_PATHS[section.icon] || ICON_PATHS.tools);
+      icon.append(path);
+      const label = document2.createElement("span");
+      label.textContent = section.title;
+      link.append(icon, label);
+      nav.append(link);
+      links.set(section.id, link);
+      const option = document2.createElement("option");
+      option.value = section.id;
+      option.textContent = section.title;
+      select.append(option);
+    }
+    function remembered() {
+      try {
+        return window2.sessionStorage.getItem(LAST_SECTION_KEY);
+      } catch {
+        return null;
+      }
+    }
+    function activate() {
+      if (stopped) return;
+      const section = resolveSettingsSection(window2.location.hash, remembered());
+      const changed = section.id !== active;
+      active = section.id;
+      for (const [id, panel] of panels) panel.hidden = id !== active;
+      for (const [id, link] of links) {
+        if (id === active) link.setAttribute("aria-current", "page");
+        else link.removeAttribute("aria-current");
+      }
+      select.value = active;
+      title.textContent = section.title;
+      description.textContent = section.description;
+      document2.title = `${section.title} \xB7 AdsFriendly Settings`;
+      try {
+        window2.sessionStorage.setItem(LAST_SECTION_KEY, active);
+      } catch {
+      }
+      if (changed) {
+        document2.getElementById("settings-main").scrollTop = 0;
+        window2.scrollTo?.({ top: 0, behavior: "instant" });
+      }
+      onActivate(section.id, { hash: window2.location.hash, changed });
+    }
+    function onSelect() {
+      window2.location.hash = select.value;
+    }
+    window2.addEventListener("hashchange", activate);
+    select.addEventListener("change", onSelect);
+    activate();
+    return {
+      isActive: (id) => active === id,
+      current: () => active,
+      stop() {
+        stopped = true;
+        window2.removeEventListener("hashchange", activate);
+        select.removeEventListener("change", onSelect);
+      }
+    };
+  }
+
+  // src/media/download-job-view.js
+  var ACTIVE_STATUSES = /* @__PURE__ */ new Set([
+    "starting",
+    "probing",
+    "downloading",
+    "finalizing"
+  ]);
+  function getMediaJobProgress(job = {}) {
+    const progress = job.progress || {};
+    const downloadedBytes = finiteOrNull(progress.downloadedBytes);
+    const totalBytes = finiteOrNull(progress.totalBytes);
+    const processedSeconds = finiteOrNull(progress.processedSeconds);
+    const duration = finiteOrNull(progress.duration);
+    let percent = null;
+    if (duration > 0 && processedSeconds !== null) {
+      percent = Math.min(100, Math.round(processedSeconds / duration * 100));
+    } else if (totalBytes > 0 && downloadedBytes !== null) {
+      percent = Math.min(100, Math.round(downloadedBytes / totalBytes * 100));
+    }
+    return {
+      percent,
+      downloadedBytes,
+      totalBytes,
+      bytesPerSecond: finiteOrNull(progress.bytesPerSecond),
+      processedSeconds,
+      duration,
+      resumedBytes: finiteOrNull(progress.resumedBytes),
+      resumable: progress.resumable === true,
+      connections: normalizeConnections(job.connections)
+    };
+  }
+  function getMediaJobPrimaryAction(job = {}) {
+    if (job.historyOnly === true) return null;
+    if (job.status === "paused")
+      return {
+        type: "resume",
+        label: "Resume",
+        messageType: "RESUME_MEDIA_DOWNLOAD_JOB"
+      };
+    if (["cancelled", "failed"].includes(job.status))
+      return {
+        type: "retry",
+        label: "Retry",
+        messageType: "RETRY_MEDIA_DOWNLOAD_JOB"
+      };
+    if (!ACTIVE_STATUSES.has(job.status)) return null;
+    if (job.progress?.resumable === true)
+      return {
+        type: "pause",
+        label: "Pause",
+        messageType: "PAUSE_MEDIA_DOWNLOAD_JOB"
+      };
+    return {
+      type: "cancel",
+      label: "Cancel",
+      messageType: "CANCEL_MEDIA_DOWNLOAD_JOB"
+    };
+  }
+  function getMediaJobPauseAvailability(job = {}) {
+    if (!ACTIVE_STATUSES.has(job.status)) return null;
+    if (job.progress?.resumable === true)
+      return { supported: true, label: "Pause", reason: null };
+    if (["hls", "dash"].includes(job.kind)) {
+      return {
+        supported: false,
+        label: "Pause unavailable",
+        reason: `${job.kind.toUpperCase()} downloads run through FFmpeg and cannot resume partial output yet.`
+      };
+    }
+    if (job.kind === "player_output") {
+      return {
+        supported: false,
+        label: "Pause unavailable",
+        reason: "Player output capture must remain continuous; cancel and reload the page to restart."
+      };
+    }
+    if (job.kind === "direct" && job.progress) {
+      return {
+        supported: false,
+        label: "Pause unavailable",
+        reason: "This server does not support resumable HTTP Range downloads."
+      };
+    }
+    return {
+      supported: false,
+      label: "Checking pause\u2026",
+      reason: "Pause becomes available after the server confirms HTTP Range support."
+    };
+  }
+  function formatMediaJobDetails(job = {}) {
+    const progress = getMediaJobProgress(job);
+    if (job.status === "starting") return "Starting Media Helper\u2026";
+    if (job.status === "probing") return formatMediaJobStage(job);
+    const connectionFact = `${progress.connections} connections`;
+    const speedFact = `Speed ${formatBytes(
+      ACTIVE_STATUSES.has(job.status) ? progress.bytesPerSecond || 0 : 0
+    )}/s`;
+    if (job.status === "completed") {
+      const size = progress.totalBytes ?? progress.downloadedBytes;
+      return [
+        "Completed",
+        size !== null ? formatBytes(size) : null,
+        speedFact,
+        connectionFact
+      ].filter(Boolean).join(" \xB7 ");
+    }
+    if (job.status === "failed")
+      return ["Failed", job.error || "unknown error", speedFact, connectionFact].filter(Boolean).join(" \xB7 ");
+    if (["cancelled", "paused"].includes(job.status)) {
+      return [
+        job.status === "paused" ? "Paused" : "Cancelled",
+        progress.downloadedBytes !== null ? `${formatBytes(progress.downloadedBytes)} downloaded` : null,
+        progress.resumable ? "partial data kept" : null,
+        speedFact,
+        connectionFact
+      ].filter(Boolean).join(" \xB7 ");
+    }
+    if (job.status === "cancelling")
+      return `Stopping \xB7 ${speedFact} \xB7 ${connectionFact}`;
+    if (job.status === "pausing")
+      return `Pausing \xB7 ${speedFact} \xB7 ${connectionFact}`;
+    const facts = [];
+    if (progress.percent !== null) facts.push(`${progress.percent}%`);
+    if (progress.duration > 0 && progress.processedSeconds !== null) {
+      facts.push(
+        `${formatDuration(progress.processedSeconds)} / ${formatDuration(progress.duration)}`
+      );
+    }
+    if (progress.downloadedBytes !== null) {
+      facts.push(
+        progress.totalBytes > 0 ? `${formatBytes(progress.downloadedBytes)} / ${formatBytes(progress.totalBytes)}` : formatBytes(progress.downloadedBytes)
+      );
+    }
+    facts.push(speedFact);
+    if (progress.resumedBytes > 0)
+      facts.push(`resumed ${formatBytes(progress.resumedBytes)}`);
+    if (job.kind !== "player_output") facts.push(connectionFact);
+    if (facts.length === 1) facts.unshift(capitalize(job.status || "starting"));
+    return facts.join(" \xB7 ");
+  }
+  function formatMediaJobStage(job = {}) {
+    const stages = {
+      manifest_fetch: "Reading HLS manifest\u2026",
+      resource_check: "Checking HLS key and segment URLs\u2026",
+      output_prepare: "Preparing output file\u2026",
+      ffmpeg_start: "Starting FFmpeg\u2026",
+      compatibility_check: "Testing key and sample segment\u2026",
+      provider_resolution: "Resolving selected YouTube quality\u2026",
+      segment_download: "Downloading HLS segments\u2026",
+      local_assembly: "Preparing local HLS manifest\u2026",
+      local_processing: "Processing downloaded media\u2026",
+      player_output_capture: "Fast-capturing decoded player output\u2026",
+      player_output_probe: "Validating captured video and audio\u2026",
+      player_output_remux: "Remuxing captured tracks to MP4\u2026"
+    };
+    return stages[job.progress?.stage] || "Checking media source\u2026";
+  }
+  function isMediaJobActive(job = {}) {
+    return [...ACTIVE_STATUSES, "pausing", "cancelling"].includes(job.status);
+  }
+  function formatBytes(bytes) {
+    const value = Math.max(0, Number(bytes) || 0);
+    if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(1)} GB`;
+    if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MB`;
+    return `${Math.round(value / 1024)} KB`;
+  }
+  function formatDuration(seconds) {
+    const total = Math.max(0, Math.round(Number(seconds) || 0));
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor(total % 3600 / 60);
+    const remaining = total % 60;
+    return hours ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remaining).padStart(2, "0")}` : `${minutes}:${String(remaining).padStart(2, "0")}`;
+  }
+  function finiteOrNull(value) {
+    if (value === null || value === void 0 || value === "") return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  }
+  function normalizeConnections(value) {
+    const connections = Number(value);
+    return Number.isInteger(connections) && connections > 0 ? connections : 8;
+  }
+  function capitalize(value) {
+    return value ? `${value[0].toUpperCase()}${value.slice(1)}` : "Starting";
+  }
+
+  // src/options/list-filters.js
+  function matchesDownloadFilter(status, filter) {
+    if (filter === "active") return isMediaJobActive({ status });
+    if (filter === "paused") return ["paused", "cancelled"].includes(status);
+    return filter === "all" || status === filter;
+  }
+  function createSettingsListFilters(document2, onDownloadsFiltered = () => {
+  }) {
+    const groups = [
+      {
+        input: "sites-search",
+        status: "sites-search-status",
+        selector: "#whitelist-list > .item, #blacklist-list > .item, #custom-rules-container > .rule-site, #learned-paths-container > .item"
+      },
+      {
+        input: "activity-search",
+        status: "activity-search-status",
+        selector: "#blocked-logs-container > .item"
+      },
+      {
+        input: "download-search",
+        status: "download-search-status",
+        selector: "#download-job-manager > .download-history-item",
+        filter: "download-filter"
+      }
+    ];
+    const listeners = [];
+    function apply(group) {
+      const query = document2.getElementById(group.input).value;
+      const filter = group.filter ? document2.getElementById(group.filter).value : "all";
+      const rows = [...document2.querySelectorAll(group.selector)];
+      for (const row of rows)
+        row.hidden = !matchesSettingsSearch(
+          [row.dataset.searchText || row.textContent],
+          query
+        ) || group.filter && !matchesDownloadFilter(row.dataset.status, filter);
+      const visible = rows.filter((row) => !row.hidden).length;
+      document2.getElementById(group.status).textContent = rows.length ? `${visible} of ${rows.length} entries${visible === 0 ? " \xB7 No matches" : ""}` : "";
+      if (group.filter) onDownloadsFiltered();
+    }
+    for (const group of groups) {
+      for (const [id, event] of [
+        [group.input, "input"],
+        ...group.filter ? [[group.filter, "change"]] : []
+      ]) {
+        const element = document2.getElementById(id);
+        const run = () => apply(group);
+        element.addEventListener(event, run);
+        listeners.push(() => element.removeEventListener(event, run));
+      }
+    }
+    return {
+      update: () => groups.forEach(apply),
+      stop: () => listeners.forEach((remove) => remove())
+    };
   }
 
   // src/settings-package/schema.js
@@ -782,8 +1183,9 @@ var AdsFriendlyOptions = (() => {
     const seen = /* @__PURE__ */ new Set();
     return rules.filter((rule) => {
       const selector = typeof rule === "string" ? rule : rule.selector;
-      if (seen.has(selector)) return false;
-      seen.add(selector);
+      const key = selector + "|" + (typeof rule === "string" ? "any" : rule.layout || "any");
+      if (seen.has(key)) return false;
+      seen.add(key);
       return true;
     });
   }
@@ -927,189 +1329,6 @@ var AdsFriendlyOptions = (() => {
   var DOWNLOAD_HISTORY_KEY = "mediaDownloadHistory";
   var DOWNLOAD_JOB_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
 
-  // src/media/download-job-view.js
-  var ACTIVE_STATUSES = /* @__PURE__ */ new Set([
-    "starting",
-    "probing",
-    "downloading",
-    "finalizing"
-  ]);
-  function getMediaJobProgress(job = {}) {
-    const progress = job.progress || {};
-    const downloadedBytes = finiteOrNull(progress.downloadedBytes);
-    const totalBytes = finiteOrNull(progress.totalBytes);
-    const processedSeconds = finiteOrNull(progress.processedSeconds);
-    const duration = finiteOrNull(progress.duration);
-    let percent = null;
-    if (duration > 0 && processedSeconds !== null) {
-      percent = Math.min(100, Math.round(processedSeconds / duration * 100));
-    } else if (totalBytes > 0 && downloadedBytes !== null) {
-      percent = Math.min(100, Math.round(downloadedBytes / totalBytes * 100));
-    }
-    return {
-      percent,
-      downloadedBytes,
-      totalBytes,
-      bytesPerSecond: finiteOrNull(progress.bytesPerSecond),
-      processedSeconds,
-      duration,
-      resumedBytes: finiteOrNull(progress.resumedBytes),
-      resumable: progress.resumable === true,
-      connections: normalizeConnections(job.connections)
-    };
-  }
-  function getMediaJobPrimaryAction(job = {}) {
-    if (job.historyOnly === true) return null;
-    if (job.status === "paused")
-      return {
-        type: "resume",
-        label: "Resume",
-        messageType: "RESUME_MEDIA_DOWNLOAD_JOB"
-      };
-    if (["cancelled", "failed"].includes(job.status))
-      return {
-        type: "retry",
-        label: "Retry",
-        messageType: "RETRY_MEDIA_DOWNLOAD_JOB"
-      };
-    if (!ACTIVE_STATUSES.has(job.status)) return null;
-    if (job.progress?.resumable === true)
-      return {
-        type: "pause",
-        label: "Pause",
-        messageType: "PAUSE_MEDIA_DOWNLOAD_JOB"
-      };
-    return {
-      type: "cancel",
-      label: "Cancel",
-      messageType: "CANCEL_MEDIA_DOWNLOAD_JOB"
-    };
-  }
-  function getMediaJobPauseAvailability(job = {}) {
-    if (!ACTIVE_STATUSES.has(job.status)) return null;
-    if (job.progress?.resumable === true)
-      return { supported: true, label: "Pause", reason: null };
-    if (["hls", "dash"].includes(job.kind)) {
-      return {
-        supported: false,
-        label: "Pause unavailable",
-        reason: `${job.kind.toUpperCase()} downloads run through FFmpeg and cannot resume partial output yet.`
-      };
-    }
-    if (job.kind === "player_output") {
-      return {
-        supported: false,
-        label: "Pause unavailable",
-        reason: "Player output capture must remain continuous; cancel and reload the page to restart."
-      };
-    }
-    if (job.kind === "direct" && job.progress) {
-      return {
-        supported: false,
-        label: "Pause unavailable",
-        reason: "This server does not support resumable HTTP Range downloads."
-      };
-    }
-    return {
-      supported: false,
-      label: "Checking pause\u2026",
-      reason: "Pause becomes available after the server confirms HTTP Range support."
-    };
-  }
-  function formatMediaJobDetails(job = {}) {
-    const progress = getMediaJobProgress(job);
-    if (job.status === "starting") return "Starting Media Helper\u2026";
-    if (job.status === "probing") return formatMediaJobStage(job);
-    const connectionFact = `${progress.connections} connections`;
-    const speedFact = `Speed ${formatBytes(
-      ACTIVE_STATUSES.has(job.status) ? progress.bytesPerSecond || 0 : 0
-    )}/s`;
-    if (job.status === "completed") {
-      const size = progress.totalBytes ?? progress.downloadedBytes;
-      return [
-        "Completed",
-        size !== null ? formatBytes(size) : null,
-        speedFact,
-        connectionFact
-      ].filter(Boolean).join(" \xB7 ");
-    }
-    if (job.status === "failed")
-      return ["Failed", job.error || "unknown error", speedFact, connectionFact].filter(Boolean).join(" \xB7 ");
-    if (["cancelled", "paused"].includes(job.status)) {
-      return [
-        job.status === "paused" ? "Paused" : "Cancelled",
-        progress.downloadedBytes !== null ? `${formatBytes(progress.downloadedBytes)} downloaded` : null,
-        progress.resumable ? "partial data kept" : null,
-        speedFact,
-        connectionFact
-      ].filter(Boolean).join(" \xB7 ");
-    }
-    if (job.status === "cancelling")
-      return `Stopping \xB7 ${speedFact} \xB7 ${connectionFact}`;
-    if (job.status === "pausing")
-      return `Pausing \xB7 ${speedFact} \xB7 ${connectionFact}`;
-    const facts = [];
-    if (progress.percent !== null) facts.push(`${progress.percent}%`);
-    if (progress.duration > 0 && progress.processedSeconds !== null) {
-      facts.push(
-        `${formatDuration(progress.processedSeconds)} / ${formatDuration(progress.duration)}`
-      );
-    }
-    if (progress.downloadedBytes !== null) {
-      facts.push(
-        progress.totalBytes > 0 ? `${formatBytes(progress.downloadedBytes)} / ${formatBytes(progress.totalBytes)}` : formatBytes(progress.downloadedBytes)
-      );
-    }
-    facts.push(speedFact);
-    if (progress.resumedBytes > 0)
-      facts.push(`resumed ${formatBytes(progress.resumedBytes)}`);
-    if (job.kind !== "player_output") facts.push(connectionFact);
-    if (facts.length === 1) facts.unshift(capitalize(job.status || "starting"));
-    return facts.join(" \xB7 ");
-  }
-  function formatMediaJobStage(job = {}) {
-    const stages = {
-      manifest_fetch: "Reading HLS manifest\u2026",
-      resource_check: "Checking HLS key and segment URLs\u2026",
-      output_prepare: "Preparing output file\u2026",
-      ffmpeg_start: "Starting FFmpeg\u2026",
-      compatibility_check: "Testing key and sample segment\u2026",
-      provider_resolution: "Resolving selected YouTube quality\u2026",
-      segment_download: "Downloading HLS segments\u2026",
-      local_assembly: "Preparing local HLS manifest\u2026",
-      local_processing: "Processing downloaded media\u2026",
-      player_output_capture: "Fast-capturing decoded player output\u2026",
-      player_output_probe: "Validating captured video and audio\u2026",
-      player_output_remux: "Remuxing captured tracks to MP4\u2026"
-    };
-    return stages[job.progress?.stage] || "Checking media source\u2026";
-  }
-  function formatBytes(bytes) {
-    const value = Math.max(0, Number(bytes) || 0);
-    if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(1)} GB`;
-    if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MB`;
-    return `${Math.round(value / 1024)} KB`;
-  }
-  function formatDuration(seconds) {
-    const total = Math.max(0, Math.round(Number(seconds) || 0));
-    const hours = Math.floor(total / 3600);
-    const minutes = Math.floor(total % 3600 / 60);
-    const remaining = total % 60;
-    return hours ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remaining).padStart(2, "0")}` : `${minutes}:${String(remaining).padStart(2, "0")}`;
-  }
-  function finiteOrNull(value) {
-    if (value === null || value === void 0 || value === "") return null;
-    const number = Number(value);
-    return Number.isFinite(number) ? number : null;
-  }
-  function normalizeConnections(value) {
-    const connections = Number(value);
-    return Number.isInteger(connections) && connections > 0 ? connections : 8;
-  }
-  function capitalize(value) {
-    return value ? `${value[0].toUpperCase()}${value.slice(1)}` : "Starting";
-  }
-
   // src/options/index.js
   var $ = (id) => document.getElementById(id);
   var whitelistEl = $("whitelist-list");
@@ -1119,6 +1338,13 @@ var AdsFriendlyOptions = (() => {
   var currentSnapshot = {};
   var storageRefreshTimer = null;
   var downloadRefreshTimer = null;
+  var settingsNavigation = null;
+  var listFilters = null;
+  var pageLoaded = false;
+  var downloadRenderRevision = 0;
+  var disposed = false;
+  var expandedRuleHost = null;
+  var handledElementLink = null;
   var DOWNLOAD_HISTORY_VISIBLE_ITEMS = 15;
   initialize().catch((error) => showPackageStatus(error.message, true));
   window.addEventListener("unhandledrejection", (event) => {
@@ -1130,26 +1356,67 @@ var AdsFriendlyOptions = (() => {
   });
   async function initialize() {
     bindStaticActions();
+    listFilters = createSettingsListFilters(document, () => {
+      if (settingsNavigation?.isActive("downloads"))
+        updateDownloadHistoryViewport($("download-job-manager"));
+    });
+    settingsNavigation = createSettingsNavigation({
+      document,
+      window,
+      onActivate: () => {
+        if (pageLoaded)
+          void renderActiveSection().catch(
+            (error) => showPackageStatus(error.message, true)
+          );
+      }
+    });
+    $("settings-version").textContent = `\xB7 ${chrome.runtime.getManifest().version}`;
     chrome.storage.onChanged.addListener(handleStorageChange);
-    window.addEventListener(
-      "unload",
-      () => chrome.storage.onChanged.removeListener(handleStorageChange)
-    );
+    window.addEventListener("unload", () => {
+      disposed = true;
+      settingsNavigation.stop();
+      listFilters.stop();
+      clearTimeout(storageRefreshTimer);
+      clearTimeout(downloadRefreshTimer);
+      chrome.storage.onChanged.removeListener(handleStorageChange);
+    });
     await loadPage();
-    await renderDownloads();
-    if (location.hash === "#downloads")
-      $("downloads").scrollIntoView({ behavior: "smooth", block: "start" });
-    if (location.hash === "#element-decisions") {
-      $("element-decisions")?.scrollIntoView({
-        behavior: "smooth",
-        block: "start"
-      });
+  }
+  var sectionRenderers = Object.freeze({
+    protection: () => {
+    },
+    packages: renderPackageStatus,
+    sites: () => {
+      renderDomainList(currentSnapshot.whitelist || [], whitelistEl, "whitelist");
+      renderDomainList(currentSnapshot.blacklist || [], blacklistEl, "blacklist");
+      renderCustomRules();
+      renderLearnedPaths();
+    },
+    downloads: renderDownloads,
+    activity: () => renderNavigationLogs(currentSnapshot.blockedLogs || []),
+    advanced: async () => {
+      await renderStorageHealth();
+      if (!settingsNavigation.isActive("advanced") || disposed) return;
+      if ($("training-details").open) await renderDomSamples();
+      if ($("diagnostics-details").open) await renderNavigationDiagnostics();
+    }
+  });
+  async function renderActiveSection() {
+    if (disposed || !pageLoaded) return;
+    const section = settingsNavigation.current();
+    await sectionRenderers[section]();
+    if (disposed || section !== settingsNavigation.current()) return;
+    listFilters.update();
+    const elementLink = section === "sites" && location.hash === "#element-decisions" ? location.href : null;
+    if (elementLink && elementLink !== handledElementLink) {
       const site = new URLSearchParams(location.search).get("site");
       const siteCard = site ? [...document.querySelectorAll(".rule-site")].find(
         (card) => card.dataset.host === site
       ) : null;
-      siteCard?.querySelector(".toggle-details")?.click();
+      if (siteCard) expandRuleSite(siteCard.dataset.host);
+      siteCard?.scrollIntoView({ block: "nearest" });
     }
+    handledElementLink = elementLink;
   }
   function handleStorageChange(changes, areaName) {
     if (areaName === "session" && Object.keys(changes).some((key) => key.startsWith(DOWNLOAD_JOB_PREFIX))) {
@@ -1164,6 +1431,7 @@ var AdsFriendlyOptions = (() => {
     const affectsSettings = keys.some(
       (key) => [
         "appSettings",
+        "blockedLogs",
         "whitelist",
         "blacklist",
         "userCustomRules",
@@ -1178,13 +1446,26 @@ var AdsFriendlyOptions = (() => {
     }, 80);
   }
   function scheduleDownloadRefresh() {
+    if (!settingsNavigation?.isActive("downloads") || disposed) return;
     if (downloadRefreshTimer) return;
     downloadRefreshTimer = setTimeout(() => {
       downloadRefreshTimer = null;
-      void renderDownloads();
+      if (settingsNavigation.isActive("downloads")) void renderDownloads();
     }, 250);
   }
   function bindStaticActions() {
+    document.querySelector(".skip-link").onclick = (event) => {
+      event.preventDefault();
+      $("settings-main").focus();
+    };
+    $("training-details").addEventListener("toggle", () => {
+      if ($("training-details").open && settingsNavigation?.isActive("advanced"))
+        void renderDomSamples();
+    });
+    $("diagnostics-details").addEventListener("toggle", () => {
+      if ($("diagnostics-details").open && settingsNavigation?.isActive("advanced"))
+        void renderNavigationDiagnostics();
+    });
     $("btn-package-export").onclick = exportSettingsPackage;
     $("btn-package-import").onclick = () => $("package-file-input").click();
     $("package-file-input").onchange = importSettingsPackage;
@@ -1205,10 +1486,102 @@ var AdsFriendlyOptions = (() => {
     $("btn-download-refresh").onclick = renderDownloads;
     $("btn-download-clear").onclick = clearDownloadHistory;
     $("media-download-connections").onchange = saveDownloadConnections;
+    $("btn-nav-diagnostics-start").onclick = startNavigationDiagnostics;
+    $("btn-nav-diagnostics-stop").onclick = stopNavigationDiagnostics;
+    $("btn-nav-diagnostics-refresh").onclick = renderNavigationDiagnostics;
+    $("btn-nav-diagnostics-export").onclick = exportNavigationDiagnostics;
+    $("btn-nav-diagnostics-clear").onclick = clearNavigationDiagnostics;
     $("btn-reset").onclick = factoryReset;
     bindFeedbackForm();
   }
+  async function renderNavigationDiagnostics() {
+    if (disposed || !settingsNavigation?.isActive("advanced") || !$("diagnostics-details").open)
+      return;
+    const status = $("nav-diagnostics-status");
+    const preview = $("nav-diagnostics-preview");
+    if (!status || !preview) return;
+    try {
+      const snapshot = await chrome.runtime.sendMessage({
+        type: "GET_NAVIGATION_DIAGNOSTICS"
+      });
+      if (!Array.isArray(snapshot?.events))
+        throw new Error(snapshot?.error || "Trace is unavailable.");
+      status.textContent = snapshot.captureUntil ? snapshot.events.length + " events \xB7 capture active until " + new Date(snapshot.captureUntil).toLocaleTimeString() : snapshot.events.length + " recent events \xB7 session-only buffer";
+      preview.textContent = JSON.stringify(snapshot.events, null, 2);
+      status.style.color = "";
+    } catch (error) {
+      status.textContent = "Diagnostics unavailable \xB7 " + error.message;
+      status.style.color = "#f87171";
+    }
+  }
+  async function startNavigationDiagnostics() {
+    await runNavigationDiagnosticsAction("btn-nav-diagnostics-start", {
+      type: "START_NAVIGATION_DIAGNOSTICS",
+      durationMs: 10 * 60 * 1e3
+    });
+  }
+  async function stopNavigationDiagnostics() {
+    await runNavigationDiagnosticsAction("btn-nav-diagnostics-stop", {
+      type: "STOP_NAVIGATION_DIAGNOSTICS"
+    });
+  }
+  async function clearNavigationDiagnostics() {
+    if (!confirm("Clear the session navigation trace?")) return;
+    await runNavigationDiagnosticsAction("btn-nav-diagnostics-clear", {
+      type: "CLEAR_NAVIGATION_DIAGNOSTICS"
+    });
+  }
+  async function exportNavigationDiagnostics() {
+    const button = $("btn-nav-diagnostics-export");
+    button.disabled = true;
+    try {
+      const snapshot = await requestNavigationDiagnostics({
+        type: "GET_NAVIGATION_DIAGNOSTICS"
+      });
+      if (!Array.isArray(snapshot?.events))
+        throw new Error("The recorder returned no trace to export.");
+      const blob = new Blob([JSON.stringify(snapshot, null, 2)], {
+        type: "application/json"
+      });
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = "adsfriendly-navigation-trace-" + Date.now() + ".json";
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 1e3);
+    } catch (error) {
+      showNavigationDiagnosticsError(error);
+    } finally {
+      button.disabled = false;
+    }
+  }
+  async function runNavigationDiagnosticsAction(buttonId, message) {
+    const button = $(buttonId);
+    button.disabled = true;
+    try {
+      await requestNavigationDiagnostics(message);
+      await renderNavigationDiagnostics();
+    } catch (error) {
+      showNavigationDiagnosticsError(error);
+    } finally {
+      button.disabled = false;
+    }
+  }
+  async function requestNavigationDiagnostics(message) {
+    const response = await chrome.runtime.sendMessage(message);
+    if (response?.status === "ignored" || response?.status === "disabled" || response?.status === "capability_disabled" || response?.status === "error") {
+      throw new Error(response.error || "The background rejected this action.");
+    }
+    return response;
+  }
+  function showNavigationDiagnosticsError(error) {
+    const status = $("nav-diagnostics-status");
+    status.textContent = "Diagnostics action failed \xB7 " + error.message;
+    status.style.color = "#f87171";
+  }
   async function renderDownloads() {
+    if (!settingsNavigation?.isActive("downloads") || disposed) return;
+    const revision = ++downloadRenderRevision;
     const container = $("download-job-manager");
     const status = $("download-manager-status");
     if (!container || !status) return;
@@ -1217,6 +1590,8 @@ var AdsFriendlyOptions = (() => {
         chrome.runtime.sendMessage({ type: "GET_MEDIA_DOWNLOAD_JOBS" }),
         chrome.runtime.sendMessage({ type: "GET_MEDIA_HELPER_STATUS" })
       ]);
+      if (revision !== downloadRenderRevision || !settingsNavigation.isActive("downloads") || disposed)
+        return;
       const jobs = Array.isArray(jobsResponse?.items) ? jobsResponse.items : [];
       const activeCount = jobs.filter(
         (job) => [
@@ -1239,6 +1614,7 @@ var AdsFriendlyOptions = (() => {
         empty.textContent = "No download history yet.";
         container.replaceChildren(empty);
         updateDownloadHistoryViewport(container);
+        listFilters.update();
         return;
       }
       container.querySelector(".empty-msg")?.remove();
@@ -1249,23 +1625,29 @@ var AdsFriendlyOptions = (() => {
         ])
       );
       const visibleIds = /* @__PURE__ */ new Set();
-      for (const job of jobs) {
+      const sorted = [...jobs].sort(
+        (a, b) => Number(isActiveDownload(b)) - Number(isActiveDownload(a))
+      );
+      for (const [index, job] of sorted.entries()) {
         visibleIds.add(job.id);
         const row = existing.get(job.id) || createDownloadHistoryItem();
         updateDownloadHistoryItem(row, job, helper);
-        container.append(row);
+        if (container.children[index] !== row)
+          container.insertBefore(row, container.children[index] || null);
       }
       for (const [jobId, row] of existing) {
         if (!visibleIds.has(jobId)) row.remove();
       }
-      updateDownloadHistoryViewport(container);
+      listFilters.update();
     } catch (error) {
       status.textContent = `Downloads unavailable \xB7 ${error.message}`;
       status.style.color = "#f87171";
     }
   }
   function updateDownloadHistoryViewport(container) {
-    const rows = [...container.querySelectorAll(".download-history-item")];
+    const rows = [...container.querySelectorAll(".download-history-item")].filter(
+      (row) => !row.hidden
+    );
     const scrollable = rows.length > DOWNLOAD_HISTORY_VISIBLE_ITEMS;
     container.classList.toggle("is-scrollable", scrollable);
     if (!scrollable) {
@@ -1279,7 +1661,7 @@ var AdsFriendlyOptions = (() => {
       (total, row) => total + row.getBoundingClientRect().height,
       gap * (visibleRows.length - 1)
     );
-    container.style.maxHeight = `${Math.ceil(height)}px`;
+    container.style.maxHeight = `${Math.ceil(Math.min(height, innerHeight * 0.65))}px`;
   }
   function createDownloadHistoryItem() {
     const row = document.createElement("article");
@@ -1310,6 +1692,8 @@ var AdsFriendlyOptions = (() => {
   }
   function updateDownloadHistoryItem(row, job, helper) {
     row.dataset.jobId = job.id;
+    row.dataset.status = job.status;
+    row.dataset.searchText = [job.title, job.outputPath].filter(Boolean).join(" ");
     const active = isActiveDownload(job);
     row.classList.toggle("is-terminal", !active);
     const title = row.querySelector(".download-history-title");
@@ -1323,8 +1707,9 @@ var AdsFriendlyOptions = (() => {
     progressTrack.hidden = !active;
     row.querySelector(".download-progress-bar").style.width = `${progress.percent ?? 0}%`;
     const details = row.querySelector(".download-history-details");
-    details.hidden = !active;
-    details.textContent = formatMediaJobDetails(job);
+    const completedSize = job.status === "completed" ? progress.totalBytes : null;
+    details.hidden = !active && !completedSize;
+    details.textContent = active ? formatMediaJobDetails(job) : completedSize ? [formatBytes(completedSize), job.downloadSummary?.qualityLabel].filter(Boolean).join(" \xB7 ") : "";
     const output = row.querySelector(".download-output-path");
     output.textContent = job.outputPath || job.error || (active ? formatMediaJobStage(job) : "No output file");
     output.title = output.textContent;
@@ -1334,6 +1719,18 @@ var AdsFriendlyOptions = (() => {
     errorDetails.textContent = hasError ? job.error : "";
     errorDetails.hidden = !errorExpanded;
     const controls = row.querySelector(".download-history-controls");
+    const controlsKey = JSON.stringify([
+      job.status,
+      Boolean(job.outputPath),
+      job.error,
+      errorExpanded,
+      job.historyOnly,
+      job.progress?.resumable,
+      helper?.capabilities?.["output.open"],
+      helper?.capabilities?.["output.reveal"]
+    ]);
+    if (row.dataset.controlsKey === controlsKey) return;
+    row.dataset.controlsKey = controlsKey;
     controls.replaceChildren();
     const primary = getMediaJobPrimaryAction(job);
     const pauseAvailability = getMediaJobPauseAvailability(job);
@@ -1521,14 +1918,34 @@ var AdsFriendlyOptions = (() => {
     $("media-download-connections").value = String(
       settings.mediaDownloadConnections
     );
-    renderPackageStatus();
-    renderStorageHealth();
-    renderDomainList(currentSnapshot.whitelist || [], whitelistEl, "whitelist");
-    renderDomainList(currentSnapshot.blacklist || [], blacklistEl, "blacklist");
-    renderCustomRules();
-    renderNavigationLogs(currentSnapshot.blockedLogs || []);
-    renderLearnedPaths();
-    renderDomSamples();
+    renderProtectionSummary(settings);
+    pageLoaded = true;
+    await renderActiveSection();
+  }
+  function renderProtectionSummary(settings) {
+    const modeLabels = { safe: "Safe", assist: "Assist", auto: "Auto" };
+    const descriptions = {
+      safe: "Conservative protection using navigation safeguards, static rules and your saved decisions.",
+      assist: "Safe protection, with page suggestions you can review. Media tools are enabled.",
+      auto: "Assist protection, with eligible automatic hiding and video actions."
+    };
+    $("protection-status").textContent = settings.enabled ? `${modeLabels[settings.protectionMode]} \xB7 On` : "Protection off";
+    $("protection-status").classList.toggle("is-disabled", !settings.enabled);
+    $("protection-mode-description").textContent = descriptions[settings.protectionMode];
+    const whitelist = currentSnapshot.whitelist?.length || 0;
+    const blacklist = currentSnapshot.blacklist?.length || 0;
+    const rules = currentSnapshot.userCustomRules || {};
+    const exceptions = currentSnapshot.userElementExceptions || {};
+    $("allowed-count").textContent = $("whitelist-count").textContent = whitelist;
+    $("blocked-sites-count").textContent = $("blacklist-count").textContent = blacklist;
+    $("page-decisions-count").textContent = [
+      ...Object.values(rules),
+      ...Object.values(exceptions)
+    ].reduce((sum, rows) => sum + (Array.isArray(rows) ? rows.length : 0), 0);
+    $("rule-sites-count").textContent = `${(/* @__PURE__ */ new Set([...Object.keys(rules), ...Object.keys(exceptions)])).size} sites`;
+    $("workflow-count").textContent = Object.keys(currentSnapshot).filter(
+      (key) => key.startsWith("p:")
+    ).length;
   }
   async function renderStorageHealth() {
     const element = $("storage-health");
@@ -1572,6 +1989,7 @@ var AdsFriendlyOptions = (() => {
       protectionMode: $("settings-mode").value
     });
     await loadPage();
+    showSettingsNotice("Protection settings saved.");
   }
   async function exportSettingsPackage() {
     const snapshot = await chrome.storage.local.get(null);
@@ -1661,6 +2079,9 @@ This replaces the current shareable settings. Diagnostics and training samples a
       throw new Error(response?.error || "Could not save domain.");
     input.value = "";
     await loadPage();
+    showSettingsNotice(
+      `Added ${hostname} to ${type === "whitelist" ? "allowed" : "blocked"} sites.`
+    );
   }
   function renderDomainList(list, element, type) {
     if (!list.length) {
@@ -1669,9 +2090,9 @@ This replaces the current shareable settings. Diagnostics and training samples a
     }
     element.innerHTML = list.map(
       (domain, index) => `
-        <div class="item">
+        <div class="item" data-search-text="${safeText(domain)}">
           <span>${safeText(domain)}</span>
-          <button class="btn-delete" data-index="${index}" title="Remove">
+          <button class="btn-delete" data-index="${index}" title="Remove" aria-label="Remove ${safeText(domain)}">
             <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
           </button>
         </div>`
@@ -1734,14 +2155,14 @@ This replaces the current shareable settings. Diagnostics and training samples a
       }).join("");
       const details = `${hiddenDetails}${exceptionDetails}`;
       return `
-        <div class="rule-site" data-host="${safeText(hostname)}" style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.05); padding:12px; border-radius:12px; margin-bottom:10px;">
-          <div style="display:flex; justify-content:space-between; align-items:center; gap:1rem">
+        <div class="rule-site" data-host="${safeText(hostname)}" data-search-text="${safeText([hostname, ...rules.map((rule) => typeof rule === "string" ? rule : rule.selector), ...exceptions.map((rule) => rule.selector)].join(" "))}" style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.05); padding:12px; border-radius:12px; margin-bottom:10px;">
+          <div class="rule-header">
             <div>
               <div style="font-weight:bold; color:#e2e8f0">${safeText(hostname)}</div>
               <div style="font-size:0.75rem; color:#64748b">${rules.length} hidden \xB7 ${exceptions.length} not ads</div>
             </div>
-            <div style="display:flex; gap:8px">
-              <button class="toggle-details btn-secondary">Details</button>
+            <div class="rule-actions">
+              <button class="toggle-details btn-secondary" aria-expanded="false">Details</button>
               <button class="reset-site-rules btn-secondary" data-host="${safeText(hostname)}">Reset site</button>
             </div>
           </div>
@@ -1750,8 +2171,8 @@ This replaces the current shareable settings. Diagnostics and training samples a
     }).join("");
     container.querySelectorAll(".toggle-details").forEach((button) => {
       button.onclick = () => {
-        const pane = button.closest(".rule-site").querySelector(".details-pane");
-        pane.style.display = pane.style.display === "none" ? "block" : "none";
+        const host = button.closest(".rule-site").dataset.host;
+        expandRuleSite(expandedRuleHost === host ? null : host);
       };
     });
     container.querySelectorAll(".btn-delete-rule-item").forEach((button) => {
@@ -1794,6 +2215,17 @@ This replaces the current shareable settings. Diagnostics and training samples a
         await loadPage();
       };
     });
+    expandRuleSite(expandedRuleHost);
+  }
+  function expandRuleSite(host) {
+    expandedRuleHost = host;
+    for (const card of document.querySelectorAll(".rule-site")) {
+      const expanded = card.dataset.host === host;
+      const button = card.querySelector(".toggle-details");
+      button.setAttribute("aria-expanded", String(expanded));
+      button.textContent = expanded ? "Hide details" : "Details";
+      card.querySelector(".details-pane").style.display = expanded ? "block" : "none";
+    }
   }
   function renderLearnedPaths() {
     const container = $("learned-paths-container");
@@ -1804,7 +2236,7 @@ This replaces the current shareable settings. Diagnostics and training samples a
     }
     container.innerHTML = entries.map(
       ([key, path]) => `
-      <div class="item">
+      <div class="item" data-search-text="${safeText(`${path.source} ${path.target}`)}">
         <div>
           <div style="font-size:0.85rem; font-weight:bold">${safeText(path.source)} \u2192 ${safeText(path.target)}</div>
           <div style="font-size:0.7rem; color:${path.isManual ? "#a855f7" : "#22c55e"}">${path.isManual ? "MANUAL TRUST" : `Natural habit (${Number(path.visits) || 0} visits)`}</div>
@@ -1827,7 +2259,7 @@ This replaces the current shareable settings. Diagnostics and training samples a
     }
     container.innerHTML = logs.slice(0, 20).map(
       (log) => `
-      <div class="item" style="flex-direction:column; align-items:flex-start; gap:4px">
+      <div class="item" data-search-text="${safeText(`${log.url} ${log.source}`)}" style="flex-direction:column; align-items:flex-start; gap:4px">
         <div style="font-size:0.8rem; color:#fbd38d; font-weight:bold">Blocked Navigation</div>
         <div style="font-family:monospace; font-size:0.75rem; word-break:break-all">Target: ${safeText(log.url)}</div>
         <div style="font-size:0.7rem; color:#64748b">Source: ${safeText(log.source)} \xB7 ${safeText(new Date(log.timestamp).toLocaleString())}</div>
@@ -1835,6 +2267,8 @@ This replaces the current shareable settings. Diagnostics and training samples a
     ).join("");
   }
   async function renderDomSamples() {
+    if (disposed || !settingsNavigation?.isActive("advanced") || !$("training-details").open)
+      return;
     if (!domSamplesEl) return;
     const domTrainingSamples = await listDomTrainingSamples(80);
     if (!domTrainingSamples.length) {
@@ -1884,7 +2318,7 @@ This replaces the current shareable settings. Diagnostics and training samples a
   }
   async function factoryReset() {
     if (!confirm(
-      "Factory reset all memory and restore the bundled Settings Package?"
+      "Reset local settings, personal decisions, training data and stored history, then restore the bundled Settings Package? Downloaded files are kept. Active downloads are not cancelled."
     )) {
       return;
     }
@@ -1944,6 +2378,13 @@ This replaces the current shareable settings. Diagnostics and training samples a
   function showPackageStatus(message, error = false) {
     packageStatusEl.textContent = message;
     packageStatusEl.style.color = error ? "#f87171" : "#94a3b8";
+    if (error) showSettingsNotice(message, true);
+  }
+  function showSettingsNotice(message, error = false) {
+    const notice = $("settings-notice");
+    notice.hidden = !message;
+    notice.textContent = message;
+    notice.classList.toggle("is-error", error);
   }
   function downloadText(filename, text, type) {
     const url = URL.createObjectURL(new Blob([text], { type }));

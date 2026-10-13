@@ -29,6 +29,7 @@ for (const capability of Object.values(CAPABILITY_CATALOG)) {
   }
 }
 await access("packages/default-settings-package.json");
+await access("options/settings-shell.css");
 const scripts =
   manifest.content_scripts?.flatMap((item) => item.js || []) || [];
 const resources =

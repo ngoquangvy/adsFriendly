@@ -9,6 +9,10 @@ import {
   createYouTubeAdaptiveCandidate,
   parseYouTubePlaybackTrack,
 } from "../media/youtube-track-profile.js";
+import { createMediaSizeProbe } from "./media-size-probe.js";
+
+const mediaSizeProbe = createMediaSizeProbe();
+const pendingSizeUpdates = new Set();
 
 const OBSERVED_RESOURCE_TYPES = Object.freeze([
   "xmlhttprequest",
@@ -44,6 +48,7 @@ export function createMediaRequestObservation(details = {}) {
   )
     return null;
   const mimeType = responseMimeType(details.responseHeaders);
+  const contentLength = responseTotalBytes(details);
   const adaptiveTrack = parseYouTubePlaybackTrack(details.url, {
     mimeType,
     responseHeaders: details.responseHeaders,
@@ -62,6 +67,7 @@ export function createMediaRequestObservation(details = {}) {
     initiator: safeHttpOrigin(details.initiator),
     url: details.url,
     mimeType,
+    contentLength,
     kind,
     adaptiveTrack,
     method: String(details.method || "GET").toUpperCase(),
@@ -88,6 +94,8 @@ async function recordObservation(observation) {
         pageUrl: tab.url,
         sourceUrl: observation.url,
         mimeType: observation.mimeType,
+        contentLength:
+          observation.kind === "direct" ? observation.contentLength : null,
         title,
         detectedBy: "network",
       });
@@ -116,6 +124,18 @@ async function recordObservation(observation) {
     }),
   );
   if (
+    result?.status === "recorded" &&
+    candidate.kind === "direct" &&
+    !result.item?.contentLength
+  ) {
+    probeMissingMediaSize({
+      tabId: observation.tabId,
+      candidate,
+      frameId: frameContext.frameId,
+      frameUrl: frameContext.frameUrl,
+    });
+  }
+  if (
     result?.status !== "recorded" ||
     !["hls", "dash"].includes(candidate.kind) ||
     frameContext.frameId < 0
@@ -128,6 +148,60 @@ async function recordObservation(observation) {
       { frameId: frameContext.frameId },
     )
     .catch(() => {});
+}
+
+function probeMissingMediaSize({ tabId, candidate, frameId, frameUrl }) {
+  const scopeKey = mediaProbeScope(tabId, candidate.pageUrl);
+  const updateKey = `${scopeKey}:${candidate.id}`;
+  if (pendingSizeUpdates.has(updateKey)) return;
+  pendingSizeUpdates.add(updateKey);
+  mediaSizeProbe
+    .probe(candidate.sourceUrl, {
+      scopeKey,
+    })
+    .then(async (probe) => {
+      if (probe.status !== "resolved" || !probe.contentLength) return;
+      if (!(await isCurrentTabPage(tabId, candidate.pageUrl))) return;
+      await recordDiscoveredMedia(
+        tabId,
+        createRegisteredEvent(
+          EVENTS.MEDIA_DISCOVERED,
+          { ...candidate, contentLength: probe.contentLength },
+          {
+            frameId,
+            frameUrl,
+            observationInput: "media.size_probe.headers",
+            observationOutput: "media.catalog.content_length",
+          },
+        ),
+      );
+    })
+    .catch(() => {})
+    .finally(() => pendingSizeUpdates.delete(updateKey));
+}
+
+function mediaProbeScope(tabId, pageUrl) {
+  try {
+    const url = new URL(pageUrl);
+    // This key exists only in memory, so separate SPA media pages without
+    // persisting search text or page query parameters into diagnostics.
+    return `${tabId}:${url.href}`;
+  } catch {
+    return String(tabId);
+  }
+}
+
+async function isCurrentTabPage(tabId, pageUrl) {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    const current = new URL(tab.url);
+    const observed = new URL(pageUrl);
+    current.hash = "";
+    observed.hash = "";
+    return current.href === observed.href;
+  } catch {
+    return false;
+  }
 }
 
 async function resolveFrameContext(observation) {
@@ -154,6 +228,37 @@ function responseMimeType(headers = []) {
     (item) => String(item?.name || "").toLowerCase() === "content-type",
   );
   return typeof header?.value === "string" ? header.value : null;
+}
+
+function responseTotalBytes(details = {}) {
+  const headers = Array.isArray(details.responseHeaders)
+    ? details.responseHeaders
+    : [];
+  const headerValue = (name) =>
+    headers.find((item) => String(item?.name || "").toLowerCase() === name)
+      ?.value;
+  const status = Number(details.statusCode);
+  const contentEncoding = String(headerValue("content-encoding") || "")
+    .trim()
+    .toLowerCase();
+  if (contentEncoding && contentEncoding !== "identity") return null;
+
+  // For a partial response, Content-Length is only the current range. The
+  // denominator in Content-Range is the total representation size.
+  if (status === 206) {
+    const total = String(headerValue("content-range") || "").match(
+      /^\s*bytes\s+\d+-\d+\/(\d+)\s*$/i,
+    )?.[1];
+    return positiveSafeInteger(total);
+  }
+
+  if (status < 200 || status >= 300) return null;
+  return positiveSafeInteger(headerValue("content-length"));
+}
+
+function positiveSafeInteger(value) {
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number > 0 ? number : null;
 }
 
 function safeHttpOrigin(value) {

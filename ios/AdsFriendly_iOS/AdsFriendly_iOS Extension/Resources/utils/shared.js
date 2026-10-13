@@ -282,6 +282,9 @@
       C2.MEDIA_CATALOG
     ]),
     feature("content.youtube-cleaner", "content", C2.DOM_STATIC_RULES),
+    feature("content.player-download", "content", C2.MEDIA_DOWNLOAD, [
+      C2.MEDIA_CATALOG
+    ]),
     feature("content.navigation-intent", "content", C2.NAVIGATION_INTENT),
     feature("content.navigation-toast", "content", C2.NAVIGATION_FEEDBACK),
     feature("content.dom-static-blocker", "content", C2.DOM_STATIC_RULES, [
@@ -300,6 +303,9 @@
       C2.MEDIA_CATALOG
     ]),
     feature("media-frame.navigation-intent", "media-frame", C2.NAVIGATION_INTENT),
+    feature("media-frame.player-download", "media-frame", C2.MEDIA_DOWNLOAD, [
+      C2.MEDIA_CATALOG
+    ]),
     feature("video.surgeon", "video", C2.VIDEO_OBSERVE, [
       C2.VIDEO_RESTORE_STATE,
       C2.VIDEO_USER_ACTION,

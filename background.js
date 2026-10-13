@@ -46,8 +46,8 @@ var AdsFriendlyBackground = (() => {
 
   // src/background/pattern-learning.js
   async function seedBaselinePatterns() {
-    const result = await chrome.storage.local.get(["globalAdPatterns"]);
-    if (!result.globalAdPatterns || result.globalAdPatterns.length === 0)
+    const result2 = await chrome.storage.local.get(["globalAdPatterns"]);
+    if (!result2.globalAdPatterns || result2.globalAdPatterns.length === 0)
       await chrome.storage.local.set({ globalAdPatterns: BASELINE_AD_PATTERNS });
   }
   async function handleNegativeLearning(fingerprint) {
@@ -229,10 +229,10 @@ var AdsFriendlyBackground = (() => {
   function createSettingsMutationStore(storage) {
     let mutationTail = Promise.resolve();
     const serial = (operation) => {
-      const result = mutationTail.then(operation, operation);
-      mutationTail = result.catch(() => {
+      const result2 = mutationTail.then(operation, operation);
+      mutationTail = result2.catch(() => {
       });
-      return result;
+      return result2;
     };
     return Object.freeze({
       upsertCustomRules(hostname, incomingRules) {
@@ -592,10 +592,6 @@ var AdsFriendlyBackground = (() => {
       data.trustScore = Math.min(1, data.trustScore + 0.01);
     await chrome.storage.local.set({ siteReputation });
   }
-  async function getDynamicTrustWindow(hostname) {
-    const { siteReputation = {} } = await chrome.storage.local.get("siteReputation");
-    return siteReputation[hostname]?.blockedAdCount > 10 ? 500 : 2e3;
-  }
   async function cleanupStaleMemory() {
     const { siteResetHistory = {} } = await chrome.storage.local.get("siteResetHistory");
     const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1e3;
@@ -830,8 +826,8 @@ var AdsFriendlyBackground = (() => {
     };
   }
   async function getClientId() {
-    const result = await chrome.storage.local.get(CLIENT_ID_KEY);
-    if (result[CLIENT_ID_KEY]) return result[CLIENT_ID_KEY];
+    const result2 = await chrome.storage.local.get(CLIENT_ID_KEY);
+    if (result2[CLIENT_ID_KEY]) return result2[CLIENT_ID_KEY];
     const clientId = randomId2();
     await chrome.storage.local.set({ [CLIENT_ID_KEY]: clientId });
     return clientId;
@@ -1141,6 +1137,9 @@ var AdsFriendlyBackground = (() => {
       C2.MEDIA_CATALOG
     ]),
     feature("content.youtube-cleaner", "content", C2.DOM_STATIC_RULES),
+    feature("content.player-download", "content", C2.MEDIA_DOWNLOAD, [
+      C2.MEDIA_CATALOG
+    ]),
     feature("content.navigation-intent", "content", C2.NAVIGATION_INTENT),
     feature("content.navigation-toast", "content", C2.NAVIGATION_FEEDBACK),
     feature("content.dom-static-blocker", "content", C2.DOM_STATIC_RULES, [
@@ -1159,6 +1158,9 @@ var AdsFriendlyBackground = (() => {
       C2.MEDIA_CATALOG
     ]),
     feature("media-frame.navigation-intent", "media-frame", C2.NAVIGATION_INTENT),
+    feature("media-frame.player-download", "media-frame", C2.MEDIA_DOWNLOAD, [
+      C2.MEDIA_CATALOG
+    ]),
     feature("video.surgeon", "video", C2.VIDEO_OBSERVE, [
       C2.VIDEO_RESTORE_STATE,
       C2.VIDEO_USER_ACTION,
@@ -1322,29 +1324,14 @@ var AdsFriendlyBackground = (() => {
     }
   }
 
-  // src/shared/url.js
-  function parseUrl(value, base) {
-    try {
-      return new URL(value, base);
-    } catch {
-      return null;
-    }
-  }
-  function sameHostnameOrSubdomain(hostname, parent) {
-    if (!hostname || !parent) return false;
-    const h = hostname.toLowerCase();
-    const p = parent.toLowerCase();
-    return h === p || h.endsWith(`.${p}`);
-  }
-
   // src/background/logs.js
-  async function logBlockedNavigation(url, source) {
+  async function logBlockedNavigation(url, source, attribution = {}) {
     const { blockedLogs = [] } = await chrome.storage.local.get(["blockedLogs"]);
     await chrome.storage.local.set({
-      blockedLogs: [{ url, source, timestamp: Date.now() }, ...blockedLogs].slice(
-        0,
-        20
-      )
+      blockedLogs: [
+        { url, source, timestamp: Date.now(), attribution },
+        ...blockedLogs
+      ].slice(0, 20)
     });
     await recordTelemetry({
       unit: "navigation",
@@ -1360,6 +1347,10 @@ var AdsFriendlyBackground = (() => {
         source_host: source,
         target_host: safeHost(url),
         surface: "navigation_guard"
+      },
+      evidence: {
+        navigation: attribution,
+        interpretation: "policy_inference_not_user_label"
       }
     });
   }
@@ -1389,6 +1380,14 @@ var AdsFriendlyBackground = (() => {
     "keyword_generated",
     "auto_bookmark"
   ]);
+  function isWebNavigationTarget(value) {
+    try {
+      const url = new URL(value);
+      return url.protocol === "http:" || url.protocol === "https:";
+    } catch {
+      return false;
+    }
+  }
   function isBrowserUiNewTab({
     url = "",
     pendingUrl = "",
@@ -1403,6 +1402,14 @@ var AdsFriendlyBackground = (() => {
     transitionQualifiers = []
   } = {}) {
     return USER_NAVIGATION_TRANSITIONS.has(transitionType) || transitionQualifiers.includes("from_address_bar");
+  }
+  function shouldEvaluateCommittedNavigation(details = {}) {
+    return !isExplicitAddressBarNavigation(details);
+  }
+  function isExplicitAddressBarCommitForUrl(url, details = {}) {
+    return Boolean(
+      url && details.url === url && !shouldEvaluateCommittedNavigation(details)
+    );
   }
   function decideNewTabNavigation({
     sameSite = false,
@@ -1436,6 +1443,21 @@ var AdsFriendlyBackground = (() => {
       return NEW_TAB_REVIEW_SURFACES.CLOSE;
     }
     return promotionalIntent || targetLikelyAd ? NEW_TAB_REVIEW_SURFACES.FULL_PAGE : NEW_TAB_REVIEW_SURFACES.TOAST;
+  }
+
+  // src/shared/url.js
+  function parseUrl(value, base) {
+    try {
+      return new URL(value, base);
+    } catch {
+      return null;
+    }
+  }
+  function sameHostnameOrSubdomain(hostname, parent) {
+    if (!hostname || !parent) return false;
+    const h = hostname.toLowerCase();
+    const p = parent.toLowerCase();
+    return h === p || h.endsWith(`.${p}`);
   }
 
   // src/navigation/background/reverse-popunder.js
@@ -1481,6 +1503,573 @@ var AdsFriendlyBackground = (() => {
     const normalized = pathname.replace(/\/+$/, "");
     return normalized || "/";
   }
+
+  // src/navigation/background/navigation-sequences.js
+  var NAVIGATION_SEQUENCES = Object.freeze({
+    OPENED_TAB_IS_TARGET: "opened_tab_is_target",
+    ORIGINAL_TAB_WAS_REDIRECTED: "original_tab_was_redirected"
+  });
+  var SEQUENCE_PLANS = Object.freeze({
+    [NAVIGATION_SEQUENCES.OPENED_TAB_IS_TARGET]: ({
+      originalTabId,
+      openedTabId
+    }) => ({
+      closeTabId: openedTabId,
+      restoreTabId: null,
+      survivingTabId: originalTabId,
+      notifyTabId: originalTabId
+    }),
+    [NAVIGATION_SEQUENCES.ORIGINAL_TAB_WAS_REDIRECTED]: ({
+      originalTabId,
+      openedTabId,
+      restoreOriginal = false
+    }) => restoreOriginal ? {
+      closeTabId: null,
+      restoreTabId: originalTabId,
+      survivingTabId: originalTabId,
+      notifyTabId: originalTabId
+    } : {
+      closeTabId: originalTabId,
+      restoreTabId: null,
+      survivingTabId: openedTabId,
+      notifyTabId: openedTabId
+    }
+  });
+  function createNavigationEnforcementPlan({
+    sequence,
+    originalTabId,
+    openedTabId,
+    restoreOriginal = false
+  }) {
+    const buildPlan = SEQUENCE_PLANS[sequence];
+    if (!buildPlan) {
+      throw new Error(
+        `Unknown navigation sequence: ${sequence}. Register it before use.`
+      );
+    }
+    if (!Number.isInteger(originalTabId) || !Number.isInteger(openedTabId)) {
+      throw new TypeError("Navigation enforcement requires two valid tab IDs.");
+    }
+    const plan = Object.freeze(
+      buildPlan({ originalTabId, openedTabId, restoreOriginal })
+    );
+    if (plan.notifyTabId !== plan.survivingTabId) {
+      throw new Error("Navigation toast must target the surviving tab.");
+    }
+    if (plan.closeTabId === plan.notifyTabId) {
+      throw new Error("Navigation toast cannot target the tab being closed.");
+    }
+    return plan;
+  }
+
+  // src/navigation/background/attribution.js
+  var NAVIGATION_CONTEXT_SCHEMA = "navigation-context.v1";
+  var ATTRIBUTION_EVIDENCE = Object.freeze({
+    WEB_TARGET: "web_navigation_target",
+    OPENER: "opener_tab",
+    RECENT_CLICK: "recent_click_timing",
+    REVERSE_SEQUENCE: "observed_clone_and_source_redirect"
+  });
+  var EVIDENCE_RANK = Object.freeze({
+    [ATTRIBUTION_EVIDENCE.RECENT_CLICK]: 1,
+    [ATTRIBUTION_EVIDENCE.OPENER]: 2,
+    [ATTRIBUTION_EVIDENCE.WEB_TARGET]: 3,
+    [ATTRIBUTION_EVIDENCE.REVERSE_SEQUENCE]: 3
+  });
+  function sameIntentUrl(left, right) {
+    try {
+      const a = new URL(left), b = new URL(right);
+      a.hash = "";
+      b.hash = "";
+      return a.href === b.href;
+    } catch {
+      return false;
+    }
+  }
+  function createNavigationAttribution({
+    now = () => Date.now(),
+    maximum = 256
+  } = {}) {
+    const contexts = /* @__PURE__ */ new Map();
+    const intents = /* @__PURE__ */ new Map();
+    let nextId = 0;
+    const prune = () => {
+      const timestamp = now();
+      for (const [id, context] of contexts)
+        if (context.expiresAt <= timestamp) contexts.delete(id);
+      for (const [id, intent] of intents)
+        if (timestamp - intent.timestamp > 2500) intents.delete(id);
+      while (contexts.size > maximum)
+        contexts.delete(contexts.keys().next().value);
+      while (intents.size > maximum) intents.delete(intents.keys().next().value);
+    };
+    const rememberIntent = (click) => {
+      prune();
+      if (!Number.isInteger(click?.tabId) || !isWebNavigationTarget(click.sourceUrl))
+        return;
+      const intent = Object.freeze({
+        tabId: click.tabId,
+        sourceFrameId: Number.isInteger(click.sourceFrameId) ? click.sourceFrameId : null,
+        timestamp: now(),
+        sourceUrl: click.sourceUrl,
+        intentUrl: isWebNavigationTarget(click.intentUrl) ? click.intentUrl : null,
+        intentKind: click.intentKind === "promotional" ? "promotional" : "navigation",
+        intentReasons: Object.freeze(
+          (Array.isArray(click.intentReasons) ? click.intentReasons : []).filter((value) => typeof value === "string").slice(0, 12)
+        )
+      });
+      const key = `${intent.tabId}:${intent.sourceFrameId}`;
+      intents.delete(key);
+      intents.set(key, intent);
+      prune();
+      return intent;
+    };
+    const getIntent = (sourceTabId, sourceFrameId = null) => {
+      prune();
+      const intent = Number.isInteger(sourceFrameId) ? intents.get(`${sourceTabId}:${sourceFrameId}`) : [...intents.values()].filter((item) => item.tabId === sourceTabId).at(-1);
+      if (!intent || now() < intent.timestamp) return null;
+      if (Number.isInteger(sourceFrameId) && intent.sourceFrameId !== sourceFrameId)
+        return null;
+      return intent;
+    };
+    const latestIntent = () => {
+      prune();
+      return [...intents.values()].filter((intent) => intent.timestamp <= now()).at(-1) || null;
+    };
+    const get = (tabId) => {
+      prune();
+      return contexts.get(tabId) || null;
+    };
+    const link = ({
+      targetTabId,
+      sourceTabId,
+      sourceFrameId = null,
+      sourceUrl = null,
+      targetUrl = null,
+      evidence,
+      origin = "website"
+    }) => {
+      prune();
+      if (!Number.isInteger(targetTabId)) return null;
+      if (origin === "website" && (!Number.isInteger(sourceTabId) || !EVIDENCE_RANK[evidence]))
+        return null;
+      const previous = contexts.get(targetTabId);
+      const rank = EVIDENCE_RANK[evidence] || 0;
+      if (previous && (previous.origin !== "website" && previous.targetUrl === targetUrl || rank < previous.rank))
+        return previous;
+      if (previous && previous.sourceTabId === sourceTabId && previous.rank === rank && previous.targetUrl === targetUrl)
+        return previous;
+      const sameSource2 = Boolean(
+        previous && previous.sourceTabId === sourceTabId && (previous.targetUrl === targetUrl || rank > previous.rank || !previous.targetUrl || previous.targetUrl === "about:blank")
+      );
+      const intent = sameSource2 ? Number.isInteger(sourceFrameId) && previous.intent?.sourceFrameId !== sourceFrameId ? null : previous.intent : getIntent(sourceTabId, sourceFrameId);
+      const intentAssociation = !intent ? "none" : sameSource2 && previous.intentAssociation === "matched_link" || sameIntentUrl(intent.intentUrl, targetUrl) ? "matched_link" : !intent.intentUrl && Number.isInteger(sourceFrameId) && intent.sourceFrameId === sourceFrameId && now() - intent.timestamp <= 500 ? "frame_temporal" : "temporal_only";
+      const context = Object.freeze({
+        schema: NAVIGATION_CONTEXT_SCHEMA,
+        navigationId: sameSource2 ? previous.navigationId : `nav-${now().toString(36)}-${++nextId}`,
+        targetTabId,
+        sourceTabId: sourceTabId ?? null,
+        sourceFrameId,
+        sourceUrl: sourceUrl || intent?.sourceUrl || (sameSource2 ? previous.sourceUrl : null),
+        targetUrl,
+        origin,
+        rank,
+        attribution: origin !== "website" || rank >= 3 ? "confirmed" : rank === 2 ? "probable" : "unconfirmed",
+        evidence: Object.freeze([
+          ...new Set(
+            [...sameSource2 ? previous.evidence : [], evidence].filter(Boolean)
+          )
+        ]),
+        intent: intent || null,
+        intentAssociation,
+        createdAt: sameSource2 ? previous.createdAt : now(),
+        expiresAt: sameSource2 ? previous.expiresAt : now() + 1e4,
+        revision: (previous?.revision || 0) + 1
+      });
+      contexts.set(targetTabId, context);
+      prune();
+      return context;
+    };
+    const isCurrent = (context) => {
+      const current = get(context?.targetTabId);
+      return Boolean(
+        current && current.navigationId === context.navigationId && current.revision === context.revision
+      );
+    };
+    const retarget = (context, targetUrl) => {
+      if (!isCurrent(context)) return null;
+      if (context.targetUrl === targetUrl) return context;
+      const updated = Object.freeze({
+        ...context,
+        targetUrl,
+        revision: context.revision + 1
+      });
+      contexts.set(context.targetTabId, updated);
+      return updated;
+    };
+    const invalidate = (tabId) => {
+      contexts.delete(tabId);
+    };
+    const removeTab = (tabId) => {
+      contexts.delete(tabId);
+      for (const [key, intent] of intents)
+        if (intent.tabId === tabId) intents.delete(key);
+      for (const [target, context] of contexts)
+        if (context.sourceTabId === tabId) contexts.delete(target);
+    };
+    return {
+      rememberIntent,
+      getIntent,
+      latestIntent,
+      get,
+      link,
+      retarget,
+      isCurrent,
+      invalidate,
+      removeTab,
+      clear: () => {
+        contexts.clear();
+        intents.clear();
+      }
+    };
+  }
+  var navigationAttribution = createNavigationAttribution();
+  function navigationAttributionFacts(context) {
+    return context ? normalizeNavigationAttributionFacts({
+      navigationSchema: context.schema,
+      navigationId: context.navigationId,
+      attribution: context.attribution,
+      origin: context.origin,
+      sourceFrameId: context.sourceFrameId,
+      revision: context.revision,
+      attributionEvidence: context.evidence,
+      intentAssociation: context.intentAssociation
+    }) : {};
+  }
+  function normalizeNavigationAttributionFacts(value = {}) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    const facts = {};
+    if (value.navigationSchema === NAVIGATION_CONTEXT_SCHEMA)
+      facts.navigationSchema = value.navigationSchema;
+    if (/^nav-[a-z0-9-]{1,80}$/.test(value.navigationId || ""))
+      facts.navigationId = value.navigationId;
+    if (["confirmed", "probable", "unconfirmed"].includes(value.attribution))
+      facts.attribution = value.attribution;
+    if (["extension", "browser-ui", "website", "unknown"].includes(value.origin))
+      facts.origin = value.origin;
+    for (const key of ["sourceFrameId", "revision"])
+      if (Number.isInteger(value[key]) && value[key] >= 0)
+        facts[key] = value[key];
+    if (["none", "matched_link", "frame_temporal", "temporal_only"].includes(
+      value.intentAssociation
+    ))
+      facts.intentAssociation = value.intentAssociation;
+    if (Array.isArray(value.attributionEvidence))
+      facts.attributionEvidence = value.attributionEvidence.filter(
+        (item) => [
+          ...Object.values(ATTRIBUTION_EVIDENCE),
+          "registered_extension_action"
+        ].includes(item)
+      ).slice(0, 8);
+    return facts;
+  }
+
+  // src/navigation/background/diagnostics.js
+  var NAVIGATION_DIAGNOSTICS_SESSION_KEY = "adsfriendly.navigationDiagnostics";
+  var DEFAULT_CAPTURE_MS = 10 * 60 * 1e3;
+  var MAX_CAPTURE_MS = 15 * 60 * 1e3;
+  var BUFFER_TTL_MS = 5 * 60 * 1e3;
+  var CAPTURE_TTL_MS = 60 * 60 * 1e3;
+  var BUFFER_LIMIT = 120;
+  var CAPTURE_LIMIT = 500;
+  var ALLOWED_EVENT_TYPES = /* @__PURE__ */ new Set([
+    "tab_created",
+    "navigation_target_created",
+    "navigation_committed",
+    "candidate_linked",
+    "policy_decided",
+    "enforcement_requested",
+    "enforcement_completed",
+    "tab_removed",
+    "capture_triggered"
+  ]);
+  function normalizeNavigationDiagnosticEvent(event2 = {}, now = Date.now()) {
+    const normalized = {
+      at: Number.isFinite(event2.at) ? event2.at : now,
+      type: ALLOWED_EVENT_TYPES.has(event2.type) ? event2.type : "unknown"
+    };
+    for (const key of [
+      "tabId",
+      "sourceTabId",
+      "openerTabId",
+      "sourceFrameId",
+      "revision"
+    ]) {
+      if (Number.isInteger(event2[key])) normalized[key] = event2[key];
+    }
+    Object.assign(normalized, normalizeNavigationAttributionFacts(event2));
+    for (const key of ["url", "sourceUrl", "targetUrl"]) {
+      const safeUrl = summarizeNavigationDiagnosticUrl(event2[key]);
+      if (safeUrl) normalized[`${key}Host`] = safeUrl.host;
+      if (key === "url" && safeUrl?.hasSearchQuery)
+        normalized.searchQueryPresent = true;
+    }
+    for (const key of [
+      "transitionType",
+      "role",
+      "decision",
+      "reviewSurface",
+      "action",
+      "reason"
+    ]) {
+      if (typeof event2[key] === "string" && event2[key].length <= 80)
+        normalized[key] = event2[key];
+    }
+    if (Array.isArray(event2.transitionQualifiers)) {
+      normalized.transitionQualifiers = event2.transitionQualifiers.filter((value) => typeof value === "string").slice(0, 8);
+    }
+    if (Array.isArray(event2.reasons)) {
+      normalized.reasons = event2.reasons.filter((value) => typeof value === "string").slice(0, 12);
+    }
+    return normalized;
+  }
+  function summarizeNavigationDiagnosticUrl(value) {
+    if (typeof value !== "string" || !value) return null;
+    try {
+      const url = new URL(value);
+      return {
+        host: url.host.slice(0, 255),
+        hasSearchQuery: url.searchParams.has("q")
+      };
+    } catch {
+      return null;
+    }
+  }
+  function createNavigationDiagnostics({
+    getStorage,
+    now = () => Date.now()
+  } = {}) {
+    let writeQueue = Promise.resolve();
+    const enqueue = (operation) => {
+      const result2 = writeQueue.then(operation);
+      writeQueue = result2.catch(() => {
+      });
+      return result2;
+    };
+    const readState = async () => {
+      const storage = getStorage?.();
+      if (!storage)
+        return {
+          events: [],
+          captureUntil: 0,
+          retainUntil: 0,
+          captureReason: null
+        };
+      const snapshot = await storage.get(NAVIGATION_DIAGNOSTICS_SESSION_KEY);
+      const state = snapshot?.[NAVIGATION_DIAGNOSTICS_SESSION_KEY];
+      return state && typeof state === "object" ? state : { events: [], captureUntil: 0, retainUntil: 0, captureReason: null };
+    };
+    const pruneEvents = (events, timestamp, extendedRetention) => {
+      const ttl = extendedRetention ? CAPTURE_TTL_MS : BUFFER_TTL_MS;
+      const limit = extendedRetention ? CAPTURE_LIMIT : BUFFER_LIMIT;
+      return (Array.isArray(events) ? events : []).filter(
+        (event2) => Number.isFinite(event2?.at) && event2.at >= timestamp - ttl && event2.at <= timestamp + 1e3
+      ).slice(-limit);
+    };
+    const record = (event2) => enqueue(async () => {
+      const timestamp = now();
+      const state = await readState();
+      const captureUntil = Number.isFinite(state.captureUntil) && state.captureUntil > timestamp ? state.captureUntil : 0;
+      const retainUntil = Number.isFinite(state.retainUntil) && state.retainUntil > timestamp ? state.retainUntil : 0;
+      if (!captureUntil && retainUntil) {
+        return { status: "retained", count: state.events?.length || 0 };
+      }
+      const extendedRetention = captureUntil > timestamp;
+      const events = pruneEvents(state.events, timestamp, extendedRetention);
+      events.push(normalizeNavigationDiagnosticEvent(event2, timestamp));
+      const limit = extendedRetention ? CAPTURE_LIMIT : BUFFER_LIMIT;
+      await getStorage()?.set({
+        [NAVIGATION_DIAGNOSTICS_SESSION_KEY]: {
+          events: events.slice(-limit),
+          captureUntil,
+          retainUntil,
+          captureReason: extendedRetention ? state.captureReason || "developer" : null
+        }
+      });
+      return { status: "recorded", count: events.length };
+    });
+    const startCapture = ({
+      durationMs = DEFAULT_CAPTURE_MS,
+      reason = "developer"
+    } = {}) => enqueue(async () => {
+      const timestamp = now();
+      const duration = Math.min(
+        MAX_CAPTURE_MS,
+        Math.max(
+          6e4,
+          Number.isFinite(durationMs) ? durationMs : DEFAULT_CAPTURE_MS
+        )
+      );
+      const state = await readState();
+      const events = pruneEvents(state.events, timestamp, true);
+      const captureUntil = timestamp + duration;
+      events.push(
+        normalizeNavigationDiagnosticEvent(
+          { type: "capture_triggered", reason },
+          timestamp
+        )
+      );
+      await getStorage()?.set({
+        [NAVIGATION_DIAGNOSTICS_SESSION_KEY]: {
+          events: events.slice(-CAPTURE_LIMIT),
+          captureUntil,
+          retainUntil: captureUntil + CAPTURE_TTL_MS,
+          captureReason: reason
+        }
+      });
+      return { status: "capturing", captureUntil };
+    });
+    const stopCapture = () => enqueue(async () => {
+      const timestamp = now();
+      const state = await readState();
+      const retainUntil = Number.isFinite(state.retainUntil) && state.retainUntil > timestamp ? state.retainUntil : timestamp + CAPTURE_TTL_MS;
+      const events = pruneEvents(state.events, timestamp, true);
+      await getStorage()?.set({
+        [NAVIGATION_DIAGNOSTICS_SESSION_KEY]: {
+          events: events.slice(-CAPTURE_LIMIT),
+          captureUntil: 0,
+          retainUntil,
+          captureReason: state.captureReason || "developer"
+        }
+      });
+      return { status: "stopped", count: events.length };
+    });
+    const getSnapshot = () => enqueue(async () => {
+      const timestamp = now();
+      const state = await readState();
+      const captureUntil = Number.isFinite(state.captureUntil) && state.captureUntil > timestamp ? state.captureUntil : 0;
+      const retainUntil = Number.isFinite(state.retainUntil) && state.retainUntil > timestamp ? state.retainUntil : 0;
+      const extendedRetention = captureUntil > timestamp || retainUntil > timestamp;
+      const events = pruneEvents(state.events, timestamp, extendedRetention);
+      return {
+        events,
+        captureUntil,
+        retainedUntil: retainUntil,
+        captureReason: extendedRetention ? state.captureReason || "developer" : null
+      };
+    });
+    const clear = () => enqueue(async () => {
+      await getStorage()?.remove(NAVIGATION_DIAGNOSTICS_SESSION_KEY);
+      return { status: "cleared" };
+    });
+    return { record, startCapture, stopCapture, getSnapshot, clear };
+  }
+  var navigationDiagnostics = createNavigationDiagnostics({
+    getStorage: () => chrome.storage.session
+  });
+
+  // src/navigation/background/managed-tabs.js
+  var ACTION_TTL_MS = 5e3;
+  var MANAGED_ACTIONS = /* @__PURE__ */ new Set([
+    "extension_action",
+    "download_manager",
+    "element_decisions",
+    "user_restore",
+    "user_open_once",
+    "user_allow_source"
+  ]);
+  function createManagedTabRegistry({
+    now = () => Date.now(),
+    maximum = 32
+  } = {}) {
+    const pending = /* @__PURE__ */ new Set();
+    const receipts = /* @__PURE__ */ new Map();
+    let nextId = 0;
+    const prune = () => {
+      for (const action2 of pending)
+        if (action2.expiresAt <= now()) pending.delete(action2);
+      for (const [id, receipt] of receipts)
+        if (receipt.expiresAt <= now()) receipts.delete(id);
+    };
+    const owns = (tabId, url) => {
+      prune();
+      const receipt = receipts.get(tabId);
+      return receipt?.url === url ? receipt : null;
+    };
+    const matching = (tab) => [...pending].filter(
+      (action2) => action2.expiresAt > now() && action2.url === (tab.pendingUrl || tab.url) && (!Number.isInteger(tab.windowId) || !Number.isInteger(action2.windowId) || action2.windowId === tab.windowId)
+    );
+    const open = async (properties, {
+      reason = "extension_action",
+      create = (value) => chrome.tabs.create(value)
+    } = {}) => {
+      prune();
+      if (!MANAGED_ACTIONS.has(reason))
+        throw new Error(
+          "Unknown managed tab action. Register its purpose before use."
+        );
+      const target = new URL(properties.url);
+      if (!["http:", "https:", "chrome-extension:"].includes(target.protocol))
+        throw new Error("Unsupported managed tab destination.");
+      if (pending.size >= maximum)
+        throw new Error("Too many pending extension tab actions.");
+      let finish;
+      const action2 = {
+        url: target.href,
+        windowId: properties.windowId,
+        expiresAt: now() + ACTION_TTL_MS,
+        reason,
+        settled: new Promise((resolve) => {
+          finish = resolve;
+        })
+      };
+      pending.add(action2);
+      try {
+        const tab = await create(properties);
+        if (Number.isInteger(tab?.id)) {
+          receipts.set(tab.id, {
+            url: action2.url,
+            reason,
+            navigationId: `nav-${now().toString(36)}-managed-${++nextId}`,
+            expiresAt: now() + ACTION_TTL_MS
+          });
+          while (receipts.size > maximum)
+            receipts.delete(receipts.keys().next().value);
+        }
+        return tab;
+      } finally {
+        pending.delete(action2);
+        finish();
+      }
+    };
+    const waitForCreatedTab = async (tab) => {
+      if (owns(tab.id, tab.pendingUrl || tab.url)) return true;
+      const actions = matching(tab);
+      if (!actions.length) return false;
+      let timeout;
+      try {
+        await Promise.race([
+          Promise.all(actions.map((action2) => action2.settled)),
+          new Promise((resolve) => {
+            timeout = setTimeout(resolve, ACTION_TTL_MS);
+          })
+        ]);
+      } finally {
+        clearTimeout(timeout);
+      }
+      return Boolean(owns(tab.id, tab.pendingUrl || tab.url));
+    };
+    return {
+      open,
+      owns,
+      hasPending: (tab) => matching(tab).length > 0,
+      waitForCreatedTab,
+      removeTab: (tabId) => receipts.delete(tabId),
+      clear: () => receipts.clear()
+    };
+  }
+  var managedNavigationTabs = createManagedTabRegistry();
+  var openExtensionManagedTab = (properties, reason) => managedNavigationTabs.open(properties, { reason });
 
   // src/navigation/shared/intent-classifier.js
   var STRONG_TRACKING_KEYS = /* @__PURE__ */ new Set([
@@ -1545,65 +2134,31 @@ var AdsFriendlyBackground = (() => {
     };
   }
 
-  // src/navigation/background/navigation-sequences.js
-  var NAVIGATION_SEQUENCES = Object.freeze({
-    OPENED_TAB_IS_TARGET: "opened_tab_is_target",
-    ORIGINAL_TAB_WAS_REDIRECTED: "original_tab_was_redirected"
-  });
-  var SEQUENCE_PLANS = Object.freeze({
-    [NAVIGATION_SEQUENCES.OPENED_TAB_IS_TARGET]: ({
-      originalTabId,
-      openedTabId
-    }) => ({
-      closeTabId: openedTabId,
-      restoreTabId: null,
-      survivingTabId: originalTabId,
-      notifyTabId: originalTabId
-    }),
-    [NAVIGATION_SEQUENCES.ORIGINAL_TAB_WAS_REDIRECTED]: ({
-      originalTabId,
-      openedTabId,
-      restoreOriginal = false
-    }) => restoreOriginal ? {
-      closeTabId: null,
-      restoreTabId: originalTabId,
-      survivingTabId: originalTabId,
-      notifyTabId: originalTabId
-    } : {
-      closeTabId: originalTabId,
-      restoreTabId: null,
-      survivingTabId: openedTabId,
-      notifyTabId: openedTabId
+  // src/navigation/background/enforcement-policy.js
+  function constrainNavigationEnforcement(context, evaluation) {
+    if (context?.origin === "extension" || context?.origin === "browser-ui") {
+      return {
+        ...evaluation,
+        decision: NEW_TAB_DECISIONS.ALLOW,
+        reviewSurface: null,
+        attributionReason: "owned_user_navigation"
+      };
     }
-  });
-  function createNavigationEnforcementPlan({
-    sequence,
-    originalTabId,
-    openedTabId,
-    restoreOriginal = false
-  }) {
-    const buildPlan = SEQUENCE_PLANS[sequence];
-    if (!buildPlan) {
-      throw new Error(
-        `Unknown navigation sequence: ${sequence}. Register it before use.`
-      );
-    }
-    if (!Number.isInteger(originalTabId) || !Number.isInteger(openedTabId)) {
-      throw new TypeError("Navigation enforcement requires two valid tab IDs.");
-    }
-    const plan = Object.freeze(
-      buildPlan({ originalTabId, openedTabId, restoreOriginal })
-    );
-    if (plan.notifyTabId !== plan.survivingTabId) {
-      throw new Error("Navigation toast must target the surviving tab.");
-    }
-    if (plan.closeTabId === plan.notifyTabId) {
-      throw new Error("Navigation toast cannot target the tab being closed.");
-    }
-    return plan;
+    if (context?.attribution === "confirmed")
+      return { ...evaluation, attributionReason: "confirmed_source" };
+    if (evaluation.decision === NEW_TAB_DECISIONS.ALLOW)
+      return { ...evaluation, attributionReason: "existing_allow_policy" };
+    const hasAdEvidence = evaluation.targetLikelyAd || evaluation.promotionalIntent || evaluation.blacklisted;
+    return {
+      ...evaluation,
+      decision: hasAdEvidence ? NEW_TAB_DECISIONS.VERIFY : NEW_TAB_DECISIONS.ALLOW,
+      reviewSurface: hasAdEvidence ? NEW_TAB_REVIEW_SURFACES.TOAST : null,
+      attributionReason: "insufficient_source_evidence",
+      mayReplacePage: false
+    };
   }
 
-  // src/navigation/background/guard.js
+  // src/navigation/background/policy.js
   var TRUSTED_INITIATORS = [
     "google.com",
     "bing.com",
@@ -1633,142 +2188,479 @@ var AdsFriendlyBackground = (() => {
     "adyen.com",
     "authorize.net"
   ];
+  async function evaluateNavigationPolicy({
+    sourceUrl: sourceValue,
+    targetUrl: targetValue,
+    allowMatchingIntent = false,
+    allowTrustedInitiator = true,
+    context
+  }, { storage = chrome.storage.local, readTrustedPath = getTrustedPath } = {}) {
+    const sourceUrl = new URL(sourceValue);
+    const targetUrl = new URL(targetValue);
+    const targetDomain = targetUrl.hostname;
+    const sameSite = sameHostnameOrSubdomain(sourceUrl.hostname, targetDomain) || sameHostnameOrSubdomain(targetDomain, sourceUrl.hostname);
+    const targetClassification = classifyNavigationIntent({
+      intentUrl: targetUrl.href,
+      sourceUrl: sourceUrl.href
+    });
+    const prefilledSearch = targetClassification.reasons.includes(
+      "prefilled_search_navigation"
+    );
+    const trustTarget = prefilledSearch ? PREFILLED_SEARCH_TRUST_TARGET : targetDomain;
+    const [{ whitelist = [], blacklist = [] }, path] = await Promise.all([
+      storage.get(["whitelist", "blacklist"]),
+      readTrustedPath(sourceUrl.hostname, trustTarget)
+    ]);
+    const intentClassification = classifyCapturedIntent(context);
+    const promotionalIntent = intentClassification.likelyAd;
+    const allowedSearch = prefilledSearch && path?.isManual === true;
+    const matchingIntent = allowMatchingIntent && hasMatchingIntent(context, targetDomain);
+    const blacklisted = isBlacklistedTarget(targetDomain, blacklist);
+    const decision = allowedSearch ? NEW_TAB_DECISIONS.ALLOW : decideNewTabNavigation({
+      sameSite,
+      trustedInitiator: allowTrustedInitiator && isTrustedInitiator(sourceUrl.hostname),
+      trustedTarget: isTrustedTarget(targetDomain),
+      whitelisted: whitelist.includes(targetDomain),
+      blacklisted,
+      trustedPath: matchingIntent || !!path?.isManual || (path?.visits || 0) >= 3,
+      promotionalIntent,
+      targetLikelyAd: targetClassification.likelyAd
+    });
+    const reviewSurface = decision === NEW_TAB_DECISIONS.VERIFY ? chooseNewTabReviewSurface({
+      promotionalIntent,
+      targetLikelyAd: targetClassification.likelyAd,
+      intentReasons: intentClassification.reasons,
+      targetReasons: targetClassification.reasons
+    }) : null;
+    const evaluation = constrainNavigationEnforcement(context, {
+      sourceUrl,
+      targetUrl,
+      targetDomain,
+      sameSite,
+      trustTarget,
+      allowedSearch,
+      decision,
+      reviewSurface,
+      blacklisted,
+      promotionalIntent,
+      targetLikelyAd: targetClassification.likelyAd,
+      reasons: [
+        .../* @__PURE__ */ new Set([
+          ...targetClassification.reasons,
+          ...intentClassification.reasons
+        ])
+      ]
+    });
+    if (evaluation.decision !== NEW_TAB_DECISIONS.ALLOW && promotionalIntent && !targetClassification.likelyAd && !blacklisted && context?.intentAssociation !== "matched_link") {
+      return {
+        ...evaluation,
+        decision: NEW_TAB_DECISIONS.VERIFY,
+        reviewSurface: "toast",
+        mayReplacePage: false,
+        attributionReason: "intent_not_linked_to_destination"
+      };
+    }
+    return evaluation;
+  }
+  function hasMatchingIntent(context, targetDomain) {
+    const click = context?.intent;
+    if (!click || context.intentAssociation !== "matched_link") return false;
+    const intent = parseUrl(click.intentUrl);
+    if (classifyCapturedIntent(context).likelyAd) return false;
+    return !!intent && (sameHostnameOrSubdomain(targetDomain, intent.hostname) || sameHostnameOrSubdomain(intent.hostname, targetDomain));
+  }
+  function classifyCapturedIntent(context) {
+    const click = context?.intent;
+    if (!click || !["matched_link", "frame_temporal"].includes(context.intentAssociation))
+      return { likelyAd: false, reasons: [] };
+    const classification = classifyNavigationIntent({
+      intentUrl: click.intentUrl,
+      sourceUrl: click.sourceUrl,
+      evidence: click.intentKind === "promotional" ? "promo" : ""
+    });
+    const reasons = [
+      .../* @__PURE__ */ new Set([...click.intentReasons || [], ...classification.reasons])
+    ];
+    return {
+      likelyAd: click.intentKind === "promotional" || classification.likelyAd,
+      reasons
+    };
+  }
+  function isTrustedInitiator(hostname) {
+    return hostMatchesAny(hostname, TRUSTED_INITIATORS) || isGoogleHost(hostname);
+  }
+  function isTrustedTarget(hostname) {
+    return hostMatchesAny(hostname, TRUSTED_TARGETS) || isGoogleHost(hostname);
+  }
+  function isBlacklistedTarget(hostname, blacklist = []) {
+    const normalized = hostname.toLowerCase();
+    return blacklist.some((entry) => {
+      const value = String(entry || "").replace(/^\|\|/, "").replace(/\^$/, "").toLowerCase();
+      return normalized === value || normalized.endsWith(`.${value}`);
+    });
+  }
+  function hostMatchesAny(hostname, domains) {
+    const normalized = hostname.toLowerCase();
+    return domains.some(
+      (domain) => normalized === domain || normalized.endsWith(`.${domain}`)
+    );
+  }
+  function isGoogleHost(hostname) {
+    return /^(.+\.)?google\.(com|[a-z]{2}|com\.[a-z]{2}|co\.[a-z]{2})$/.test(
+      hostname.toLowerCase()
+    );
+  }
+
+  // src/navigation/background/user-navigation.js
+  function createUserNavigationTracker({
+    now = () => Date.now(),
+    maximum = 256
+  } = {}) {
+    const sessions = /* @__PURE__ */ new Map();
+    const get = (tabId) => {
+      const session = sessions.get(tabId);
+      if (!session || session.expiresAt <= now()) {
+        sessions.delete(tabId);
+        return null;
+      }
+      return session;
+    };
+    const begin = (tabId, url) => {
+      try {
+        const target = new URL(url);
+        if (!/^https?:$/.test(target.protocol)) return;
+        sessions.set(tabId, {
+          url: target.href,
+          expiresAt: now() + 1e4,
+          redirects: 0
+        });
+        while (sessions.size > maximum)
+          sessions.delete(sessions.keys().next().value);
+      } catch {
+      }
+    };
+    const continueRedirect = ({ tabId, url, transitionQualifiers = [] }) => {
+      const session = get(tabId);
+      if (!session || session.redirects >= 5 || !transitionQualifiers.some(
+        (value) => value === "server_redirect" || value === "client_redirect"
+      ))
+        return false;
+      try {
+        const previous = new URL(session.url), next = new URL(url);
+        const google = (host) => /(^|\.)google\.(com|[a-z]{2}|com\.[a-z]{2}|co\.[a-z]{2})$/.test(host);
+        const sameHost = previous.hostname === next.hostname || previous.hostname.endsWith(`.${next.hostname}`) || next.hostname.endsWith(`.${previous.hostname}`);
+        const sameGoogleSearch = google(previous.hostname) && google(next.hostname) && previous.pathname === "/search" && next.pathname === "/search" && previous.searchParams.has("q") && previous.searchParams.get("q") === next.searchParams.get("q");
+        if (!/^https?:$/.test(next.protocol) || (!(google(previous.hostname) && google(next.hostname)) ? !sameHost : !sameGoogleSearch))
+          return false;
+        session.url = next.href;
+        session.redirects++;
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    return {
+      begin,
+      continueRedirect,
+      removeTab: (tabId) => sessions.delete(tabId),
+      clear: () => sessions.clear()
+    };
+  }
+  var userNavigationTracker = createUserNavigationTracker();
+
+  // src/navigation/background/guard.js
   var pendingTabs = /* @__PURE__ */ new Map();
   var handledTabs = /* @__PURE__ */ new Map();
-  var evaluatingTabs = /* @__PURE__ */ new Set();
+  var evaluatingTabs = /* @__PURE__ */ new Map();
   var reverseCandidatesBySource = /* @__PURE__ */ new Map();
   var reverseCandidatesByClone = /* @__PURE__ */ new Map();
   var committedUrlsByTab = /* @__PURE__ */ new Map();
+  var committedNavigationsByTab = /* @__PURE__ */ new Map();
   var pendingReviewToasts = /* @__PURE__ */ new Map();
   var blockedNoticesBySource = /* @__PURE__ */ new Map();
-  var userOpenedNavigations = /* @__PURE__ */ new Map();
   var browserUiTabs = /* @__PURE__ */ new Map();
+  var explicitNavigationEpochs = /* @__PURE__ */ new Map();
   var navigationPolicy = null;
+  var guardGeneration = 0;
   function registerNavigationGuard(policy) {
+    const generation = ++guardGeneration;
     navigationPolicy = policy;
     chrome.tabs.query({}).then((tabs) => {
+      if (generation !== guardGeneration) return;
       for (const tab of tabs) rememberCommittedUrl(tab.id, tab.url);
     }).catch(() => {
     });
     const onCreatedNavigationTarget = (details) => {
-      trackReverseCandidate({
+      if (deferManagedTab(
+        { id: details.tabId, url: details.url },
+        () => onCreatedNavigationTarget(details)
+      ))
+        return;
+      if (!isBlankUrl(details.url) && !isWebNavigationTarget(details.url)) return;
+      if (browserUiTabs.has(details.tabId) || isExplicitAddressBarCommitForUrl(
+        details.url,
+        committedNavigationsByTab.get(details.tabId)
+      ))
+        return;
+      recordNavigationTrace({
+        type: "navigation_target_created",
         sourceTabId: details.sourceTabId,
-        cloneTabId: details.tabId,
-        cloneUrl: details.url
-      }).catch(logReversePopunderError);
+        tabId: details.tabId,
+        url: details.url,
+        role: "web_created_target"
+      });
+      const context = registerPendingTab(
+        { id: details.tabId, url: details.url },
+        details.sourceTabId,
+        ATTRIBUTION_EVIDENCE.WEB_TARGET,
+        details.sourceFrameId
+      );
+      if (!context) return;
       evaluateNewTab({
         sourceTabId: details.sourceTabId,
         tabId: details.tabId,
-        url: details.url
+        url: details.url,
+        context
       });
     };
-    const registerPendingTab = (tab, sourceTabId, hasRealOpener) => {
+    const registerPendingTab = (tab, sourceTabId, evidence, sourceFrameId = null) => {
       if (!Number.isInteger(tab?.id) || !Number.isInteger(sourceTabId)) return;
-      rememberCommittedUrl(tab.id, tab.pendingUrl || tab.url);
-      pendingTabs.set(tab.id, {
-        sourceTabId,
-        createdAt: Date.now(),
-        hasRealOpener
-      });
-      trackReverseCandidate({
-        sourceTabId,
-        cloneTabId: tab.id,
-        cloneUrl: tab.pendingUrl || tab.url
-      }).catch(logReversePopunderError);
-      setTimeout(
-        () => pendingTabs.delete(tab.id),
-        hasRealOpener ? 1e4 : REVERSE_POPUNDER_WINDOW_MS + 500
-      );
+      const destination = tab.pendingUrl || tab.url;
+      if (destination && !isBlankUrl(destination) && !isWebNavigationTarget(destination))
+        return;
       const initialUrl = tab.pendingUrl || tab.url;
+      if (isExplicitAddressBarCommitForUrl(
+        initialUrl,
+        committedNavigationsByTab.get(tab.id)
+      ))
+        return;
+      const context = navigationAttribution.link({
+        targetTabId: tab.id,
+        sourceTabId,
+        sourceFrameId,
+        targetUrl: initialUrl,
+        sourceUrl: committedUrlsByTab.get(sourceTabId),
+        evidence
+      });
+      if (!context || context.origin !== "website") return;
+      if (context.targetUrl !== initialUrl) return context;
+      recordNavigationTrace({
+        type: "candidate_linked",
+        tabId: tab.id,
+        sourceTabId: context.sourceTabId,
+        openerTabId: tab.openerTabId,
+        url: tab.pendingUrl || tab.url,
+        role: evidence,
+        ...navigationAttributionFacts(context)
+      });
+      rememberCommittedUrl(tab.id, tab.pendingUrl || tab.url);
+      pendingTabs.set(tab.id, context);
+      trackReverseCandidate({
+        sourceTabId: context.sourceTabId,
+        cloneTabId: tab.id,
+        cloneUrl: tab.pendingUrl || tab.url,
+        context
+      }).catch(logReversePopunderError);
+      setTimeout(() => {
+        if (pendingTabs.get(tab.id) === context) pendingTabs.delete(tab.id);
+      }, 1e4);
       if (initialUrl && !isBlankUrl(initialUrl)) {
-        evaluateNewTab({ sourceTabId, tabId: tab.id, url: initialUrl });
+        const committed = committedNavigationsByTab.get(tab.id);
+        if (isExplicitAddressBarCommitForUrl(initialUrl, committed)) {
+          pendingTabs.delete(tab.id);
+          return;
+        }
+        if (committed?.url === initialUrl) {
+          evaluateNewTab({
+            sourceTabId: context.sourceTabId,
+            tabId: tab.id,
+            url: initialUrl,
+            context
+          });
+        }
       }
+      return context;
+    };
+    const markManagedTab = (tab) => {
+      const receipt = managedNavigationTabs.owns(
+        tab.id,
+        tab.pendingUrl || tab.url
+      );
+      if (!receipt) return false;
+      cancelTabAttribution(tab.id);
+      recordNavigationTrace({
+        type: "candidate_linked",
+        tabId: tab.id,
+        url: receipt.url,
+        navigationSchema: "navigation-context.v1",
+        navigationId: receipt.navigationId,
+        origin: "extension",
+        attribution: "confirmed",
+        attributionEvidence: ["registered_extension_action"],
+        reason: receipt.reason
+      });
+      return true;
+    };
+    const deferManagedTab = (tab, retry) => {
+      if (markManagedTab(tab)) return true;
+      if (!managedNavigationTabs.hasPending(tab)) return false;
+      managedNavigationTabs.waitForCreatedTab(tab).then((owned) => {
+        if (!navigationPolicy || generation !== guardGeneration) return;
+        if (owned) markManagedTab(tab);
+        else retry();
+      }).catch(() => {
+      });
+      return true;
     };
     const onCreated = (tab) => {
       rememberCommittedUrl(tab.id, tab.pendingUrl || tab.url);
-      if (isBrowserUiNewTab(tab) && Number.isInteger(tab.id)) {
+      recordNavigationTrace({
+        type: "tab_created",
+        tabId: tab.id,
+        openerTabId: tab.openerTabId,
+        url: tab.pendingUrl || tab.url,
+        role: Number.isInteger(tab.openerTabId) ? "has_opener" : "no_opener"
+      });
+      if (deferManagedTab(tab, () => onCreated(tab))) return;
+      if (isBrowserUiNewTab({ ...tab, openerTabId: null }) && Number.isInteger(tab.id)) {
         browserUiTabs.set(tab.id, Date.now());
         setTimeout(() => browserUiTabs.delete(tab.id), 2 * 60 * 1e3);
         return;
       }
-      const sourceTabId = tab.openerTabId || getRecentUserGestureSourceTabId(2500);
-      if (sourceTabId) {
-        registerPendingTab(tab, sourceTabId, !!tab.openerTabId);
+      const initialUrl = tab.pendingUrl || tab.url;
+      if (initialUrl && !isBlankUrl(initialUrl) && !isWebNavigationTarget(initialUrl))
+        return;
+      const recentIntent = navigationAttribution.latestIntent();
+      const sourceTabId = Number.isInteger(tab.openerTabId) ? tab.openerTabId : recentIntent?.tabId;
+      if (Number.isInteger(sourceTabId)) {
+        registerPendingTab(
+          tab,
+          sourceTabId,
+          Number.isInteger(tab.openerTabId) ? ATTRIBUTION_EVIDENCE.OPENER : ATTRIBUTION_EVIDENCE.RECENT_CLICK
+        );
         return;
       }
       if (!Number.isInteger(tab.id)) return;
       setTimeout(async () => {
-        if (!navigationPolicy || pendingTabs.has(tab.id) || handledTabs.has(tab.id))
+        if (!navigationPolicy || generation !== guardGeneration || pendingTabs.has(tab.id) || handledTabs.has(tab.id) || browserUiTabs.has(tab.id))
           return;
-        const delayedSourceTabId = getRecentUserGestureSourceTabId(2500);
-        if (!delayedSourceTabId) return;
+        const delayedSourceTabId = navigationAttribution.latestIntent()?.tabId;
+        if (!Number.isInteger(delayedSourceTabId)) return;
         try {
           const currentTab = await chrome.tabs.get(tab.id);
-          registerPendingTab(currentTab, delayedSourceTabId, false);
+          if (deferManagedTab(currentTab, () => onCreated(currentTab))) return;
+          registerPendingTab(
+            currentTab,
+            delayedSourceTabId,
+            ATTRIBUTION_EVIDENCE.RECENT_CLICK
+          );
         } catch {
         }
       }, 300);
     };
-    const onUpdated = (tabId, changeInfo) => {
-      if (!changeInfo.url || isBlankUrl(changeInfo.url)) return;
-      if (browserUiTabs.has(tabId)) {
-        browserUiTabs.delete(tabId);
-        pendingTabs.delete(tabId);
-        return;
-      }
-      observeReverseNavigation(tabId, changeInfo.url);
-      const pending = pendingTabs.get(tabId);
-      if (!pending) return;
-      if (isExpiredFallbackPending(pending)) {
-        pendingTabs.delete(tabId);
-        return;
-      }
-      evaluateNewTab({
-        sourceTabId: pending.sourceTabId,
-        tabId,
-        url: changeInfo.url
-      });
-    };
     const onCommitted = (details) => {
       if (details.frameId !== 0 || isBlankUrl(details.url)) return;
-      if (browserUiTabs.has(details.tabId) || isExplicitAddressBarNavigation(details)) {
+      if (markManagedTab({ id: details.tabId, url: details.url })) return;
+      if (!isWebNavigationTarget(details.url)) {
+        cancelTabAttribution(details.tabId);
+        return;
+      }
+      const wasBrowserUiTab = browserUiTabs.has(details.tabId);
+      const explicitAddressBarCommit = !shouldEvaluateCommittedNavigation(details);
+      committedNavigationsByTab.set(details.tabId, {
+        url: details.url,
+        transitionType: details.transitionType,
+        transitionQualifiers: details.transitionQualifiers || []
+      });
+      if (explicitAddressBarCommit) {
+        if (pendingTabs.has(details.tabId) || evaluatingTabs.has(details.tabId) || reverseCandidatesByClone.has(details.tabId) || reverseCandidatesBySource.has(details.tabId)) {
+          triggerNavigationDiagnosticCapture(
+            "address_bar_commit_superseded_pending_ad_candidate"
+          );
+        }
+      }
+      recordNavigationTrace({
+        type: "navigation_committed",
+        tabId: details.tabId,
+        url: details.url,
+        transitionType: details.transitionType,
+        transitionQualifiers: details.transitionQualifiers,
+        role: wasBrowserUiTab ? "browser_ui_tab" : explicitAddressBarCommit ? "explicit_user_navigation" : "tracked_or_unknown"
+      });
+      const userRedirect = userNavigationTracker.continueRedirect(details);
+      if (wasBrowserUiTab || explicitAddressBarCommit || userRedirect) {
+        cancelTabAttribution(details.tabId);
+        if (!userRedirect)
+          userNavigationTracker.begin(details.tabId, details.url);
         browserUiTabs.delete(details.tabId);
         pendingTabs.delete(details.tabId);
         rememberCommittedUrl(details.tabId, details.url);
         return;
       }
+      const previousContext = pendingTabs.get(details.tabId);
+      if (previousContext) {
+        const updated = navigationAttribution.retarget(
+          previousContext,
+          details.url
+        );
+        if (updated) {
+          pendingTabs.set(details.tabId, updated);
+          const clone = reverseCandidatesByClone.get(details.tabId);
+          if (clone) clone.context = updated;
+        }
+      }
       observeReverseNavigation(details.tabId, details.url);
       rememberCommittedUrl(details.tabId, details.url);
       const pending = pendingTabs.get(details.tabId);
       if (!pending) return;
-      if (isExpiredFallbackPending(pending)) {
+      if (!navigationAttribution.isCurrent(pending)) {
         pendingTabs.delete(details.tabId);
         return;
       }
       evaluateNewTab({
         sourceTabId: pending.sourceTabId,
         tabId: details.tabId,
-        url: details.url
+        url: details.url,
+        context: pending
       });
     };
     const onRemoved = (tabId) => {
+      recordNavigationTrace({
+        type: "tab_removed",
+        tabId,
+        url: committedUrlsByTab.get(tabId),
+        sourceTabId: pendingTabs.get(tabId)?.sourceTabId,
+        role: "no_extension_removal_cause_recorded"
+      });
       committedUrlsByTab.delete(tabId);
+      committedNavigationsByTab.delete(tabId);
       pendingReviewToasts.delete(tabId);
       browserUiTabs.delete(tabId);
+      explicitNavigationEpochs.delete(tabId);
+      pendingTabs.delete(tabId);
+      handledTabs.delete(tabId);
+      navigationAttribution.removeTab(tabId);
+      managedNavigationTabs.removeTab(tabId);
+      userNavigationTracker.removeTab(tabId);
+      for (const candidate of /* @__PURE__ */ new Set([
+        reverseCandidatesBySource.get(tabId),
+        reverseCandidatesByClone.get(tabId)
+      ]))
+        if (candidate) cleanupReverseCandidate(candidate);
     };
     chrome.webNavigation.onCreatedNavigationTarget.addListener(
       onCreatedNavigationTarget
     );
     chrome.tabs.onCreated.addListener(onCreated);
-    chrome.tabs.onUpdated.addListener(onUpdated);
     chrome.webNavigation.onCommitted.addListener(onCommitted);
     chrome.tabs.onRemoved.addListener(onRemoved);
     return () => {
+      if (generation !== guardGeneration) return;
+      guardGeneration++;
       chrome.webNavigation.onCreatedNavigationTarget.removeListener(
         onCreatedNavigationTarget
       );
       chrome.tabs.onCreated.removeListener(onCreated);
-      chrome.tabs.onUpdated.removeListener(onUpdated);
       chrome.webNavigation.onCommitted.removeListener(onCommitted);
       chrome.tabs.onRemoved.removeListener(onRemoved);
       pendingTabs.clear();
@@ -1776,25 +2668,44 @@ var AdsFriendlyBackground = (() => {
       reverseCandidatesBySource.clear();
       reverseCandidatesByClone.clear();
       committedUrlsByTab.clear();
+      committedNavigationsByTab.clear();
       pendingReviewToasts.clear();
       blockedNoticesBySource.clear();
-      userOpenedNavigations.clear();
+      handledTabs.clear();
+      navigationAttribution.clear();
+      managedNavigationTabs.clear();
+      userNavigationTracker.clear();
       browserUiTabs.clear();
+      explicitNavigationEpochs.clear();
       navigationPolicy = null;
     };
   }
-  function getRecentUserGestureSourceTabId(windowMs) {
-    const click = runtimeState.lastTrustedClick;
-    if (!click.tabId || !click.sourceUrl || Date.now() - click.timestamp >= windowMs)
-      return null;
-    return click.tabId;
+  function cancelTabAttribution(tabId) {
+    explicitNavigationEpochs.set(
+      tabId,
+      (explicitNavigationEpochs.get(tabId) || 0) + 1
+    );
+    navigationAttribution.invalidate(tabId);
+    pendingTabs.delete(tabId);
+    pendingReviewToasts.delete(tabId);
+    for (const candidate of /* @__PURE__ */ new Set([
+      reverseCandidatesBySource.get(tabId),
+      reverseCandidatesByClone.get(tabId)
+    ]))
+      if (candidate) cleanupReverseCandidate(candidate);
   }
-  function isExpiredFallbackPending(pending) {
-    return !pending.hasRealOpener && Date.now() - pending.createdAt > REVERSE_POPUNDER_WINDOW_MS;
-  }
-  async function trackReverseCandidate({ sourceTabId, cloneTabId, cloneUrl }) {
+  async function trackReverseCandidate({
+    sourceTabId,
+    cloneTabId,
+    cloneUrl,
+    context
+  }) {
     if (!navigationPolicy?.can(CAPABILITIES.NAVIGATION_REVERSE_POPUNDER) || !sourceTabId || !cloneTabId)
       return;
+    if (!navigationAttribution.isCurrent(context)) return;
+    const previousClone = reverseCandidatesByClone.get(cloneTabId);
+    if (previousClone && previousClone.sourceTabId !== sourceTabId)
+      cleanupReverseCandidate(previousClone);
     let candidate = reverseCandidatesBySource.get(sourceTabId);
     if (candidate && candidate.cloneTabId !== cloneTabId) {
       cleanupReverseCandidate(candidate);
@@ -1804,12 +2715,14 @@ var AdsFriendlyBackground = (() => {
       candidate = {
         sourceTabId,
         cloneTabId,
-        originalUrl: getRecentSourceUrl(sourceTabId) || committedUrlsByTab.get(sourceTabId),
+        originalUrl: context.sourceUrl || context.intent?.sourceUrl || committedUrlsByTab.get(sourceTabId),
+        context,
         cloneUrl: null,
         redirectedUrl: null,
         createdAt: Date.now(),
         handling: false,
-        reviewTimer: null
+        reviewTimer: null,
+        revision: 0
       };
       reverseCandidatesBySource.set(sourceTabId, candidate);
       reverseCandidatesByClone.set(cloneTabId, candidate);
@@ -1818,6 +2731,7 @@ var AdsFriendlyBackground = (() => {
         REVERSE_POPUNDER_WINDOW_MS + 500
       );
     }
+    candidate.context = context;
     if (!candidate.originalUrl) {
       try {
         const sourceTab = await chrome.tabs.get(sourceTabId);
@@ -1827,23 +2741,26 @@ var AdsFriendlyBackground = (() => {
       } catch {
       }
     }
+    if (!isCurrentReverseCandidate(candidate)) return;
     if (cloneUrl && !isBlankUrl(cloneUrl)) candidate.cloneUrl = cloneUrl;
     maybeHandleReversePopunder(candidate).catch(logReversePopunderError);
   }
   function observeReverseNavigation(tabId, url) {
     const cloneCandidate = reverseCandidatesByClone.get(tabId);
     if (cloneCandidate) {
+      if (cloneCandidate.cloneUrl !== url) cloneCandidate.revision++;
       cloneCandidate.cloneUrl = url;
       maybeHandleReversePopunder(cloneCandidate).catch(logReversePopunderError);
     }
     const sourceCandidate = reverseCandidatesBySource.get(tabId);
     if (sourceCandidate) {
+      if (sourceCandidate.redirectedUrl !== url) sourceCandidate.revision++;
       sourceCandidate.redirectedUrl = url;
       maybeHandleReversePopunder(sourceCandidate).catch(logReversePopunderError);
     }
   }
   async function maybeHandleReversePopunder(candidate) {
-    if (candidate.handling || !candidate.originalUrl || !candidate.cloneUrl || !candidate.redirectedUrl)
+    if (!isCurrentReverseCandidate(candidate) || candidate.handling || !candidate.originalUrl || !candidate.cloneUrl || !candidate.redirectedUrl)
       return;
     const elapsedMs = Date.now() - candidate.createdAt;
     if (!isReversePopunderSequence({
@@ -1855,25 +2772,69 @@ var AdsFriendlyBackground = (() => {
       scheduleReverseRedirectReview(candidate);
       return;
     }
+    if (candidate.context.attribution !== "confirmed") {
+      const context = navigationAttribution.link({
+        targetTabId: candidate.cloneTabId,
+        sourceTabId: candidate.sourceTabId,
+        sourceFrameId: candidate.context.sourceFrameId,
+        sourceUrl: candidate.originalUrl,
+        targetUrl: candidate.cloneUrl,
+        evidence: ATTRIBUTION_EVIDENCE.REVERSE_SEQUENCE
+      });
+      if (!context || context.origin !== "website") return;
+      candidate.context = context;
+      pendingTabs.set(candidate.cloneTabId, context);
+      recordNavigationTrace({
+        type: "candidate_linked",
+        tabId: candidate.cloneTabId,
+        sourceTabId: candidate.sourceTabId,
+        role: "reverse_sequence_confirmed",
+        ...navigationAttributionFacts(context)
+      });
+    }
     candidate.handling = true;
+    const expectedRevision = candidate.revision;
+    const expectedContext = candidate.context;
+    const isCurrent = () => isCurrentReverseCandidate(candidate) && candidate.revision === expectedRevision && navigationAttribution.isCurrent(expectedContext);
     if (await isAllowedReverseRedirect(candidate)) {
       cleanupReverseCandidate(candidate);
       return;
     }
+    if (!isCurrent()) return;
     const sourceHost = new URL(candidate.originalUrl).hostname;
-    await logBlockedNavigationIfAllowed(candidate.redirectedUrl, sourceHost);
+    try {
+      const sourceTab = await chrome.tabs.get(candidate.sourceTabId);
+      if (!isCurrent() || (sourceTab.pendingUrl || sourceTab.url) !== candidate.redirectedUrl)
+        return;
+    } catch {
+      return;
+    }
     let enforcementPlan = createNavigationEnforcementPlan({
       sequence: NAVIGATION_SEQUENCES.ORIGINAL_TAB_WAS_REDIRECTED,
       originalTabId: candidate.sourceTabId,
       openedTabId: candidate.cloneTabId
     });
+    let applied = false;
     try {
       const cloneTab = await chrome.tabs.get(candidate.cloneTabId);
+      if (!isCurrent()) return;
       if (!cloneTab?.url || !isSelfCloneNavigation(candidate.originalUrl, cloneTab.url))
         throw new Error("clone gone");
       await chrome.tabs.update(enforcementPlan.survivingTabId, { active: true });
+      if (!isCurrent()) return;
+      recordNavigationTrace({
+        type: "enforcement_requested",
+        tabId: enforcementPlan.closeTabId,
+        sourceTabId: enforcementPlan.notifyTabId,
+        targetUrl: candidate.redirectedUrl,
+        action: "close_tab",
+        role: "reverse_popunder",
+        ...navigationAttributionFacts(expectedContext)
+      });
       await chrome.tabs.remove(enforcementPlan.closeTabId);
+      applied = true;
     } catch {
+      if (!isCurrent()) return;
       enforcementPlan = createNavigationEnforcementPlan({
         sequence: NAVIGATION_SEQUENCES.ORIGINAL_TAB_WAS_REDIRECTED,
         originalTabId: candidate.sourceTabId,
@@ -1884,18 +2845,33 @@ var AdsFriendlyBackground = (() => {
         await chrome.tabs.update(enforcementPlan.restoreTabId, {
           url: candidate.originalUrl
         });
+        applied = true;
       } catch {
       }
     } finally {
-      pendingTabs.delete(candidate.cloneTabId);
-      handledTabs.set(candidate.sourceTabId, Date.now());
-      await showBlockedNavigationToast({
-        sourceTabId: enforcementPlan.notifyTabId,
-        url: candidate.redirectedUrl,
-        source: sourceHost,
-        target: new URL(candidate.redirectedUrl).hostname
-      });
-      cleanupReverseCandidate(candidate);
+      if (applied) {
+        recordNavigationTrace({
+          type: "enforcement_completed",
+          tabId: enforcementPlan.closeTabId ?? enforcementPlan.restoreTabId,
+          sourceTabId: enforcementPlan.notifyTabId,
+          action: enforcementPlan.restoreTabId === null ? "close_tab" : "restore_original",
+          role: "reverse_popunder",
+          ...navigationAttributionFacts(expectedContext)
+        });
+        void logBlockedNavigationIfAllowed(
+          candidate.redirectedUrl,
+          sourceHost,
+          expectedContext
+        );
+        pendingTabs.delete(candidate.cloneTabId);
+        await showBlockedNavigationToast({
+          sourceTabId: enforcementPlan.notifyTabId,
+          url: candidate.redirectedUrl,
+          source: sourceHost,
+          target: new URL(candidate.redirectedUrl).hostname
+        });
+        cleanupReverseCandidate(candidate);
+      }
     }
   }
   function scheduleReverseRedirectReview(candidate) {
@@ -1914,8 +2890,7 @@ var AdsFriendlyBackground = (() => {
     }, 400);
   }
   async function reviewReverseRedirect(candidate) {
-    if (candidate.handling || reverseCandidatesBySource.get(candidate.sourceTabId) !== candidate)
-      return;
+    if (candidate.handling || !isCurrentReverseCandidate(candidate)) return;
     const elapsedMs = Date.now() - candidate.createdAt;
     if (isReversePopunderSequence({
       originalUrl: candidate.originalUrl,
@@ -1934,19 +2909,25 @@ var AdsFriendlyBackground = (() => {
     }))
       return;
     candidate.handling = true;
+    const revision = candidate.revision;
+    const context = candidate.context;
     const evaluation = await evaluateNavigationPolicy({
       sourceUrl: candidate.originalUrl,
       targetUrl: candidate.redirectedUrl,
       sourceTabId: candidate.sourceTabId,
       allowMatchingIntent: true,
-      allowTrustedInitiator: false
+      allowTrustedInitiator: false,
+      context
     });
+    if (!isCurrentReverseCandidate(candidate) || candidate.revision !== revision || !navigationAttribution.isCurrent(context))
+      return;
     if (evaluation.decision !== NEW_TAB_DECISIONS.ALLOW) {
       await showNavigationReviewToast({
         tabId: candidate.sourceTabId,
         url: candidate.redirectedUrl,
         source: evaluation.sourceUrl.hostname,
-        target: evaluation.targetDomain
+        target: evaluation.targetDomain,
+        context
       });
     }
     cleanupReverseCandidate(candidate);
@@ -1957,7 +2938,8 @@ var AdsFriendlyBackground = (() => {
       targetUrl: candidate.redirectedUrl,
       sourceTabId: candidate.sourceTabId,
       allowMatchingIntent: true,
-      allowTrustedInitiator: false
+      allowTrustedInitiator: false,
+      context: candidate.context
     });
     if (evaluation.allowedSearch) {
       await showAllowedSearchToast({
@@ -1969,11 +2951,8 @@ var AdsFriendlyBackground = (() => {
     }
     return evaluation.decision === NEW_TAB_DECISIONS.ALLOW;
   }
-  function getRecentSourceUrl(sourceTabId) {
-    const click = runtimeState.lastTrustedClick;
-    if (click.tabId === sourceTabId && click.sourceUrl?.startsWith("http") && Date.now() - click.timestamp < 2e3)
-      return click.sourceUrl;
-    return null;
+  function isCurrentReverseCandidate(candidate) {
+    return reverseCandidatesBySource.get(candidate.sourceTabId) === candidate && reverseCandidatesByClone.get(candidate.cloneTabId) === candidate && navigationAttribution.isCurrent(candidate.context);
   }
   function cleanupReverseCandidate(candidate) {
     if (candidate.reviewTimer) clearTimeout(candidate.reviewTimer);
@@ -1993,89 +2972,51 @@ var AdsFriendlyBackground = (() => {
   function logReversePopunderError(error) {
     console.error("Reverse pop-under guard failed:", error);
   }
-  async function evaluateNavigationPolicy({
-    sourceUrl: sourceValue,
-    targetUrl: targetValue,
-    sourceTabId,
-    allowMatchingIntent = false,
-    allowTrustedInitiator = true,
-    waitForIntent = false
-  }) {
-    const sourceUrl = new URL(sourceValue);
-    const targetUrl = new URL(targetValue);
-    const targetDomain = targetUrl.hostname;
-    const sameSite = sameHostnameOrSubdomain(sourceUrl.hostname, targetDomain) || sameHostnameOrSubdomain(targetDomain, sourceUrl.hostname);
-    const targetClassification = classifyNavigationIntent({
-      intentUrl: targetUrl.href,
-      sourceUrl: sourceUrl.href
-    });
-    const prefilledSearch = targetClassification.reasons.includes(
-      "prefilled_search_navigation"
-    );
-    const trustTarget = prefilledSearch ? PREFILLED_SEARCH_TRUST_TARGET : targetDomain;
-    const [{ whitelist = [], blacklist = [] }, path, trustWindow] = await Promise.all([
-      chrome.storage.local.get(["whitelist", "blacklist"]),
-      getTrustedPath(sourceUrl.hostname, trustTarget),
-      getDynamicTrustWindow(sourceUrl.hostname)
-    ]);
-    if (waitForIntent) await delay(180);
-    const intentClassification = getRecentIntentClassification(
-      sourceTabId,
-      trustWindow
-    );
-    const promotionalIntent = intentClassification.likelyAd;
-    const allowedSearch = prefilledSearch && path?.isManual === true;
-    const matchingIntent = allowMatchingIntent && hasMatchingIntent(sourceTabId, targetDomain, trustWindow);
-    const decision = allowedSearch ? NEW_TAB_DECISIONS.ALLOW : decideNewTabNavigation({
-      sameSite,
-      trustedInitiator: allowTrustedInitiator && isTrustedInitiator(sourceUrl.hostname),
-      trustedTarget: isTrustedTarget(targetDomain),
-      whitelisted: whitelist.includes(targetDomain),
-      blacklisted: isBlacklistedTarget(targetDomain, blacklist),
-      trustedPath: matchingIntent || !!path?.isManual || (path?.visits || 0) >= 3,
-      promotionalIntent,
-      targetLikelyAd: targetClassification.likelyAd
-    });
-    const reviewSurface = decision === NEW_TAB_DECISIONS.VERIFY ? chooseNewTabReviewSurface({
-      promotionalIntent,
-      targetLikelyAd: targetClassification.likelyAd,
-      intentReasons: intentClassification.reasons,
-      targetReasons: targetClassification.reasons
-    }) : null;
-    return {
-      sourceUrl,
-      targetUrl,
-      targetDomain,
-      sameSite,
-      trustTarget,
-      allowedSearch,
-      decision,
-      reviewSurface
-    };
-  }
-  async function evaluateNewTab({ sourceTabId, tabId, url }) {
+  async function evaluateNewTab({ sourceTabId, tabId, url, context }) {
     if (!navigationPolicy?.can(CAPABILITIES.NAVIGATION_GUARD)) return;
     if (!sourceTabId || !tabId || !url || isBlankUrl(url)) return;
-    if (handledTabs.has(tabId) || evaluatingTabs.has(tabId)) return;
-    if (consumeUserOpenedNavigation(url)) {
-      pendingTabs.delete(tabId);
-      handledTabs.set(tabId, Date.now());
-      setTimeout(() => handledTabs.delete(tabId), 15e3);
+    if (!isWebNavigationTarget(url)) return;
+    if (context?.targetUrl !== url) return;
+    if (!navigationAttribution.isCurrent(context) || handledTabs.get(tabId) === context)
       return;
-    }
-    evaluatingTabs.add(tabId);
+    if (evaluatingTabs.get(tabId) === context) return;
+    evaluatingTabs.set(tabId, context);
+    const evaluationEpoch = explicitNavigationEpochs.get(tabId) || 0;
+    const isCurrentEvaluation = () => navigationPolicy && navigationAttribution.isCurrent(context) && (explicitNavigationEpochs.get(tabId) || 0) === evaluationEpoch;
+    const canEnforce = async () => {
+      if (!isCurrentEvaluation()) return false;
+      try {
+        const tab = await chrome.tabs.get(tabId);
+        return isCurrentEvaluation() && (tab.pendingUrl || tab.url) === url;
+      } catch {
+        return false;
+      }
+    };
     let shouldFinalize = false;
     try {
       const sourceTab = await chrome.tabs.get(sourceTabId);
-      const capturedSourceUrl = reverseCandidatesBySource.get(sourceTabId)?.originalUrl || sourceTab?.url;
+      const capturedSourceUrl = context.sourceUrl || context.intent?.sourceUrl || sourceTab?.url;
       if (!capturedSourceUrl?.startsWith("http")) return;
       const evaluation = await evaluateNavigationPolicy({
         sourceUrl: capturedSourceUrl,
         targetUrl: url,
         sourceTabId,
-        waitForIntent: true
+        context
       });
+      if (!isCurrentEvaluation()) return;
       const { sourceUrl, targetDomain, decision, reviewSurface } = evaluation;
+      recordNavigationTrace({
+        type: "policy_decided",
+        tabId,
+        sourceTabId,
+        sourceUrl: sourceUrl.href,
+        targetUrl: url,
+        decision,
+        reviewSurface,
+        reasons: evaluation.reasons,
+        reason: evaluation.attributionReason,
+        ...navigationAttributionFacts(context)
+      });
       if (shouldKeepTrackingNewTab({ sameSite: evaluation.sameSite })) return;
       if (evaluation.allowedSearch) {
         shouldFinalize = true;
@@ -2090,31 +3031,37 @@ var AdsFriendlyBackground = (() => {
         shouldFinalize = true;
         return;
       }
-      if (decision === NEW_TAB_DECISIONS.CLOSE) {
-        shouldFinalize = true;
-        const enforcementPlan = createNavigationEnforcementPlan({
-          sequence: NAVIGATION_SEQUENCES.OPENED_TAB_IS_TARGET,
-          originalTabId: sourceTabId,
-          openedTabId: tabId
-        });
-        await logBlockedNavigationIfAllowed(url, sourceUrl.hostname);
-        await closeTabQuietly(enforcementPlan.closeTabId);
-        return showBlockedNavigationToast({
-          sourceTabId: enforcementPlan.notifyTabId,
-          url,
-          source: sourceUrl.hostname,
-          target: targetDomain
-        });
-      }
       shouldFinalize = true;
-      if (reviewSurface === NEW_TAB_REVIEW_SURFACES.CLOSE) {
+      if (decision === NEW_TAB_DECISIONS.CLOSE || reviewSurface === NEW_TAB_REVIEW_SURFACES.CLOSE) {
         const enforcementPlan = createNavigationEnforcementPlan({
           sequence: NAVIGATION_SEQUENCES.OPENED_TAB_IS_TARGET,
           originalTabId: sourceTabId,
           openedTabId: tabId
         });
-        await logBlockedNavigationIfAllowed(url, sourceUrl.hostname);
-        await closeTabQuietly(enforcementPlan.closeTabId);
+        if (!await canEnforce()) return;
+        recordNavigationTrace({
+          type: "enforcement_requested",
+          tabId: enforcementPlan.closeTabId,
+          sourceTabId: enforcementPlan.notifyTabId,
+          sourceUrl: sourceUrl.href,
+          targetUrl: url,
+          decision,
+          action: "close_tab",
+          reason: decision === NEW_TAB_DECISIONS.CLOSE ? "blacklisted_target" : "review_policy_close",
+          ...navigationAttributionFacts(context)
+        });
+        const outcome = await closeTabQuietly(
+          enforcementPlan.closeTabId,
+          canEnforce
+        );
+        if (!outcome) return;
+        recordNavigationTrace({
+          type: "enforcement_completed",
+          tabId,
+          action: outcome,
+          ...navigationAttributionFacts(context)
+        });
+        void logBlockedNavigationIfAllowed(url, sourceUrl.hostname, context);
         return showBlockedNavigationToast({
           sourceTabId: enforcementPlan.notifyTabId,
           url,
@@ -2123,24 +3070,40 @@ var AdsFriendlyBackground = (() => {
         });
       }
       if (reviewSurface === NEW_TAB_REVIEW_SURFACES.FULL_PAGE) {
-        return redirectToBlockedPage(tabId, url, sourceUrl.hostname);
+        return redirectToBlockedPage(
+          tabId,
+          url,
+          sourceUrl.hostname,
+          canEnforce,
+          context
+        );
       }
+      if (!await canEnforce()) return;
       const toastShown = await showNavigationReviewToast({
         tabId,
         url,
         source: sourceUrl.hostname,
-        target: targetDomain
+        target: targetDomain,
+        context
       });
-      if (toastShown) return;
-      return redirectToBlockedPage(tabId, url, sourceUrl.hostname);
+      if (toastShown || evaluation.mayReplacePage === false) return;
+      return redirectToBlockedPage(
+        tabId,
+        url,
+        sourceUrl.hostname,
+        canEnforce,
+        context
+      );
     } catch (err) {
       console.error("Error evaluating navigation:", err);
     } finally {
-      evaluatingTabs.delete(tabId);
-      if (shouldFinalize) {
+      if (evaluatingTabs.get(tabId) === context) evaluatingTabs.delete(tabId);
+      if (shouldFinalize && isCurrentEvaluation()) {
         pendingTabs.delete(tabId);
-        handledTabs.set(tabId, Date.now());
-        setTimeout(() => handledTabs.delete(tabId), 15e3);
+        handledTabs.set(tabId, context);
+        setTimeout(() => {
+          if (handledTabs.get(tabId) === context) handledTabs.delete(tabId);
+        }, 15e3);
       }
     }
   }
@@ -2156,27 +3119,6 @@ var AdsFriendlyBackground = (() => {
   }
   function showAllowedSearchNavigation(details) {
     return showAllowedSearchToast(details);
-  }
-  function allowUserOpenedNavigation(url) {
-    let normalized;
-    try {
-      normalized = new URL(url).href;
-    } catch {
-      return false;
-    }
-    userOpenedNavigations.set(normalized, Date.now() + 5e3);
-    return true;
-  }
-  function consumeUserOpenedNavigation(url) {
-    let normalized;
-    try {
-      normalized = new URL(url).href;
-    } catch {
-      return false;
-    }
-    const expiresAt = userOpenedNavigations.get(normalized) || 0;
-    userOpenedNavigations.delete(normalized);
-    return expiresAt > Date.now();
   }
   async function showBlockedNavigationToast({
     sourceTabId,
@@ -2206,22 +3148,22 @@ var AdsFriendlyBackground = (() => {
     }, 10500);
     return queueNavigationToast(sourceTabId, notice.message);
   }
-  function hasMatchingIntent(sourceTabId, targetDomain, trustWindow) {
-    const click = runtimeState.lastTrustedClick;
-    if (click.tabId !== sourceTabId) return false;
-    const intent = parseUrl(click.intentUrl);
-    if (isPromotionalIntent(sourceTabId)) return false;
-    const timeSinceClick = Date.now() - click.timestamp;
-    return timeSinceClick >= 0 && timeSinceClick < trustWindow && !!intent && (sameHostnameOrSubdomain(targetDomain, intent.hostname) || sameHostnameOrSubdomain(intent.hostname, targetDomain));
-  }
-  async function showNavigationReviewToast({ tabId, url, source, target }) {
+  async function showNavigationReviewToast({
+    tabId,
+    url,
+    source,
+    target,
+    context
+  }) {
     if (!navigationPolicy?.can(CAPABILITIES.NAVIGATION_FEEDBACK)) return false;
     const message = {
       type: "SHOW_GRAY_NAVIGATION",
       tabId,
       url,
-      source,
-      target
+      // Keep/Block feedback must not create trusted workflows for a guessed source.
+      source: context?.attribution === "confirmed" ? source : "",
+      target,
+      navigationAttribution: navigationAttributionFacts(context)
     };
     return queueNavigationToast(tabId, message);
   }
@@ -2232,8 +3174,8 @@ var AdsFriendlyBackground = (() => {
       delivered: false
     });
     setTimeout(() => {
-      const pending = pendingReviewToasts.get(tabId);
-      if (pending?.message === message) pendingReviewToasts.delete(tabId);
+      const pending2 = pendingReviewToasts.get(tabId);
+      if (pending2?.message === message) pendingReviewToasts.delete(tabId);
     }, 10500);
     for (let attempt = 0; attempt < 6; attempt += 1) {
       if (await deliverPendingNavigationReview(tabId)) {
@@ -2242,7 +3184,9 @@ var AdsFriendlyBackground = (() => {
       }
       if (attempt < 5) await delay(220);
     }
-    return pendingReviewToasts.has(tabId);
+    const pending = pendingReviewToasts.get(tabId);
+    if (pending?.message === message) pendingReviewToasts.delete(tabId);
+    return false;
   }
   async function deliverPendingNavigationReview(tabId) {
     const pending = pendingReviewToasts.get(tabId);
@@ -2260,78 +3204,71 @@ var AdsFriendlyBackground = (() => {
       return false;
     }
   }
-  function isPromotionalIntent(sourceTabId) {
-    return getRecentIntentClassification(sourceTabId).likelyAd;
-  }
-  function getRecentIntentClassification(sourceTabId, windowMs = 2500) {
-    const click = runtimeState.lastTrustedClick;
-    if (click.tabId !== sourceTabId || Date.now() - click.timestamp < 0 || Date.now() - click.timestamp >= windowMs)
-      return { likelyAd: false, reasons: [] };
-    const classification = classifyNavigationIntent({
-      intentUrl: click.intentUrl,
-      sourceUrl: click.sourceUrl,
-      evidence: click.intentKind === "promotional" ? "promo" : ""
-    });
-    const reasons = [
-      .../* @__PURE__ */ new Set([...click.intentReasons || [], ...classification.reasons])
-    ];
-    return {
-      likelyAd: click.intentKind === "promotional" || classification.likelyAd,
-      reasons
-    };
-  }
   function delay(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
-  async function redirectToBlockedPage(tabId, url, source) {
-    await logBlockedNavigationIfAllowed(url, source);
+  async function redirectToBlockedPage(tabId, url, source, shouldContinue = () => true, context) {
+    if (!await shouldContinue()) return false;
+    recordNavigationTrace({
+      type: "enforcement_requested",
+      tabId,
+      sourceUrl: `https://${source}`,
+      targetUrl: url,
+      decision: NEW_TAB_DECISIONS.VERIFY,
+      action: "redirect_to_blocked_page",
+      reason: "review_fallback",
+      ...navigationAttributionFacts(context)
+    });
     await chrome.tabs.update(tabId, {
       url: chrome.runtime.getURL(
         `ui/blocked.html?url=${encodeURIComponent(url)}&source=${encodeURIComponent(source)}`
       )
     });
+    recordNavigationTrace({
+      type: "enforcement_completed",
+      tabId,
+      action: "redirect_to_blocked_page",
+      ...navigationAttributionFacts(context)
+    });
+    void logBlockedNavigationIfAllowed(url, source, context);
+    return true;
   }
-  async function logBlockedNavigationIfAllowed(url, source) {
-    if (navigationPolicy?.can(CAPABILITIES.TELEMETRY_QUEUE)) {
-      await logBlockedNavigation(url, source);
+  async function logBlockedNavigationIfAllowed(url, source, context) {
+    if (!navigationPolicy?.can(CAPABILITIES.TELEMETRY_QUEUE)) return;
+    try {
+      await logBlockedNavigation(
+        url,
+        source,
+        navigationAttributionFacts(context)
+      );
+    } catch (error) {
+      console.debug("Navigation logging unavailable", error);
     }
   }
-  async function closeTabQuietly(tabId) {
+  async function closeTabQuietly(tabId, shouldContinue) {
     try {
       await chrome.tabs.remove(tabId);
+      return "close_tab";
     } catch {
+      if (!await shouldContinue()) return null;
       try {
         await chrome.tabs.update(tabId, { url: "about:blank" });
+        return "blank_tab";
       } catch {
+        return null;
       }
     }
   }
-  function isBlankUrl(url) {
-    return !url || url === "about:blank" || url.startsWith("about:") || url.startsWith("chrome:");
-  }
-  function isTrustedInitiator(hostname) {
-    return hostMatchesAny(hostname, TRUSTED_INITIATORS) || isGoogleHost(hostname);
-  }
-  function isTrustedTarget(hostname) {
-    return hostMatchesAny(hostname, TRUSTED_TARGETS) || isGoogleHost(hostname);
-  }
-  function isBlacklistedTarget(hostname, blacklist = []) {
-    const normalized = hostname.toLowerCase();
-    return blacklist.some((entry) => {
-      const value = String(entry || "").replace(/^\|\|/, "").replace(/\^$/, "").toLowerCase();
-      return normalized === value || normalized.endsWith(`.${value}`);
+  function recordNavigationTrace(event2) {
+    navigationDiagnostics.record(event2).catch(() => {
     });
   }
-  function hostMatchesAny(hostname, domains) {
-    const normalized = hostname.toLowerCase();
-    return domains.some(
-      (domain) => normalized === domain || normalized.endsWith(`.${domain}`)
-    );
+  function triggerNavigationDiagnosticCapture(reason) {
+    navigationDiagnostics.startCapture({ durationMs: 10 * 60 * 1e3, reason }).catch(() => {
+    });
   }
-  function isGoogleHost(hostname) {
-    return /^(.+\.)?google\.(com|[a-z]{2}|com\.[a-z]{2}|co\.[a-z]{2})$/.test(
-      hostname.toLowerCase()
-    );
+  function isBlankUrl(url) {
+    return !url || url === "about:blank" || url.startsWith("about:") || url.startsWith("chrome:");
   }
 
   // src/media/contracts.js
@@ -2453,6 +3390,7 @@ var AdsFriendlyBackground = (() => {
         "streamType"
       ),
       duration: optionalFiniteNumber(value.duration),
+      contentLength: optionalNonNegativeInteger(value.contentLength),
       resolution: normalizeResolution(value.resolution),
       playback: normalizePlaybackState(value.playback),
       bandwidth: optionalPositiveNumber(value.bandwidth),
@@ -3142,6 +4080,7 @@ var AdsFriendlyBackground = (() => {
     mimeType = null,
     title = null,
     duration = null,
+    contentLength = null,
     resolution = null,
     playback = null,
     detectedBy = MEDIA_DETECTION_SOURCES.DOM
@@ -3159,6 +4098,7 @@ var AdsFriendlyBackground = (() => {
       title,
       mimeType,
       duration,
+      contentLength: kind === MEDIA_KINDS.DIRECT ? contentLength : null,
       resolution,
       playback,
       detectedBy,
@@ -3799,6 +4739,7 @@ var AdsFriendlyBackground = (() => {
           ...adaptiveTracks || {},
           acquisitionDiagnostic: candidate.acquisitionDiagnostic || existing?.acquisitionDiagnostic || null,
           duration: candidate.duration ?? existing?.duration ?? null,
+          contentLength: candidate.contentLength ?? existing?.contentLength ?? null,
           resolution: candidate.resolution ?? existing?.resolution ?? null,
           playback: candidate.playback || existing?.playback || null,
           requestContexts: mergeRequestContexts(
@@ -4578,6 +5519,7 @@ var AdsFriendlyBackground = (() => {
   var catalog = createMediaCatalog();
   var PLAYBACK_CHECKPOINT_INTERVAL_MS = 1e4;
   var playbackCheckpointTimers = /* @__PURE__ */ new Map();
+  var preferredMedia = /* @__PURE__ */ new Map();
   var active = false;
   async function startBackgroundMediaCatalog() {
     await hydrateCatalog().catch(() => {
@@ -4600,6 +5542,7 @@ var AdsFriendlyBackground = (() => {
       for (const timer of playbackCheckpointTimers.values()) clearTimeout(timer);
       playbackCheckpointTimers.clear();
       catalog.clearAll();
+      preferredMedia.clear();
       chrome.tabs.onRemoved.removeListener(onRemoved);
       chrome.tabs.onUpdated.removeListener(onUpdated);
       await clearSessionCatalog().catch(() => {
@@ -4660,7 +5603,18 @@ var AdsFriendlyBackground = (() => {
   }
   async function listDiscoveredMedia(tabId, pageUrl = null) {
     if (!active) return { status: "catalog_disabled", items: [] };
-    return { status: "ok", items: catalog.list(tabId, pageUrl) };
+    return {
+      status: "ok",
+      items: catalog.list(tabId, pageUrl),
+      preferredMediaId: preferredMedia.get(tabId) || null
+    };
+  }
+  async function preferDiscoveredMedia(tabId, mediaId) {
+    if (!active) return { status: "catalog_disabled" };
+    preferredMedia.set(tabId, mediaId);
+    await persistTab(tabId).catch(() => {
+    });
+    return { status: "selected" };
   }
   async function listMediaPlaybackSessions(tabId, pageUrl = null) {
     if (!active) return { status: "catalog_disabled", sessions: [] };
@@ -4676,6 +5630,8 @@ var AdsFriendlyBackground = (() => {
       if (!items.length && !sessions.length) continue;
       const tabId = Number(key.slice(MEDIA_CATALOG_SESSION_PREFIX.length));
       if (!Number.isInteger(tabId)) continue;
+      if (typeof stored?.preferredMediaId === "string")
+        preferredMedia.set(tabId, stored.preferredMediaId);
       for (const item of items) {
         if (item.kind === "direct" && isLikelyMediaSegment(item.sourceUrl, item.mimeType))
           continue;
@@ -4776,7 +5732,12 @@ var AdsFriendlyBackground = (() => {
     if (!storage) return;
     const snapshot = catalog.snapshot(tabId);
     if (snapshot)
-      await storage.set({ [mediaCatalogSessionKey(tabId)]: snapshot });
+      await storage.set({
+        [mediaCatalogSessionKey(tabId)]: {
+          ...snapshot,
+          preferredMediaId: preferredMedia.get(tabId) || null
+        }
+      });
   }
   function schedulePlaybackCheckpoint(tabId) {
     if (playbackCheckpointTimers.has(tabId)) return;
@@ -4798,6 +5759,7 @@ var AdsFriendlyBackground = (() => {
     if (timer) clearTimeout(timer);
     playbackCheckpointTimers.delete(tabId);
     catalog.clear(tabId);
+    preferredMedia.delete(tabId);
     if (chrome.storage.session)
       await chrome.storage.session.remove(mediaCatalogSessionKey(tabId));
   }
@@ -4827,6 +5789,7 @@ var AdsFriendlyBackground = (() => {
     MEDIA_DOWNLOAD_CANCEL: "media.download.cancel",
     MEDIA_DOWNLOAD_CREATE: "media.download.create",
     MEDIA_DOWNLOAD_PREFLIGHT: "media.download.preflight",
+    MEDIA_DOWNLOAD_LOOKUP: "media.download.lookup",
     MEDIA_OUTPUT_CANARY: "media.output.canary",
     MEDIA_OUTPUT_CAPTURE_START: "media.output.capture.start",
     MEDIA_DOWNLOAD_PAUSE: "media.download.pause",
@@ -4859,6 +5822,7 @@ var AdsFriendlyBackground = (() => {
       "background.media-download-jobs",
       C3.MEDIA_NATIVE_DOWNLOAD
     ),
+    [A.MEDIA_DOWNLOAD_LOOKUP]: action(A.MEDIA_DOWNLOAD_LOOKUP, "background.media-download-jobs", C3.MEDIA_DOWNLOAD),
     [A.MEDIA_OUTPUT_CANARY]: action(
       A.MEDIA_OUTPUT_CANARY,
       "background.media-download-jobs",
@@ -5093,6 +6057,65 @@ var AdsFriendlyBackground = (() => {
     "ti\u1EBFng nh\u1EADt": "Japanese",
     "ti\u1EBFng h\xE0n": "Korean"
   });
+  function formatAudioLanguageLabel({
+    language = null,
+    name = null,
+    role = null,
+    isDefault = false
+  } = {}) {
+    const locale = normalizedLocale(language);
+    const baseName = englishLanguageName(locale?.language) || normalizedSourceName(name);
+    const region = normalizedRegion(
+      locale?.region || regionFromName(name),
+      locale?.language
+    );
+    const effectiveRole = role || roleFromName(name);
+    const qualifiers = [region, ROLE_LABELS[effectiveRole]].filter(Boolean);
+    const identity = baseName || (isDefault ? "Default Audio" : "Audio");
+    return qualifiers.length ? `${identity} (${qualifiers.join(", ")})` : identity;
+  }
+  function normalizedLocale(value) {
+    if (typeof value !== "string" || !value.trim()) return null;
+    try {
+      return new Intl.Locale(value.replace(/_/g, "-"));
+    } catch {
+      return null;
+    }
+  }
+  function englishLanguageName(value) {
+    if (!value) return null;
+    try {
+      return new Intl.DisplayNames(["en"], { type: "language" }).of(value);
+    } catch {
+      return null;
+    }
+  }
+  function normalizedSourceName(value) {
+    if (typeof value !== "string" || !value.trim()) return null;
+    const withoutQualifiers = value.replace(/\s*\([^)]*\)\s*$/u, "").trim();
+    return LOCALIZED_LANGUAGE_NAMES[withoutQualifiers.toLowerCase()] || withoutQualifiers;
+  }
+  function regionFromName(value) {
+    if (typeof value !== "string") return null;
+    return value.match(/\((US|UK|GB|United States|United Kingdom)\b/i)?.[1] || null;
+  }
+  function normalizedRegion(value, language) {
+    if (!value) return null;
+    const region = String(value).toUpperCase();
+    if (language === "vi" && region === "VN" || language === "zh" && region === "CN" || language === "ja" && region === "JP" || language === "ko" && region === "KR")
+      return null;
+    if (region === "UNITED STATES") return "US";
+    if (region === "UNITED KINGDOM") return "UK";
+    return region === "GB" ? "UK" : region;
+  }
+  function roleFromName(value) {
+    if (typeof value !== "string") return null;
+    const qualifier = value.match(/\(([^)]*)\)\s*$/u)?.[1]?.toLowerCase() || "";
+    if (/\boriginal\b/.test(qualifier)) return "original";
+    if (/\bauto[- ]?dubbed\b/.test(qualifier)) return "auto_dubbed";
+    if (/\bdubbed\b/.test(qualifier)) return "dubbed";
+    return null;
+  }
 
   // src/media/download-options.js
   var MEDIA_OUTPUT_CONTAINERS = Object.freeze({
@@ -5179,6 +6202,39 @@ var AdsFriendlyBackground = (() => {
     }
     return normalized;
   }
+  function getMediaAudioTrackOptions(candidate = {}) {
+    if (candidate.kind !== "adaptive") return [];
+    return uniqueObjects(candidate.audioTracks || []).filter((track) => isAcquirableAdaptiveTrack(candidate, track)).sort(compareAudioPreference).map(
+      (track) => Object.freeze({
+        id: track.id,
+        label: audioTrackLabel(track),
+        language: track.language || null,
+        role: track.audioRole || null,
+        isOriginal: track.audioRole === "original",
+        isDefault: track.audioIsDefault === true,
+        estimatedBytes: positiveInteger(track.contentLength)
+      })
+    );
+  }
+  function getMediaVideoQualityOptions(candidate = {}) {
+    if (candidate.kind !== "adaptive") return [];
+    const hasSeparateAudio = (candidate.audioTracks || []).some(
+      (track) => isAcquirableAdaptiveTrack(candidate, track)
+    );
+    return uniqueObjects(candidate.variants || []).filter(
+      (track) => isAcquirableAdaptiveTrack(candidate, track) && (track.muxed === true || hasSeparateAudio)
+    ).sort(compareVideoQuality).map(
+      (track) => Object.freeze({
+        id: track.id,
+        label: videoQualityLabel(track),
+        groupLabel: videoQualityGroupLabel(track),
+        optionLabel: videoQualityOptionLabel(track),
+        height: positiveInteger(track.resolution?.height || track.height),
+        muxed: track.muxed === true,
+        estimatedBytes: positiveInteger(track.contentLength)
+      })
+    );
+  }
   function normalizeVideoTrackId(value, candidate) {
     if (candidate.kind !== "adaptive") return null;
     if (value === null || value === void 0 || value === "") return null;
@@ -5206,6 +6262,48 @@ var AdsFriendlyBackground = (() => {
       );
     return value;
   }
+  function compareVideoQuality(left, right) {
+    return (right.resolution?.height || right.height || 0) - (left.resolution?.height || left.height || 0) || qualityFps(right) - qualityFps(left) || videoCompatibilityScore(right) - videoCompatibilityScore(left) || (right.averageBandwidth || right.bandwidth || 0) - (left.averageBandwidth || left.bandwidth || 0);
+  }
+  function videoQualityLabel(track) {
+    return [videoQualityGroupLabel(track), videoQualityOptionLabel(track)].filter(Boolean).join(" \xB7 ");
+  }
+  function videoQualityGroupLabel(track) {
+    const quality = track.qualityLabel || (track.resolution?.height || track.height ? `${track.resolution?.height || track.height}p` : "Source quality");
+    return quality;
+  }
+  function videoQualityOptionLabel(track) {
+    const format = String(track.mimeType || "").includes("webm") ? "WebM" : String(track.mimeType || "").includes("mp4") ? "MP4" : null;
+    const codec = codecLabel(track.codecs);
+    return [format, codec, track.muxed === true ? "audio included" : null].filter(Boolean).join(" \xB7 ");
+  }
+  function qualityFps(track) {
+    const explicit = positiveInteger(track.fps);
+    if (explicit) return explicit;
+    return positiveInteger(String(track.qualityLabel || "").match(/p(\d+)$/i)?.[1]) || 0;
+  }
+  function videoCompatibilityScore(track) {
+    const mime = String(track.mimeType || "").toLowerCase();
+    const codec = String(track.codecs || "").toLowerCase();
+    if (mime.includes("mp4") && (codec.includes("avc1") || codec.includes("avc3")))
+      return 40;
+    if (mime.includes("mp4") && codec.includes("av01")) return 30;
+    if (mime.includes("webm") && (codec.includes("vp9") || codec.includes("vp09")))
+      return 20;
+    if (mime.includes("mp4")) return 10;
+    return 0;
+  }
+  function codecLabel(value) {
+    const codec = String(value || "").toLowerCase();
+    if (codec.includes("avc1") || codec.includes("avc3")) return "H.264";
+    if (codec.includes("av01")) return "AV1";
+    if (codec.includes("vp9") || codec.includes("vp09")) return "VP9";
+    if (codec.includes("hev1") || codec.includes("hvc1")) return "HEVC";
+    if (codec.includes("mp4a") || codec.includes("aac")) return "AAC";
+    if (codec.includes("opus")) return "Opus";
+    if (codec.includes("vorbis")) return "Vorbis";
+    return null;
+  }
   function classifyDirectMediaContainer(candidate = {}) {
     const mime = String(candidate.mimeType || "").split(";", 1)[0].trim().toLowerCase();
     const byMime = {
@@ -5225,6 +6323,82 @@ var AdsFriendlyBackground = (() => {
     } catch {
       return null;
     }
+  }
+  function compareAudioPreference(left, right) {
+    return audioRoleScore(right) - audioRoleScore(left) || Number(right.audioIsDefault === true) - Number(left.audioIsDefault === true) || Number(left.isDrc === true) - Number(right.isDrc === true) || compareBandwidth(left, right) || mp4AudioScore(right) - mp4AudioScore(left);
+  }
+  function audioRoleScore(track) {
+    return {
+      original: 50,
+      secondary: 30,
+      dubbed: 20,
+      auto_dubbed: 10,
+      descriptive: 5
+    }[track.audioRole] || 25;
+  }
+  function audioTrackLabel(track) {
+    const language = formatAudioLanguageLabel({
+      language: track.language,
+      name: track.audioTrackName,
+      role: track.audioRole,
+      isDefault: track.audioIsDefault === true
+    });
+    const codec = codecLabel(track.codecs);
+    const bitrate = audioBitrateLabel(
+      firstPositiveNumber(track.averageBandwidth, track.bandwidth)
+    );
+    return [
+      language,
+      bitrate,
+      codec,
+      audioChannelsLabel(track.audioChannels),
+      audioSampleRateLabel(track.audioSampleRate),
+      track.isDrc ? "DRC" : null
+    ].filter(Boolean).join(" \xB7 ");
+  }
+  function audioBitrateLabel(value) {
+    const bitrate = positiveInteger(value);
+    return bitrate ? `${Math.round(bitrate / 1e3)} kbps` : null;
+  }
+  function audioChannelsLabel(value) {
+    const channels = positiveInteger(value);
+    if (channels === 1) return "Mono";
+    if (channels === 2) return "Stereo";
+    return channels ? `${channels} channels` : null;
+  }
+  function audioSampleRateLabel(value) {
+    const rate = positiveInteger(value);
+    if (!rate) return null;
+    const khz = rate / 1e3;
+    return `${Number.isInteger(khz) ? khz : khz.toFixed(1)} kHz`;
+  }
+  function mp4AudioScore(track) {
+    return /\/(?:mp4|m4a)(?:$|;)/i.test(track.mimeType || "") ? 1 : 0;
+  }
+  function compareBandwidth(left, right) {
+    return (firstPositiveNumber(right.averageBandwidth, right.bandwidth) || 0) - (firstPositiveNumber(left.averageBandwidth, left.bandwidth) || 0) || (right.resolution?.height || 0) - (left.resolution?.height || 0);
+  }
+  function uniqueObjects(items) {
+    const unique = /* @__PURE__ */ new Map();
+    for (const item of items) {
+      if (!item || typeof item !== "object") continue;
+      unique.set(
+        item.id || `${item.url || ""}:${item.bandwidth || ""}:${item.resolution?.height || ""}`,
+        item
+      );
+    }
+    return [...unique.values()];
+  }
+  function firstPositiveNumber(...values) {
+    for (const value of values) {
+      const number = Number(value);
+      if (Number.isFinite(number) && number > 0) return number;
+    }
+    return null;
+  }
+  function positiveInteger(value) {
+    const number = Number(value);
+    return Number.isSafeInteger(number) && number > 0 ? number : null;
   }
 
   // src/media/protection-policy.js
@@ -5781,7 +6955,8 @@ var AdsFriendlyBackground = (() => {
     DOWNLOAD_START: "download.start",
     DOWNLOAD_CANCEL: "download.cancel",
     OUTPUT_OPEN: "output.open",
-    OUTPUT_REVEAL: "output.reveal"
+    OUTPUT_REVEAL: "output.reveal",
+    OUTPUT_STAT: "output.stat"
   });
   var MEDIA_HELPER_EVENTS = Object.freeze({
     READY: "helper.ready",
@@ -5795,6 +6970,7 @@ var AdsFriendlyBackground = (() => {
     DOWNLOAD_COMPLETED: "download.completed",
     DOWNLOAD_CANCELLED: "download.cancelled",
     OUTPUT_OPENED: "output.opened",
+    OUTPUT_STAT: "output.stat",
     ERROR: "helper.error"
   });
   var MEDIA_HELPER_CAPABILITIES = Object.freeze({
@@ -5812,7 +6988,8 @@ var AdsFriendlyBackground = (() => {
     PLAYER_OUTPUT_CAPTURE: "capture.player_output",
     FFMPEG_MUX: "mux.ffmpeg",
     OUTPUT_OPEN: "output.open",
-    OUTPUT_REVEAL: "output.reveal"
+    OUTPUT_REVEAL: "output.reveal",
+    OUTPUT_STAT: "output.stat"
   });
   function normalizeHelperEvent(value = {}) {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -5839,6 +7016,915 @@ var AdsFriendlyBackground = (() => {
       throw new Error("[MediaHelperProtocol] Invalid protocol version.");
     }
     return version;
+  }
+
+  // src/media/resolution-diagnostics.js
+  var MEDIA_RESOLUTION_STAGES = Object.freeze({
+    NETWORK_OBSERVATION: "network_observation",
+    MANIFEST_PROBE: "manifest_probe",
+    CHILD_DISCOVERY: "child_discovery",
+    CHILD_PROBE: "child_probe",
+    SOURCE_MATCHING: "source_matching",
+    PLAYER_DECRYPTION: "player_decryption",
+    PLAYER_SEGMENT_RESOLUTION: "player_segment_resolution",
+    DOWNLOAD_READY: "download_ready",
+    PLAYBACK_ONLY: "playback_only"
+  });
+  var MEDIA_RESOLUTION_DIAGNOSTIC_STATES = Object.freeze({
+    WAITING: "waiting",
+    FAILED: "failed",
+    UNHANDLED: "unhandled",
+    READY: "ready",
+    BLOCKED: "blocked"
+  });
+  var S2 = MEDIA_RESOLUTION_STAGES;
+  var D = MEDIA_RESOLUTION_DIAGNOSTIC_STATES;
+  var MEDIA_RESOLUTION_STAGE_CATALOG = Object.freeze({
+    [S2.NETWORK_OBSERVATION]: stage("Browser media request", "Catalog candidate"),
+    [S2.MANIFEST_PROBE]: stage("Manifest candidate", "Parsed manifest"),
+    [S2.CHILD_DISCOVERY]: stage(
+      "Master or playback request",
+      "Observed child playlist"
+    ),
+    [S2.CHILD_PROBE]: stage("Observed child playlist", "Playable child stream"),
+    [S2.SOURCE_MATCHING]: stage(
+      "Playable child stream + player context",
+      "Selected media source"
+    ),
+    [S2.PLAYER_DECRYPTION]: stage(
+      "Encrypted manifest + player Blob",
+      "Parsed plaintext manifest"
+    ),
+    [S2.PLAYER_SEGMENT_RESOLUTION]: stage(
+      "SAMPLE-AES candidate + player playback",
+      "Resolved media segment sequence"
+    ),
+    [S2.DOWNLOAD_READY]: stage("Selected media source", "Download plan input"),
+    [S2.PLAYBACK_ONLY]: stage("Protected media metadata", "Playback-only result")
+  });
+  function diagnoseMediaResolution(item, items = []) {
+    const byId = new Map(items.map((candidate) => [candidate.id, candidate]));
+    const target = item.kind === "blob" && item.selectedMediaId ? byId.get(item.selectedMediaId) || item.resolvedStream || item : item;
+    if (target.kind === "direct")
+      return diagnostic(S2.DOWNLOAD_READY, D.READY, "direct_ready", {
+        message: "Download ready \xB7 direct media"
+      });
+    if (target.kind === "blob")
+      return diagnostic(S2.NETWORK_OBSERVATION, D.WAITING, "blob_source_missing", {
+        message: "Network observation \xB7 Blob found \xB7 source request missing"
+      });
+    if (!["hls", "dash"].includes(target.kind))
+      return diagnostic(S2.NETWORK_OBSERVATION, D.UNHANDLED, "media_unhandled", {
+        message: "Network observation \xB7 media type not handled"
+      });
+    if (hasStrongDrmEvidence(target))
+      return diagnostic(S2.PLAYBACK_ONLY, D.BLOCKED, "drm_playback_only", {
+        message: "Playback only \xB7 DRM protected"
+      });
+    if (hasUnsupportedHlsKeyFormat(target))
+      return diagnostic(
+        S2.PLAYBACK_ONLY,
+        D.BLOCKED,
+        "custom_hls_protection_playback_only",
+        { message: "Playback only \xB7 custom HLS protection" }
+      );
+    if (target.probeStatus === "ready" && isWeakSampleAesSignal(target) && !isFfmpegCompatibleSampleAes(target))
+      return diagnostic(
+        S2.PLAYER_SEGMENT_RESOLUTION,
+        D.WAITING,
+        "sample_aes_player_segments_pending",
+        {
+          message: "Player URL resolution \xB7 waiting for resolved media segments"
+        }
+      );
+    if (target.kind === "dash") return diagnoseDash(target);
+    if (target.probeSource === "decrypted_blob" && !(Number(target.manifestHandoff?.expiresAt) > Date.now()))
+      return diagnostic(
+        S2.PLAYER_DECRYPTION,
+        D.UNHANDLED,
+        "decrypted_manifest_handoff_pending",
+        {
+          message: "Player decryption \xB7 manifest parsed \xB7 download handoff pending"
+        }
+      );
+    if (target.resolutionStatus === "resolved" || target.probeStatus === "ready" && target.playlistType === "media" && target.streamType === "vod" && target.segmentCount > 0)
+      return diagnostic(S2.DOWNLOAD_READY, D.READY, "hls_ready", {
+        message: "Download ready \xB7 HLS VOD resolved"
+      });
+    if (target.probeStatus === "unsupported")
+      return diagnostic(
+        S2.MANIFEST_PROBE,
+        D.UNHANDLED,
+        "hls_manifest_unsupported",
+        { message: "Manifest probe \xB7 HLS format not handled" }
+      );
+    const latestTargetProbe = latestProbeDiagnostic([target]);
+    if (latestTargetProbe?.code?.startsWith("contextual_probe_")) {
+      const described2 = describeProbeDiagnostic(latestTargetProbe);
+      return diagnostic(S2.MANIFEST_PROBE, described2.status, described2.code, {
+        probeDiagnostic: latestTargetProbe,
+        message: `Manifest probe \xB7 ${described2.message}`
+      });
+    }
+    const children = findObservedChildren(target, items);
+    const readyChildren = children.filter(isUsableChild);
+    const failedChildren = children.filter(
+      (candidate) => candidate.probeStatus === "failed"
+    );
+    const facts = {
+      observedChildCount: children.length,
+      readyChildCount: readyChildren.length,
+      failedChildCount: failedChildren.length,
+      masterProbeStatus: target.probeStatus || "discovered",
+      masterProbeError: target.probeError || null
+    };
+    if (!children.length) {
+      const masterFailure = formatProbeFailure(target);
+      if (target.probeStatus !== "failed" && target.playlistType !== "master") {
+        return diagnostic(S2.MANIFEST_PROBE, D.WAITING, "hls_probe_pending", {
+          ...facts,
+          message: "Manifest probe \xB7 HLS response not parsed yet"
+        });
+      }
+      return diagnostic(
+        S2.CHILD_DISCOVERY,
+        target.probeStatus === "failed" ? D.FAILED : D.WAITING,
+        target.probeStatus === "failed" ? "master_failed_child_not_observed" : "child_request_not_observed",
+        {
+          ...facts,
+          message: `Child discovery \xB7 0 child playlists${masterFailure ? ` \xB7 ${masterFailure}` : ""}`
+        }
+      );
+    }
+    if (readyChildren.length && !target.selectedMediaId) {
+      return diagnostic(S2.SOURCE_MATCHING, D.WAITING, "child_ready_not_matched", {
+        ...facts,
+        message: `Source matching \xB7 ${readyChildren.length} child ready \xB7 not linked to player`
+      });
+    }
+    const latestChildProbe = latestProbeDiagnostic(children);
+    if (latestChildProbe) {
+      const described2 = describeProbeDiagnostic(latestChildProbe);
+      return diagnostic(S2.CHILD_PROBE, described2.status, described2.code, {
+        ...facts,
+        probeDiagnostic: latestChildProbe,
+        message: `Child probe \xB7 ${described2.message}`
+      });
+    }
+    if (failedChildren.length === children.length) {
+      return diagnostic(S2.CHILD_PROBE, D.FAILED, "child_probe_failed", {
+        ...facts,
+        message: `Child probe \xB7 ${failedChildren.length} failed \xB7 ${formatProbeFailure(failedChildren[0]) || "request rejected"}`
+      });
+    }
+    return diagnostic(S2.CHILD_PROBE, D.WAITING, "child_observed_probe_pending", {
+      ...facts,
+      message: `Child probe \xB7 ${children.length} observed \xB7 manifest not parsed`
+    });
+  }
+  function diagnoseDash(item) {
+    if (item.probeStatus === "failed")
+      return diagnostic(S2.MANIFEST_PROBE, D.FAILED, "dash_probe_failed", {
+        message: `Manifest probe \xB7 DASH failed${item.probeError ? ` \xB7 ${item.probeError}` : ""}`
+      });
+    if (item.probeStatus !== "ready")
+      return diagnostic(S2.MANIFEST_PROBE, D.WAITING, "dash_probe_pending", {
+        message: "Manifest probe \xB7 DASH tracks not parsed"
+      });
+    return diagnostic(S2.DOWNLOAD_READY, D.READY, "dash_ready", {
+      message: "Download ready \xB7 DASH tracks resolved"
+    });
+  }
+  function findObservedChildren(parent, items) {
+    const explicitIds = new Set(parent.childManifestIds || []);
+    return items.filter((candidate) => {
+      if (candidate.kind !== "hls" || candidate.id === parent.id) return false;
+      if (explicitIds.has(candidate.id) || candidate.parentManifestIds?.includes(parent.id))
+        return true;
+      if (!sameFrame2(parent, candidate)) return false;
+      const parentAt = parent.firstSeenAt || parent.lastSeenAt;
+      const childAt = candidate.firstSeenAt || candidate.lastSeenAt;
+      return Number.isFinite(parentAt) && Number.isFinite(childAt) && Math.abs(parentAt - childAt) <= 6e4;
+    });
+  }
+  function isUsableChild(item) {
+    return item.probeStatus === "ready" && item.playlistType === "media" && ["vod", "live"].includes(item.streamType) && (item.segmentCount > 0 || item.partialSegmentCount > 0);
+  }
+  function sameFrame2(left, right) {
+    return Number.isInteger(left.frameId) && Number.isInteger(right.frameId) && left.frameId === right.frameId;
+  }
+  function formatProbeFailure(item) {
+    if (item.probeError === "manifest_http_403") return "master probe 403";
+    if (item.probeError === "fallback_fetch_blocked")
+      return "probe blocked by page/CORS";
+    if (item.probeStatus === "failed") return "manifest probe failed";
+    return null;
+  }
+  function latestProbeDiagnostic(items) {
+    return items.flatMap((item) => item.probeDiagnostics || [item.probeDiagnostic]).filter(Boolean).sort((left, right) => (right.observedAt || 0) - (left.observedAt || 0))[0];
+  }
+  function describeProbeDiagnostic(diagnostic2) {
+    const code = diagnostic2.code || "probe_status_unknown";
+    if (code === "iframe_probe_scheduled")
+      return described(D.WAITING, code, "scheduled in player frame");
+    if (code === "manifest_fetch_dispatched")
+      return described(D.WAITING, code, "request sent \xB7 waiting for response");
+    if (code === "contextual_probe_prepared")
+      return described(
+        D.WAITING,
+        code,
+        "Referer/Origin prepared \xB7 retry starting"
+      );
+    if (code === "contextual_manifest_fetch_dispatched")
+      return described(
+        D.WAITING,
+        code,
+        "contextual request sent \xB7 waiting for response"
+      );
+    if (code.startsWith("contextual_probe_"))
+      return described(
+        D.FAILED,
+        code,
+        `context setup failed \xB7 ${code.slice("contextual_probe_".length)}`
+      );
+    if (code === "content_duplicate")
+      return described(D.WAITING, code, "duplicate schedule skipped");
+    if (code === "probe_gate_duplicate")
+      return described(D.WAITING, code, "probe already in progress or completed");
+    if (code === "manifest_probe_timeout")
+      return described(D.FAILED, code, "timed out after 10s");
+    if (/^manifest_http_\d+$/.test(code))
+      return described(
+        D.FAILED,
+        code,
+        `HTTP ${diagnostic2.httpStatus || code.split("_").at(-1)}`
+      );
+    if (code === "fallback_fetch_blocked")
+      return described(D.FAILED, code, "request blocked by page/CORS");
+    if (code === "manifest_body_received")
+      return described(
+        D.WAITING,
+        code,
+        `${formatBodySize(diagnostic2.bodyBytes)} body received \xB7 ${diagnostic2.bodyFormat || "unknown"} format \xB7 parser pending`
+      );
+    if (code === "manifest_parsed_zero_segments")
+      return described(
+        D.UNHANDLED,
+        code,
+        `${formatBodySize(diagnostic2.bodyBytes)} ${diagnostic2.bodyFormat || "unknown"} parsed \xB7 0 segments`
+      );
+    if (code === "manifest_parsed_no_stream")
+      return described(
+        D.UNHANDLED,
+        code,
+        `${formatBodySize(diagnostic2.bodyBytes)} body parsed \xB7 no playable stream`
+      );
+    if (code === "manifest_unsupported")
+      return described(D.UNHANDLED, code, "body received \xB7 format unsupported");
+    if (code === "manifest_parsed")
+      return described(
+        D.WAITING,
+        code,
+        `${diagnostic2.playlistType || "manifest"} parsed \xB7 ${diagnostic2.segmentCount || 0} segments \xB7 matching pending`
+      );
+    if (code === "decrypted_manifest_blob_observed")
+      return described(
+        D.WAITING,
+        code,
+        `player decrypted ${diagnostic2.bodyFormat || "manifest"} \xB7 parser pending`
+      );
+    if (code === "decrypted_manifest_parsed")
+      return described(
+        D.READY,
+        code,
+        `player-decrypted ${diagnostic2.playlistType || "manifest"} parsed \xB7 ${diagnostic2.segmentCount || 0} segments`
+      );
+    if (code === "decrypted_manifest_zero_segments")
+      return described(
+        D.UNHANDLED,
+        code,
+        "player-decrypted manifest \xB7 0 segments"
+      );
+    if (code === "decrypted_manifest_no_stream")
+      return described(
+        D.UNHANDLED,
+        code,
+        "player-decrypted manifest \xB7 no playable stream"
+      );
+    if (code === "decrypted_manifest_unsupported")
+      return described(D.UNHANDLED, code, "player-decrypted format unsupported");
+    if (code === "decrypted_manifest_parse_failed")
+      return described(D.FAILED, code, "player-decrypted manifest parse failed");
+    return described(
+      diagnostic2.phase === "failed" ? D.FAILED : D.WAITING,
+      code,
+      code.replaceAll("_", " ")
+    );
+  }
+  function described(status, code, message) {
+    return { status, code, message };
+  }
+  function formatBodySize(bytes) {
+    if (!Number.isFinite(bytes)) return "Unknown-size";
+    if (bytes < 1024) return `${bytes} B`;
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+  function diagnostic(stage2, status, code, facts = {}) {
+    const contract = MEDIA_RESOLUTION_STAGE_CATALOG[stage2];
+    return Object.freeze({
+      stage: stage2,
+      status,
+      code,
+      input: contract.input,
+      output: contract.output,
+      ...facts
+    });
+  }
+  function stage(input, output) {
+    return Object.freeze({ input, output });
+  }
+
+  // src/media/catalog-view.js
+  function selectVisibleMediaItems(items = [], maximum = 8) {
+    const diagnosedItems = items.map((item) => ({
+      ...item,
+      resolutionDiagnostic: diagnoseMediaResolution(item, items)
+    }));
+    const displayItems = prioritizeFacebookPlayback(
+      groupFacebookDirectRepresentations(diagnosedItems)
+    );
+    const blobResolvedSourceIds = new Set(
+      diagnosedItems.filter((item) => item.kind === "blob" && item.selectedMediaId).flatMap((item) => [
+        item.selectedMediaId,
+        ...item.resolvedMediaIds || [],
+        ...item.blobTrace?.candidateIds || []
+      ]).filter(Boolean)
+    );
+    for (const blob of diagnosedItems.filter(
+      (item) => item.kind === "blob" && item.selectedMediaId
+    )) {
+      for (const source of diagnosedItems) {
+        if (source.kind !== "blob" && samePlaybackFrame(blob, source) && (source.selectedMediaId === blob.selectedMediaId || source.resolvedMediaIds?.includes(blob.selectedMediaId) || (blob.resolvedMediaIds || []).some(
+          (id) => source.resolvedMediaIds?.includes(id)
+        ))) {
+          blobResolvedSourceIds.add(source.id);
+        }
+      }
+    }
+    const sorted = [...displayItems].sort(
+      (left, right) => playbackPriority(right) - playbackPriority(left) || (right.firstSeenAt || 0) - (left.firstSeenAt || 0) || String(left.id || "").localeCompare(String(right.id || ""))
+    );
+    const visible = [];
+    const adaptivePages = new Set(
+      displayItems.filter((item) => item.kind === "adaptive").map((item) => item.pageUrl)
+    );
+    const blobGroups = /* @__PURE__ */ new Map();
+    const directGroups = /* @__PURE__ */ new Map();
+    const resolvedBlobGroupKeys = resolvedBlobGroupKeysByPage(diagnosedItems);
+    for (const item of sorted) {
+      if (item.kind === "blob" && adaptivePages.has(item.pageUrl)) continue;
+      if (item.kind !== "blob" && blobResolvedSourceIds.has(item.id)) continue;
+      if (item.kind === "hls" && item.parentManifestIds?.length) continue;
+      if (item.kind === "direct") {
+        const key2 = directMediaGroupKey(item);
+        const existing2 = directGroups.get(key2);
+        if (existing2) {
+          existing2.relatedCount += 1;
+          continue;
+        }
+        const grouped2 = { ...item, relatedCount: 1 };
+        directGroups.set(key2, grouped2);
+        visible.push(grouped2);
+        continue;
+      }
+      if (item.kind !== "blob") {
+        visible.push(item);
+        continue;
+      }
+      const key = blobGroupKey(item, resolvedBlobGroupKeys);
+      const existing = blobGroups.get(key);
+      if (existing) {
+        existing.relatedCount += 1;
+        if (item.selectedMediaId && !existing.selectedMediaId) {
+          const resolved = { ...item, relatedCount: existing.relatedCount };
+          blobGroups.set(key, resolved);
+          const visibleIndex = visible.indexOf(existing);
+          if (visibleIndex >= 0) visible[visibleIndex] = resolved;
+        }
+        continue;
+      }
+      const grouped = { ...item, relatedCount: 1 };
+      blobGroups.set(key, grouped);
+      visible.push(grouped);
+    }
+    return visible.slice(0, maximum);
+  }
+  function playbackPriority(item) {
+    if (item.playback?.playing === true) return 2;
+    if (item.playback?.visible === true) return 1;
+    return 0;
+  }
+  function groupFacebookDirectRepresentations(items) {
+    const groups = /* @__PURE__ */ new Map();
+    for (const item of items) {
+      if (item.kind !== "direct") continue;
+      const key = facebookMediaAssetKey(item);
+      if (!key) continue;
+      const group = groups.get(key) || [];
+      group.push(item);
+      groups.set(key, group);
+    }
+    const consumed = /* @__PURE__ */ new Set();
+    const synthetic = [];
+    for (const [key, group] of groups) {
+      if (group.length < 2) continue;
+      const adaptive = createFacebookAdaptiveGroup(key, group);
+      if (!adaptive) continue;
+      group.forEach((item) => consumed.add(item.id));
+      synthetic.push(adaptive);
+    }
+    return [
+      ...items.filter(
+        (item) => !consumed.has(item.id) && !isFacebookAudioTrack(item)
+      ),
+      ...synthetic
+    ];
+  }
+  function prioritizeFacebookPlayback(items) {
+    const facebookItems = items.filter(isFacebookMediaItem);
+    if (facebookItems.length <= 1) return items;
+    const playing = facebookItems.filter((item) => item.playback?.playing);
+    const visible = facebookItems.filter((item) => item.playback?.visible);
+    const preferred = playing.length ? playing : visible.length ? visible : [...facebookItems].sort(
+      (left, right) => (right.lastSeenAt || right.firstSeenAt || 0) - (left.lastSeenAt || left.firstSeenAt || 0)
+    ).slice(0, 1);
+    const preferredIds = new Set(preferred.map((item) => item.id));
+    return items.filter(
+      (item) => !isFacebookMediaItem(item) || preferredIds.has(item.id)
+    );
+  }
+  function isFacebookMediaItem(item) {
+    if (item.provider === "facebook") return true;
+    try {
+      return item.kind === "direct" && isFacebookCdnHost(new URL(item.sourceUrl).hostname);
+    } catch {
+      return false;
+    }
+  }
+  function createFacebookAdaptiveGroup(key, items) {
+    const audioItems = items.filter(isFacebookAudioTrack);
+    const representations = collapseFacebookRepresentations(
+      items.filter((item) => !isFacebookAudioTrack(item))
+    );
+    if (!representations.length) return null;
+    const sorted = [...representations].sort(
+      (left, right) => facebookQualityScore(right) - facebookQualityScore(left) || (right.contentLength || 0) - (left.contentLength || 0) || (right.lastSeenAt || 0) - (left.lastSeenAt || 0)
+    );
+    const primary = sorted[0];
+    const variants = sorted.map((item, index) => ({
+      id: item.id,
+      type: "video",
+      sourceUrl: facebookFullMediaUrl(item.sourceUrl),
+      mimeType: item.mimeType || "video/mp4",
+      codecs: null,
+      itag: null,
+      bandwidth: item.bandwidth || null,
+      averageBandwidth: item.averageBandwidth || null,
+      contentLength: facebookUrlHasByteLimit(item.sourceUrl) ? null : item.contentLength || null,
+      width: item.resolution?.width || null,
+      height: item.resolution?.height || null,
+      qualityLabel: facebookQualityLabel(item) || `Source ${index + 1}`,
+      urlResolution: "resolved",
+      signatureCipher: null,
+      muxed: !isFacebookDashTrack(item)
+    }));
+    const audioTracks = createFacebookAudioTracks(audioItems);
+    return {
+      ...primary,
+      id: stableMediaId("adaptive", key),
+      kind: "adaptive",
+      provider: "facebook",
+      title: primary.title && !/^(?:\(\d+\+?\)\s*)?facebook$/i.test(primary.title.trim()) ? primary.title : "Facebook video",
+      sourceUrl: facebookFullMediaUrl(primary.sourceUrl),
+      contentLength: facebookUrlHasByteLimit(primary.sourceUrl) ? null : primary.contentLength || null,
+      mimeType: "video/mp4",
+      variants,
+      audioTracks,
+      subtitles: [],
+      acquisitionProfile: "facebook_direct_representations",
+      probeStatus: "ready",
+      streamType: "vod",
+      relatedCount: items.length,
+      playback: newestPlaybackState(items),
+      firstSeenAt: Math.min(...items.map((item) => item.firstSeenAt || 0)),
+      lastSeenAt: Math.max(...items.map((item) => item.lastSeenAt || 0))
+    };
+  }
+  function createFacebookAudioTracks(items) {
+    if (!items.length) return [];
+    const selected = [...items].sort(
+      (left, right) => facebookAudioScore(right) - facebookAudioScore(left) || facebookObservationTime(right) - facebookObservationTime(left)
+    )[0];
+    return [
+      {
+        id: selected.id,
+        type: "audio",
+        sourceUrl: facebookFullMediaUrl(selected.sourceUrl),
+        mimeType: selected.mimeType || "audio/mp4",
+        codecs: null,
+        bandwidth: selected.bandwidth || null,
+        averageBandwidth: selected.averageBandwidth || null,
+        contentLength: facebookUrlHasByteLimit(selected.sourceUrl) ? null : selected.contentLength || null,
+        qualityLabel: "Facebook audio",
+        urlResolution: "resolved",
+        signatureCipher: null,
+        muxed: false,
+        language: null,
+        audioTrackName: "Facebook audio",
+        audioRole: "original",
+        audioIsDefault: true
+      }
+    ];
+  }
+  function isFacebookAudioTrack(item) {
+    const mimeType = String(item?.mimeType || "").toLowerCase();
+    if (mimeType.startsWith("audio/")) return true;
+    const tag = facebookEncodingTag(item?.sourceUrl);
+    return /(?:^|[_-])(?:audio|aac|opus)(?:[_-]|$)/i.test(tag || "");
+  }
+  function isFacebookDashTrack(item) {
+    return /(?:^|[_-])dash(?:[_-]|$)/i.test(
+      facebookEncodingTag(item?.sourceUrl) || ""
+    );
+  }
+  function facebookAudioScore(item) {
+    const bandwidth = item.averageBandwidth || item.bandwidth;
+    if (Number.isFinite(bandwidth) && bandwidth > 0) return bandwidth;
+    const tag = facebookEncodingTag(item.sourceUrl) || "";
+    const kilobits = Number(
+      tag.match(/(?:audio|aac|opus)[_-]?(\d{2,3})(?:k|kbps)?/i)?.[1]
+    );
+    return Number.isFinite(kilobits) ? kilobits * 1e3 : 0;
+  }
+  function collapseFacebookRepresentations(items) {
+    const representations = /* @__PURE__ */ new Map();
+    for (const item of items) {
+      const quality = facebookQualityLabel(item);
+      const key = quality?.toLowerCase() || "source";
+      const existing = representations.get(key);
+      if (!existing || facebookObservationTime(item) >= facebookObservationTime(existing))
+        representations.set(key, item);
+    }
+    return [...representations.values()];
+  }
+  function facebookObservationTime(item) {
+    return item.playback?.observedAt || item.lastSeenAt || item.firstSeenAt || 0;
+  }
+  function facebookFullMediaUrl(value) {
+    try {
+      const url = new URL(value || "");
+      for (const name of ["range", "bytestart", "byteend"])
+        url.searchParams.delete(name);
+      return url.href;
+    } catch {
+      return value;
+    }
+  }
+  function facebookUrlHasByteLimit(value) {
+    try {
+      const url = new URL(value || "");
+      return ["range", "bytestart", "byteend"].some(
+        (name) => url.searchParams.has(name)
+      );
+    } catch {
+      return false;
+    }
+  }
+  function newestPlaybackState(items) {
+    const states = items.map((item) => item.playback).filter(Boolean).sort((left, right) => (right.observedAt || 0) - (left.observedAt || 0));
+    if (!states.length) return null;
+    const active2 = states.find((state) => state.playing) || states[0];
+    return {
+      ...active2,
+      playing: states.some((state) => state.playing),
+      visible: states.some((state) => state.visible)
+    };
+  }
+  function facebookMediaAssetKey(item) {
+    try {
+      const source = new URL(item.sourceUrl || "");
+      if (!isFacebookCdnHost(source.hostname)) return null;
+      const envelope = decodeFacebookEfg(source.searchParams.get("efg"));
+      const assetId = findFacebookAssetId(envelope);
+      if (assetId) return `facebook-asset:${assetId}`;
+      const pageId = facebookPageVideoId(item.pageUrl);
+      return pageId ? `facebook-page:${pageId}` : null;
+    } catch {
+      return null;
+    }
+  }
+  function decodeFacebookEfg(value) {
+    if (typeof value !== "string" || !value || value.length > 1e4)
+      return null;
+    try {
+      const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+      const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+      return JSON.parse(atob(padded));
+    } catch {
+      return null;
+    }
+  }
+  function findFacebookAssetId(value, depth = 0) {
+    if (!value || typeof value !== "object" || depth > 2) return null;
+    for (const key of ["xpv_asset_id", "video_id", "asset_id"]) {
+      const candidate = value[key];
+      if (typeof candidate === "string" || Number.isSafeInteger(candidate))
+        return String(candidate);
+    }
+    for (const child of Object.values(value)) {
+      const candidate = findFacebookAssetId(child, depth + 1);
+      if (candidate) return candidate;
+    }
+    return null;
+  }
+  function facebookPageVideoId(value) {
+    try {
+      const page = new URL(value || "");
+      if (!(page.hostname === "facebook.com" || page.hostname.endsWith(".facebook.com")))
+        return null;
+      return page.searchParams.get("v") || page.pathname.match(/\/(?:reel|videos)\/(\d+)/i)?.[1] || null;
+    } catch {
+      return null;
+    }
+  }
+  function facebookQualityLabel(item) {
+    const tag = facebookEncodingTag(item.sourceUrl);
+    const height = item.resolution?.height || Number(tag?.match(/(?:^|[^0-9])(\d{3,4})p/i)?.[1]);
+    if (height) return `${height}p`;
+    if (/\bhd\b/i.test(tag || "")) return "HD";
+    if (/\bsd\b/i.test(tag || "")) return "SD";
+    return null;
+  }
+  function facebookQualityScore(item) {
+    const label = facebookQualityLabel(item);
+    const height = Number(label?.match(/^(\d+)p$/)?.[1]);
+    if (height) return height;
+    if (label === "HD") return 720;
+    if (label === "SD") return 480;
+    return 0;
+  }
+  function facebookEncodingTag(value) {
+    try {
+      const envelope = decodeFacebookEfg(new URL(value).searchParams.get("efg"));
+      return typeof envelope?.vencode_tag === "string" ? envelope.vencode_tag : null;
+    } catch {
+      return null;
+    }
+  }
+  function directMediaGroupKey(item) {
+    const sourceUrl = item.sourceUrl || "";
+    try {
+      const url = new URL(sourceUrl);
+      url.hash = "";
+      if (isFacebookCdnHost(url.hostname))
+        return `facebook:${url.pathname.toLowerCase()}`;
+      for (const name of ["range", "bytestart", "byteend"])
+        url.searchParams.delete(name);
+      const entries = [...url.searchParams.entries()].sort(
+        ([leftKey, left], [rightKey, right]) => leftKey.localeCompare(rightKey) || left.localeCompare(right)
+      );
+      url.search = "";
+      for (const [name, value] of entries) url.searchParams.append(name, value);
+      return url.href;
+    } catch {
+      return sourceUrl;
+    }
+  }
+  function isFacebookCdnHost(value) {
+    const host = String(value || "").toLowerCase();
+    return host === "fbcdn.net" || host.endsWith(".fbcdn.net");
+  }
+  function readableMediaTitle(value) {
+    const title = typeof value === "string" ? value.trim() : "";
+    if (!title || title.length > 160) return null;
+    if (/^[a-f0-9]{24,}$/i.test(title)) return null;
+    return title;
+  }
+  function resolvedBlobGroupKeysByPage(items) {
+    const byPage = /* @__PURE__ */ new Map();
+    for (const item of items) {
+      if (item.kind !== "blob" || !item.selectedMediaId) continue;
+      const pageUrl = item.pageUrl || "";
+      const matches = byPage.get(pageUrl) || [];
+      matches.push(item);
+      byPage.set(pageUrl, matches);
+    }
+    return new Map(
+      [...byPage].flatMap(
+        ([pageUrl, matches]) => matches.length === 1 ? [[pageUrl, `${pageUrl}
+${blobTitleKey(matches[0].title)}`]] : []
+      )
+    );
+  }
+  function blobGroupKey(item, resolvedGroupKeys) {
+    const pageUrl = item.pageUrl || "";
+    if (!item.selectedMediaId && isGenericBlobTitle(item.title)) {
+      const resolvedKey = resolvedGroupKeys.get(pageUrl);
+      if (resolvedKey) return resolvedKey;
+    }
+    return `${pageUrl}
+${blobTitleKey(item.title)}`;
+  }
+  function blobTitleKey(value) {
+    return readableMediaTitle(value)?.toLowerCase() || "blob";
+  }
+  function isGenericBlobTitle(value) {
+    const title = typeof value === "string" ? value.trim() : "";
+    return !readableMediaTitle(title) || /^(blob|blob media stream|media stream)$/i.test(title);
+  }
+  function samePlaybackFrame(left, right) {
+    if (Number.isInteger(left.frameId) && Number.isInteger(right.frameId))
+      return left.frameId === right.frameId;
+    return Boolean(
+      left.frameUrl && right.frameUrl && left.frameUrl === right.frameUrl
+    );
+  }
+
+  // src/media/download-job-view.js
+  var ACTIVE_STATUSES = /* @__PURE__ */ new Set([
+    "starting",
+    "probing",
+    "downloading",
+    "finalizing"
+  ]);
+  function isMediaJobActive(job = {}) {
+    return [...ACTIVE_STATUSES, "pausing", "cancelling"].includes(job.status);
+  }
+
+  // src/media/download-identity.js
+  var DOWNLOAD_IDENTITY_SCHEMA = "download-identity.v1";
+  var RECENT_DOWNLOAD_WINDOW_MS = 7 * 24 * 60 * 60 * 1e3;
+  function sourceIdentity(candidate) {
+    if (candidate.provider === "youtube" && candidate.kind === "adaptive") {
+      for (const value of [candidate.pageUrl, candidate.sourceUrl]) {
+        try {
+          const url2 = new URL(value);
+          if (!/(^|\.)youtube\.com$/.test(url2.hostname)) continue;
+          const id = url2.searchParams.get("v") || url2.pathname.match(/^\/shorts\/([^/]+)/)?.[1];
+          if (id) return { asset: `youtube:${id}`, representation: "adaptive" };
+        } catch {
+        }
+      }
+    }
+    if (candidate.provider === "facebook" && candidate.kind === "adaptive") {
+      const id = facebookMediaAssetKey(candidate);
+      if (id) return { asset: id, representation: "adaptive" };
+    }
+    const url = new URL(candidate.manifestUrl || candidate.sourceUrl);
+    if (!/^https?:$/.test(url.protocol))
+      throw new Error("HTTP media source required.");
+    url.hash = "";
+    for (const key of ["range", "bytestart", "byteend"])
+      url.searchParams.delete(key);
+    url.searchParams.sort();
+    if (candidate.kind === "direct" && /^s\d+\.pornone\.com$/.test(url.hostname)) {
+      const match = url.pathname.match(
+        /^\/vid2\/[^/]+\/\d+\/[^/]+\/(\d+)\/(\d+_[^/]+\.mp4)$/
+      );
+      if (match && match[2].startsWith(`${match[1]}_`))
+        return {
+          asset: `pornone:${match[1]}`,
+          representation: `${match[2]}${url.search}`
+        };
+    }
+    return { asset: `${candidate.kind}:${url.href}`, representation: "source" };
+  }
+  function trackIdentity(track, candidate) {
+    if (!track) return null;
+    const facts = {
+      itag: track.itag || null,
+      codec: track.codecs || track.mimeType || null,
+      width: track.width || track.resolution?.width || null,
+      height: track.height || track.resolution?.height || null,
+      fps: track.frameRate || track.fps || null,
+      bitrate: track.averageBandwidth || track.bandwidth || null,
+      audioTrackId: track.audioTrackId || null,
+      language: track.language || null,
+      role: track.audioRole || null,
+      sampleRate: track.audioSampleRate || null,
+      channels: track.audioChannels || null,
+      muxed: track.muxed === true,
+      drc: track.isDrc === true
+    };
+    if (candidate.provider === "facebook" && facebookMediaAssetKey(candidate) && facebookMediaAssetKey({
+      ...candidate,
+      sourceUrl: track.sourceUrl || track.url
+    }) === facebookMediaAssetKey(candidate)) {
+      try {
+        const source = new URL(track.sourceUrl || track.url);
+        facts.source = `${source.pathname}|${source.searchParams.get("efg") || ""}`;
+      } catch {
+        facts.source = track.sourceUrl || track.url || track.id;
+      }
+    } else if (candidate.provider !== "youtube")
+      facts.source = track.sourceUrl || track.url || track.id;
+    else if (!facts.itag) facts.id = track.id;
+    return facts;
+  }
+  async function digest(value) {
+    const bytes = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(JSON.stringify(value))
+    );
+    return Array.from(
+      new Uint8Array(bytes),
+      (byte) => byte.toString(16).padStart(2, "0")
+    ).join("");
+  }
+  async function buildMediaDownloadIdentity(candidate, value) {
+    const output = normalizeMediaDownloadOutput(value, candidate);
+    const audioOnly = output.profileId === "audio-ogg";
+    const source = sourceIdentity(candidate);
+    const tracks = (values) => values.map((track) => JSON.stringify(trackIdentity(track, candidate))).sort();
+    const selection = {
+      profile: output.profileId,
+      representation: source.representation,
+      video: audioOnly ? null : output.videoTrackId ? trackIdentity(
+        candidate.variants?.find(
+          (track) => track.id === output.videoTrackId
+        ),
+        candidate
+      ) : candidate.kind === "adaptive" ? { auto: tracks(candidate.variants || []) } : "source",
+      audio: output.audioTrackId ? trackIdentity(
+        candidate.audioTracks?.find(
+          (track) => track.id === output.audioTrackId
+        ),
+        candidate
+      ) : candidate.kind === "adaptive" ? { auto: tracks(candidate.audioTracks || []) } : "included"
+    };
+    const [assetKey, selectionKey] = await Promise.all([
+      digest(source.asset),
+      digest(selection)
+    ]);
+    return Object.freeze({
+      schema: DOWNLOAD_IDENTITY_SCHEMA,
+      assetKey,
+      selectionKey,
+      requestKey: await digest([assetKey, selectionKey])
+    });
+  }
+  function buildMediaDownloadSummary(candidate, value) {
+    const output = normalizeMediaDownloadOutput(value, candidate);
+    const quality = getMediaVideoQualityOptions(candidate).find(
+      (item) => item.id === output.videoTrackId
+    );
+    const audio = getMediaAudioTrackOptions(candidate).find(
+      (item) => item.id === output.audioTrackId
+    );
+    const height = candidate.resolution?.height;
+    return {
+      profileLabel: getMediaDownloadProfiles(candidate).find(
+        (item) => item.id === output.profileId
+      )?.label || output.profileId,
+      qualityLabel: output.profileId === "audio-ogg" ? "Audio only" : quality?.label || (candidate.kind === "adaptive" ? "Auto quality" : height ? `${height}p` : "Source quality"),
+      audioLabel: audio?.label || null
+    };
+  }
+  function normalizeDownloadIdentity(value) {
+    return value?.schema === DOWNLOAD_IDENTITY_SCHEMA && [value.assetKey, value.selectionKey, value.requestKey].every(
+      (key) => typeof key === "string" && /^[a-f0-9]{64}$/.test(key)
+    ) ? {
+      schema: DOWNLOAD_IDENTITY_SCHEMA,
+      assetKey: value.assetKey,
+      selectionKey: value.selectionKey,
+      requestKey: value.requestKey
+    } : null;
+  }
+  function findRelatedDownloadJobs(jobs, identity, { exact = true, now = Date.now() } = {}) {
+    const normalized = normalizeDownloadIdentity(identity);
+    if (!normalized) return [];
+    return jobs.filter((job) => {
+      const saved = normalizeDownloadIdentity(job.downloadIdentity);
+      if (!saved || saved.assetKey !== normalized.assetKey || exact && saved.requestKey !== normalized.requestKey)
+        return false;
+      return isMediaJobActive(job) || job.status === "completed" && Number(job.updatedAt) >= now - RECENT_DOWNLOAD_WINDOW_MS;
+    }).sort(
+      (a, b) => Number(isMediaJobActive(b)) - Number(isMediaJobActive(a)) || (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0)
+    );
+  }
+  function presentDownloadJob(job, fileStatus = "unchecked") {
+    if (!job) return null;
+    return {
+      id: job.id,
+      status: job.status,
+      title: job.title,
+      updatedAt: job.updatedAt,
+      progress: job.progress ? { ...job.progress } : null,
+      outputPath: job.outputPath || null,
+      output: job.output || null,
+      summary: job.downloadSummary || null,
+      fileStatus
+    };
   }
 
   // src/background/media-access-strategy-memory.js
@@ -6036,7 +8122,8 @@ var AdsFriendlyBackground = (() => {
         canResolveYouTubeQualityPreflight: capabilities[MEDIA_HELPER_CAPABILITIES.YOUTUBE_QUALITY_PREFLIGHT] === true,
         canValidatePlayerOutput: capabilities[MEDIA_HELPER_CAPABILITIES.PLAYER_OUTPUT_CANARY] === true,
         canCapturePlayerOutput: capabilities[MEDIA_HELPER_CAPABILITIES.PLAYER_OUTPUT_CAPTURE] === true,
-        canMuxWithFfmpeg: capabilities[MEDIA_HELPER_CAPABILITIES.FFMPEG_MUX] === true
+        canMuxWithFfmpeg: capabilities[MEDIA_HELPER_CAPABILITIES.FFMPEG_MUX] === true,
+        canCheckOutput: capabilities[MEDIA_HELPER_CAPABILITIES.OUTPUT_STAT] === true
       });
     } catch (error) {
       const message = messageOf(error);
@@ -6117,7 +8204,12 @@ var AdsFriendlyBackground = (() => {
       deltaSeconds: value?.deltaSeconds !== null && Number.isFinite(Number(value?.deltaSeconds)) ? Math.max(0, Number(value.deltaSeconds)) : null
     };
   }
-  async function startMediaHelperDownload(rawJob, { connections = 8, attempt = 1 } = {}) {
+  async function startMediaHelperDownload(rawJob, {
+    connections = 8,
+    attempt = 1,
+    downloadIdentity = null,
+    downloadSummary = null
+  } = {}) {
     if (!await hasNativeMessagingPermission()) {
       throw new Error("Native Messaging permission is required.");
     }
@@ -6138,6 +8230,8 @@ var AdsFriendlyBackground = (() => {
       kind: job.candidate.kind,
       title: job.candidate.title,
       output: job.output,
+      downloadIdentity: normalizeDownloadIdentity(downloadIdentity),
+      downloadSummary,
       sourceTabId: job.sourceTabId,
       candidate: withoutSensitiveHandoffs(job.candidate),
       connections,
@@ -6573,6 +8667,29 @@ var AdsFriendlyBackground = (() => {
       throw new Error(`Unexpected Media Helper event: ${response.type}.`);
     return { status: "opened", action: action2, outputPath };
   }
+  async function inspectMediaHelperOutput(outputPath) {
+    const helper = await getMediaHelperStatus();
+    if (helper.status !== "ready" || !helper.canCheckOutput)
+      return { status: "unchecked", size: null };
+    const requestId = randomId4();
+    const response = normalizeHelperEvent(
+      await withTimeout(
+        chrome.runtime.sendNativeMessage(MEDIA_HELPER_HOST_NAME, {
+          type: MEDIA_HELPER_REQUESTS.OUTPUT_STAT,
+          requestId,
+          protocolVersion: MEDIA_HELPER_PROTOCOL_VERSION,
+          payload: { outputPath }
+        }),
+        DEFAULT_TIMEOUT_MS
+      )
+    );
+    if (response.requestId !== requestId || response.type !== MEDIA_HELPER_EVENTS.OUTPUT_STAT)
+      throw new Error("Could not check the downloaded file.");
+    return {
+      status: ["available", "missing"].includes(response.payload.status) ? response.payload.status : "unchecked",
+      size: Number.isSafeInteger(response.payload.size) ? response.payload.size : null
+    };
+  }
   async function handleJobEvent(jobId, requestId, rawEvent) {
     try {
       const event2 = normalizeHelperEvent(rawEvent);
@@ -6702,7 +8819,10 @@ var AdsFriendlyBackground = (() => {
       outputPath: state.outputPath,
       error: state.error,
       connections: state.connections,
-      attempt: state.attempt
+      attempt: state.attempt,
+      output: state.output,
+      downloadIdentity: normalizeDownloadIdentity(state.downloadIdentity),
+      downloadSummary: state.downloadSummary || null
     };
     return updateHistory(
       (history) => [safeState, ...history.filter((item) => item?.id !== state.id)].slice(
@@ -6764,6 +8884,7 @@ var AdsFriendlyBackground = (() => {
       canResolveYouTubeProviderFormats: false,
       canResolveYouTubeQualityPreflight: false,
       canMuxWithFfmpeg: false,
+      canCheckOutput: false,
       helperVersion: null,
       capabilities: {},
       error: null,
@@ -7279,9 +9400,9 @@ var AdsFriendlyBackground = (() => {
     ).toLowerCase();
     const type = contentType.includes("video") ? "video" : contentType.includes("audio") ? "audio" : contentType.includes("text") || contentType.includes("subtitle") || contentType.includes("application") ? "text" : null;
     if (!type) return null;
-    const width = positiveInteger(representation.width || adaptation.width);
-    const height = positiveInteger(representation.height || adaptation.height);
-    const bandwidth = positiveInteger(representation.bandwidth);
+    const width = positiveInteger2(representation.width || adaptation.width);
+    const height = positiveInteger2(representation.height || adaptation.height);
+    const bandwidth = positiveInteger2(representation.bandwidth);
     return {
       id: representation.id || adaptation.id || `${type}-${index + 1}`,
       type,
@@ -7339,7 +9460,7 @@ var AdsFriendlyBackground = (() => {
   function decodeXml(value) {
     return value.replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
   }
-  function positiveInteger(value) {
+  function positiveInteger2(value) {
     const number = Number(value);
     return Number.isInteger(number) && number > 0 ? number : null;
   }
@@ -7514,10 +9635,10 @@ ${body}`;
     return metadata;
   }
   function withStorageLock(operation) {
-    const result = storageOperation.then(operation, operation);
-    storageOperation = result.catch(() => {
+    const result2 = storageOperation.then(operation, operation);
+    storageOperation = result2.catch(() => {
     });
-    return result;
+    return result2;
   }
   function handoffKey(tabId) {
     return `${HANDOFF_PREFIX}${tabId}`;
@@ -7541,735 +9662,108 @@ ${body}`;
     }
   }
 
-  // src/media/resolution-diagnostics.js
-  var MEDIA_RESOLUTION_STAGES = Object.freeze({
-    NETWORK_OBSERVATION: "network_observation",
-    MANIFEST_PROBE: "manifest_probe",
-    CHILD_DISCOVERY: "child_discovery",
-    CHILD_PROBE: "child_probe",
-    SOURCE_MATCHING: "source_matching",
-    PLAYER_DECRYPTION: "player_decryption",
-    PLAYER_SEGMENT_RESOLUTION: "player_segment_resolution",
-    DOWNLOAD_READY: "download_ready",
-    PLAYBACK_ONLY: "playback_only"
-  });
-  var MEDIA_RESOLUTION_DIAGNOSTIC_STATES = Object.freeze({
-    WAITING: "waiting",
-    FAILED: "failed",
-    UNHANDLED: "unhandled",
-    READY: "ready",
-    BLOCKED: "blocked"
-  });
-  var S2 = MEDIA_RESOLUTION_STAGES;
-  var D = MEDIA_RESOLUTION_DIAGNOSTIC_STATES;
-  var MEDIA_RESOLUTION_STAGE_CATALOG = Object.freeze({
-    [S2.NETWORK_OBSERVATION]: stage("Browser media request", "Catalog candidate"),
-    [S2.MANIFEST_PROBE]: stage("Manifest candidate", "Parsed manifest"),
-    [S2.CHILD_DISCOVERY]: stage(
-      "Master or playback request",
-      "Observed child playlist"
-    ),
-    [S2.CHILD_PROBE]: stage("Observed child playlist", "Playable child stream"),
-    [S2.SOURCE_MATCHING]: stage(
-      "Playable child stream + player context",
-      "Selected media source"
-    ),
-    [S2.PLAYER_DECRYPTION]: stage(
-      "Encrypted manifest + player Blob",
-      "Parsed plaintext manifest"
-    ),
-    [S2.PLAYER_SEGMENT_RESOLUTION]: stage(
-      "SAMPLE-AES candidate + player playback",
-      "Resolved media segment sequence"
-    ),
-    [S2.DOWNLOAD_READY]: stage("Selected media source", "Download plan input"),
-    [S2.PLAYBACK_ONLY]: stage("Protected media metadata", "Playback-only result")
-  });
-  function diagnoseMediaResolution(item, items = []) {
-    const byId = new Map(items.map((candidate) => [candidate.id, candidate]));
-    const target = item.kind === "blob" && item.selectedMediaId ? byId.get(item.selectedMediaId) || item.resolvedStream || item : item;
-    if (target.kind === "direct")
-      return diagnostic(S2.DOWNLOAD_READY, D.READY, "direct_ready", {
-        message: "Download ready \xB7 direct media"
-      });
-    if (target.kind === "blob")
-      return diagnostic(S2.NETWORK_OBSERVATION, D.WAITING, "blob_source_missing", {
-        message: "Network observation \xB7 Blob found \xB7 source request missing"
-      });
-    if (!["hls", "dash"].includes(target.kind))
-      return diagnostic(S2.NETWORK_OBSERVATION, D.UNHANDLED, "media_unhandled", {
-        message: "Network observation \xB7 media type not handled"
-      });
-    if (hasStrongDrmEvidence(target))
-      return diagnostic(S2.PLAYBACK_ONLY, D.BLOCKED, "drm_playback_only", {
-        message: "Playback only \xB7 DRM protected"
-      });
-    if (hasUnsupportedHlsKeyFormat(target))
-      return diagnostic(
-        S2.PLAYBACK_ONLY,
-        D.BLOCKED,
-        "custom_hls_protection_playback_only",
-        { message: "Playback only \xB7 custom HLS protection" }
-      );
-    if (target.probeStatus === "ready" && isWeakSampleAesSignal(target) && !isFfmpegCompatibleSampleAes(target))
-      return diagnostic(
-        S2.PLAYER_SEGMENT_RESOLUTION,
-        D.WAITING,
-        "sample_aes_player_segments_pending",
-        {
-          message: "Player URL resolution \xB7 waiting for resolved media segments"
-        }
-      );
-    if (target.kind === "dash") return diagnoseDash(target);
-    if (target.probeSource === "decrypted_blob" && !(Number(target.manifestHandoff?.expiresAt) > Date.now()))
-      return diagnostic(
-        S2.PLAYER_DECRYPTION,
-        D.UNHANDLED,
-        "decrypted_manifest_handoff_pending",
-        {
-          message: "Player decryption \xB7 manifest parsed \xB7 download handoff pending"
-        }
-      );
-    if (target.resolutionStatus === "resolved" || target.probeStatus === "ready" && target.playlistType === "media" && target.streamType === "vod" && target.segmentCount > 0)
-      return diagnostic(S2.DOWNLOAD_READY, D.READY, "hls_ready", {
-        message: "Download ready \xB7 HLS VOD resolved"
-      });
-    if (target.probeStatus === "unsupported")
-      return diagnostic(
-        S2.MANIFEST_PROBE,
-        D.UNHANDLED,
-        "hls_manifest_unsupported",
-        { message: "Manifest probe \xB7 HLS format not handled" }
-      );
-    const latestTargetProbe = latestProbeDiagnostic([target]);
-    if (latestTargetProbe?.code?.startsWith("contextual_probe_")) {
-      const described2 = describeProbeDiagnostic(latestTargetProbe);
-      return diagnostic(S2.MANIFEST_PROBE, described2.status, described2.code, {
-        probeDiagnostic: latestTargetProbe,
-        message: `Manifest probe \xB7 ${described2.message}`
-      });
-    }
-    const children = findObservedChildren(target, items);
-    const readyChildren = children.filter(isUsableChild);
-    const failedChildren = children.filter(
-      (candidate) => candidate.probeStatus === "failed"
-    );
-    const facts = {
-      observedChildCount: children.length,
-      readyChildCount: readyChildren.length,
-      failedChildCount: failedChildren.length,
-      masterProbeStatus: target.probeStatus || "discovered",
-      masterProbeError: target.probeError || null
+  // src/background/recent-downloads.js
+  function createRecentDownloadService({
+    listJobs,
+    checkFile,
+    now = () => Date.now()
+  }) {
+    const checks = /* @__PURE__ */ new Map();
+    const operations = /* @__PURE__ */ new Map();
+    const fileState = async (job, verify) => {
+      if (job.status !== "completed") return "unchecked";
+      if (!job.outputPath) return "missing";
+      const key = `${job.id}|${job.outputPath}|${job.updatedAt}`;
+      const cached = checks.get(key);
+      if (!verify) return cached?.expiresAt > now() ? cached.status : "unchecked";
+      let status;
+      try {
+        const result2 = await checkFile(job.outputPath);
+        status = result2?.status || "unchecked";
+        const expectedSize = job.progress?.totalBytes;
+        if (status === "available" && expectedSize > 0 && result2.size !== expectedSize)
+          status = "changed";
+      } catch {
+        status = "unchecked";
+      }
+      checks.set(key, { status, expiresAt: now() + 6e4 });
+      while (checks.size > 128) checks.delete(checks.keys().next().value);
+      return status;
     };
-    if (!children.length) {
-      const masterFailure = formatProbeFailure(target);
-      if (target.probeStatus !== "failed" && target.playlistType !== "master") {
-        return diagnostic(S2.MANIFEST_PROBE, D.WAITING, "hls_probe_pending", {
-          ...facts,
-          message: "Manifest probe \xB7 HLS response not parsed yet"
-        });
-      }
-      return diagnostic(
-        S2.CHILD_DISCOVERY,
-        target.probeStatus === "failed" ? D.FAILED : D.WAITING,
-        target.probeStatus === "failed" ? "master_failed_child_not_observed" : "child_request_not_observed",
-        {
-          ...facts,
-          message: `Child discovery \xB7 0 child playlists${masterFailure ? ` \xB7 ${masterFailure}` : ""}`
-        }
+    const lookup = async (candidate, output, { verifyFile = false } = {}) => {
+      const identity = await buildMediaDownloadIdentity(candidate, output);
+      const jobs = await listJobs();
+      const compatible = await Promise.all(
+        jobs.map(async (job) => {
+          if (job.downloadIdentity || !job.candidate || !job.output) return job;
+          try {
+            return {
+              ...job,
+              downloadIdentity: await buildMediaDownloadIdentity(
+                job.candidate,
+                job.output
+              ),
+              downloadSummary: buildMediaDownloadSummary(
+                job.candidate,
+                job.output
+              )
+            };
+          } catch {
+            return job;
+          }
+        })
       );
-    }
-    if (readyChildren.length && !target.selectedMediaId) {
-      return diagnostic(S2.SOURCE_MATCHING, D.WAITING, "child_ready_not_matched", {
-        ...facts,
-        message: `Source matching \xB7 ${readyChildren.length} child ready \xB7 not linked to player`
-      });
-    }
-    const latestChildProbe = latestProbeDiagnostic(children);
-    if (latestChildProbe) {
-      const described2 = describeProbeDiagnostic(latestChildProbe);
-      return diagnostic(S2.CHILD_PROBE, described2.status, described2.code, {
-        ...facts,
-        probeDiagnostic: latestChildProbe,
-        message: `Child probe \xB7 ${described2.message}`
-      });
-    }
-    if (failedChildren.length === children.length) {
-      return diagnostic(S2.CHILD_PROBE, D.FAILED, "child_probe_failed", {
-        ...facts,
-        message: `Child probe \xB7 ${failedChildren.length} failed \xB7 ${formatProbeFailure(failedChildren[0]) || "request rejected"}`
-      });
-    }
-    return diagnostic(S2.CHILD_PROBE, D.WAITING, "child_observed_probe_pending", {
-      ...facts,
-      message: `Child probe \xB7 ${children.length} observed \xB7 manifest not parsed`
-    });
-  }
-  function diagnoseDash(item) {
-    if (item.probeStatus === "failed")
-      return diagnostic(S2.MANIFEST_PROBE, D.FAILED, "dash_probe_failed", {
-        message: `Manifest probe \xB7 DASH failed${item.probeError ? ` \xB7 ${item.probeError}` : ""}`
-      });
-    if (item.probeStatus !== "ready")
-      return diagnostic(S2.MANIFEST_PROBE, D.WAITING, "dash_probe_pending", {
-        message: "Manifest probe \xB7 DASH tracks not parsed"
-      });
-    return diagnostic(S2.DOWNLOAD_READY, D.READY, "dash_ready", {
-      message: "Download ready \xB7 DASH tracks resolved"
-    });
-  }
-  function findObservedChildren(parent, items) {
-    const explicitIds = new Set(parent.childManifestIds || []);
-    return items.filter((candidate) => {
-      if (candidate.kind !== "hls" || candidate.id === parent.id) return false;
-      if (explicitIds.has(candidate.id) || candidate.parentManifestIds?.includes(parent.id))
-        return true;
-      if (!sameFrame2(parent, candidate)) return false;
-      const parentAt = parent.firstSeenAt || parent.lastSeenAt;
-      const childAt = candidate.firstSeenAt || candidate.lastSeenAt;
-      return Number.isFinite(parentAt) && Number.isFinite(childAt) && Math.abs(parentAt - childAt) <= 6e4;
-    });
-  }
-  function isUsableChild(item) {
-    return item.probeStatus === "ready" && item.playlistType === "media" && ["vod", "live"].includes(item.streamType) && (item.segmentCount > 0 || item.partialSegmentCount > 0);
-  }
-  function sameFrame2(left, right) {
-    return Number.isInteger(left.frameId) && Number.isInteger(right.frameId) && left.frameId === right.frameId;
-  }
-  function formatProbeFailure(item) {
-    if (item.probeError === "manifest_http_403") return "master probe 403";
-    if (item.probeError === "fallback_fetch_blocked")
-      return "probe blocked by page/CORS";
-    if (item.probeStatus === "failed") return "manifest probe failed";
-    return null;
-  }
-  function latestProbeDiagnostic(items) {
-    return items.flatMap((item) => item.probeDiagnostics || [item.probeDiagnostic]).filter(Boolean).sort((left, right) => (right.observedAt || 0) - (left.observedAt || 0))[0];
-  }
-  function describeProbeDiagnostic(diagnostic2) {
-    const code = diagnostic2.code || "probe_status_unknown";
-    if (code === "iframe_probe_scheduled")
-      return described(D.WAITING, code, "scheduled in player frame");
-    if (code === "manifest_fetch_dispatched")
-      return described(D.WAITING, code, "request sent \xB7 waiting for response");
-    if (code === "contextual_probe_prepared")
-      return described(
-        D.WAITING,
-        code,
-        "Referer/Origin prepared \xB7 retry starting"
+      const exact = findRelatedDownloadJobs(compatible, identity, { now: now() })[0] || null;
+      const related = findRelatedDownloadJobs(compatible, identity, {
+        exact: false,
+        now: now()
+      }).slice(0, 5);
+      const selected = related[0] || null;
+      const states = new Map(
+        await Promise.all(
+          [...new Set([exact, selected].filter(Boolean))].map(async (job) => [
+            job.id,
+            await fileState(job, verifyFile)
+          ])
+        )
       );
-    if (code === "contextual_manifest_fetch_dispatched")
-      return described(
-        D.WAITING,
-        code,
-        "contextual request sent \xB7 waiting for response"
-      );
-    if (code.startsWith("contextual_probe_"))
-      return described(
-        D.FAILED,
-        code,
-        `context setup failed \xB7 ${code.slice("contextual_probe_".length)}`
-      );
-    if (code === "content_duplicate")
-      return described(D.WAITING, code, "duplicate schedule skipped");
-    if (code === "probe_gate_duplicate")
-      return described(D.WAITING, code, "probe already in progress or completed");
-    if (code === "manifest_probe_timeout")
-      return described(D.FAILED, code, "timed out after 10s");
-    if (/^manifest_http_\d+$/.test(code))
-      return described(
-        D.FAILED,
-        code,
-        `HTTP ${diagnostic2.httpStatus || code.split("_").at(-1)}`
-      );
-    if (code === "fallback_fetch_blocked")
-      return described(D.FAILED, code, "request blocked by page/CORS");
-    if (code === "manifest_body_received")
-      return described(
-        D.WAITING,
-        code,
-        `${formatBodySize(diagnostic2.bodyBytes)} body received \xB7 ${diagnostic2.bodyFormat || "unknown"} format \xB7 parser pending`
-      );
-    if (code === "manifest_parsed_zero_segments")
-      return described(
-        D.UNHANDLED,
-        code,
-        `${formatBodySize(diagnostic2.bodyBytes)} ${diagnostic2.bodyFormat || "unknown"} parsed \xB7 0 segments`
-      );
-    if (code === "manifest_parsed_no_stream")
-      return described(
-        D.UNHANDLED,
-        code,
-        `${formatBodySize(diagnostic2.bodyBytes)} body parsed \xB7 no playable stream`
-      );
-    if (code === "manifest_unsupported")
-      return described(D.UNHANDLED, code, "body received \xB7 format unsupported");
-    if (code === "manifest_parsed")
-      return described(
-        D.WAITING,
-        code,
-        `${diagnostic2.playlistType || "manifest"} parsed \xB7 ${diagnostic2.segmentCount || 0} segments \xB7 matching pending`
-      );
-    if (code === "decrypted_manifest_blob_observed")
-      return described(
-        D.WAITING,
-        code,
-        `player decrypted ${diagnostic2.bodyFormat || "manifest"} \xB7 parser pending`
-      );
-    if (code === "decrypted_manifest_parsed")
-      return described(
-        D.READY,
-        code,
-        `player-decrypted ${diagnostic2.playlistType || "manifest"} parsed \xB7 ${diagnostic2.segmentCount || 0} segments`
-      );
-    if (code === "decrypted_manifest_zero_segments")
-      return described(
-        D.UNHANDLED,
-        code,
-        "player-decrypted manifest \xB7 0 segments"
-      );
-    if (code === "decrypted_manifest_no_stream")
-      return described(
-        D.UNHANDLED,
-        code,
-        "player-decrypted manifest \xB7 no playable stream"
-      );
-    if (code === "decrypted_manifest_unsupported")
-      return described(D.UNHANDLED, code, "player-decrypted format unsupported");
-    if (code === "decrypted_manifest_parse_failed")
-      return described(D.FAILED, code, "player-decrypted manifest parse failed");
-    return described(
-      diagnostic2.phase === "failed" ? D.FAILED : D.WAITING,
-      code,
-      code.replaceAll("_", " ")
-    );
-  }
-  function described(status, code, message) {
-    return { status, code, message };
-  }
-  function formatBodySize(bytes) {
-    if (!Number.isFinite(bytes)) return "Unknown-size";
-    if (bytes < 1024) return `${bytes} B`;
-    return `${(bytes / 1024).toFixed(1)} KB`;
-  }
-  function diagnostic(stage2, status, code, facts = {}) {
-    const contract = MEDIA_RESOLUTION_STAGE_CATALOG[stage2];
-    return Object.freeze({
-      stage: stage2,
-      status,
-      code,
-      input: contract.input,
-      output: contract.output,
-      ...facts
-    });
-  }
-  function stage(input, output) {
-    return Object.freeze({ input, output });
-  }
-
-  // src/media/catalog-view.js
-  function selectVisibleMediaItems(items = [], maximum = 8) {
-    const diagnosedItems = items.map((item) => ({
-      ...item,
-      resolutionDiagnostic: diagnoseMediaResolution(item, items)
-    }));
-    const displayItems = prioritizeFacebookPlayback(
-      groupFacebookDirectRepresentations(diagnosedItems)
-    );
-    const blobResolvedSourceIds = new Set(
-      diagnosedItems.filter((item) => item.kind === "blob" && item.selectedMediaId).flatMap((item) => [
-        item.selectedMediaId,
-        ...item.resolvedMediaIds || [],
-        ...item.blobTrace?.candidateIds || []
-      ]).filter(Boolean)
-    );
-    for (const blob of diagnosedItems.filter(
-      (item) => item.kind === "blob" && item.selectedMediaId
-    )) {
-      for (const source of diagnosedItems) {
-        if (source.kind !== "blob" && samePlaybackFrame(blob, source) && (source.selectedMediaId === blob.selectedMediaId || source.resolvedMediaIds?.includes(blob.selectedMediaId) || (blob.resolvedMediaIds || []).some(
-          (id) => source.resolvedMediaIds?.includes(id)
-        ))) {
-          blobResolvedSourceIds.add(source.id);
-        }
-      }
-    }
-    const sorted = [...displayItems].sort(
-      (left, right) => (right.firstSeenAt || 0) - (left.firstSeenAt || 0) || String(left.id || "").localeCompare(String(right.id || ""))
-    );
-    const visible = [];
-    const adaptivePages = new Set(
-      displayItems.filter((item) => item.kind === "adaptive").map((item) => item.pageUrl)
-    );
-    const blobGroups = /* @__PURE__ */ new Map();
-    const directGroups = /* @__PURE__ */ new Map();
-    const resolvedBlobGroupKeys = resolvedBlobGroupKeysByPage(diagnosedItems);
-    for (const item of sorted) {
-      if (item.kind === "blob" && adaptivePages.has(item.pageUrl)) continue;
-      if (item.kind !== "blob" && blobResolvedSourceIds.has(item.id)) continue;
-      if (item.kind === "hls" && item.parentManifestIds?.length) continue;
-      if (item.kind === "direct") {
-        const key2 = directMediaGroupKey(item);
-        const existing2 = directGroups.get(key2);
-        if (existing2) {
-          existing2.relatedCount += 1;
-          continue;
-        }
-        const grouped2 = { ...item, relatedCount: 1 };
-        directGroups.set(key2, grouped2);
-        visible.push(grouped2);
-        continue;
-      }
-      if (item.kind !== "blob") {
-        visible.push(item);
-        continue;
-      }
-      const key = blobGroupKey(item, resolvedBlobGroupKeys);
-      const existing = blobGroups.get(key);
-      if (existing) {
-        existing.relatedCount += 1;
-        if (item.selectedMediaId && !existing.selectedMediaId) {
-          const resolved = { ...item, relatedCount: existing.relatedCount };
-          blobGroups.set(key, resolved);
-          const visibleIndex = visible.indexOf(existing);
-          if (visibleIndex >= 0) visible[visibleIndex] = resolved;
-        }
-        continue;
-      }
-      const grouped = { ...item, relatedCount: 1 };
-      blobGroups.set(key, grouped);
-      visible.push(grouped);
-    }
-    return visible.slice(0, maximum);
-  }
-  function groupFacebookDirectRepresentations(items) {
-    const groups = /* @__PURE__ */ new Map();
-    for (const item of items) {
-      if (item.kind !== "direct") continue;
-      const key = facebookMediaAssetKey(item);
-      if (!key) continue;
-      const group = groups.get(key) || [];
-      group.push(item);
-      groups.set(key, group);
-    }
-    const consumed = /* @__PURE__ */ new Set();
-    const synthetic = [];
-    for (const [key, group] of groups) {
-      if (group.length < 2) continue;
-      const adaptive = createFacebookAdaptiveGroup(key, group);
-      if (!adaptive) continue;
-      group.forEach((item) => consumed.add(item.id));
-      synthetic.push(adaptive);
-    }
-    return [
-      ...items.filter(
-        (item) => !consumed.has(item.id) && !isFacebookAudioTrack(item)
-      ),
-      ...synthetic
-    ];
-  }
-  function prioritizeFacebookPlayback(items) {
-    const facebookItems = items.filter(isFacebookMediaItem);
-    if (facebookItems.length <= 1) return items;
-    const playing = facebookItems.filter((item) => item.playback?.playing);
-    const visible = facebookItems.filter((item) => item.playback?.visible);
-    const preferred = playing.length ? playing : visible.length ? visible : [...facebookItems].sort(
-      (left, right) => (right.lastSeenAt || right.firstSeenAt || 0) - (left.lastSeenAt || left.firstSeenAt || 0)
-    ).slice(0, 1);
-    const preferredIds = new Set(preferred.map((item) => item.id));
-    return items.filter(
-      (item) => !isFacebookMediaItem(item) || preferredIds.has(item.id)
-    );
-  }
-  function isFacebookMediaItem(item) {
-    if (item.provider === "facebook") return true;
-    try {
-      return item.kind === "direct" && isFacebookCdnHost(new URL(item.sourceUrl).hostname);
-    } catch {
-      return false;
-    }
-  }
-  function createFacebookAdaptiveGroup(key, items) {
-    const audioItems = items.filter(isFacebookAudioTrack);
-    const representations = collapseFacebookRepresentations(
-      items.filter((item) => !isFacebookAudioTrack(item))
-    );
-    if (!representations.length) return null;
-    const sorted = [...representations].sort(
-      (left, right) => facebookQualityScore(right) - facebookQualityScore(left) || (right.contentLength || 0) - (left.contentLength || 0) || (right.lastSeenAt || 0) - (left.lastSeenAt || 0)
-    );
-    const primary = sorted[0];
-    const variants = sorted.map((item, index) => ({
-      id: item.id,
-      type: "video",
-      sourceUrl: facebookFullMediaUrl(item.sourceUrl),
-      mimeType: item.mimeType || "video/mp4",
-      codecs: null,
-      itag: null,
-      bandwidth: item.bandwidth || null,
-      averageBandwidth: item.averageBandwidth || null,
-      contentLength: facebookUrlHasByteLimit(item.sourceUrl) ? null : item.contentLength || null,
-      width: item.resolution?.width || null,
-      height: item.resolution?.height || null,
-      qualityLabel: facebookQualityLabel(item) || `Source ${index + 1}`,
-      urlResolution: "resolved",
-      signatureCipher: null,
-      muxed: !isFacebookDashTrack(item)
-    }));
-    const audioTracks = createFacebookAudioTracks(audioItems);
-    return {
-      ...primary,
-      id: stableMediaId("adaptive", key),
-      kind: "adaptive",
-      provider: "facebook",
-      title: primary.title && !/^(?:\(\d+\+?\)\s*)?facebook$/i.test(primary.title.trim()) ? primary.title : "Facebook video",
-      sourceUrl: facebookFullMediaUrl(primary.sourceUrl),
-      contentLength: facebookUrlHasByteLimit(primary.sourceUrl) ? null : primary.contentLength || null,
-      mimeType: "video/mp4",
-      variants,
-      audioTracks,
-      subtitles: [],
-      acquisitionProfile: "facebook_direct_representations",
-      probeStatus: "ready",
-      streamType: "vod",
-      relatedCount: items.length,
-      playback: newestPlaybackState(items),
-      firstSeenAt: Math.min(...items.map((item) => item.firstSeenAt || 0)),
-      lastSeenAt: Math.max(...items.map((item) => item.lastSeenAt || 0))
+      return {
+        status: "ok",
+        identity,
+        exactJob: exact ? presentDownloadJob(exact, states.get(exact.id)) : null,
+        latestJob: selected ? presentDownloadJob(selected, states.get(selected.id)) : null,
+        relatedCount: related.length
+      };
     };
-  }
-  function createFacebookAudioTracks(items) {
-    if (!items.length) return [];
-    const selected = [...items].sort(
-      (left, right) => facebookAudioScore(right) - facebookAudioScore(left) || facebookObservationTime(right) - facebookObservationTime(left)
-    )[0];
-    return [
-      {
-        id: selected.id,
-        type: "audio",
-        sourceUrl: facebookFullMediaUrl(selected.sourceUrl),
-        mimeType: selected.mimeType || "audio/mp4",
-        codecs: null,
-        bandwidth: selected.bandwidth || null,
-        averageBandwidth: selected.averageBandwidth || null,
-        contentLength: facebookUrlHasByteLimit(selected.sourceUrl) ? null : selected.contentLength || null,
-        qualityLabel: "Facebook audio",
-        urlResolution: "resolved",
-        signatureCipher: null,
-        muxed: false,
-        language: null,
-        audioTrackName: "Facebook audio",
-        audioRole: "original",
-        audioIsDefault: true
-      }
-    ];
-  }
-  function isFacebookAudioTrack(item) {
-    const mimeType = String(item?.mimeType || "").toLowerCase();
-    if (mimeType.startsWith("audio/")) return true;
-    const tag = facebookEncodingTag(item?.sourceUrl);
-    return /(?:^|[_-])(?:audio|aac|opus)(?:[_-]|$)/i.test(tag || "");
-  }
-  function isFacebookDashTrack(item) {
-    return /(?:^|[_-])dash(?:[_-]|$)/i.test(
-      facebookEncodingTag(item?.sourceUrl) || ""
-    );
-  }
-  function facebookAudioScore(item) {
-    const bandwidth = item.averageBandwidth || item.bandwidth;
-    if (Number.isFinite(bandwidth) && bandwidth > 0) return bandwidth;
-    const tag = facebookEncodingTag(item.sourceUrl) || "";
-    const kilobits = Number(
-      tag.match(/(?:audio|aac|opus)[_-]?(\d{2,3})(?:k|kbps)?/i)?.[1]
-    );
-    return Number.isFinite(kilobits) ? kilobits * 1e3 : 0;
-  }
-  function collapseFacebookRepresentations(items) {
-    const representations = /* @__PURE__ */ new Map();
-    for (const item of items) {
-      const quality = facebookQualityLabel(item);
-      const key = quality?.toLowerCase() || "source";
-      const existing = representations.get(key);
-      if (!existing || facebookObservationTime(item) >= facebookObservationTime(existing))
-        representations.set(key, item);
-    }
-    return [...representations.values()];
-  }
-  function facebookObservationTime(item) {
-    return item.playback?.observedAt || item.lastSeenAt || item.firstSeenAt || 0;
-  }
-  function facebookFullMediaUrl(value) {
-    try {
-      const url = new URL(value || "");
-      for (const name of ["range", "bytestart", "byteend"])
-        url.searchParams.delete(name);
-      return url.href;
-    } catch {
-      return value;
-    }
-  }
-  function facebookUrlHasByteLimit(value) {
-    try {
-      const url = new URL(value || "");
-      return ["range", "bytestart", "byteend"].some(
-        (name) => url.searchParams.has(name)
-      );
-    } catch {
-      return false;
-    }
-  }
-  function newestPlaybackState(items) {
-    const states = items.map((item) => item.playback).filter(Boolean).sort((left, right) => (right.observedAt || 0) - (left.observedAt || 0));
-    if (!states.length) return null;
-    const active2 = states.find((state) => state.playing) || states[0];
-    return {
-      ...active2,
-      playing: states.some((state) => state.playing),
-      visible: states.some((state) => state.visible)
-    };
-  }
-  function facebookMediaAssetKey(item) {
-    try {
-      const source = new URL(item.sourceUrl || "");
-      if (!isFacebookCdnHost(source.hostname)) return null;
-      const envelope = decodeFacebookEfg(source.searchParams.get("efg"));
-      const assetId = findFacebookAssetId(envelope);
-      if (assetId) return `facebook-asset:${assetId}`;
-      const pageId = facebookPageVideoId(item.pageUrl);
-      return pageId ? `facebook-page:${pageId}` : null;
-    } catch {
-      return null;
-    }
-  }
-  function decodeFacebookEfg(value) {
-    if (typeof value !== "string" || !value || value.length > 1e4)
-      return null;
-    try {
-      const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
-      const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
-      return JSON.parse(atob(padded));
-    } catch {
-      return null;
-    }
-  }
-  function findFacebookAssetId(value, depth = 0) {
-    if (!value || typeof value !== "object" || depth > 2) return null;
-    for (const key of ["xpv_asset_id", "video_id", "asset_id"]) {
-      const candidate = value[key];
-      if (typeof candidate === "string" || Number.isSafeInteger(candidate))
-        return String(candidate);
-    }
-    for (const child of Object.values(value)) {
-      const candidate = findFacebookAssetId(child, depth + 1);
-      if (candidate) return candidate;
-    }
-    return null;
-  }
-  function facebookPageVideoId(value) {
-    try {
-      const page = new URL(value || "");
-      if (!(page.hostname === "facebook.com" || page.hostname.endsWith(".facebook.com")))
+    const duplicate = async (candidate, output, repeatOf = null) => {
+      const result2 = await lookup(candidate, output, { verifyFile: true });
+      const job = result2.exactJob;
+      if (!job) return null;
+      if (isMediaJobActive(job)) return { status: "already_downloading", job };
+      if (["missing", "changed"].includes(job.fileStatus) || job.id === repeatOf)
         return null;
-      return page.searchParams.get("v") || page.pathname.match(/\/(?:reel|videos)\/(\d+)/i)?.[1] || null;
-    } catch {
-      return null;
-    }
-  }
-  function facebookQualityLabel(item) {
-    const tag = facebookEncodingTag(item.sourceUrl);
-    const height = item.resolution?.height || Number(tag?.match(/(?:^|[^0-9])(\d{3,4})p/i)?.[1]);
-    if (height) return `${height}p`;
-    if (/\bhd\b/i.test(tag || "")) return "HD";
-    if (/\bsd\b/i.test(tag || "")) return "SD";
-    return null;
-  }
-  function facebookQualityScore(item) {
-    const label = facebookQualityLabel(item);
-    const height = Number(label?.match(/^(\d+)p$/)?.[1]);
-    if (height) return height;
-    if (label === "HD") return 720;
-    if (label === "SD") return 480;
-    return 0;
-  }
-  function facebookEncodingTag(value) {
-    try {
-      const envelope = decodeFacebookEfg(new URL(value).searchParams.get("efg"));
-      return typeof envelope?.vencode_tag === "string" ? envelope.vencode_tag : null;
-    } catch {
-      return null;
-    }
-  }
-  function directMediaGroupKey(item) {
-    const sourceUrl = item.sourceUrl || "";
-    try {
-      const url = new URL(sourceUrl);
-      url.hash = "";
-      if (isFacebookCdnHost(url.hostname))
-        return `facebook:${url.pathname.toLowerCase()}`;
-      for (const name of ["range", "bytestart", "byteend"])
-        url.searchParams.delete(name);
-      const entries = [...url.searchParams.entries()].sort(
-        ([leftKey, left], [rightKey, right]) => leftKey.localeCompare(rightKey) || left.localeCompare(right)
-      );
-      url.search = "";
-      for (const [name, value] of entries) url.searchParams.append(name, value);
-      return url.href;
-    } catch {
-      return sourceUrl;
-    }
-  }
-  function isFacebookCdnHost(value) {
-    const host = String(value || "").toLowerCase();
-    return host === "fbcdn.net" || host.endsWith(".fbcdn.net");
-  }
-  function readableMediaTitle(value) {
-    const title = typeof value === "string" ? value.trim() : "";
-    if (!title || title.length > 160) return null;
-    if (/^[a-f0-9]{24,}$/i.test(title)) return null;
-    return title;
-  }
-  function resolvedBlobGroupKeysByPage(items) {
-    const byPage = /* @__PURE__ */ new Map();
-    for (const item of items) {
-      if (item.kind !== "blob" || !item.selectedMediaId) continue;
-      const pageUrl = item.pageUrl || "";
-      const matches = byPage.get(pageUrl) || [];
-      matches.push(item);
-      byPage.set(pageUrl, matches);
-    }
-    return new Map(
-      [...byPage].flatMap(
-        ([pageUrl, matches]) => matches.length === 1 ? [[pageUrl, `${pageUrl}
-${blobTitleKey(matches[0].title)}`]] : []
-      )
-    );
-  }
-  function blobGroupKey(item, resolvedGroupKeys) {
-    const pageUrl = item.pageUrl || "";
-    if (!item.selectedMediaId && isGenericBlobTitle(item.title)) {
-      const resolvedKey = resolvedGroupKeys.get(pageUrl);
-      if (resolvedKey) return resolvedKey;
-    }
-    return `${pageUrl}
-${blobTitleKey(item.title)}`;
-  }
-  function blobTitleKey(value) {
-    return readableMediaTitle(value)?.toLowerCase() || "blob";
-  }
-  function isGenericBlobTitle(value) {
-    const title = typeof value === "string" ? value.trim() : "";
-    return !readableMediaTitle(title) || /^(blob|blob media stream|media stream)$/i.test(title);
-  }
-  function samePlaybackFrame(left, right) {
-    if (Number.isInteger(left.frameId) && Number.isInteger(right.frameId))
-      return left.frameId === right.frameId;
-    return Boolean(
-      left.frameUrl && right.frameUrl && left.frameUrl === right.frameUrl
-    );
+      return { status: "already_downloaded", job };
+    };
+    const withRequestLock = async (key, run) => {
+      const previous = operations.get(key) || Promise.resolve();
+      const operation = previous.catch(() => {
+      }).then(run);
+      operations.set(key, operation);
+      try {
+        return await operation;
+      } finally {
+        if (operations.get(key) === operation) operations.delete(key);
+      }
+    };
+    return { lookup, duplicate, withRequestLock, clear: () => checks.clear() };
   }
 
   // src/background/media-download-jobs.js
   var broker = null;
+  var recentDownloads = createRecentDownloadService({
+    listJobs: listMediaHelperDownloads,
+    checkFile: inspectMediaHelperOutput
+  });
   async function startMediaDownloadJobStore(policy) {
     await removeStaleJobs();
     broker = createActionBroker({
@@ -8280,6 +9774,7 @@ ${blobTitleKey(item.title)}`;
         [ACTIONS.MEDIA_DOWNLOAD_CLEAR_HISTORY]: clearJobHistory,
         [ACTIONS.MEDIA_DOWNLOAD_CREATE]: createJob,
         [ACTIONS.MEDIA_DOWNLOAD_PREFLIGHT]: preflightJob,
+        [ACTIONS.MEDIA_DOWNLOAD_LOOKUP]: lookupDownload,
         [ACTIONS.MEDIA_OUTPUT_CANARY]: validatePlayerOutput,
         [ACTIONS.MEDIA_OUTPUT_CAPTURE_START]: startPlayerOutputCapture,
         [ACTIONS.MEDIA_DOWNLOAD_PAUSE]: pauseJob,
@@ -8292,6 +9787,7 @@ ${blobTitleKey(item.title)}`;
     });
     return () => {
       broker = null;
+      recentDownloads.clear();
     };
   }
   async function requestMediaDownloadJob(payload) {
@@ -8301,6 +9797,23 @@ ${blobTitleKey(item.title)}`;
   async function requestMediaDownloadQualityPreflight(payload) {
     if (!broker) return { status: "download_disabled" };
     return broker.execute(ACTIONS.MEDIA_DOWNLOAD_PREFLIGHT, payload);
+  }
+  async function requestMediaDownloadContext(payload) {
+    if (!broker) return { status: "download_disabled" };
+    return broker.execute(ACTIONS.MEDIA_DOWNLOAD_LOOKUP, payload);
+  }
+  async function lookupDownload({
+    tabId,
+    mediaId,
+    output,
+    verifyFile = false
+  } = {}) {
+    if (!Number.isInteger(tabId) || typeof mediaId !== "string")
+      return { status: "invalid_media" };
+    const catalog2 = await listDiscoveredMedia(tabId);
+    const candidate = findDownloadCandidate(catalog2.items, mediaId);
+    if (!candidate) return { status: "media_not_found" };
+    return recentDownloads.lookup(candidate, output, { verifyFile });
   }
   async function requestPlayerOutputCanary(payload) {
     if (!broker) return { status: "download_disabled" };
@@ -8494,9 +10007,9 @@ ${blobTitleKey(item.title)}`;
       sourceTabId: tabId,
       sourceFrameId
     });
-    let result = null;
+    let result2 = null;
     try {
-      result = sourceFrameId === 0 ? await chrome.tabs.sendMessage(tabId, {
+      result2 = sourceFrameId === 0 ? await chrome.tabs.sendMessage(tabId, {
         type: "START_PLAYER_OUTPUT_CAPTURE",
         captureId: jobId
       }) : await chrome.tabs.sendMessage(
@@ -8506,7 +10019,7 @@ ${blobTitleKey(item.title)}`;
       );
     } catch {
     }
-    if (result?.status === "reload_required") {
+    if (result2?.status === "reload_required") {
       let reloadResult = null;
       try {
         reloadResult = sourceFrameId === 0 ? await chrome.tabs.sendMessage(tabId, {
@@ -8530,24 +10043,24 @@ ${blobTitleKey(item.title)}`;
           reason: "The player frame is reloading and capture is armed from its first output buffer."
         };
       }
-      result = {
+      result2 = {
         status: "reload_unavailable",
         reason: reloadResult?.reason || "The player frame could not preserve capture across reload."
       };
     }
-    if (result?.status !== "started") {
+    if (result2?.status !== "started") {
       await failMediaHelperPlayerOutputCapture(
         jobId,
-        result?.reason || "Player output capture could not start in the media frame.",
+        result2?.reason || "Player output capture could not start in the media frame.",
         tabId,
         sourceFrameId
       );
-      return result || {
+      return result2 || {
         status: "capture_unavailable",
         reason: "The player frame did not expose a continuous start buffer."
       };
     }
-    return { ...result, jobId, status: "started" };
+    return { ...result2, jobId, status: "started" };
   }
   function isPlayerOutputCanaryEligible(candidate) {
     if (candidate?.kind !== "blob") return false;
@@ -8560,7 +10073,13 @@ ${blobTitleKey(item.title)}`;
       return value && value !== "identity" && !value.includes("widevine") && !value.includes("playready") && !value.includes("fairplay");
     });
   }
-  async function createJob({ tabId, mediaId, connections, output } = {}) {
+  async function createJob({
+    tabId,
+    mediaId,
+    connections,
+    output,
+    repeatOf = null
+  } = {}) {
     if (!Number.isInteger(tabId) || tabId < 0) return { status: "invalid_tab" };
     if (typeof mediaId !== "string" || !mediaId)
       return { status: "invalid_media" };
@@ -8570,36 +10089,57 @@ ${blobTitleKey(item.title)}`;
     if (candidate.kind === "hls" && candidate.selectedMediaId) {
       candidate = response.items.find((item) => item.id === candidate.selectedMediaId) || candidate;
     }
-    candidate = await attachFreshYouTubeBrowserHandoff(tabId, candidate);
-    const availability = getMediaDownloadAvailability(candidate);
-    if (!availability.supported)
-      return { status: "unsupported", reason: availability.reason };
     const normalizedOutput = normalizeMediaDownloadOutput(output, candidate);
-    const qualityCheck = await normalizeYouTubeQualityCheck(
+    const downloadIdentity = await buildMediaDownloadIdentity(
       candidate,
       normalizedOutput
     );
-    if (qualityCheck.status !== "ready") return qualityCheck;
-    const checkedOutput = qualityCheck.output;
-    const helperFailure = await helperFailureFor(candidate, checkedOutput);
-    if (helperFailure) return helperFailure;
-    const handoffResult = await attachManifestHandoff(tabId, candidate);
-    if (handoffResult.status !== "ready") return handoffResult;
-    candidate = handoffResult.candidate;
-    candidate = await attachAesKeyHandoff(tabId, candidate);
-    const job = normalizeMediaDownloadJob({
-      id: randomId5(),
-      createdAt: Date.now(),
-      sourceTabId: tabId,
-      output: checkedOutput,
-      candidate
-    });
-    const settings = await loadSettings();
-    return startMediaHelperDownload(job, {
-      connections: normalizeMediaDownloadConnections(
-        connections ?? settings.mediaDownloadConnections
-      )
-    });
+    const downloadSummary = buildMediaDownloadSummary(
+      candidate,
+      normalizedOutput
+    );
+    return recentDownloads.withRequestLock(
+      downloadIdentity.requestKey,
+      async () => {
+        const duplicate = await recentDownloads.duplicate(
+          candidate,
+          normalizedOutput,
+          repeatOf
+        );
+        if (duplicate) return duplicate;
+        candidate = await attachFreshYouTubeBrowserHandoff(tabId, candidate);
+        const availability = getMediaDownloadAvailability(candidate);
+        if (!availability.supported)
+          return { status: "unsupported", reason: availability.reason };
+        const qualityCheck = await normalizeYouTubeQualityCheck(
+          candidate,
+          normalizedOutput
+        );
+        if (qualityCheck.status !== "ready") return qualityCheck;
+        const checkedOutput = qualityCheck.output;
+        const helperFailure = await helperFailureFor(candidate, checkedOutput);
+        if (helperFailure) return helperFailure;
+        const handoffResult = await attachManifestHandoff(tabId, candidate);
+        if (handoffResult.status !== "ready") return handoffResult;
+        candidate = handoffResult.candidate;
+        candidate = await attachAesKeyHandoff(tabId, candidate);
+        const job = normalizeMediaDownloadJob({
+          id: randomId5(),
+          createdAt: Date.now(),
+          sourceTabId: tabId,
+          output: checkedOutput,
+          candidate
+        });
+        const settings = await loadSettings();
+        return startMediaHelperDownload(job, {
+          downloadIdentity,
+          downloadSummary,
+          connections: normalizeMediaDownloadConnections(
+            connections ?? settings.mediaDownloadConnections
+          )
+        });
+      }
+    );
   }
   async function preflightJob({ tabId, mediaId } = {}) {
     if (!Number.isInteger(tabId) || tabId < 0) return { status: "invalid_tab" };
@@ -8614,15 +10154,15 @@ ${blobTitleKey(item.title)}`;
   async function normalizeYouTubeQualityCheck(candidate, output) {
     if (candidate.kind !== "adaptive" || candidate.provider !== "youtube" || !hasYouTubeProviderPendingTracks(candidate))
       return { status: "ready", output };
-    const result = await preflightMediaHelperYouTubeQualities(candidate);
-    if (result.status !== "ready") {
+    const result2 = await preflightMediaHelperYouTubeQualities(candidate);
+    if (result2.status !== "ready") {
       return {
         status: "quality_unavailable",
-        reason: result.reason || "No compatible YouTube quality is available through the current provider profile."
+        reason: result2.reason || "No compatible YouTube quality is available through the current provider profile."
       };
     }
     if (output.profileId === "audio-ogg") {
-      const selectedAudio = result.audioOptions?.find((item) => item.id === output.audioTrackId) || result.audioOption;
+      const selectedAudio = result2.audioOptions?.find((item) => item.id === output.audioTrackId) || result2.audioOption;
       if (!selectedAudio) {
         return {
           status: "quality_unavailable",
@@ -8638,7 +10178,7 @@ ${blobTitleKey(item.title)}`;
         }
       };
     }
-    if (!result.videoOptions.length) {
+    if (!result2.videoOptions.length) {
       return {
         status: "quality_unavailable",
         reason: "No downloadable YouTube video quality is available through the current provider profile."
@@ -8649,14 +10189,14 @@ ${blobTitleKey(item.title)}`;
         status: "ready",
         output: {
           ...output,
-          audioTrackId: result.audioOptions?.some(
+          audioTrackId: result2.audioOptions?.some(
             (item) => item.id === output.audioTrackId
-          ) ? output.audioTrackId : result.audioOption?.id || null,
+          ) ? output.audioTrackId : result2.audioOption?.id || null,
           allowEquivalentVideo: true
         }
       };
     }
-    const option = result.videoOptions.find(
+    const option = result2.videoOptions.find(
       (item) => item.id === output.videoTrackId
     );
     if (!option) {
@@ -8669,9 +10209,9 @@ ${blobTitleKey(item.title)}`;
       status: "ready",
       output: {
         ...output,
-        audioTrackId: result.audioOptions?.some(
+        audioTrackId: result2.audioOptions?.some(
           (item) => item.id === output.audioTrackId
-        ) ? output.audioTrackId : result.audioOption?.id || null,
+        ) ? output.audioTrackId : result2.audioOption?.id || null,
         allowEquivalentVideo: option.availability === "equivalent"
       }
     };
@@ -8796,7 +10336,9 @@ ${blobTitleKey(item.title)}`;
       connections: normalizeMediaDownloadConnections(
         requestedConnections ?? settings.mediaDownloadConnections
       ),
-      attempt: Math.max(1, Number(state.attempt) || 1) + 1
+      attempt: Math.max(1, Number(state.attempt) || 1) + 1,
+      downloadIdentity: state.downloadIdentity,
+      downloadSummary: state.downloadSummary
     });
   }
   async function attachFreshYouTubeBrowserHandoff(tabId, candidate) {
@@ -9176,7 +10718,7 @@ ${blobTitleKey(item.title)}`;
   var DEBUG_CAPTURE_PREFIX = "adsfriendly.mediaDebugCaptures.";
   var MAX_CAPTURE_BYTES = 512 * 1024;
   var MAX_CAPTURES_PER_TAB = 3;
-  var CAPTURE_TTL_MS = 15 * 60 * 1e3;
+  var CAPTURE_TTL_MS2 = 15 * 60 * 1e3;
   function startMediaDebugCaptureStore() {
     const onRemoved = (tabId) => clearMediaDebugCaptures(tabId).catch(() => {
     });
@@ -9232,7 +10774,7 @@ ${blobTitleKey(item.title)}`;
       bodyFormat: ["hls", "dash", "unknown"].includes(value.bodyFormat) ? value.bodyFormat : "unknown",
       reason: requiredString4(value.reason, "reason").slice(0, 100),
       capturedAt: now,
-      expiresAt: now + CAPTURE_TTL_MS
+      expiresAt: now + CAPTURE_TTL_MS2
     });
   }
   function pruneCaptures(value, now = Date.now()) {
@@ -9304,7 +10846,73 @@ ${blobTitleKey(item.title)}`;
     return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
 
+  // src/media/player-download-target.js
+  function resolvePlayerDownloadTarget({
+    sourceUrl,
+    pageUrl,
+    frameId,
+    items = []
+  }) {
+    if (!sourceUrl) return null;
+    const scoped = items.filter((item) => item.frameId === frameId);
+    const displayed = selectVisibleMediaItems(scoped, Infinity);
+    const raw = scoped.find((item) => sameSource(item.sourceUrl, sourceUrl));
+    let matches = displayed.filter(
+      (item) => sameSource(item.sourceUrl, sourceUrl) || item.variants?.some((track) => sameSource(track.sourceUrl, sourceUrl))
+    );
+    if (!matches.length && raw?.kind === "blob") {
+      const ids = new Set(
+        [raw.selectedMediaId, ...raw.blobTrace?.candidateIds || []].filter(
+          Boolean
+        )
+      );
+      matches = displayed.filter(
+        (item) => ids.has(item.id) || item.selectedMediaId && ids.has(item.selectedMediaId)
+      );
+      if (!matches.length) {
+        try {
+          const page = new URL(pageUrl);
+          const id = page.searchParams.get("v") || page.pathname.match(/^\/shorts\/([^/]+)/)?.[1];
+          if (id && /(^|\.)youtube\.com$/.test(page.hostname)) {
+            matches = displayed.filter(
+              (item) => item.provider === "youtube" && item.id === stableMediaId("adaptive", `youtube:${id}`)
+            );
+          }
+        } catch {
+        }
+      }
+    }
+    if (matches.length !== 1) return null;
+    const presentation = matches[0];
+    const candidate = scoped.find((item) => item.id === presentation.selectedMediaId) || presentation;
+    if (!getMediaDownloadAvailability(candidate).supported) return null;
+    return { presentation, candidate };
+  }
+  function sameSource(left, right) {
+    if (!left || !right) return false;
+    if (left === right) return true;
+    try {
+      const normalize = (value) => {
+        const url = new URL(value);
+        for (const key of ["range", "bytestart", "byteend"])
+          url.searchParams.delete(key);
+        url.hash = "";
+        url.searchParams.sort();
+        return url.href;
+      };
+      return normalize(left) === normalize(right);
+    } catch {
+      return false;
+    }
+  }
+
   // src/background/message-router.js
+  var NAVIGATION_DIAGNOSTICS_MESSAGES = /* @__PURE__ */ new Set([
+    "START_NAVIGATION_DIAGNOSTICS",
+    "STOP_NAVIGATION_DIAGNOSTICS",
+    "GET_NAVIGATION_DIAGNOSTICS",
+    "CLEAR_NAVIGATION_DIAGNOSTICS"
+  ]);
   var MESSAGE_CAPABILITIES = Object.freeze({
     TRUSTED_CLICK: CAPABILITIES.NAVIGATION_INTENT,
     SYNC_LEARNING: CAPABILITIES.LEARNING_FEEDBACK,
@@ -9319,6 +10927,10 @@ ${blobTitleKey(item.title)}`;
     ALLOW_BLOCKED_SOURCE: CAPABILITIES.NAVIGATION_FEEDBACK,
     BLOCK_ALLOWED_SEARCH_SOURCE: CAPABILITIES.NAVIGATION_FEEDBACK,
     NAVIGATION_TOAST_READY: CAPABILITIES.NAVIGATION_FEEDBACK,
+    START_NAVIGATION_DIAGNOSTICS: CAPABILITIES.CORE_MESSAGING,
+    STOP_NAVIGATION_DIAGNOSTICS: CAPABILITIES.CORE_MESSAGING,
+    GET_NAVIGATION_DIAGNOSTICS: CAPABILITIES.CORE_MESSAGING,
+    CLEAR_NAVIGATION_DIAGNOSTICS: CAPABILITIES.CORE_MESSAGING,
     LEARN_VIDEO_AD: CAPABILITIES.LEARNING_FEEDBACK,
     SYNC_VIDEO_LEARNING: CAPABILITIES.LEARNING_FEEDBACK,
     REPORT_AD_DENSITY: CAPABILITIES.CORE_MAINTENANCE,
@@ -9343,6 +10955,11 @@ ${blobTitleKey(item.title)}`;
     MEDIA_PLAYBACK_OBSERVED: CAPABILITIES.MEDIA_CATALOG,
     PREPARE_MEDIA_CONTEXTUAL_PROBE: CAPABILITIES.MEDIA_CATALOG,
     GET_MEDIA_CATALOG: CAPABILITIES.MEDIA_CATALOG,
+    GET_PLAYER_MEDIA_CONTEXT: CAPABILITIES.MEDIA_DOWNLOAD,
+    GET_PLAYER_DOWNLOAD_CONTEXT: CAPABILITIES.MEDIA_DOWNLOAD,
+    SELECT_PLAYER_MEDIA: CAPABILITIES.MEDIA_DOWNLOAD,
+    OPEN_PLAYER_DOWNLOAD_MANAGER: CAPABILITIES.MEDIA_DOWNLOAD,
+    OPEN_ELEMENT_DECISIONS: CAPABILITIES.CORE_MAINTENANCE,
     GET_MEDIA_SESSIONS: CAPABILITIES.MEDIA_CATALOG,
     SAVE_MEDIA_DEBUG_MANIFEST: CAPABILITIES.MEDIA_CATALOG,
     GET_MEDIA_DEBUG_MANIFEST: CAPABILITIES.MEDIA_CATALOG,
@@ -9384,15 +11001,30 @@ ${blobTitleKey(item.title)}`;
   }
   async function route(message, sender) {
     if (!message) return { status: "ignored" };
+    if (NAVIGATION_DIAGNOSTICS_MESSAGES.has(message.type) && !sender?.url?.startsWith(chrome.runtime.getURL("options/")))
+      return { status: "ignored" };
+    if (message.type === "START_NAVIGATION_DIAGNOSTICS")
+      return navigationDiagnostics.startCapture({
+        durationMs: message.durationMs,
+        reason: "developer_test"
+      });
+    if (message.type === "STOP_NAVIGATION_DIAGNOSTICS")
+      return navigationDiagnostics.stopCapture();
+    if (message.type === "GET_NAVIGATION_DIAGNOSTICS")
+      return navigationDiagnostics.getSnapshot();
+    if (message.type === "CLEAR_NAVIGATION_DIAGNOSTICS")
+      return navigationDiagnostics.clear();
     if (message.type === "TRUSTED_CLICK") {
       runtimeState.lastTrustedClick = {
         timestamp: Date.now(),
         intentUrl: message.intentUrl,
-        sourceUrl: message.sourceUrl || sender?.tab?.url || null,
+        sourceUrl: sender?.tab?.url || message.sourceUrl || null,
         intentKind: message.intentKind || "navigation",
         intentReasons: Array.isArray(message.intentReasons) ? message.intentReasons : [],
-        tabId: sender?.tab?.id || null
+        tabId: sender?.tab?.id || null,
+        sourceFrameId: sender?.frameId ?? null
       };
+      navigationAttribution.rememberIntent(runtimeState.lastTrustedClick);
       return;
     }
     if (message.type === "NAVIGATION_TOAST_READY") {
@@ -9571,6 +11203,67 @@ ${blobTitleKey(item.title)}`;
       if (!Number.isInteger(message.tabId)) return { status: "invalid_tab" };
       return listDiscoveredMedia(message.tabId, message.pageUrl || null);
     }
+    if (message.type === "GET_PLAYER_MEDIA_CONTEXT") {
+      if (!Number.isInteger(sender?.tab?.id)) return { status: "invalid_tab" };
+      const snapshot = await listDiscoveredMedia(sender.tab.id, sender.tab.url);
+      return {
+        ...snapshot,
+        tab: { id: sender.tab.id, url: sender.tab.url },
+        frameId: sender.frameId ?? 0
+      };
+    }
+    if (message.type === "GET_PLAYER_DOWNLOAD_CONTEXT") {
+      if (!Number.isInteger(sender?.tab?.id)) return { status: "invalid_tab" };
+      const snapshot = await listDiscoveredMedia(sender.tab.id, sender.tab.url);
+      const target = resolvePlayerDownloadTarget({
+        sourceUrl: message.sourceUrl,
+        pageUrl: sender.url,
+        frameId: sender.frameId ?? 0,
+        items: snapshot.items
+      });
+      if (!target) return { status: "unavailable" };
+      return requestMediaDownloadContext({
+        tabId: sender.tab.id,
+        mediaId: target.candidate.id,
+        output: message.output,
+        verifyFile: message.verifyFile === true
+      });
+    }
+    if (message.type === "SELECT_PLAYER_MEDIA") {
+      if (!Number.isInteger(sender?.tab?.id)) return { status: "invalid_tab" };
+      const snapshot = await listDiscoveredMedia(sender.tab.id, sender.tab.url);
+      const target = resolvePlayerDownloadTarget({
+        sourceUrl: message.sourceUrl,
+        pageUrl: sender.url,
+        frameId: sender.frameId ?? 0,
+        items: snapshot.items
+      });
+      if (!target) return { status: "unavailable" };
+      return preferDiscoveredMedia(sender.tab.id, target.presentation.id);
+    }
+    if (message.type === "OPEN_PLAYER_DOWNLOAD_MANAGER") {
+      await openExtensionManagedTab(
+        {
+          url: chrome.runtime.getURL("options/options.html#downloads")
+        },
+        "download_manager"
+      );
+      return { status: "opened" };
+    }
+    if (message.type === "OPEN_ELEMENT_DECISIONS") {
+      if (!isExtensionPageSender(sender) || !Number.isInteger(message.tabId))
+        return { status: "forbidden" };
+      const tab = await chrome.tabs.get(message.tabId);
+      const page = new URL(tab.url);
+      if (!/^https?:$/.test(page.protocol)) return { status: "invalid_tab" };
+      await openExtensionManagedTab(
+        {
+          url: chrome.runtime.getURL("options/options.html") + `?site=${encodeURIComponent(page.hostname)}#element-decisions`
+        },
+        "element_decisions"
+      );
+      return { status: "opened" };
+    }
     if (message.type === "GET_MEDIA_SESSIONS") {
       if (!Number.isInteger(message.tabId)) return { status: "invalid_tab" };
       return listMediaPlaybackSessions(message.tabId, message.pageUrl || null);
@@ -9613,7 +11306,8 @@ ${blobTitleKey(item.title)}`;
         tabId: message.tabId,
         mediaId: message.mediaId,
         connections: message.connections,
-        output: message.output
+        output: message.output,
+        repeatOf: typeof message.repeatOf === "string" ? message.repeatOf : null
       });
     if (message.type === "PREFLIGHT_MEDIA_DOWNLOAD_QUALITIES")
       return requestMediaDownloadQualityPreflight({
@@ -9688,7 +11382,10 @@ ${blobTitleKey(item.title)}`;
           surface: "navigation_toast"
         }
       });
-      await chrome.tabs.create({ url: message.url, active: true });
+      await openExtensionManagedTab(
+        { url: message.url, active: true },
+        "user_restore"
+      );
       return;
     }
     if (message.type === "BLOCK_GRAY_NAVIGATION") {
@@ -9732,6 +11429,12 @@ ${blobTitleKey(item.title)}`;
         sourceUrl: `https://${message.source}/`,
         action: "allow",
         outcome: "user_kept_reviewed_tab",
+        evidence: {
+          navigation: normalizeNavigationAttributionFacts(
+            message.navigationAttribution
+          ),
+          interpretation: "explicit_user_feedback"
+        },
         context: {
           source_host: message.source,
           target_host: message.target,
@@ -9762,6 +11465,12 @@ ${blobTitleKey(item.title)}`;
         sourceUrl: `https://${message.source}/`,
         action: "block",
         outcome: "user_blocked_reviewed_tab",
+        evidence: {
+          navigation: normalizeNavigationAttributionFacts(
+            message.navigationAttribution
+          ),
+          interpretation: "explicit_user_feedback"
+        },
         context: {
           source_host: message.source,
           target_host: message.target,
@@ -9788,8 +11497,10 @@ ${blobTitleKey(item.title)}`;
         return { status: "invalid_url" };
       }
       if (!/^https?:$/.test(targetUrl.protocol)) return { status: "invalid_url" };
-      allowUserOpenedNavigation(targetUrl.href);
-      await chrome.tabs.create(tabCreateProperties(targetUrl.href, sender));
+      await openExtensionManagedTab(
+        tabCreateProperties(targetUrl.href, sender),
+        "user_open_once"
+      );
       return { status: "opened" };
     }
     if (message.type === "ALLOW_BLOCKED_SOURCE") {
@@ -9797,9 +11508,9 @@ ${blobTitleKey(item.title)}`;
       const search = getPrefilledSearchNavigation(message.url);
       if (!source || !search) return { status: "invalid_navigation" };
       await syncTrustedPath(source, PREFILLED_SEARCH_TRUST_TARGET, true);
-      allowUserOpenedNavigation(message.url);
-      const tab = await chrome.tabs.create(
-        tabCreateProperties(message.url, sender)
+      const tab = await openExtensionManagedTab(
+        tabCreateProperties(message.url, sender),
+        "user_allow_source"
       );
       await showAllowedSearchNavigation({
         tabId: tab.id,
@@ -10003,25 +11714,25 @@ ${blobTitleKey(item.title)}`;
   }
   function normalizeCustomRules(value) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-    const result = {};
+    const result2 = {};
     for (const [rawHostname, rawRules] of Object.entries(value)) {
       const hostname = normalizeHostname3(rawHostname);
       if (!hostname || !Array.isArray(rawRules)) continue;
       const rules = rawRules.slice(0, MAX_RULES_PER_SITE2).map(normalizeRule).filter(Boolean);
-      if (rules.length) result[hostname] = dedupeRules(rules);
+      if (rules.length) result2[hostname] = dedupeRules(rules);
     }
-    return result;
+    return result2;
   }
   function normalizeElementExceptions2(value) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-    const result = {};
+    const result2 = {};
     for (const [rawHostname, rawRules] of Object.entries(value)) {
       const hostname = normalizeHostname3(rawHostname);
       if (!hostname || !Array.isArray(rawRules)) continue;
       const rules = rawRules.slice(0, MAX_RULES_PER_SITE2).map(normalizeElementException).filter(Boolean);
-      if (rules.length) result[hostname] = dedupeElementExceptions(rules);
+      if (rules.length) result2[hostname] = dedupeElementExceptions(rules);
     }
-    return result;
+    return result2;
   }
   function normalizeElementException(rule) {
     if (!rule || typeof rule !== "object" || Array.isArray(rule)) return null;
@@ -10276,12 +11987,12 @@ ${blobTitleKey(item.title)}`;
             lifecycle.active = true;
             continue;
           }
-          const result = implementations[definition.id]({
+          const result2 = implementations[definition.id]({
             controller: controller2,
             feature: definition,
             policy
           });
-          const cleanup = isPromiseLike(result) ? await result : result;
+          const cleanup = isPromiseLike(result2) ? await result2 : result2;
           lifecycles.set(definition.id, {
             active: true,
             started: true,
@@ -10406,8 +12117,8 @@ ${blobTitleKey(item.title)}`;
     normalizedUrl.searchParams.delete("range");
     const size = parseSize(url.searchParams.get("size"));
     const duration = positiveNumber(url.searchParams.get("dur"));
-    const contentLength = positiveInteger2(url.searchParams.get("clen")) || contentRangeTotal(responseHeaders) || positiveInteger2(headerValue(responseHeaders, "content-length"));
-    const bitrate = positiveInteger2(url.searchParams.get("bitrate"));
+    const contentLength = positiveInteger3(url.searchParams.get("clen")) || contentRangeTotal(responseHeaders) || positiveInteger3(headerValue(responseHeaders, "content-length"));
+    const bitrate = positiveInteger3(url.searchParams.get("bitrate"));
     const codecs = parseCodecs(url.searchParams.get("mime"));
     const assetToken = safeToken(url.searchParams.get("id"), 180) || safeToken(url.searchParams.get("docid"), 64) || null;
     return Object.freeze({
@@ -10531,13 +12242,13 @@ ${blobTitleKey(item.title)}`;
   function parseSize(value) {
     const match = String(value || "").match(/^(\d{2,5})x(\d{2,5})$/i);
     if (!match) return null;
-    const width = positiveInteger2(match[1]);
-    const height = positiveInteger2(match[2]);
+    const width = positiveInteger3(match[1]);
+    const height = positiveInteger3(match[2]);
     return width && height ? { width, height } : null;
   }
   function contentRangeTotal(headers) {
     const value = headerValue(headers, "content-range");
-    return positiveInteger2(String(value || "").match(/\/(\d+)$/)?.[1]);
+    return positiveInteger3(String(value || "").match(/\/(\d+)$/)?.[1]);
   }
   function headerValue(headers, name) {
     const match = (headers || []).find(
@@ -10550,7 +12261,7 @@ ${blobTitleKey(item.title)}`;
     const normalized = value.trim();
     return normalized && normalized.length <= maximum ? normalized : null;
   }
-  function positiveInteger2(value) {
+  function positiveInteger3(value) {
     const number = Number(value);
     return Number.isSafeInteger(number) && number > 0 ? number : null;
   }
@@ -10559,7 +12270,185 @@ ${blobTitleKey(item.title)}`;
     return Number.isFinite(number) && number > 0 ? number : null;
   }
 
+  // src/background/media-size-probe.js
+  var DEFAULT_MAX_CONCURRENT = 2;
+  var DEFAULT_MAX_PER_SCOPE = 8;
+  var DEFAULT_CACHE_TTL_MS = 5 * 6e4;
+  var DEFAULT_TIMEOUT_MS2 = 5e3;
+  var DEFAULT_MAX_CACHE_ENTRIES = 256;
+  var DEFAULT_MAX_SCOPES = 64;
+  var DEFAULT_MAX_QUEUED = 16;
+  function createMediaSizeProbe({
+    fetchImpl = globalThis.fetch,
+    now = Date.now,
+    maxConcurrent = DEFAULT_MAX_CONCURRENT,
+    maxPerScope = DEFAULT_MAX_PER_SCOPE,
+    cacheTtlMs = DEFAULT_CACHE_TTL_MS,
+    timeoutMs = DEFAULT_TIMEOUT_MS2,
+    maxCacheEntries = DEFAULT_MAX_CACHE_ENTRIES,
+    maxScopes = DEFAULT_MAX_SCOPES,
+    maxQueued = DEFAULT_MAX_QUEUED
+  } = {}) {
+    if (typeof fetchImpl !== "function")
+      throw new TypeError("Media size probe requires fetch().");
+    const cache = /* @__PURE__ */ new Map();
+    const inFlight = /* @__PURE__ */ new Map();
+    const scopeUrls = /* @__PURE__ */ new Map();
+    const waiters = [];
+    let active2 = 0;
+    return Object.freeze({
+      probe(rawUrl, { scopeKey = "default" } = {}) {
+        const url = validDirectUrl(rawUrl);
+        if (!url) return Promise.resolve(result("skipped", "invalid_url"));
+        const cached = cache.get(url);
+        if (cached && now() - cached.at < cacheTtlMs) {
+          cache.delete(url);
+          cache.set(url, cached);
+          return Promise.resolve(cached.value);
+        }
+        cache.delete(url);
+        if (inFlight.has(url)) return inFlight.get(url);
+        pruneExpired(now());
+        const scopedUrls = scopeUrls.get(scopeKey)?.urls || /* @__PURE__ */ new Set();
+        if (!scopedUrls.has(url)) {
+          if (scopedUrls.size >= maxPerScope)
+            return Promise.resolve(result("skipped", "scope_limit"));
+          scopedUrls.add(url);
+          scopeUrls.set(scopeKey, { urls: scopedUrls, at: now() });
+        }
+        if (active2 >= maxConcurrent && waiters.length >= maxQueued)
+          return Promise.resolve(result("skipped", "queue_limit"));
+        const operation = runQueued(async () => {
+          const value = await probeResponseMetadata(url, fetchImpl, timeoutMs);
+          cache.set(url, { at: now(), value });
+          trimCache();
+          return value;
+        });
+        inFlight.set(url, operation);
+        operation.finally(() => inFlight.delete(url));
+        return operation;
+      }
+    });
+    function pruneExpired(timestamp) {
+      for (const [key, entry] of cache) {
+        if (timestamp - entry.at >= cacheTtlMs) cache.delete(key);
+      }
+      for (const [key, entry] of scopeUrls) {
+        if (timestamp - entry.at >= cacheTtlMs) scopeUrls.delete(key);
+      }
+      if (scopeUrls.size >= maxScopes) {
+        const oldest = [...scopeUrls.entries()].sort(
+          (left, right) => left[1].at - right[1].at
+        );
+        for (const [key] of oldest.slice(0, scopeUrls.size - maxScopes + 1))
+          scopeUrls.delete(key);
+      }
+    }
+    function trimCache() {
+      while (cache.size > maxCacheEntries)
+        cache.delete(cache.keys().next().value);
+    }
+    async function runQueued(task) {
+      if (active2 >= maxConcurrent) {
+        await new Promise((resolve) => waiters.push(resolve));
+      } else {
+        active2 += 1;
+      }
+      try {
+        return await task();
+      } finally {
+        const next = waiters.shift();
+        if (next) next();
+        else active2 -= 1;
+      }
+    }
+  }
+  async function probeResponseMetadata(url, fetchImpl, timeoutMs) {
+    const head = await requestHeadersOnly(
+      fetchImpl,
+      url,
+      "HEAD",
+      null,
+      timeoutMs
+    );
+    const headSize = totalBytes(head);
+    if (headSize) return result("resolved", null, headSize, "HEAD", head.status);
+    const range = await requestHeadersOnly(
+      fetchImpl,
+      url,
+      "GET",
+      "bytes=0-0",
+      timeoutMs
+    );
+    const rangeSize = totalBytes(range);
+    if (rangeSize)
+      return result("resolved", null, rangeSize, "GET_RANGE", range.status);
+    if (head.error || range.error)
+      return result("unavailable", "request_failed", null, null, range.status);
+    return result("unavailable", "size_header_missing", null, null, range.status);
+  }
+  async function requestHeadersOnly(fetchImpl, url, method, range, timeoutMs) {
+    const controller2 = new AbortController();
+    const timeout = setTimeout(() => controller2.abort(), timeoutMs);
+    try {
+      const response = await fetchImpl(url, {
+        method,
+        credentials: "include",
+        cache: "no-store",
+        redirect: "follow",
+        signal: controller2.signal,
+        ...range ? { headers: { Range: range } } : {}
+      });
+      const metadata = {
+        status: Number(response.status) || 0,
+        headers: response.headers,
+        error: false
+      };
+      if (method !== "HEAD") {
+        await response.body?.cancel().catch(() => {
+        });
+      }
+      return metadata;
+    } catch {
+      return { status: 0, headers: null, error: true };
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+  function totalBytes(response) {
+    if (!response || response.error || response.status < 200 || response.status >= 300)
+      return null;
+    const headers = response.headers;
+    const encoding = String(headers?.get?.("content-encoding") || "").trim().toLowerCase();
+    if (encoding && encoding !== "identity") return null;
+    if (response.status === 206) {
+      const total = String(headers?.get?.("content-range") || "").match(
+        /^\s*bytes\s+\d+-\d+\/(\d+)\s*$/i
+      )?.[1];
+      return positiveSafeInteger(total);
+    }
+    return positiveSafeInteger(headers?.get?.("content-length"));
+  }
+  function validDirectUrl(value) {
+    if (typeof value !== "string" || !value.trim()) return null;
+    try {
+      const url = new URL(value);
+      return ["http:", "https:"].includes(url.protocol) ? url.href : null;
+    } catch {
+      return null;
+    }
+  }
+  function positiveSafeInteger(value) {
+    const number = Number(value);
+    return Number.isSafeInteger(number) && number > 0 ? number : null;
+  }
+  function result(status, reason, contentLength = null, method = null, httpStatus = null) {
+    return Object.freeze({ status, reason, contentLength, method, httpStatus });
+  }
+
   // src/background/media-request-observer.js
+  var mediaSizeProbe = createMediaSizeProbe();
+  var pendingSizeUpdates = /* @__PURE__ */ new Set();
   var OBSERVED_RESOURCE_TYPES = Object.freeze([
     "xmlhttprequest",
     "media",
@@ -10584,6 +12473,7 @@ ${blobTitleKey(item.title)}`;
     if (!Number.isInteger(details.tabId) || details.tabId < 0 || typeof details.url !== "string" || !/^https?:/i.test(details.url) || Number(details.statusCode) < 200 || Number(details.statusCode) >= 400)
       return null;
     const mimeType = responseMimeType(details.responseHeaders);
+    const contentLength = responseTotalBytes(details);
     const adaptiveTrack = parseYouTubePlaybackTrack(details.url, {
       mimeType,
       responseHeaders: details.responseHeaders
@@ -10598,6 +12488,7 @@ ${blobTitleKey(item.title)}`;
       initiator: safeHttpOrigin(details.initiator),
       url: details.url,
       mimeType,
+      contentLength,
       kind,
       adaptiveTrack,
       method: String(details.method || "GET").toUpperCase(),
@@ -10621,6 +12512,7 @@ ${blobTitleKey(item.title)}`;
       pageUrl: tab.url,
       sourceUrl: observation.url,
       mimeType: observation.mimeType,
+      contentLength: observation.kind === "direct" ? observation.contentLength : null,
       title,
       detectedBy: "network"
     });
@@ -10639,7 +12531,7 @@ ${blobTitleKey(item.title)}`;
         observedAt: observation.observedAt
       }
     ];
-    const result = await recordDiscoveredMedia(
+    const result2 = await recordDiscoveredMedia(
       observation.tabId,
       createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, candidate, {
         frameId: frameContext.frameId,
@@ -10648,7 +12540,15 @@ ${blobTitleKey(item.title)}`;
         observationOutput: observation.output
       })
     );
-    if (result?.status !== "recorded" || !["hls", "dash"].includes(candidate.kind) || frameContext.frameId < 0)
+    if (result2?.status === "recorded" && candidate.kind === "direct" && !result2.item?.contentLength) {
+      probeMissingMediaSize({
+        tabId: observation.tabId,
+        candidate,
+        frameId: frameContext.frameId,
+        frameUrl: frameContext.frameUrl
+      });
+    }
+    if (result2?.status !== "recorded" || !["hls", "dash"].includes(candidate.kind) || frameContext.frameId < 0)
       return;
     await chrome.tabs.sendMessage(
       observation.tabId,
@@ -10656,6 +12556,52 @@ ${blobTitleKey(item.title)}`;
       { frameId: frameContext.frameId }
     ).catch(() => {
     });
+  }
+  function probeMissingMediaSize({ tabId, candidate, frameId, frameUrl }) {
+    const scopeKey = mediaProbeScope(tabId, candidate.pageUrl);
+    const updateKey = `${scopeKey}:${candidate.id}`;
+    if (pendingSizeUpdates.has(updateKey)) return;
+    pendingSizeUpdates.add(updateKey);
+    mediaSizeProbe.probe(candidate.sourceUrl, {
+      scopeKey
+    }).then(async (probe) => {
+      if (probe.status !== "resolved" || !probe.contentLength) return;
+      if (!await isCurrentTabPage(tabId, candidate.pageUrl)) return;
+      await recordDiscoveredMedia(
+        tabId,
+        createRegisteredEvent(
+          EVENTS.MEDIA_DISCOVERED,
+          { ...candidate, contentLength: probe.contentLength },
+          {
+            frameId,
+            frameUrl,
+            observationInput: "media.size_probe.headers",
+            observationOutput: "media.catalog.content_length"
+          }
+        )
+      );
+    }).catch(() => {
+    }).finally(() => pendingSizeUpdates.delete(updateKey));
+  }
+  function mediaProbeScope(tabId, pageUrl) {
+    try {
+      const url = new URL(pageUrl);
+      return `${tabId}:${url.href}`;
+    } catch {
+      return String(tabId);
+    }
+  }
+  async function isCurrentTabPage(tabId, pageUrl) {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      const current = new URL(tab.url);
+      const observed = new URL(pageUrl);
+      current.hash = "";
+      observed.hash = "";
+      return current.href === observed.href;
+    } catch {
+      return false;
+    }
   }
   async function resolveFrameContext(observation) {
     if (observation.frameId >= 0) {
@@ -10676,6 +12622,25 @@ ${blobTitleKey(item.title)}`;
       (item) => String(item?.name || "").toLowerCase() === "content-type"
     );
     return typeof header?.value === "string" ? header.value : null;
+  }
+  function responseTotalBytes(details = {}) {
+    const headers = Array.isArray(details.responseHeaders) ? details.responseHeaders : [];
+    const headerValue2 = (name) => headers.find((item) => String(item?.name || "").toLowerCase() === name)?.value;
+    const status = Number(details.statusCode);
+    const contentEncoding = String(headerValue2("content-encoding") || "").trim().toLowerCase();
+    if (contentEncoding && contentEncoding !== "identity") return null;
+    if (status === 206) {
+      const total = String(headerValue2("content-range") || "").match(
+        /^\s*bytes\s+\d+-\d+\/(\d+)\s*$/i
+      )?.[1];
+      return positiveSafeInteger2(total);
+    }
+    if (status < 200 || status >= 300) return null;
+    return positiveSafeInteger2(headerValue2("content-length"));
+  }
+  function positiveSafeInteger2(value) {
+    const number = Number(value);
+    return Number.isSafeInteger(number) && number > 0 ? number : null;
   }
   function safeHttpOrigin(value) {
     try {

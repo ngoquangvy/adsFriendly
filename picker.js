@@ -262,6 +262,9 @@ var AdsFriendlyPicker = (() => {
       C2.MEDIA_CATALOG
     ]),
     feature("content.youtube-cleaner", "content", C2.DOM_STATIC_RULES),
+    feature("content.player-download", "content", C2.MEDIA_DOWNLOAD, [
+      C2.MEDIA_CATALOG
+    ]),
     feature("content.navigation-intent", "content", C2.NAVIGATION_INTENT),
     feature("content.navigation-toast", "content", C2.NAVIGATION_FEEDBACK),
     feature("content.dom-static-blocker", "content", C2.DOM_STATIC_RULES, [
@@ -280,6 +283,9 @@ var AdsFriendlyPicker = (() => {
       C2.MEDIA_CATALOG
     ]),
     feature("media-frame.navigation-intent", "media-frame", C2.NAVIGATION_INTENT),
+    feature("media-frame.player-download", "media-frame", C2.MEDIA_DOWNLOAD, [
+      C2.MEDIA_CATALOG
+    ]),
     feature("video.surgeon", "video", C2.VIDEO_OBSERVE, [
       C2.VIDEO_RESTORE_STATE,
       C2.VIDEO_USER_ACTION,
@@ -768,6 +774,7 @@ var AdsFriendlyPicker = (() => {
         if (activeOverlay) return;
         activeOverlay = document.createElement("div");
         activeOverlay.id = "adsfriendly-picker-active-overlay";
+        activeOverlay.setAttribute("data-adsfriendly-ui", "picker-overlay");
         activeOverlay.style.cssText = `
             position: fixed;
             pointer-events: none;
@@ -782,6 +789,7 @@ var AdsFriendlyPicker = (() => {
         document.body.appendChild(activeOverlay);
         controlPanel = document.createElement("div");
         controlPanel.id = "adsfriendly-picker-panel";
+        controlPanel.setAttribute("data-adsfriendly-ui", "picker-controls");
         controlPanel.style.cssText = `
             position: fixed;
             z-index: 2147483647;

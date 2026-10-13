@@ -355,7 +355,12 @@ export function getMediaDownloadEstimate(
           audioTrackId,
         )
       : null;
+  const directBytes =
+    candidate.kind === "direct"
+      ? positiveInteger(candidate.contentLength || presentation.contentLength)
+      : null;
   const estimatedBytes =
+    directBytes ||
     adaptiveBytes ||
     (duration && bandwidth ? Math.round((duration * bandwidth) / 8) : null);
   return Object.freeze({
@@ -369,7 +374,9 @@ export function getMediaDownloadEstimate(
     bandwidth,
     estimatedBytes,
     basis: estimatedBytes
-      ? candidate.kind === "adaptive"
+      ? directBytes
+        ? "source_headers"
+        : candidate.kind === "adaptive"
         ? adaptiveBytes
           ? "track_content_length"
           : "track_bitrate"

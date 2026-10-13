@@ -144,6 +144,7 @@ var AdsFriendlyMainWorld = (() => {
         "streamType"
       ),
       duration: optionalFiniteNumber(value.duration),
+      contentLength: optionalNonNegativeInteger(value.contentLength),
       resolution: normalizeResolution(value.resolution),
       playback: normalizePlaybackState(value.playback),
       bandwidth: optionalPositiveNumber(value.bandwidth),
@@ -682,6 +683,7 @@ var AdsFriendlyMainWorld = (() => {
     mimeType = null,
     title = null,
     duration = null,
+    contentLength = null,
     resolution = null,
     playback = null,
     detectedBy = MEDIA_DETECTION_SOURCES.DOM
@@ -699,6 +701,7 @@ var AdsFriendlyMainWorld = (() => {
       title,
       mimeType,
       duration,
+      contentLength: kind === MEDIA_KINDS.DIRECT ? contentLength : null,
       resolution,
       playback,
       detectedBy,
@@ -1874,6 +1877,9 @@ ${body}`;
       C2.MEDIA_CATALOG
     ]),
     feature("content.youtube-cleaner", "content", C2.DOM_STATIC_RULES),
+    feature("content.player-download", "content", C2.MEDIA_DOWNLOAD, [
+      C2.MEDIA_CATALOG
+    ]),
     feature("content.navigation-intent", "content", C2.NAVIGATION_INTENT),
     feature("content.navigation-toast", "content", C2.NAVIGATION_FEEDBACK),
     feature("content.dom-static-blocker", "content", C2.DOM_STATIC_RULES, [
@@ -1892,6 +1898,9 @@ ${body}`;
       C2.MEDIA_CATALOG
     ]),
     feature("media-frame.navigation-intent", "media-frame", C2.NAVIGATION_INTENT),
+    feature("media-frame.player-download", "media-frame", C2.MEDIA_DOWNLOAD, [
+      C2.MEDIA_CATALOG
+    ]),
     feature("video.surgeon", "video", C2.VIDEO_OBSERVE, [
       C2.VIDEO_RESTORE_STATE,
       C2.VIDEO_USER_ACTION,

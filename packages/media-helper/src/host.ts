@@ -23,13 +23,17 @@ import { hlsFfmpegAdapter } from "./hls-ffmpeg-adapter.js";
 import { dashFfmpegAdapter } from "./dash-ffmpeg-adapter.js";
 import { adaptiveHttpAdapter } from "./adaptive-http-adapter.js";
 import { DownloadJobManager } from "./job-manager.js";
-import { openManagedOutput, revealManagedOutput } from "./output-actions.js";
+import {
+  openManagedOutput,
+  revealManagedOutput,
+  inspectManagedOutput,
+} from "./output-actions.js";
 import { preflightYouTubeProviderQualities } from "./youtube-provider-resolver.js";
 import { validatePlayerOutputCanary } from "./player-output-canary.js";
 import { PlayerOutputCaptureManager } from "./player-output-capture-manager.js";
 import type { DownloadCandidate } from "./download-types.js";
 
-const HELPER_VERSION = "0.24.1";
+const HELPER_VERSION = "0.24.2";
 const callerOrigin = process.argv[2] || null;
 const reader = new NativeMessageReader();
 const adapters = new DownloadAdapterRegistry([
@@ -196,6 +200,19 @@ async function handleMessage(rawMessage: unknown): Promise<void> {
       );
       return;
     }
+    if (request.type === MEDIA_HELPER_REQUESTS.OUTPUT_STAT) {
+      const outputPath = request.payload?.outputPath;
+      if (typeof outputPath !== "string" || !outputPath)
+        throw new Error("Output check requires payload.outputPath.");
+      writeMessage(
+        createHelperEvent(
+          MEDIA_HELPER_EVENTS.OUTPUT_STAT,
+          requestId,
+          await inspectManagedOutput(outputPath),
+        ),
+      );
+      return;
+    }
     writeError(
       requestId,
       "not_implemented",
@@ -226,6 +243,7 @@ async function inspectCapabilities() {
     [MEDIA_HELPER_CAPABILITIES.FFMPEG_MUX]: ffmpeg.available,
     [MEDIA_HELPER_CAPABILITIES.OUTPUT_OPEN]: true,
     [MEDIA_HELPER_CAPABILITIES.OUTPUT_REVEAL]: true,
+    [MEDIA_HELPER_CAPABILITIES.OUTPUT_STAT]: true,
     ffmpeg,
     ffprobe,
   };

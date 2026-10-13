@@ -1,4 +1,6 @@
 import { loadSettings, saveSettings } from "../runtime/settings-store.js";
+import { createSettingsNavigation } from "./section-navigation.js";
+import { createSettingsListFilters } from "./list-filters.js";
 import {
   BUNDLED_SETTINGS_PACKAGE_PATH,
   SETTINGS_PACKAGE_STATE_KEY,
@@ -18,6 +20,7 @@ import {
 } from "../media/download-job-contract.js";
 import {
   formatMediaJobDetails,
+  formatBytes,
   formatMediaJobStage,
   getMediaJobPauseAvailability,
   getMediaJobPrimaryAction,
@@ -32,6 +35,13 @@ const packageStatusEl = $("package-status");
 let currentSnapshot = {};
 let storageRefreshTimer = null;
 let downloadRefreshTimer = null;
+let settingsNavigation = null;
+let listFilters = null;
+let pageLoaded = false;
+let downloadRenderRevision = 0;
+let disposed = false;
+let expandedRuleHost = null;
+let handledElementLink = null;
 const DOWNLOAD_HISTORY_VISIBLE_ITEMS = 15;
 
 initialize().catch((error) => showPackageStatus(error.message, true));
@@ -45,27 +55,76 @@ window.addEventListener("unhandledrejection", (event) => {
 
 async function initialize() {
   bindStaticActions();
+  listFilters = createSettingsListFilters(document, () => {
+    if (settingsNavigation?.isActive("downloads"))
+      updateDownloadHistoryViewport($("download-job-manager"));
+  });
+  settingsNavigation = createSettingsNavigation({
+    document,
+    window,
+    onActivate: () => {
+      if (pageLoaded)
+        void renderActiveSection().catch((error) =>
+          showPackageStatus(error.message, true),
+        );
+    },
+  });
+  $("settings-version").textContent =
+    `· ${chrome.runtime.getManifest().version}`;
   chrome.storage.onChanged.addListener(handleStorageChange);
-  window.addEventListener("unload", () =>
-    chrome.storage.onChanged.removeListener(handleStorageChange),
-  );
+  window.addEventListener("unload", () => {
+    disposed = true;
+    settingsNavigation.stop();
+    listFilters.stop();
+    clearTimeout(storageRefreshTimer);
+    clearTimeout(downloadRefreshTimer);
+    chrome.storage.onChanged.removeListener(handleStorageChange);
+  });
   await loadPage();
-  await renderDownloads();
-  if (location.hash === "#downloads")
-    $("downloads").scrollIntoView({ behavior: "smooth", block: "start" });
-  if (location.hash === "#element-decisions") {
-    $("element-decisions")?.scrollIntoView({
-      behavior: "smooth",
-      block: "start",
-    });
+}
+
+// Only the visible page performs expensive/native/IndexedDB reads. Downloads
+// and diagnostic capture themselves keep running independently in background.
+const sectionRenderers = Object.freeze({
+  protection: () => {},
+  packages: renderPackageStatus,
+  sites: () => {
+    renderDomainList(currentSnapshot.whitelist || [], whitelistEl, "whitelist");
+    renderDomainList(currentSnapshot.blacklist || [], blacklistEl, "blacklist");
+    renderCustomRules();
+    renderLearnedPaths();
+  },
+  downloads: renderDownloads,
+  activity: () => renderNavigationLogs(currentSnapshot.blockedLogs || []),
+  advanced: async () => {
+    await renderStorageHealth();
+    if (!settingsNavigation.isActive("advanced") || disposed) return;
+    if ($("training-details").open) await renderDomSamples();
+    if ($("diagnostics-details").open) await renderNavigationDiagnostics();
+  },
+});
+
+async function renderActiveSection() {
+  if (disposed || !pageLoaded) return;
+  const section = settingsNavigation.current();
+  await sectionRenderers[section]();
+  if (disposed || section !== settingsNavigation.current()) return;
+  listFilters.update();
+  const elementLink =
+    section === "sites" && location.hash === "#element-decisions"
+      ? location.href
+      : null;
+  if (elementLink && elementLink !== handledElementLink) {
     const site = new URLSearchParams(location.search).get("site");
     const siteCard = site
       ? [...document.querySelectorAll(".rule-site")].find(
           (card) => card.dataset.host === site,
         )
       : null;
-    siteCard?.querySelector(".toggle-details")?.click();
+    if (siteCard) expandRuleSite(siteCard.dataset.host);
+    siteCard?.scrollIntoView({ block: "nearest" });
   }
+  handledElementLink = elementLink;
 }
 
 function handleStorageChange(changes, areaName) {
@@ -85,6 +144,7 @@ function handleStorageChange(changes, areaName) {
     (key) =>
       [
         "appSettings",
+        "blockedLogs",
         "whitelist",
         "blacklist",
         "userCustomRules",
@@ -100,14 +160,30 @@ function handleStorageChange(changes, areaName) {
 }
 
 function scheduleDownloadRefresh() {
+  if (!settingsNavigation?.isActive("downloads") || disposed) return;
   if (downloadRefreshTimer) return;
   downloadRefreshTimer = setTimeout(() => {
     downloadRefreshTimer = null;
-    void renderDownloads();
+    if (settingsNavigation.isActive("downloads")) void renderDownloads();
   }, 250);
 }
 
 function bindStaticActions() {
+  document.querySelector(".skip-link").onclick = (event) => {
+    event.preventDefault();
+    $("settings-main").focus();
+  };
+  $("training-details").addEventListener("toggle", () => {
+    if ($("training-details").open && settingsNavigation?.isActive("advanced"))
+      void renderDomSamples();
+  });
+  $("diagnostics-details").addEventListener("toggle", () => {
+    if (
+      $("diagnostics-details").open &&
+      settingsNavigation?.isActive("advanced")
+    )
+      void renderNavigationDiagnostics();
+  });
   $("btn-package-export").onclick = exportSettingsPackage;
   $("btn-package-import").onclick = () => $("package-file-input").click();
   $("package-file-input").onchange = importSettingsPackage;
@@ -128,11 +204,124 @@ function bindStaticActions() {
   $("btn-download-refresh").onclick = renderDownloads;
   $("btn-download-clear").onclick = clearDownloadHistory;
   $("media-download-connections").onchange = saveDownloadConnections;
+  $("btn-nav-diagnostics-start").onclick = startNavigationDiagnostics;
+  $("btn-nav-diagnostics-stop").onclick = stopNavigationDiagnostics;
+  $("btn-nav-diagnostics-refresh").onclick = renderNavigationDiagnostics;
+  $("btn-nav-diagnostics-export").onclick = exportNavigationDiagnostics;
+  $("btn-nav-diagnostics-clear").onclick = clearNavigationDiagnostics;
   $("btn-reset").onclick = factoryReset;
   bindFeedbackForm();
 }
 
+async function renderNavigationDiagnostics() {
+  if (
+    disposed ||
+    !settingsNavigation?.isActive("advanced") ||
+    !$("diagnostics-details").open
+  )
+    return;
+  const status = $("nav-diagnostics-status");
+  const preview = $("nav-diagnostics-preview");
+  if (!status || !preview) return;
+  try {
+    const snapshot = await chrome.runtime.sendMessage({
+      type: "GET_NAVIGATION_DIAGNOSTICS",
+    });
+    if (!Array.isArray(snapshot?.events))
+      throw new Error(snapshot?.error || "Trace is unavailable.");
+    status.textContent = snapshot.captureUntil
+      ? snapshot.events.length +
+        " events · capture active until " +
+        new Date(snapshot.captureUntil).toLocaleTimeString()
+      : snapshot.events.length + " recent events · session-only buffer";
+    preview.textContent = JSON.stringify(snapshot.events, null, 2);
+    status.style.color = "";
+  } catch (error) {
+    status.textContent = "Diagnostics unavailable · " + error.message;
+    status.style.color = "#f87171";
+  }
+}
+
+async function startNavigationDiagnostics() {
+  await runNavigationDiagnosticsAction("btn-nav-diagnostics-start", {
+    type: "START_NAVIGATION_DIAGNOSTICS",
+    durationMs: 10 * 60 * 1000,
+  });
+}
+
+async function stopNavigationDiagnostics() {
+  await runNavigationDiagnosticsAction("btn-nav-diagnostics-stop", {
+    type: "STOP_NAVIGATION_DIAGNOSTICS",
+  });
+}
+
+async function clearNavigationDiagnostics() {
+  if (!confirm("Clear the session navigation trace?")) return;
+  await runNavigationDiagnosticsAction("btn-nav-diagnostics-clear", {
+    type: "CLEAR_NAVIGATION_DIAGNOSTICS",
+  });
+}
+
+async function exportNavigationDiagnostics() {
+  const button = $("btn-nav-diagnostics-export");
+  button.disabled = true;
+  try {
+    const snapshot = await requestNavigationDiagnostics({
+      type: "GET_NAVIGATION_DIAGNOSTICS",
+    });
+    if (!Array.isArray(snapshot?.events))
+      throw new Error("The recorder returned no trace to export.");
+    const blob = new Blob([JSON.stringify(snapshot, null, 2)], {
+      type: "application/json",
+    });
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = "adsfriendly-navigation-trace-" + Date.now() + ".json";
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+  } catch (error) {
+    showNavigationDiagnosticsError(error);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function runNavigationDiagnosticsAction(buttonId, message) {
+  const button = $(buttonId);
+  button.disabled = true;
+  try {
+    await requestNavigationDiagnostics(message);
+    await renderNavigationDiagnostics();
+  } catch (error) {
+    showNavigationDiagnosticsError(error);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function requestNavigationDiagnostics(message) {
+  const response = await chrome.runtime.sendMessage(message);
+  if (
+    response?.status === "ignored" ||
+    response?.status === "disabled" ||
+    response?.status === "capability_disabled" ||
+    response?.status === "error"
+  ) {
+    throw new Error(response.error || "The background rejected this action.");
+  }
+  return response;
+}
+
+function showNavigationDiagnosticsError(error) {
+  const status = $("nav-diagnostics-status");
+  status.textContent = "Diagnostics action failed · " + error.message;
+  status.style.color = "#f87171";
+}
+
 async function renderDownloads() {
+  if (!settingsNavigation?.isActive("downloads") || disposed) return;
+  const revision = ++downloadRenderRevision;
   const container = $("download-job-manager");
   const status = $("download-manager-status");
   if (!container || !status) return;
@@ -141,6 +330,12 @@ async function renderDownloads() {
       chrome.runtime.sendMessage({ type: "GET_MEDIA_DOWNLOAD_JOBS" }),
       chrome.runtime.sendMessage({ type: "GET_MEDIA_HELPER_STATUS" }),
     ]);
+    if (
+      revision !== downloadRenderRevision ||
+      !settingsNavigation.isActive("downloads") ||
+      disposed
+    )
+      return;
     const jobs = Array.isArray(jobsResponse?.items) ? jobsResponse.items : [];
     const activeCount = jobs.filter((job) =>
       [
@@ -167,6 +362,7 @@ async function renderDownloads() {
       empty.textContent = "No download history yet.";
       container.replaceChildren(empty);
       updateDownloadHistoryViewport(container);
+      listFilters.update();
       return;
     }
     container.querySelector(".empty-msg")?.remove();
@@ -177,16 +373,21 @@ async function renderDownloads() {
       ]),
     );
     const visibleIds = new Set();
-    for (const job of jobs) {
+    // Keep live jobs first without moving unchanged rows on every progress tick.
+    const sorted = [...jobs].sort(
+      (a, b) => Number(isActiveDownload(b)) - Number(isActiveDownload(a)),
+    );
+    for (const [index, job] of sorted.entries()) {
       visibleIds.add(job.id);
       const row = existing.get(job.id) || createDownloadHistoryItem();
       updateDownloadHistoryItem(row, job, helper);
-      container.append(row);
+      if (container.children[index] !== row)
+        container.insertBefore(row, container.children[index] || null);
     }
     for (const [jobId, row] of existing) {
       if (!visibleIds.has(jobId)) row.remove();
     }
-    updateDownloadHistoryViewport(container);
+    listFilters.update();
   } catch (error) {
     status.textContent = `Downloads unavailable · ${error.message}`;
     status.style.color = "#f87171";
@@ -194,7 +395,9 @@ async function renderDownloads() {
 }
 
 function updateDownloadHistoryViewport(container) {
-  const rows = [...container.querySelectorAll(".download-history-item")];
+  const rows = [...container.querySelectorAll(".download-history-item")].filter(
+    (row) => !row.hidden,
+  );
   const scrollable = rows.length > DOWNLOAD_HISTORY_VISIBLE_ITEMS;
   container.classList.toggle("is-scrollable", scrollable);
   if (!scrollable) {
@@ -208,7 +411,7 @@ function updateDownloadHistoryViewport(container) {
     (total, row) => total + row.getBoundingClientRect().height,
     gap * (visibleRows.length - 1),
   );
-  container.style.maxHeight = `${Math.ceil(height)}px`;
+  container.style.maxHeight = `${Math.ceil(Math.min(height, innerHeight * 0.65))}px`;
 }
 
 function createDownloadHistoryItem() {
@@ -244,6 +447,10 @@ function createDownloadHistoryItem() {
 
 function updateDownloadHistoryItem(row, job, helper) {
   row.dataset.jobId = job.id;
+  row.dataset.status = job.status;
+  row.dataset.searchText = [job.title, job.outputPath]
+    .filter(Boolean)
+    .join(" ");
   const active = isActiveDownload(job);
   row.classList.toggle("is-terminal", !active);
   const title = row.querySelector(".download-history-title");
@@ -263,8 +470,15 @@ function updateDownloadHistoryItem(row, job, helper) {
   row.querySelector(".download-progress-bar").style.width =
     `${progress.percent ?? 0}%`;
   const details = row.querySelector(".download-history-details");
-  details.hidden = !active;
-  details.textContent = formatMediaJobDetails(job);
+  const completedSize = job.status === "completed" ? progress.totalBytes : null;
+  details.hidden = !active && !completedSize;
+  details.textContent = active
+    ? formatMediaJobDetails(job)
+    : completedSize
+      ? [formatBytes(completedSize), job.downloadSummary?.qualityLabel]
+          .filter(Boolean)
+          .join(" · ")
+      : "";
   const output = row.querySelector(".download-output-path");
   output.textContent =
     job.outputPath ||
@@ -277,6 +491,18 @@ function updateDownloadHistoryItem(row, job, helper) {
   errorDetails.textContent = hasError ? job.error : "";
   errorDetails.hidden = !errorExpanded;
   const controls = row.querySelector(".download-history-controls");
+  const controlsKey = JSON.stringify([
+    job.status,
+    Boolean(job.outputPath),
+    job.error,
+    errorExpanded,
+    job.historyOnly,
+    job.progress?.resumable,
+    helper?.capabilities?.["output.open"],
+    helper?.capabilities?.["output.reveal"],
+  ]);
+  if (row.dataset.controlsKey === controlsKey) return;
+  row.dataset.controlsKey = controlsKey;
   controls.replaceChildren();
   const primary = getMediaJobPrimaryAction(job);
   const pauseAvailability = getMediaJobPauseAvailability(job);
@@ -491,14 +717,41 @@ async function loadPage() {
     settings.mediaDownloadConnections,
   );
 
-  renderPackageStatus();
-  renderStorageHealth();
-  renderDomainList(currentSnapshot.whitelist || [], whitelistEl, "whitelist");
-  renderDomainList(currentSnapshot.blacklist || [], blacklistEl, "blacklist");
-  renderCustomRules();
-  renderNavigationLogs(currentSnapshot.blockedLogs || []);
-  renderLearnedPaths();
-  renderDomSamples();
+  renderProtectionSummary(settings);
+  pageLoaded = true;
+  await renderActiveSection();
+}
+
+function renderProtectionSummary(settings) {
+  const modeLabels = { safe: "Safe", assist: "Assist", auto: "Auto" };
+  const descriptions = {
+    safe: "Conservative protection using navigation safeguards, static rules and your saved decisions.",
+    assist:
+      "Safe protection, with page suggestions you can review. Media tools are enabled.",
+    auto: "Assist protection, with eligible automatic hiding and video actions.",
+  };
+  $("protection-status").textContent = settings.enabled
+    ? `${modeLabels[settings.protectionMode]} · On`
+    : "Protection off";
+  $("protection-status").classList.toggle("is-disabled", !settings.enabled);
+  $("protection-mode-description").textContent =
+    descriptions[settings.protectionMode];
+  const whitelist = currentSnapshot.whitelist?.length || 0;
+  const blacklist = currentSnapshot.blacklist?.length || 0;
+  const rules = currentSnapshot.userCustomRules || {};
+  const exceptions = currentSnapshot.userElementExceptions || {};
+  $("allowed-count").textContent = $("whitelist-count").textContent = whitelist;
+  $("blocked-sites-count").textContent = $("blacklist-count").textContent =
+    blacklist;
+  $("page-decisions-count").textContent = [
+    ...Object.values(rules),
+    ...Object.values(exceptions),
+  ].reduce((sum, rows) => sum + (Array.isArray(rows) ? rows.length : 0), 0);
+  $("rule-sites-count").textContent =
+    `${new Set([...Object.keys(rules), ...Object.keys(exceptions)]).size} sites`;
+  $("workflow-count").textContent = Object.keys(currentSnapshot).filter((key) =>
+    key.startsWith("p:"),
+  ).length;
 }
 
 async function renderStorageHealth() {
@@ -554,6 +807,7 @@ async function saveProtectionControls() {
     protectionMode: $("settings-mode").value,
   });
   await loadPage();
+  showSettingsNotice("Protection settings saved.");
 }
 
 async function exportSettingsPackage() {
@@ -648,6 +902,9 @@ async function addDomain(type) {
     throw new Error(response?.error || "Could not save domain.");
   input.value = "";
   await loadPage();
+  showSettingsNotice(
+    `Added ${hostname} to ${type === "whitelist" ? "allowed" : "blocked"} sites.`,
+  );
 }
 
 function renderDomainList(list, element, type) {
@@ -658,9 +915,9 @@ function renderDomainList(list, element, type) {
   element.innerHTML = list
     .map(
       (domain, index) => `
-        <div class="item">
+        <div class="item" data-search-text="${safeText(domain)}">
           <span>${safeText(domain)}</span>
-          <button class="btn-delete" data-index="${index}" title="Remove">
+          <button class="btn-delete" data-index="${index}" title="Remove" aria-label="Remove ${safeText(domain)}">
             <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
           </button>
         </div>`,
@@ -738,14 +995,14 @@ function renderCustomRules() {
         .join("");
       const details = `${hiddenDetails}${exceptionDetails}`;
       return `
-        <div class="rule-site" data-host="${safeText(hostname)}" style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.05); padding:12px; border-radius:12px; margin-bottom:10px;">
-          <div style="display:flex; justify-content:space-between; align-items:center; gap:1rem">
+        <div class="rule-site" data-host="${safeText(hostname)}" data-search-text="${safeText([hostname, ...rules.map((rule) => (typeof rule === "string" ? rule : rule.selector)), ...exceptions.map((rule) => rule.selector)].join(" "))}" style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.05); padding:12px; border-radius:12px; margin-bottom:10px;">
+          <div class="rule-header">
             <div>
               <div style="font-weight:bold; color:#e2e8f0">${safeText(hostname)}</div>
               <div style="font-size:0.75rem; color:#64748b">${rules.length} hidden · ${exceptions.length} not ads</div>
             </div>
-            <div style="display:flex; gap:8px">
-              <button class="toggle-details btn-secondary">Details</button>
+            <div class="rule-actions">
+              <button class="toggle-details btn-secondary" aria-expanded="false">Details</button>
               <button class="reset-site-rules btn-secondary" data-host="${safeText(hostname)}">Reset site</button>
             </div>
           </div>
@@ -756,8 +1013,8 @@ function renderCustomRules() {
 
   container.querySelectorAll(".toggle-details").forEach((button) => {
     button.onclick = () => {
-      const pane = button.closest(".rule-site").querySelector(".details-pane");
-      pane.style.display = pane.style.display === "none" ? "block" : "none";
+      const host = button.closest(".rule-site").dataset.host;
+      expandRuleSite(expandedRuleHost === host ? null : host);
     };
   });
   container.querySelectorAll(".btn-delete-rule-item").forEach((button) => {
@@ -803,6 +1060,20 @@ function renderCustomRules() {
       await loadPage();
     };
   });
+  expandRuleSite(expandedRuleHost);
+}
+
+function expandRuleSite(host) {
+  expandedRuleHost = host;
+  for (const card of document.querySelectorAll(".rule-site")) {
+    const expanded = card.dataset.host === host;
+    const button = card.querySelector(".toggle-details");
+    button.setAttribute("aria-expanded", String(expanded));
+    button.textContent = expanded ? "Hide details" : "Details";
+    card.querySelector(".details-pane").style.display = expanded
+      ? "block"
+      : "none";
+  }
 }
 
 function renderLearnedPaths() {
@@ -818,7 +1089,7 @@ function renderLearnedPaths() {
   container.innerHTML = entries
     .map(
       ([key, path]) => `
-      <div class="item">
+      <div class="item" data-search-text="${safeText(`${path.source} ${path.target}`)}">
         <div>
           <div style="font-size:0.85rem; font-weight:bold">${safeText(path.source)} → ${safeText(path.target)}</div>
           <div style="font-size:0.7rem; color:${path.isManual ? "#a855f7" : "#22c55e"}">${path.isManual ? "MANUAL TRUST" : `Natural habit (${Number(path.visits) || 0} visits)`}</div>
@@ -846,7 +1117,7 @@ function renderNavigationLogs(logs) {
     .slice(0, 20)
     .map(
       (log) => `
-      <div class="item" style="flex-direction:column; align-items:flex-start; gap:4px">
+      <div class="item" data-search-text="${safeText(`${log.url} ${log.source}`)}" style="flex-direction:column; align-items:flex-start; gap:4px">
         <div style="font-size:0.8rem; color:#fbd38d; font-weight:bold">Blocked Navigation</div>
         <div style="font-family:monospace; font-size:0.75rem; word-break:break-all">Target: ${safeText(log.url)}</div>
         <div style="font-size:0.7rem; color:#64748b">Source: ${safeText(log.source)} · ${safeText(new Date(log.timestamp).toLocaleString())}</div>
@@ -856,6 +1127,12 @@ function renderNavigationLogs(logs) {
 }
 
 async function renderDomSamples() {
+  if (
+    disposed ||
+    !settingsNavigation?.isActive("advanced") ||
+    !$("training-details").open
+  )
+    return;
   if (!domSamplesEl) return;
   const domTrainingSamples = await listDomTrainingSamples(80);
   if (!domTrainingSamples.length) {
@@ -923,7 +1200,7 @@ async function clearDomSamples() {
 async function factoryReset() {
   if (
     !confirm(
-      "Factory reset all memory and restore the bundled Settings Package?",
+      "Reset local settings, personal decisions, training data and stored history, then restore the bundled Settings Package? Downloaded files are kept. Active downloads are not cancelled.",
     )
   ) {
     return;
@@ -988,6 +1265,14 @@ function bindFeedbackForm() {
 function showPackageStatus(message, error = false) {
   packageStatusEl.textContent = message;
   packageStatusEl.style.color = error ? "#f87171" : "#94a3b8";
+  if (error) showSettingsNotice(message, true);
+}
+
+function showSettingsNotice(message, error = false) {
+  const notice = $("settings-notice");
+  notice.hidden = !message;
+  notice.textContent = message;
+  notice.classList.toggle("is-error", error);
 }
 
 function downloadText(filename, text, type) {

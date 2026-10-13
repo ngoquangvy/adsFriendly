@@ -8,11 +8,13 @@ import { startNavigationToast } from "../navigation/content/navigation-toast.js"
 import { startYouTubeCleaner } from "../dom/youtube-cleaner.js";
 import { createMainController } from "../runtime/main-controller.js";
 import { startMediaObserver } from "./media-observer.js";
+import { startPlayerDownload } from "./player-download.js";
 
 const controller = createMainController({
   context: "content",
   implementations: {
     "content.media-observer": () => startMediaObserver(),
+    "content.player-download": () => startPlayerDownload(),
     "content.youtube-cleaner": () => startYouTubeCleaner(),
     "content.navigation-intent": () => startIntentTracker(),
     "content.navigation-toast": () => startNavigationToast(),

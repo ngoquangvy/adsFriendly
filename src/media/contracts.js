@@ -126,6 +126,7 @@ export function normalizeMediaCandidate(value = {}) {
       "streamType",
     ),
     duration: optionalFiniteNumber(value.duration),
+    contentLength: optionalNonNegativeInteger(value.contentLength),
     resolution: normalizeResolution(value.resolution),
     playback: normalizePlaybackState(value.playback),
     bandwidth: optionalPositiveNumber(value.bandwidth),

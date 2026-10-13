@@ -80,6 +80,7 @@ export function selectVisibleMediaItems(items = [], maximum = 8) {
   }
   const sorted = [...displayItems].sort(
     (left, right) =>
+      playbackPriority(right) - playbackPriority(left) ||
       (right.firstSeenAt || 0) - (left.firstSeenAt || 0) ||
       String(left.id || "").localeCompare(String(right.id || "")),
   );
@@ -129,6 +130,12 @@ export function selectVisibleMediaItems(items = [], maximum = 8) {
     visible.push(grouped);
   }
   return visible.slice(0, maximum);
+}
+
+function playbackPriority(item) {
+  if (item.playback?.playing === true) return 2;
+  if (item.playback?.visible === true) return 1;
+  return 0;
 }
 
 function groupFacebookDirectRepresentations(items) {
@@ -358,7 +365,7 @@ function newestPlaybackState(items) {
   };
 }
 
-function facebookMediaAssetKey(item) {
+export function facebookMediaAssetKey(item) {
   try {
     const source = new URL(item.sourceUrl || "");
     if (!isFacebookCdnHost(source.hostname)) return null;
@@ -1098,6 +1105,7 @@ function mediaRenderFacts(item) {
     playlistType: item.playlistType,
     streamType: item.streamType,
     duration: item.duration,
+    contentLength: item.contentLength,
     resolution: item.resolution,
     bandwidth: item.bandwidth,
     averageBandwidth: item.averageBandwidth,

@@ -347,6 +347,9 @@ var AdsFriendlyVideo = (() => {
       C2.MEDIA_CATALOG
     ]),
     feature("content.youtube-cleaner", "content", C2.DOM_STATIC_RULES),
+    feature("content.player-download", "content", C2.MEDIA_DOWNLOAD, [
+      C2.MEDIA_CATALOG
+    ]),
     feature("content.navigation-intent", "content", C2.NAVIGATION_INTENT),
     feature("content.navigation-toast", "content", C2.NAVIGATION_FEEDBACK),
     feature("content.dom-static-blocker", "content", C2.DOM_STATIC_RULES, [
@@ -365,6 +368,9 @@ var AdsFriendlyVideo = (() => {
       C2.MEDIA_CATALOG
     ]),
     feature("media-frame.navigation-intent", "media-frame", C2.NAVIGATION_INTENT),
+    feature("media-frame.player-download", "media-frame", C2.MEDIA_DOWNLOAD, [
+      C2.MEDIA_CATALOG
+    ]),
     feature("video.surgeon", "video", C2.VIDEO_OBSERVE, [
       C2.VIDEO_RESTORE_STATE,
       C2.VIDEO_USER_ACTION,
@@ -533,6 +539,7 @@ var AdsFriendlyVideo = (() => {
     MEDIA_DOWNLOAD_CANCEL: "media.download.cancel",
     MEDIA_DOWNLOAD_CREATE: "media.download.create",
     MEDIA_DOWNLOAD_PREFLIGHT: "media.download.preflight",
+    MEDIA_DOWNLOAD_LOOKUP: "media.download.lookup",
     MEDIA_OUTPUT_CANARY: "media.output.canary",
     MEDIA_OUTPUT_CAPTURE_START: "media.output.capture.start",
     MEDIA_DOWNLOAD_PAUSE: "media.download.pause",
@@ -565,6 +572,7 @@ var AdsFriendlyVideo = (() => {
       "background.media-download-jobs",
       C3.MEDIA_NATIVE_DOWNLOAD
     ),
+    [A.MEDIA_DOWNLOAD_LOOKUP]: action(A.MEDIA_DOWNLOAD_LOOKUP, "background.media-download-jobs", C3.MEDIA_DOWNLOAD),
     [A.MEDIA_OUTPUT_CANARY]: action(
       A.MEDIA_OUTPUT_CANARY,
       "background.media-download-jobs",

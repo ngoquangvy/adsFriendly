@@ -2,6 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>AdsFriendly - Settings</title>
     <style>
       :root {
@@ -369,253 +370,176 @@
         cursor: help;
       }
     </style>
+    <link rel="stylesheet" href="settings-shell.css" />
   </head>
   <body>
-    <div class="container">
-      <header>
-        <h1>AdsFriendly Settings</h1>
-        <p style="color: #94a3b8">Manage your trusted and blocked domains</p>
-      </header>
-
-      <section class="config-section" style="margin-bottom: 2rem">
-        <div class="card" style="border-left: 4px solid #22c55e">
-          <div style="display: flex; justify-content: space-between; gap: 1rem">
-            <div>
-              <h2 style="color: #22c55e; margin-bottom: 0.45rem">
-                Settings Package
-              </h2>
-              <p style="color: #94a3b8; font-size: 0.82rem; margin: 0 0 1rem">
-                Export or install an editable snapshot of protection settings,
-                site lists, Magic Wand rules, Not an ad decisions, and trusted
-                workflows.
-              </p>
-            </div>
-            <span
-              id="package-source"
-              class="sample-chip"
-              style="height: fit-content"
-              >LOCAL</span
-            >
-          </div>
-
-          <div class="package-grid">
-            <label class="field-label">
-              Package name
-              <input
-                id="package-name"
-                class="field-input"
-                value="My AdsFriendly Settings"
-                maxlength="120"
-              />
-            </label>
-            <label class="field-label">
-              Author
-              <input
-                id="package-author"
-                class="field-input"
-                value="AdsFriendly User"
-                maxlength="120"
-              />
-            </label>
-            <label class="field-label">
-              Protection mode
-              <select id="settings-mode" class="field-select">
-                <option value="safe">Safe</option>
-                <option value="assist">Assist</option>
-                <option value="auto">Auto</option>
-              </select>
-            </label>
-            <label
-              class="field-label"
-              style="justify-content: flex-end; padding-bottom: 0.65rem"
-            >
-              <span>
-                <input id="settings-enabled" type="checkbox" checked />
-                General protection enabled
-              </span>
-            </label>
-          </div>
-
-          <div
-            style="
-              display: flex;
-              gap: 0.55rem;
-              flex-wrap: wrap;
-              margin-top: 1rem;
-            "
-          >
-            <button class="btn-secondary" id="btn-package-export">
-              Export package
-            </button>
-            <button class="btn-secondary" id="btn-package-import">
-              Import package
-            </button>
-            <button class="btn-secondary" id="btn-package-default">
-              Restore bundled default
-            </button>
-            <input
-              id="package-file-input"
-              type="file"
-              accept="application/json,.json,.afsettings"
-              hidden
-            />
-          </div>
-          <div id="package-status" class="package-status">
-            Loading current settings…
-          </div>
-          <div id="storage-health" class="package-status">
-            Checking settings storage…
-          </div>
-          <p style="color: #64748b; font-size: 0.72rem; margin: 0.7rem 0 0">
-            Training and telemetry use a separate local database. Block history,
-            counters, and private identifiers are never included in a package.
-          </p>
-        </div>
-      </section>
-
-      <section
-        id="downloads"
-        class="config-section"
-        style="margin-bottom: 2rem; scroll-margin-top: 1.5rem"
-      >
-        <div class="card" style="border-left: 4px solid #38bdf8">
-          <div class="download-history-header" style="align-items: flex-start">
-            <div>
-              <h2 style="color: #38bdf8; margin-bottom: 0.45rem">
-                Download Manager
-              </h2>
-              <p style="color: #94a3b8; font-size: 0.82rem; margin: 0 0 1rem">
-                Track speed and connections, pause resumable downloads, retry
-                jobs, and manage completed output files.
-              </p>
-            </div>
-            <div class="download-manager-actions">
-              <label class="download-manager-setting">
-                Parallel connections
-                <select id="media-download-connections" class="field-select">
-                  <option value="4">4</option>
-                  <option value="8" selected>8</option>
-                  <option value="12">12</option>
-                  <option value="16">16</option>
-                </select>
-              </label>
-              <button class="btn-secondary" id="btn-download-refresh">
-                Refresh
-              </button>
-              <button
-                class="btn-secondary download-danger"
-                id="btn-download-clear"
-              >
-                Clear history
-              </button>
-            </div>
-          </div>
-          <div id="download-manager-status" class="package-status">
-            Loading downloads…
-          </div>
-          <div
-            id="download-job-manager"
-            class="download-history-list"
-            style="margin-top: 0.8rem"
-          >
-            <div class="empty-msg">No download history yet.</div>
-          </div>
-          <p style="color: #64748b; font-size: 0.72rem; margin: 0.8rem 0 0">
-            Pause/Resume is available for Direct HTTP Range downloads. HLS and
-            DASH currently use Cancel/Retry because FFmpeg cannot resume partial
-            output yet.<br />
-            Remove history keeps the downloaded file. Open and Open location
-            require the current Media Helper.
-          </p>
-        </div>
-      </section>
-
-      <div class="grid">
-        <!-- Whitelist -->
-        <div class="card">
-          <h2 style="color: #22c55e">
-            <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
-            </svg>
-            Trusted Sites (Whitelist)
-          </h2>
-          <div id="whitelist-list" class="list-container">
-            <div class="empty-msg">No sites added yet</div>
-          </div>
-          <div class="inline-add">
-            <input
-              id="whitelist-input"
-              class="field-input"
-              placeholder="example.com"
-            />
-            <button class="btn-secondary" id="btn-whitelist-add">Add</button>
+    <a class="skip-link" href="#settings-main">Skip to settings</a>
+    <div class="settings-shell">
+      <aside class="settings-sidebar">
+        <div class="settings-brand">
+          <img src="../icons/icon48.png" alt="" />
+          <div>
+            AdsFriendly<span>Settings <span id="settings-version"></span></span>
           </div>
         </div>
-
-        <!-- Blacklist -->
-        <div class="card">
-          <h2 style="color: var(--danger)">
-            <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24">
-              <path
-                d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"
-              />
-            </svg>
-            Always Blocked (Blacklist)
-          </h2>
-          <div id="blacklist-list" class="list-container">
-            <div class="empty-msg">No sites added yet</div>
-          </div>
-          <div class="inline-add">
-            <input
-              id="blacklist-input"
-              class="field-input"
-              placeholder="ads.example.com"
-            />
-            <button class="btn-secondary" id="btn-blacklist-add">Add</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Custom Rules Management Section -->
-      <section
-        class="config-section"
-        id="element-decisions"
-        style="margin-top: 3rem"
-      >
-        <div class="card">
-          <h2 style="color: #60a5fa">
-            <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24">
-              <path
-                d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"
-              />
-            </svg>
-            Page Element Decisions
-          </h2>
-          <p style="color: #94a3b8; font-size: 0.85rem; margin-bottom: 1.5rem">
-            Manage Magic Wand/hidden rules and elements marked Not an ad. These
-            personal decisions are included when you export a Settings Package.
-          </p>
-          <div id="custom-rules-container">
-            <p style="color: #475569; font-style: italic">
-              No page element decisions found yet.
+        <nav id="settings-navigation" aria-label="Settings sections"></nav>
+        <p class="sidebar-note">
+          Protection and rule changes<br />save automatically.
+        </p>
+      </aside>
+      <main class="container settings-main" id="settings-main" tabindex="-1">
+        <header class="settings-header">
+          <div>
+            <p class="settings-eyebrow">ADSFRIENDLY SETTINGS</p>
+            <h1 id="settings-page-title">Protection</h1>
+            <p id="settings-page-description">
+              Choose how AdsFriendly protects your browsing.
             </p>
           </div>
-        </div>
-      </section>
+          <span id="protection-status" class="protection-status">Loading…</span>
+        </header>
+        <label class="mobile-section-picker"
+          >Section<select
+            id="settings-section-select"
+            class="field-select"
+          ></select
+        ></label>
+        <div
+          id="settings-notice"
+          class="settings-notice"
+          role="status"
+          hidden
+        ></div>
+        <section
+          id="settings-panel-protection"
+          class="settings-panel"
+          aria-labelledby="settings-page-title"
+        >
+          <div class="card">
+            <h2>Browsing protection</h2>
+            <div class="protection-controls">
+              <label class="setting-switch"
+                ><input id="settings-enabled" type="checkbox" checked /><span
+                  ><strong>Enable protection</strong
+                  ><small
+                    >Apply your protection mode and saved decisions.</small
+                  ></span
+                ></label
+              >
+              <label class="field-label"
+                >Protection mode<select
+                  id="settings-mode"
+                  class="field-select"
+                  aria-describedby="protection-mode-description"
+                >
+                  <option value="safe">Safe</option>
+                  <option value="assist">Assist</option>
+                  <option value="auto">Auto</option>
+                </select></label
+              >
+            </div>
+            <p id="protection-mode-description" class="setting-description"></p>
+            <details class="settings-details">
+              <summary>Compare modes</summary>
+              <div class="mode-comparison">
+                <div>
+                  <strong>Safe</strong>
+                  <p>
+                    Navigation protection, static rules and your saved page
+                    decisions.
+                  </p>
+                </div>
+                <div>
+                  <strong>Assist</strong>
+                  <p>
+                    Safe protection, plus suggestions you review with Hide or
+                    Not an ad. Media tools are available.
+                  </p>
+                </div>
+                <div>
+                  <strong>Auto</strong>
+                  <p>
+                    Assist protection, plus eligible automatic hiding and video
+                    actions.
+                  </p>
+                </div>
+              </div>
+              <p class="setting-description">
+                Default behavior is shown here. Existing feature overrides are
+                preserved.
+              </p>
+            </details>
+          </div>
+          <div class="protection-summary">
+            <a class="card" href="#sites"
+              ><span>Allowed sites</span
+              ><strong id="allowed-count">0</strong></a
+            ><a class="card" href="#sites"
+              ><span>Blocked sites</span
+              ><strong id="blocked-sites-count">0</strong></a
+            ><a class="card" href="#element-decisions"
+              ><span>Page decisions</span
+              ><strong id="page-decisions-count">0</strong></a
+            >
+          </div>
+          <p class="setting-description">
+            Ad protection works without Media Helper. The optional Helper is
+            only used for media downloads and file actions.
+          </p>
+        </section>
+        <section
+          id="settings-panel-sites"
+          class="settings-panel"
+          aria-labelledby="settings-page-title"
+          hidden
+        >
+          <div class="list-toolbar">
+            <label class="search-field"
+              >Find sites &amp; rules<input
+                id="sites-search"
+                class="field-input"
+                type="search"
+                placeholder="Search website, rule or navigation destination" /></label
+            ><span
+              id="sites-search-status"
+              class="list-count"
+              role="status"
+            ></span>
+          </div>
+          <div class="grid">
+            <!-- Whitelist -->
+            <div class="card">
+              <h2 style="color: #22c55e">
+                <svg
+                  width="20"
+                  height="20"
+                  fill="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
+                </svg>
+                Allowed sites
+                <span id="whitelist-count" class="sample-chip">0</span>
+              </h2>
+              <div id="whitelist-list" class="list-container">
+                <div class="empty-msg">No sites added yet</div>
+              </div>
+              <div class="inline-add">
+                <input
+                  id="whitelist-input"
+                  class="field-input"
+                  aria-label="Add allowed site"
+                  placeholder="example.com"
+                />
+                <button class="btn-secondary" id="btn-whitelist-add">
+                  Add
+                </button>
+              </div>
+            </div>
 
-      <!-- DOM Training Samples -->
-      <section class="config-section" style="margin-top: 2rem">
-        <div class="card" style="border-left: 4px solid #38bdf8">
-          <div
-            style="
-              display: flex;
-              justify-content: space-between;
-              gap: 1rem;
-              align-items: flex-start;
-            "
-          >
-            <div>
-              <h2 style="color: #38bdf8; margin-bottom: 0.5rem">
+            <!-- Blacklist -->
+            <div class="card">
+              <h2 style="color: var(--danger)">
                 <svg
                   width="20"
                   height="20"
@@ -623,201 +547,601 @@
                   viewBox="0 0 24 24"
                 >
                   <path
-                    d="M3 3h18v18H3V3zm2 2v14h14V5H5zm2 2h10v2H7V7zm0 4h10v2H7v-2zm0 4h6v2H7v-2z"
+                    d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"
                   />
                 </svg>
-                DOM Training Samples
+                Blocked sites
+                <span id="blacklist-count" class="sample-chip">0</span>
               </h2>
-              <p style="color: #94a3b8; font-size: 0.85rem; margin: 0 0 1rem">
-                Inspect local labels and evidence collected from DOM banner
-                decisions.
+              <div id="blacklist-list" class="list-container">
+                <div class="empty-msg">No sites added yet</div>
+              </div>
+              <div class="inline-add">
+                <input
+                  id="blacklist-input"
+                  class="field-input"
+                  aria-label="Add blocked site"
+                  placeholder="ads.example.com"
+                />
+                <button class="btn-secondary" id="btn-blacklist-add">
+                  Add
+                </button>
+              </div>
+            </div>
+          </div>
+          <!-- Custom Rules Management Section -->
+          <section class="config-section" id="element-decisions">
+            <div class="card">
+              <h2 style="color: #60a5fa">
+                <svg
+                  width="20"
+                  height="20"
+                  fill="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"
+                  />
+                </svg>
+                Page decisions
+                <span id="rule-sites-count" class="sample-chip">0 sites</span>
+              </h2>
+              <p
+                style="
+                  color: #94a3b8;
+                  font-size: 0.85rem;
+                  margin-bottom: 1.5rem;
+                "
+              >
+                Manage Magic Wand/hidden rules and elements marked Not an ad.
+                These personal decisions are included when you export a Settings
+                Package.
+              </p>
+              <div id="custom-rules-container" class="list-container rule-list">
+                <p style="color: #475569; font-style: italic">
+                  No page element decisions found yet.
+                </p>
+              </div>
+            </div>
+          </section>
+          <!-- Trusted navigation -->
+          <section class="config-section">
+            <div class="card" style="border-left: 4px solid #a855f7">
+              <h2 style="color: #a855f7">
+                <svg
+                  width="20"
+                  height="20"
+                  fill="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"
+                  />
+                </svg>
+                Trusted navigation
+                <span id="workflow-count" class="sample-chip">0</span>
+              </h2>
+              <p
+                style="
+                  color: #94a3b8;
+                  font-size: 0.85rem;
+                  margin-bottom: 1.5rem;
+                "
+              >
+                Saved navigation workflows and the origin of each trust
+                decision.
+              </p>
+              <div
+                id="learned-paths-container"
+                class="list-container"
+                style="max-height: 250px"
+              >
+                <div class="empty-msg">
+                  No trusted navigation workflows yet.
+                </div>
+              </div>
+            </div>
+          </section>
+        </section>
+        <section
+          id="settings-panel-packages"
+          class="settings-panel"
+          aria-labelledby="settings-page-title"
+          hidden
+        >
+          <section class="config-section">
+            <div class="card" style="border-left: 4px solid #22c55e">
+              <div
+                style="display: flex; justify-content: space-between; gap: 1rem"
+              >
+                <div>
+                  <h2 style="color: #22c55e; margin-bottom: 0.45rem">
+                    Settings Package
+                  </h2>
+                  <p
+                    style="color: #94a3b8; font-size: 0.82rem; margin: 0 0 1rem"
+                  >
+                    Export or install an editable snapshot of protection
+                    settings, site lists, Magic Wand rules, Not an ad decisions,
+                    and trusted workflows.
+                  </p>
+                </div>
+                <span
+                  id="package-source"
+                  class="sample-chip"
+                  style="height: fit-content"
+                  >LOCAL</span
+                >
+              </div>
+
+              <details class="settings-details">
+                <summary>Export details · name and author</summary>
+                <div class="package-grid">
+                  <label class="field-label"
+                    >Package name<input
+                      id="package-name"
+                      class="field-input"
+                      value="My AdsFriendly Settings"
+                      maxlength="120"
+                  /></label>
+                  <label class="field-label"
+                    >Author<input
+                      id="package-author"
+                      class="field-input"
+                      value="AdsFriendly User"
+                      maxlength="120"
+                  /></label>
+                </div>
+              </details>
+
+              <div
+                style="
+                  display: flex;
+                  gap: 0.55rem;
+                  flex-wrap: wrap;
+                  margin-top: 1rem;
+                "
+              >
+                <button class="btn-secondary" id="btn-package-export">
+                  Export package
+                </button>
+                <button class="btn-secondary" id="btn-package-import">
+                  Import package
+                </button>
+                <button class="btn-secondary" id="btn-package-default">
+                  Restore bundled default
+                </button>
+                <input
+                  id="package-file-input"
+                  type="file"
+                  accept="application/json,.json,.afsettings"
+                  hidden
+                />
+              </div>
+              <div id="package-status" class="package-status">
+                Loading current settings…
+              </div>
+              <p style="color: #64748b; font-size: 0.72rem; margin: 0.7rem 0 0">
+                Training and telemetry use a separate local database. Block
+                history, counters, and private identifiers are never included in
+                a package.
               </p>
             </div>
-            <div
-              style="
-                display: flex;
-                gap: 0.5rem;
-                flex-wrap: wrap;
-                justify-content: flex-end;
-              "
+          </section>
+        </section>
+        <section
+          id="settings-panel-downloads"
+          class="settings-panel"
+          aria-labelledby="settings-page-title"
+          hidden
+        >
+          <section
+            id="downloads"
+            class="config-section"
+            style="margin-bottom: 2rem; scroll-margin-top: 1.5rem"
+          >
+            <div class="card" style="border-left: 4px solid #38bdf8">
+              <div
+                class="download-history-header"
+                style="align-items: flex-start"
+              >
+                <div>
+                  <h2 style="color: #38bdf8; margin-bottom: 0.45rem">
+                    Download Manager
+                  </h2>
+                  <p
+                    style="color: #94a3b8; font-size: 0.82rem; margin: 0 0 1rem"
+                  >
+                    Track speed and connections, pause resumable downloads,
+                    retry jobs, and manage completed output files.
+                  </p>
+                </div>
+                <div class="download-manager-actions">
+                  <label class="download-manager-setting">
+                    Parallel connections
+                    <select
+                      id="media-download-connections"
+                      class="field-select"
+                    >
+                      <option value="4">4</option>
+                      <option value="8" selected>8</option>
+                      <option value="12">12</option>
+                      <option value="16">16</option>
+                    </select>
+                  </label>
+                  <button class="btn-secondary" id="btn-download-refresh">
+                    Refresh
+                  </button>
+                  <button
+                    class="btn-secondary download-danger"
+                    id="btn-download-clear"
+                  >
+                    Clear history
+                  </button>
+                </div>
+              </div>
+              <div id="download-manager-status" class="package-status">
+                Loading downloads…
+              </div>
+              <div class="list-toolbar">
+                <label class="search-field"
+                  >Find downloads<input
+                    id="download-search"
+                    class="field-input"
+                    type="search"
+                    placeholder="Search by title or filename" /></label
+                ><label class="field-label"
+                  >Show<select id="download-filter" class="field-select">
+                    <option value="all">All downloads</option>
+                    <option value="active">Active</option>
+                    <option value="completed">Completed</option>
+                    <option value="failed">Failed</option>
+                    <option value="paused">Paused / cancelled</option>
+                  </select></label
+                >
+              </div>
+              <p
+                id="download-search-status"
+                class="list-count"
+                role="status"
+              ></p>
+              <div
+                id="download-job-manager"
+                class="download-history-list"
+                style="margin-top: 0.8rem"
+              >
+                <div class="empty-msg">No download history yet.</div>
+              </div>
+              <details class="settings-details">
+                <summary>About Pause, Resume and file actions</summary>
+                <p class="setting-description">
+                  Pause/Resume depends on the source and download adapter.
+                  Streams that cannot resume offer Cancel/Retry instead.<br />
+                  Remove history keeps the downloaded file. Open and Open
+                  location require the current Media Helper.
+                </p>
+              </details>
+            </div>
+          </section>
+        </section>
+        <section
+          id="settings-panel-activity"
+          class="settings-panel"
+          aria-labelledby="settings-page-title"
+          hidden
+        >
+          <!-- Blocked Navigation History -->
+          <section class="config-section">
+            <div class="card">
+              <h2 style="color: #fbd38d">
+                <svg
+                  width="20"
+                  height="20"
+                  fill="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    d="M13 3c-4.97 0-9 4.03-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42C8.27 19.99 10.51 21 13 21c4.97 0 9-4.03 9-9s-4.03-9-9-9zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"
+                  />
+                </svg>
+                Recent Navigation Blocks
+              </h2>
+              <p class="setting-description">
+                The most recent 20 entries. These records are not included in
+                Settings Packages.
+              </p>
+              <label class="search-field"
+                >Find a website<input
+                  id="activity-search"
+                  class="field-input"
+                  type="search"
+                  placeholder="Search blocked destination or source"
+              /></label>
+              <p
+                id="activity-search-status"
+                class="list-count"
+                role="status"
+              ></p>
+              <div
+                id="blocked-logs-container"
+                class="list-container"
+                style="max-height: 250px"
+              >
+                <div class="empty-msg">
+                  Clean history. No suspicious navigations blocked recently.
+                </div>
+              </div>
+            </div>
+          </section>
+        </section>
+        <section
+          id="settings-panel-advanced"
+          class="settings-panel"
+          aria-labelledby="settings-page-title"
+          hidden
+        >
+          <div class="card">
+            <h2>Storage</h2>
+            <div id="storage-health" class="package-status">
+              Checking settings storage…
+            </div>
+            <p class="setting-description">
+              Personal settings and training data are stored separately.
+              Packages do not include training, diagnostics or download history.
+            </p>
+          </div>
+          <!-- DOM Training Samples -->
+          <details
+            class="config-section settings-details"
+            id="training-details"
+          >
+            <summary>
+              Training data <span class="sample-chip">Developer</span>
+            </summary>
+            <div class="card" style="border-left: 4px solid #38bdf8">
+              <div
+                class="training-header"
+                style="
+                  display: flex;
+                  justify-content: space-between;
+                  gap: 1rem;
+                  align-items: flex-start;
+                "
+              >
+                <div>
+                  <h2 style="color: #38bdf8; margin-bottom: 0.5rem">
+                    <svg
+                      width="20"
+                      height="20"
+                      fill="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        d="M3 3h18v18H3V3zm2 2v14h14V5H5zm2 2h10v2H7V7zm0 4h10v2H7v-2zm0 4h6v2H7v-2z"
+                      />
+                    </svg>
+                    DOM Training Samples
+                  </h2>
+                  <p
+                    style="color: #94a3b8; font-size: 0.85rem; margin: 0 0 1rem"
+                  >
+                    Inspect local labels and evidence collected from DOM banner
+                    decisions.
+                  </p>
+                </div>
+                <div
+                  class="training-actions"
+                  style="
+                    display: flex;
+                    gap: 0.5rem;
+                    flex-wrap: wrap;
+                    justify-content: flex-end;
+                  "
+                >
+                  <button class="btn-secondary" id="btn-dom-refresh">
+                    Refresh
+                  </button>
+                  <button class="btn-secondary" id="btn-dom-export">
+                    Export JSONL
+                  </button>
+                  <button class="btn-secondary" id="btn-dom-clear">
+                    Clear
+                  </button>
+                </div>
+              </div>
+              <div
+                id="dom-samples-container"
+                class="list-container"
+                style="max-height: 320px"
+              >
+                <div class="empty-msg">No DOM samples yet.</div>
+              </div>
+            </div>
+          </details>
+          <details
+            class="config-section settings-details"
+            id="diagnostics-details"
+          >
+            <summary
+              style="cursor: pointer; color: #94a3b8; font-size: 0.85rem"
             >
-              <button class="btn-secondary" id="btn-dom-refresh">
-                Refresh
-              </button>
-              <button class="btn-secondary" id="btn-dom-export">
-                Export JSONL
-              </button>
-              <button class="btn-secondary" id="btn-dom-clear">Clear</button>
+              Navigation diagnostics · Developer
+            </summary>
+            <div
+              class="card"
+              style="margin-top: 0.8rem; border-left: 4px solid #f59e0b"
+            >
+              <h2 style="color: #f59e0b">Navigation flight recorder</h2>
+              <p style="color: #94a3b8; font-size: 0.82rem">
+                Keeps a small, session-only metadata buffer. Capture expands to
+                up to 15 minutes. URLs are reduced to hosts; search text, page
+                content, cookies, and tokens are not recorded.
+              </p>
+              <div style="display: flex; gap: 0.5rem; flex-wrap: wrap">
+                <button
+                  type="button"
+                  class="btn-secondary"
+                  id="btn-nav-diagnostics-start"
+                >
+                  Capture 10 min
+                </button>
+                <button
+                  type="button"
+                  class="btn-secondary"
+                  id="btn-nav-diagnostics-stop"
+                >
+                  Stop capture
+                </button>
+                <button
+                  type="button"
+                  class="btn-secondary"
+                  id="btn-nav-diagnostics-refresh"
+                >
+                  Refresh
+                </button>
+                <button
+                  type="button"
+                  class="btn-secondary"
+                  id="btn-nav-diagnostics-export"
+                >
+                  Export trace
+                </button>
+                <button
+                  type="button"
+                  class="btn-secondary"
+                  id="btn-nav-diagnostics-clear"
+                >
+                  Clear trace
+                </button>
+              </div>
+              <div id="nav-diagnostics-status" class="package-status">
+                Loading navigation trace…
+              </div>
+              <pre
+                id="nav-diagnostics-preview"
+                class="list-container"
+                style="
+                  max-height: 320px;
+                  overflow: auto;
+                  white-space: pre-wrap;
+                  font-size: 0.72rem;
+                  color: #cbd5e1;
+                "
+              ></pre>
             </div>
-          </div>
-          <div
-            id="dom-samples-container"
-            class="list-container"
-            style="max-height: 320px"
-          >
-            <div class="empty-msg">No DOM samples yet.</div>
-          </div>
-        </div>
-      </section>
+          </details>
+          <details class="settings-details">
+            <summary>Feedback &amp; bug reports</summary>
+            <!-- Feedback Section -->
+            <div class="card">
+              <h2 style="color: var(--primary)">
+                <svg
+                  width="20"
+                  height="20"
+                  fill="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    d="M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-7 12h-2v-2h2v2zm0-4h-2V6h2v4z"
+                  />
+                </svg>
+                Feedback & Bug Reports
+              </h2>
+              <form id="feedback-form">
+                <div
+                  style="
+                    margin-bottom: 1rem;
+                    display: flex;
+                    align-items: center;
+                    gap: 1rem;
+                  "
+                >
+                  <span style="font-size: 0.9rem; color: #94a3b8">Rating:</span>
+                  <div class="rating-stars" style="display: flex; gap: 5px">
+                    <input
+                      type="radio"
+                      name="rating"
+                      value="5"
+                      id="r5"
+                      checked
+                    /><label for="r5">5</label>
+                    <input type="radio" name="rating" value="4" id="r4" /><label
+                      for="r4"
+                      >4</label
+                    >
+                    <input type="radio" name="rating" value="3" id="r3" /><label
+                      for="r3"
+                      >3</label
+                    >
+                    <input type="radio" name="rating" value="2" id="r2" /><label
+                      for="r2"
+                      >2</label
+                    >
+                    <input type="radio" name="rating" value="1" id="r1" /><label
+                      for="r1"
+                      >1</label
+                    >
+                  </div>
+                </div>
 
-      <!-- Deep Pulse: Learned Workflows Section -->
-      <section class="config-section" style="margin-top: 2rem">
-        <div class="card" style="border-left: 4px solid #a855f7">
-          <h2 style="color: #a855f7">
-            <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24">
-              <path
-                d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"
-              />
-            </svg>
-            Deep Pulse: Learned Workflows
-          </h2>
-          <p style="color: #94a3b8; font-size: 0.85rem; margin-bottom: 1.5rem">
-            Navigation patterns authorized autonomously by the AI based on your
-            habits.
-          </p>
-          <div
-            id="learned-paths-container"
-            class="list-container"
-            style="max-height: 250px"
-          >
-            <div class="empty-msg">
-              No learned workflows yet. Try navigating between your favorite
-              sites!
+                <textarea
+                  id="fb-body"
+                  placeholder="Tell me about your experience or report a bug..."
+                  required
+                  maxlength="1000"
+                  style="
+                    width: 100%;
+                    height: 120px;
+                    padding: 0.8rem;
+                    margin-bottom: 1rem;
+                    border-radius: 10px;
+                    border: 1px solid rgba(255, 255, 255, 0.1);
+                    background: rgba(0, 0, 0, 0.2);
+                    color: white;
+                    resize: none;
+                    box-sizing: border-box;
+                  "
+                ></textarea>
+
+                <button
+                  type="submit"
+                  id="fb-submit"
+                  style="
+                    width: 100%;
+                    background: var(--primary);
+                    color: white;
+                    border: none;
+                    padding: 0.8rem;
+                    border-radius: 10px;
+                    font-weight: 600;
+                    cursor: pointer;
+                  "
+                >
+                  Send Feedback
+                </button>
+              </form>
+              <div
+                id="fb-status"
+                style="
+                  margin-top: 1rem;
+                  text-align: center;
+                  font-size: 0.9rem;
+                  display: none;
+                "
+              ></div>
             </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- Blocked Navigation History -->
-      <section class="config-section" style="margin-top: 2rem">
-        <div class="card">
-          <h2 style="color: #fbd38d">
-            <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24">
-              <path
-                d="M13 3c-4.97 0-9 4.03-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42C8.27 19.99 10.51 21 13 21c4.97 0 9-4.03 9-9s-4.03-9-9-9zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"
-              />
-            </svg>
-            Recent Navigation Blocks
-          </h2>
-          <div
-            id="blocked-logs-container"
-            class="list-container"
-            style="max-height: 250px"
-          >
-            <div class="empty-msg">
-              Clean history. No suspicious navigations blocked recently.
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section class="reset-section">
-        <button class="btn-reset" id="btn-reset">
-          Factory Reset (Wipe All Memory)
-        </button>
-      </section>
-
-      <!-- Feedback Section -->
-      <div
-        class="card"
-        style="
-          margin-top: 3rem;
-          max-width: 600px;
-          margin-left: auto;
-          margin-right: auto;
-        "
-      >
-        <h2 style="color: var(--primary)">
-          <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24">
-            <path
-              d="M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-7 12h-2v-2h2v2zm0-4h-2V6h2v4z"
-            />
-          </svg>
-          Feedback & Bug Reports
-        </h2>
-        <form id="feedback-form">
-          <div
-            style="
-              margin-bottom: 1rem;
-              display: flex;
-              align-items: center;
-              gap: 1rem;
-            "
-          >
-            <span style="font-size: 0.9rem; color: #94a3b8">Rating:</span>
-            <div class="rating-stars" style="display: flex; gap: 5px">
-              <input
-                type="radio"
-                name="rating"
-                value="5"
-                id="r5"
-                checked
-              /><label for="r5">5</label>
-              <input type="radio" name="rating" value="4" id="r4" /><label
-                for="r4"
-                >4</label
-              >
-              <input type="radio" name="rating" value="3" id="r3" /><label
-                for="r3"
-                >3</label
-              >
-              <input type="radio" name="rating" value="2" id="r2" /><label
-                for="r2"
-                >2</label
-              >
-              <input type="radio" name="rating" value="1" id="r1" /><label
-                for="r1"
-                >1</label
-              >
-            </div>
-          </div>
-
-          <textarea
-            id="fb-body"
-            placeholder="Tell me about your experience or report a bug..."
-            required
-            maxlength="1000"
-            style="
-              width: 100%;
-              height: 120px;
-              padding: 0.8rem;
-              margin-bottom: 1rem;
-              border-radius: 10px;
-              border: 1px solid rgba(255, 255, 255, 0.1);
-              background: rgba(0, 0, 0, 0.2);
-              color: white;
-              resize: none;
-              box-sizing: border-box;
-            "
-          ></textarea>
-
-          <button
-            type="submit"
-            id="fb-submit"
-            style="
-              width: 100%;
-              background: var(--primary);
-              color: white;
-              border: none;
-              padding: 0.8rem;
-              border-radius: 10px;
-              font-weight: 600;
-              cursor: pointer;
-            "
-          >
-            Send Feedback
-          </button>
-        </form>
-        <div
-          id="fb-status"
-          style="
-            margin-top: 1rem;
-            text-align: center;
-            font-size: 0.9rem;
-            display: none;
-          "
-        ></div>
-      </div>
+          </details>
+          <section class="card danger-zone">
+            <h2>Reset AdsFriendly</h2>
+            <p class="setting-description">
+              Reset local settings, personal rules, training samples and stored
+              history. Downloaded files are kept; running downloads are not
+              cancelled.
+            </p>
+            <button class="btn-reset" id="btn-reset">Factory reset…</button>
+          </section>
+        </section>
+      </main>
     </div>
     <script src="options.js"></script>
   </body>

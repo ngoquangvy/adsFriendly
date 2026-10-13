@@ -6,6 +6,7 @@ import {
   MEDIA_HELPER_REQUESTS,
   normalizeHelperEvent,
 } from "../media/helper-contract.js";
+import { normalizeDownloadIdentity } from "../media/download-identity.js";
 import {
   DOWNLOAD_HISTORY_KEY,
   DOWNLOAD_JOB_PREFIX,
@@ -129,6 +130,8 @@ async function probeMediaHelperStatus(timeoutMs) {
         capabilities[MEDIA_HELPER_CAPABILITIES.PLAYER_OUTPUT_CAPTURE] === true,
       canMuxWithFfmpeg:
         capabilities[MEDIA_HELPER_CAPABILITIES.FFMPEG_MUX] === true,
+      canCheckOutput:
+        capabilities[MEDIA_HELPER_CAPABILITIES.OUTPUT_STAT] === true,
     });
   } catch (error) {
     const message = messageOf(error);
@@ -242,7 +245,12 @@ function normalizePlayerOutputTimeline(value) {
 
 export async function startMediaHelperDownload(
   rawJob,
-  { connections = 8, attempt = 1 } = {},
+  {
+    connections = 8,
+    attempt = 1,
+    downloadIdentity = null,
+    downloadSummary = null,
+  } = {},
 ) {
   if (!(await hasNativeMessagingPermission())) {
     throw new Error("Native Messaging permission is required.");
@@ -265,6 +273,8 @@ export async function startMediaHelperDownload(
     kind: job.candidate.kind,
     title: job.candidate.title,
     output: job.output,
+    downloadIdentity: normalizeDownloadIdentity(downloadIdentity),
+    downloadSummary,
     sourceTabId: job.sourceTabId,
     candidate: withoutSensitiveHandoffs(job.candidate),
     connections,
@@ -809,6 +819,37 @@ export async function runMediaHelperOutputAction(action, outputPath) {
   return { status: "opened", action, outputPath };
 }
 
+export async function inspectMediaHelperOutput(outputPath) {
+  const helper = await getMediaHelperStatus();
+  if (helper.status !== "ready" || !helper.canCheckOutput)
+    return { status: "unchecked", size: null };
+  const requestId = randomId();
+  const response = normalizeHelperEvent(
+    await withTimeout(
+      chrome.runtime.sendNativeMessage(MEDIA_HELPER_HOST_NAME, {
+        type: MEDIA_HELPER_REQUESTS.OUTPUT_STAT,
+        requestId,
+        protocolVersion: MEDIA_HELPER_PROTOCOL_VERSION,
+        payload: { outputPath },
+      }),
+      DEFAULT_TIMEOUT_MS,
+    ),
+  );
+  if (
+    response.requestId !== requestId ||
+    response.type !== MEDIA_HELPER_EVENTS.OUTPUT_STAT
+  )
+    throw new Error("Could not check the downloaded file.");
+  return {
+    status: ["available", "missing"].includes(response.payload.status)
+      ? response.payload.status
+      : "unchecked",
+    size: Number.isSafeInteger(response.payload.size)
+      ? response.payload.size
+      : null,
+  };
+}
+
 async function handleJobEvent(jobId, requestId, rawEvent) {
   try {
     const event = normalizeHelperEvent(rawEvent);
@@ -954,6 +995,9 @@ async function persistHistoryEntry(state) {
     error: state.error,
     connections: state.connections,
     attempt: state.attempt,
+    output: state.output,
+    downloadIdentity: normalizeDownloadIdentity(state.downloadIdentity),
+    downloadSummary: state.downloadSummary || null,
   };
   return updateHistory((history) =>
     [safeState, ...history.filter((item) => item?.id !== state.id)].slice(
@@ -1024,6 +1068,7 @@ function helperStatus(status, details = {}) {
     canResolveYouTubeProviderFormats: false,
     canResolveYouTubeQualityPreflight: false,
     canMuxWithFfmpeg: false,
+    canCheckOutput: false,
     helperVersion: null,
     capabilities: {},
     error: null,

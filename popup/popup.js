@@ -1,486 +1,4 @@
 var AdsFriendlyPopup = (() => {
-  // src/runtime/ecosystem-catalog.js
-  var PRODUCT_IDS = Object.freeze({
-    AD_PROTECTION: "ad-protection",
-    MEDIA_TOOLS: "media-tools"
-  });
-  var COMPONENT_IDS = Object.freeze({
-    BROWSER_EXTENSION: "browser-extension",
-    MEDIA_HELPER: "media-helper"
-  });
-  var P = PRODUCT_IDS;
-  var C = COMPONENT_IDS;
-  var PRODUCT_CATALOG = Object.freeze({
-    [P.AD_PROTECTION]: product(P.AD_PROTECTION, {
-      name: "AdsFriendly Protection",
-      requiredComponents: [C.BROWSER_EXTENSION],
-      optionalComponents: []
-    }),
-    [P.MEDIA_TOOLS]: product(P.MEDIA_TOOLS, {
-      name: "AdsFriendly Media Tools",
-      requiredComponents: [C.BROWSER_EXTENSION],
-      optionalComponents: [C.MEDIA_HELPER]
-    })
-  });
-  validateProductCatalog();
-  function getProductDefinition(productId) {
-    const definition = PRODUCT_CATALOG[productId];
-    if (!definition) {
-      throw new Error(
-        `[EcosystemRegistry] Unknown product "${productId}". Register it in ecosystem-catalog.js before use.`
-      );
-    }
-    return definition;
-  }
-  function assertRegisteredProduct(productId) {
-    getProductDefinition(productId);
-    return productId;
-  }
-  function assertRegisteredComponent(componentId) {
-    if (!Object.values(COMPONENT_IDS).includes(componentId)) {
-      throw new Error(
-        `[EcosystemRegistry] Unknown component "${componentId}". Register it in ecosystem-catalog.js before use.`
-      );
-    }
-    return componentId;
-  }
-  function product(id, { name, requiredComponents = [], optionalComponents = [] }) {
-    return Object.freeze({
-      id,
-      name,
-      requiredComponents: Object.freeze([...requiredComponents]),
-      optionalComponents: Object.freeze([...optionalComponents])
-    });
-  }
-  function validateProductCatalog() {
-    const productIds = Object.values(PRODUCT_IDS);
-    if (new Set(productIds).size !== productIds.length) {
-      throw new Error("[EcosystemRegistry] Duplicate product ID.");
-    }
-    for (const productId of productIds) {
-      const definition = PRODUCT_CATALOG[productId];
-      if (!definition || definition.id !== productId) {
-        throw new Error(
-          `[EcosystemRegistry] Product "${productId}" has no metadata definition.`
-        );
-      }
-      const components = [
-        ...definition.requiredComponents,
-        ...definition.optionalComponents
-      ];
-      if (new Set(components).size !== components.length) {
-        throw new Error(
-          `[EcosystemRegistry] Product "${productId}" declares a component more than once.`
-        );
-      }
-      for (const componentId of components) {
-        assertRegisteredComponent(componentId);
-      }
-    }
-  }
-
-  // src/runtime/feature-catalog.js
-  var PROTECTION_MODES = Object.freeze({
-    SAFE: "safe",
-    ASSIST: "assist",
-    AUTO: "auto"
-  });
-  var CAPABILITY_TRIGGERS = Object.freeze({
-    CORE: "core",
-    PASSIVE: "passive",
-    USER: "user",
-    SUGGESTION: "suggestion",
-    AUTOMATIC: "automatic",
-    STORAGE: "storage"
-  });
-  var CAPABILITIES = Object.freeze({
-    CORE_MESSAGING: "core.messaging",
-    CORE_MAINTENANCE: "core.maintenance",
-    NAVIGATION_GUARD: "navigation.guard",
-    NAVIGATION_REVERSE_POPUNDER: "navigation.reverse_popunder",
-    NAVIGATION_INTENT: "navigation.intent",
-    NAVIGATION_FEEDBACK: "navigation.feedback",
-    DOM_STATIC_RULES: "dom.static_rules",
-    DOM_OBSERVE: "dom.observe",
-    DOM_SUGGEST: "dom.suggest",
-    DOM_AUTO_HIDE: "dom.auto_hide",
-    DOM_MANUAL_PICKER: "dom.manual_picker",
-    LEARNING_SEED: "learning.seed",
-    LEARNING_FEEDBACK: "learning.feedback",
-    LEARNING_APPLY: "learning.apply_patterns",
-    TELEMETRY_QUEUE: "telemetry.queue",
-    MEDIA_OBSERVE: "media.observe",
-    MEDIA_NETWORK_OBSERVE: "media.network_observe",
-    MEDIA_CATALOG: "media.catalog",
-    MEDIA_DOWNLOAD: "media.download",
-    MEDIA_NATIVE_DOWNLOAD: "media.native_download",
-    VIDEO_OBSERVE: "video.observe",
-    VIDEO_RESTORE_STATE: "video.restore_state",
-    VIDEO_USER_ACTION: "video.user_action",
-    VIDEO_AUTO_ACTION: "video.auto_action"
-  });
-  var C2 = CAPABILITIES;
-  var T = CAPABILITY_TRIGGERS;
-  var P2 = PRODUCT_IDS;
-  var R = COMPONENT_IDS;
-  var MODE_RANK = Object.freeze({
-    [PROTECTION_MODES.SAFE]: 0,
-    [PROTECTION_MODES.ASSIST]: 1,
-    [PROTECTION_MODES.AUTO]: 2
-  });
-  var CAPABILITY_CATALOG = Object.freeze({
-    [C2.CORE_MESSAGING]: capability(C2.CORE_MESSAGING, "safe", T.CORE, {
-      availableWhenDisabled: true,
-      productIds: [P2.AD_PROTECTION, P2.MEDIA_TOOLS]
-    }),
-    [C2.CORE_MAINTENANCE]: capability(C2.CORE_MAINTENANCE, "safe", T.CORE, {
-      availableWhenDisabled: true,
-      productIds: [P2.AD_PROTECTION, P2.MEDIA_TOOLS]
-    }),
-    [C2.NAVIGATION_GUARD]: capability(C2.NAVIGATION_GUARD, "safe", T.AUTOMATIC, {
-      productIds: [P2.AD_PROTECTION]
-    }),
-    [C2.NAVIGATION_REVERSE_POPUNDER]: capability(
-      C2.NAVIGATION_REVERSE_POPUNDER,
-      "safe",
-      T.AUTOMATIC,
-      { productIds: [P2.AD_PROTECTION] }
-    ),
-    [C2.NAVIGATION_INTENT]: capability(C2.NAVIGATION_INTENT, "safe", T.PASSIVE, {
-      productIds: [P2.AD_PROTECTION]
-    }),
-    [C2.NAVIGATION_FEEDBACK]: capability(C2.NAVIGATION_FEEDBACK, "safe", T.USER, {
-      productIds: [P2.AD_PROTECTION]
-    }),
-    [C2.DOM_STATIC_RULES]: capability(C2.DOM_STATIC_RULES, "safe", T.AUTOMATIC, {
-      productIds: [P2.AD_PROTECTION]
-    }),
-    [C2.DOM_OBSERVE]: capability(C2.DOM_OBSERVE, "assist", T.PASSIVE, {
-      productIds: [P2.AD_PROTECTION]
-    }),
-    [C2.DOM_SUGGEST]: capability(C2.DOM_SUGGEST, "assist", T.SUGGESTION, {
-      productIds: [P2.AD_PROTECTION]
-    }),
-    [C2.DOM_AUTO_HIDE]: capability(C2.DOM_AUTO_HIDE, "auto", T.AUTOMATIC, {
-      productIds: [P2.AD_PROTECTION]
-    }),
-    [C2.DOM_MANUAL_PICKER]: capability(C2.DOM_MANUAL_PICKER, "safe", T.USER, {
-      productIds: [P2.AD_PROTECTION]
-    }),
-    [C2.LEARNING_SEED]: capability(C2.LEARNING_SEED, "safe", T.STORAGE, {
-      productIds: [P2.AD_PROTECTION]
-    }),
-    [C2.LEARNING_FEEDBACK]: capability(C2.LEARNING_FEEDBACK, "safe", T.USER, {
-      productIds: [P2.AD_PROTECTION]
-    }),
-    [C2.LEARNING_APPLY]: capability(C2.LEARNING_APPLY, "auto", T.AUTOMATIC, {
-      productIds: [P2.AD_PROTECTION]
-    }),
-    [C2.TELEMETRY_QUEUE]: capability(C2.TELEMETRY_QUEUE, "safe", T.STORAGE, {
-      productIds: [P2.AD_PROTECTION]
-    }),
-    [C2.MEDIA_OBSERVE]: capability(C2.MEDIA_OBSERVE, "assist", T.PASSIVE, {
-      productIds: [P2.AD_PROTECTION, P2.MEDIA_TOOLS]
-    }),
-    [C2.MEDIA_NETWORK_OBSERVE]: capability(
-      C2.MEDIA_NETWORK_OBSERVE,
-      "assist",
-      T.PASSIVE,
-      {
-        browserPermissions: ["webRequest"],
-        productIds: [P2.AD_PROTECTION, P2.MEDIA_TOOLS]
-      }
-    ),
-    [C2.MEDIA_CATALOG]: capability(C2.MEDIA_CATALOG, "assist", T.PASSIVE, {
-      productIds: [P2.AD_PROTECTION, P2.MEDIA_TOOLS]
-    }),
-    [C2.MEDIA_DOWNLOAD]: capability(C2.MEDIA_DOWNLOAD, "assist", T.USER, {
-      browserPermissions: ["storage", "tabs"],
-      productIds: [P2.MEDIA_TOOLS]
-    }),
-    [C2.MEDIA_NATIVE_DOWNLOAD]: capability(
-      C2.MEDIA_NATIVE_DOWNLOAD,
-      "assist",
-      T.USER,
-      {
-        browserPermissions: ["nativeMessaging"],
-        productIds: [P2.MEDIA_TOOLS],
-        requiredComponents: [R.BROWSER_EXTENSION, R.MEDIA_HELPER]
-      }
-    ),
-    [C2.VIDEO_OBSERVE]: capability(C2.VIDEO_OBSERVE, "assist", T.PASSIVE, {
-      productIds: [P2.AD_PROTECTION]
-    }),
-    [C2.VIDEO_RESTORE_STATE]: capability(C2.VIDEO_RESTORE_STATE, "safe", T.CORE, {
-      availableWhenDisabled: true,
-      productIds: [P2.AD_PROTECTION]
-    }),
-    [C2.VIDEO_USER_ACTION]: capability(C2.VIDEO_USER_ACTION, "assist", T.USER, {
-      productIds: [P2.AD_PROTECTION]
-    }),
-    [C2.VIDEO_AUTO_ACTION]: capability(C2.VIDEO_AUTO_ACTION, "auto", T.AUTOMATIC, {
-      productIds: [P2.AD_PROTECTION]
-    })
-  });
-  var FEATURE_CATALOG = Object.freeze([
-    feature("background.message-router", "background", C2.CORE_MESSAGING, [
-      C2.CORE_MAINTENANCE,
-      C2.NAVIGATION_INTENT,
-      C2.NAVIGATION_FEEDBACK,
-      C2.LEARNING_FEEDBACK,
-      C2.TELEMETRY_QUEUE,
-      C2.MEDIA_CATALOG,
-      C2.MEDIA_DOWNLOAD
-    ]),
-    feature("background.media-catalog", "background", C2.MEDIA_CATALOG),
-    feature("background.media-debug-capture", "background", C2.MEDIA_CATALOG),
-    feature("background.media-manifest-handoff", "background", C2.MEDIA_CATALOG),
-    feature(
-      "background.media-request-observer",
-      "background",
-      C2.MEDIA_NETWORK_OBSERVE,
-      [C2.MEDIA_CATALOG]
-    ),
-    feature("background.media-download-jobs", "background", C2.MEDIA_DOWNLOAD, [
-      C2.MEDIA_NATIVE_DOWNLOAD
-    ]),
-    feature("background.navigation-guard", "background", C2.NAVIGATION_GUARD, [
-      C2.NAVIGATION_REVERSE_POPUNDER,
-      C2.NAVIGATION_FEEDBACK,
-      C2.TELEMETRY_QUEUE
-    ]),
-    feature("background.telemetry-flush", "background", C2.TELEMETRY_QUEUE),
-    feature("background.memory-cleanup", "background", C2.CORE_MAINTENANCE),
-    feature("background.pattern-seed", "background", C2.LEARNING_SEED),
-    feature(
-      "background.training-store-migration",
-      "background",
-      C2.CORE_MAINTENANCE
-    ),
-    feature("background.settings-package-seed", "background", C2.CORE_MAINTENANCE),
-    feature("content.media-observer", "content", C2.MEDIA_OBSERVE, [
-      C2.MEDIA_CATALOG
-    ]),
-    feature("content.youtube-cleaner", "content", C2.DOM_STATIC_RULES),
-    feature("content.navigation-intent", "content", C2.NAVIGATION_INTENT),
-    feature("content.navigation-toast", "content", C2.NAVIGATION_FEEDBACK),
-    feature("content.dom-static-blocker", "content", C2.DOM_STATIC_RULES, [
-      C2.LEARNING_FEEDBACK,
-      C2.TELEMETRY_QUEUE
-    ]),
-    feature("content.dom-candidate-collector", "content", C2.DOM_OBSERVE, [
-      C2.DOM_SUGGEST,
-      C2.DOM_AUTO_HIDE,
-      C2.LEARNING_FEEDBACK
-    ]),
-    feature("content.dom-learned-blocker", "content", C2.LEARNING_APPLY, [
-      C2.DOM_AUTO_HIDE
-    ]),
-    feature("media-frame.observer", "media-frame", C2.MEDIA_OBSERVE, [
-      C2.MEDIA_CATALOG
-    ]),
-    feature("media-frame.navigation-intent", "media-frame", C2.NAVIGATION_INTENT),
-    feature("video.surgeon", "video", C2.VIDEO_OBSERVE, [
-      C2.VIDEO_RESTORE_STATE,
-      C2.VIDEO_USER_ACTION,
-      C2.VIDEO_AUTO_ACTION
-    ]),
-    feature("picker.controller", "picker", C2.DOM_MANUAL_PICKER, [
-      C2.LEARNING_FEEDBACK
-    ]),
-    feature("main-world.network-capture", "main-world", C2.CORE_MESSAGING, [
-      C2.MEDIA_OBSERVE
-    ]),
-    feature("main-world.player-source-observer", "main-world", C2.CORE_MESSAGING, [
-      C2.MEDIA_OBSERVE
-    ]),
-    feature(
-      "main-world.youtube-player-response",
-      "main-world",
-      C2.CORE_MESSAGING,
-      [C2.MEDIA_OBSERVE]
-    ),
-    feature(
-      "main-world.decrypted-manifest-observer",
-      "main-world",
-      C2.CORE_MESSAGING,
-      [C2.MEDIA_OBSERVE]
-    ),
-    feature("main-world.blob-source-tracer", "main-world", C2.CORE_MESSAGING, [
-      C2.MEDIA_OBSERVE
-    ]),
-    feature("main-world.eme-observer", "main-world", C2.MEDIA_OBSERVE),
-    feature("main-world.timer-control", "main-world", C2.VIDEO_AUTO_ACTION)
-  ]);
-  var CAPABILITY_SET = new Set(Object.values(CAPABILITIES));
-  var FEATURE_BY_ID = new Map(FEATURE_CATALOG.map((item) => [item.id, item]));
-  validateCatalog();
-  var MODE_CAPABILITIES = Object.freeze(
-    Object.fromEntries(
-      Object.values(PROTECTION_MODES).map((mode) => [
-        mode,
-        Object.freeze(resolveCapabilitiesForMode(mode))
-      ])
-    )
-  );
-  function assertRegisteredCapability(capabilityId) {
-    if (!CAPABILITY_SET.has(capabilityId) || !CAPABILITY_CATALOG[capabilityId]) {
-      throw new Error(
-        `[FeatureRegistry] Unknown capability "${capabilityId}". Register it in feature-catalog.js before use.`
-      );
-    }
-    return capabilityId;
-  }
-  function getCapabilitiesForMode(mode) {
-    assertProtectionMode(mode);
-    return MODE_CAPABILITIES[mode];
-  }
-  function capability(id, minMode, trigger, {
-    availableWhenDisabled = false,
-    browserPermissions = [],
-    productIds = [P2.AD_PROTECTION, P2.MEDIA_TOOLS],
-    requiredComponents = [R.BROWSER_EXTENSION]
-  } = {}) {
-    return Object.freeze({
-      id,
-      minMode,
-      trigger,
-      availableWhenDisabled,
-      browserPermissions: Object.freeze([...browserPermissions]),
-      productIds: Object.freeze([...productIds]),
-      requiredComponents: Object.freeze([...requiredComponents])
-    });
-  }
-  function feature(id, context, startCapability, extraCapabilities = []) {
-    return Object.freeze({
-      id,
-      context,
-      startCapability,
-      capabilities: Object.freeze([startCapability, ...extraCapabilities])
-    });
-  }
-  function resolveCapabilitiesForMode(mode) {
-    assertProtectionMode(mode);
-    return Object.values(CAPABILITY_CATALOG).filter((definition) => MODE_RANK[mode] >= MODE_RANK[definition.minMode]).map((definition) => definition.id);
-  }
-  function assertProtectionMode(mode) {
-    if (!(mode in MODE_RANK)) {
-      throw new Error(`[FeatureRegistry] Unknown protection mode "${mode}".`);
-    }
-  }
-  function validateCatalog() {
-    const capabilityIds = Object.values(CAPABILITIES);
-    if (new Set(capabilityIds).size !== capabilityIds.length) {
-      throw new Error("[FeatureRegistry] Duplicate capability ID.");
-    }
-    for (const capabilityId of capabilityIds) {
-      const definition = CAPABILITY_CATALOG[capabilityId];
-      if (!definition || definition.id !== capabilityId) {
-        throw new Error(
-          `[FeatureRegistry] Capability "${capabilityId}" has no metadata definition.`
-        );
-      }
-      assertProtectionMode(definition.minMode);
-      if (!Object.values(CAPABILITY_TRIGGERS).includes(definition.trigger)) {
-        throw new Error(
-          `[FeatureRegistry] Capability "${capabilityId}" has unknown trigger "${definition.trigger}".`
-        );
-      }
-      if (!definition.productIds.length) {
-        throw new Error(
-          `[FeatureRegistry] Capability "${capabilityId}" must belong to at least one product.`
-        );
-      }
-      for (const productId of definition.productIds) {
-        assertRegisteredProduct(productId);
-      }
-      if (!definition.requiredComponents.length) {
-        throw new Error(
-          `[FeatureRegistry] Capability "${capabilityId}" must require at least one component.`
-        );
-      }
-      for (const componentId of definition.requiredComponents) {
-        assertRegisteredComponent(componentId);
-      }
-    }
-    const ids = /* @__PURE__ */ new Set();
-    for (const definition of FEATURE_CATALOG) {
-      if (ids.has(definition.id)) {
-        throw new Error(
-          `[FeatureRegistry] Duplicate feature "${definition.id}".`
-        );
-      }
-      ids.add(definition.id);
-      if (new Set(definition.capabilities).size !== definition.capabilities.length) {
-        throw new Error(
-          `[FeatureRegistry] Feature "${definition.id}" declares a capability more than once.`
-        );
-      }
-      for (const capabilityId of definition.capabilities) {
-        assertRegisteredCapability(capabilityId);
-      }
-    }
-  }
-
-  // src/runtime/settings-store.js
-  var SETTINGS_KEY = "appSettings";
-  var DEFAULT_SETTINGS = Object.freeze({
-    enabled: true,
-    protectionMode: PROTECTION_MODES.SAFE,
-    featureOverrides: Object.freeze({}),
-    mediaDownloadConnections: 8
-  });
-  function normalizeSettings(value = {}) {
-    const protectionMode = Object.values(PROTECTION_MODES).includes(
-      value.protectionMode
-    ) ? value.protectionMode : DEFAULT_SETTINGS.protectionMode;
-    return {
-      enabled: value.enabled !== false,
-      protectionMode,
-      featureOverrides: value.featureOverrides && typeof value.featureOverrides === "object" ? { ...value.featureOverrides } : {},
-      mediaDownloadConnections: normalizeMediaDownloadConnections(
-        value.mediaDownloadConnections
-      )
-    };
-  }
-  function normalizeMediaDownloadConnections(value) {
-    const connections = Number(
-      value ?? DEFAULT_SETTINGS.mediaDownloadConnections
-    );
-    return [4, 8, 12, 16].includes(connections) ? connections : DEFAULT_SETTINGS.mediaDownloadConnections;
-  }
-  function migrateLegacySettings(stored = {}) {
-    if (stored[SETTINGS_KEY]) return normalizeSettings(stored[SETTINGS_KEY]);
-    const protectionMode = stored.friendlyMode === false ? PROTECTION_MODES.AUTO : PROTECTION_MODES.SAFE;
-    return normalizeSettings({
-      enabled: stored.isEnabled !== false,
-      protectionMode
-    });
-  }
-  async function loadSettings(storage = chrome.storage.local, { persistMissing = false } = {}) {
-    const stored = await storage.get([SETTINGS_KEY, "isEnabled", "friendlyMode"]);
-    const settings2 = migrateLegacySettings(stored);
-    if (!stored[SETTINGS_KEY] && persistMissing) {
-      await storage.set({ [SETTINGS_KEY]: settings2 });
-    }
-    return settings2;
-  }
-  async function saveSettings(nextSettings, storage = chrome.storage.local) {
-    const settings2 = normalizeSettings(nextSettings);
-    const updates = {
-      [SETTINGS_KEY]: settings2,
-      isEnabled: settings2.enabled,
-      friendlyMode: settings2.protectionMode === PROTECTION_MODES.SAFE
-    };
-    await storage.set(updates);
-    const saved = await storage.get(Object.keys(updates));
-    for (const [key, expected] of Object.entries(updates)) {
-      if (JSON.stringify(saved[key]) !== JSON.stringify(expected))
-        throw new Error(`Could not verify saved setting: ${key}.`);
-    }
-    return settings2;
-  }
-
   // src/media/adaptive-track-policy.js
   var ADAPTIVE_TRACK_RESOLUTION = Object.freeze({
     RESOLVED: "resolved",
@@ -791,7 +309,8 @@ var AdsFriendlyPopup = (() => {
       audioOnly,
       audioTrackId
     ) : null;
-    const estimatedBytes = adaptiveBytes || (duration && bandwidth ? Math.round(duration * bandwidth / 8) : null);
+    const directBytes = candidate.kind === "direct" ? positiveInteger(candidate.contentLength || presentation.contentLength) : null;
+    const estimatedBytes = directBytes || adaptiveBytes || (duration && bandwidth ? Math.round(duration * bandwidth / 8) : null);
     return Object.freeze({
       resolution: resolution ? {
         width: positiveInteger(resolution.width),
@@ -800,7 +319,7 @@ var AdsFriendlyPopup = (() => {
       duration,
       bandwidth,
       estimatedBytes,
-      basis: estimatedBytes ? candidate.kind === "adaptive" ? adaptiveBytes ? "track_content_length" : "track_bitrate" : "manifest_bandwidth" : null
+      basis: estimatedBytes ? directBytes ? "source_headers" : candidate.kind === "adaptive" ? adaptiveBytes ? "track_content_length" : "track_bitrate" : "manifest_bandwidth" : null
     });
   }
   function adaptiveContentLength(candidate, selectedVariant = null, audioOnly = false, audioTrackId = null) {
@@ -1374,6 +893,1066 @@ var AdsFriendlyPopup = (() => {
     return value ? `${value[0].toUpperCase()}${value.slice(1)}` : "Starting";
   }
 
+  // src/media/ui/download-history.js
+  function downloadHistoryView(job, exact = true) {
+    if (!job) return null;
+    const active = isMediaJobActive(job);
+    const missing = ["missing", "changed"].includes(job.fileStatus);
+    if (!active && job.status !== "completed") return null;
+    return {
+      active,
+      missing,
+      status: active ? "Downloading" : "Completed",
+      detail: active ? exact ? "This selection is already downloading." : "Another selection is downloading." : missing ? "Saved file is missing or has changed. You can download it again." : job.fileStatus === "unchecked" ? "Downloaded recently \xB7 file not checked" : exact ? "Downloaded recently" : "Another selection was downloaded recently",
+      size: job.progress?.totalBytes || job.progress?.downloadedBytes || 0,
+      canOpen: !active && !missing && Boolean(job.outputPath),
+      canRepeat: exact && !active
+    };
+  }
+  function createDownloadHistoryCard(job, { exact = true, open, folder, repeat, options, manager } = {}) {
+    const view = downloadHistoryView(job, exact);
+    if (!view) return null;
+    const card = document.createElement("div");
+    card.className = "media-download-history";
+    card.setAttribute("role", "status");
+    const status = document.createElement("strong");
+    status.textContent = view.status;
+    const detail = document.createElement("span");
+    detail.textContent = view.detail;
+    const metadata = document.createElement("span");
+    metadata.textContent = [
+      view.size ? formatBytes(view.size) : null,
+      job.summary?.qualityLabel,
+      job.summary?.profileLabel,
+      job.summary?.audioLabel
+    ].filter(Boolean).join(" \xB7 ");
+    card.append(status, detail, metadata);
+    const actions = document.createElement("div");
+    actions.className = "media-download-history-actions";
+    const action = (label, run) => {
+      if (!run) return;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = label;
+      button.addEventListener("click", async (event) => {
+        if (!event.isTrusted) return;
+        button.disabled = true;
+        try {
+          await run(event);
+        } catch (error) {
+          detail.textContent = error?.message || "Action failed. Try again.";
+        } finally {
+          button.disabled = false;
+        }
+      });
+      actions.append(button);
+    };
+    if (view.canOpen) {
+      action("Open", open);
+      action("Folder", folder);
+    }
+    if (view.canRepeat)
+      action(view.missing ? "Download" : "Download again", repeat);
+    if (view.active) action("View download", manager);
+    action("Change options", options);
+    card.append(actions);
+    return card;
+  }
+
+  // src/media/ui/download-control.js
+  function createMediaDownloadControl(item, downloadItem, tab, helper, {
+    settings: settings2 = null,
+    qualityPreflightCache: youtubeQualityPreflightCache2 = /* @__PURE__ */ new Map(),
+    setupMediaHelper: setupMediaHelper2,
+    onStarted: updateMediaJobs2 = async () => {
+    },
+    initialSelection = {},
+    onSelectionChange = () => {
+    },
+    onOutputChange = () => {
+    },
+    onController = () => {
+    },
+    openManager = null
+  } = {}) {
+    let preferred = initialSelection;
+    let historyJob = null;
+    let historyExact = true;
+    let historyKey = null;
+    let editing = false;
+    let submitting = false;
+    const availability = getMediaDownloadAvailability(downloadItem);
+    const control = document.createElement("div");
+    control.className = "media-download-control";
+    const profiles = getMediaDownloadProfiles(downloadItem, {
+      canSelectContainer: helper.canSelectContainer === true
+    });
+    const profileSelect = document.createElement("select");
+    profileSelect.className = "media-download-profile";
+    profileSelect.title = "Output format";
+    for (const profile of profiles) {
+      const option = document.createElement("option");
+      option.value = profile.id;
+      option.textContent = profile.label;
+      option.title = profile.description;
+      profileSelect.append(option);
+    }
+    profileSelect.disabled = !availability.supported || profiles.length < 2;
+    if (profiles.some((profile) => profile.id === preferred.profileId))
+      profileSelect.value = preferred.profileId;
+    const qualityOptions = getMediaVideoQualityOptions(downloadItem);
+    const needsYouTubePreflight = downloadItem.kind === "adaptive" && downloadItem.provider === "youtube" && hasYouTubeProviderPendingTracks(downloadItem);
+    const preflightKey = needsYouTubePreflight ? `${tab?.id || ""}|${downloadItem.id}` : null;
+    let qualityVerdict = preflightKey ? youtubeQualityPreflightCache2.get(preflightKey) || null : null;
+    const qualitySelect = document.createElement("select");
+    qualitySelect.className = "media-download-profile";
+    qualitySelect.title = "Video quality";
+    const audioTrackOptions = getMediaAudioTrackOptions(downloadItem);
+    const audioSelect = document.createElement("select");
+    audioSelect.className = "media-download-profile";
+    audioSelect.title = "Audio track";
+    const renderAudioOptions = () => {
+      audioSelect.replaceChildren();
+      const availableById = new Map(
+        (qualityVerdict?.audioOptions || []).map((option) => [option.id, option])
+      );
+      const visibleAudio = needsYouTubePreflight ? audioTrackOptions.filter((option) => availableById.has(option.id)) : audioTrackOptions;
+      if (!visibleAudio.length) {
+        const option = document.createElement("option");
+        option.textContent = needsYouTubePreflight && !qualityVerdict ? "Audio \xB7 Checking availability\u2026" : "Audio \xB7 unavailable";
+        option.disabled = true;
+        audioSelect.append(option);
+        audioSelect.disabled = true;
+        return;
+      }
+      for (const audio of visibleAudio) {
+        const option = document.createElement("option");
+        option.value = audio.id;
+        option.textContent = audio.label;
+        const verdict = availableById.get(audio.id);
+        option.title = verdict?.sourceLabel || audio.label;
+        audioSelect.append(option);
+      }
+      audioSelect.disabled = !availability.supported || visibleAudio.length < 2;
+      const previous = [...audioSelect.options].find(
+        (option) => option.textContent === preferred.audioLabel
+      );
+      if (previous) audioSelect.value = previous.value;
+    };
+    const renderQualityOptions = () => {
+      qualitySelect.replaceChildren();
+      if (profileSelect.value === "audio-ogg") {
+        const option = document.createElement("option");
+        option.textContent = "Audio only \xB7 OGG";
+        option.title = "The selected audio track will be converted to OGG.";
+        option.disabled = true;
+        qualitySelect.append(option);
+        qualitySelect.disabled = true;
+        return;
+      }
+      if (needsYouTubePreflight && (helper.status !== "ready" || helper.canResolveYouTubeQualityPreflight !== true)) {
+        const option = document.createElement("option");
+        option.textContent = helper.status === "ready" ? "Quality \xB7 update helper to check" : "Quality \xB7 helper required";
+        option.title = helper.status === "ready" ? "Update Media Helper to verify downloadable YouTube qualities." : "Connect Media Helper to verify downloadable YouTube qualities.";
+        option.disabled = true;
+        qualitySelect.append(option);
+        qualitySelect.disabled = true;
+        return;
+      }
+      if (needsYouTubePreflight && !qualityVerdict) {
+        const option = document.createElement("option");
+        option.textContent = "Quality \xB7 Checking availability\u2026";
+        option.disabled = true;
+        qualitySelect.append(option);
+        qualitySelect.disabled = true;
+        return;
+      }
+      if (needsYouTubePreflight && qualityVerdict?.status !== "ready") {
+        const option = document.createElement("option");
+        option.textContent = "Quality \xB7 unavailable";
+        option.title = qualityVerdict?.reason || "No downloadable quality was found.";
+        option.disabled = true;
+        qualitySelect.append(option);
+        qualitySelect.disabled = true;
+        return;
+      }
+      const automaticQuality = document.createElement("option");
+      automaticQuality.value = "";
+      automaticQuality.textContent = needsYouTubePreflight ? "Quality \xB7 Auto (best available)" : "Quality \xB7 Auto (best)";
+      qualitySelect.append(automaticQuality);
+      const availableById = new Map(
+        (qualityVerdict?.videoOptions || []).map((option) => [option.id, option])
+      );
+      const visibleQualities = needsYouTubePreflight ? qualityOptions.filter((quality) => availableById.has(quality.id)) : qualityOptions;
+      const qualityGroups = /* @__PURE__ */ new Map();
+      for (const quality of visibleQualities) {
+        const option = document.createElement("option");
+        option.value = quality.id;
+        const verdict = availableById.get(quality.id);
+        option.textContent = quality.optionLabel || quality.label || "Source quality";
+        if (quality.groupLabel && !option.textContent.startsWith(quality.groupLabel))
+          option.textContent = `${quality.groupLabel} \xB7 ${option.textContent}`;
+        if (verdict?.availability === "equivalent") {
+          option.textContent += " \xB7 compatible equivalent";
+          option.title = `Provider source: ${verdict.sourceLabel}`;
+        } else if (verdict?.sourceLabel) {
+          option.title = `Provider source: ${verdict.sourceLabel}`;
+        }
+        const groupLabel = quality.groupLabel || "Source quality";
+        let group = qualityGroups.get(groupLabel);
+        if (!group) {
+          group = document.createElement("optgroup");
+          group.label = groupLabel;
+          qualityGroups.set(groupLabel, group);
+          qualitySelect.append(group);
+        }
+        group.append(option);
+      }
+      qualitySelect.disabled = !availability.supported || !visibleQualities.length;
+      const previous = [...qualitySelect.options].find(
+        (option) => qualityKey(option) === preferred.qualityLabel
+      );
+      if (previous) qualitySelect.value = previous.value;
+    };
+    renderAudioOptions();
+    renderQualityOptions();
+    const estimateLabel = document.createElement("span");
+    estimateLabel.className = "media-download-estimate";
+    const updateEstimate = () => {
+      const estimate = getMediaDownloadEstimate(downloadItem, item, {
+        videoTrackId: qualitySelect.value || null,
+        audioTrackId: audioSelect.value || null,
+        audioOnly: profileSelect.value === "audio-ogg"
+      });
+      estimateLabel.textContent = formatDownloadEstimate(estimate);
+      estimateLabel.title = formatDownloadEstimateTitle(estimate);
+    };
+    const syncDownloadButton = () => {
+      const presentation2 = downloadButtonPresentation(
+        availability,
+        helper,
+        downloadItem
+      );
+      let next = presentation2;
+      if (needsYouTubePreflight && helper.status === "ready" && helper.canResolveYouTubeQualityPreflight !== true) {
+        next = {
+          disabled: true,
+          label: "Update helper",
+          title: "Update Media Helper to verify YouTube qualities before downloading."
+        };
+      } else if (needsYouTubePreflight && helper.status === "ready" && helper.canResolveYouTubeQualityPreflight === true) {
+        if (!qualityVerdict) {
+          next = {
+            disabled: true,
+            label: "Checking\u2026",
+            title: "Checking which YouTube qualities are downloadable."
+          };
+        } else if (profileSelect.value !== "audio-ogg" && qualityVerdict.status !== "ready") {
+          next = {
+            disabled: true,
+            label: "Unavailable",
+            title: qualityVerdict.reason || "No YouTube quality is available through the current provider profile."
+          };
+        } else if (profileSelect.value !== "audio-ogg" && qualityVerdict.videoOptions.length === 0) {
+          next = {
+            disabled: true,
+            label: "Unavailable",
+            title: "No downloadable YouTube video quality is available."
+          };
+        } else if (profileSelect.value !== "audio-ogg" && qualitySelect.value && !qualityVerdict.videoOptions.some(
+          (option) => option.id === qualitySelect.value
+        )) {
+          next = {
+            disabled: true,
+            label: "Unavailable",
+            title: "The selected YouTube quality is not downloadable."
+          };
+        } else if (profileSelect.value === "audio-ogg" && !qualityVerdict.audioOptions?.some(
+          (option) => option.id === audioSelect.value
+        )) {
+          next = {
+            disabled: true,
+            label: "Unavailable",
+            title: "No downloadable YouTube audio track is available."
+          };
+        }
+      }
+      button.disabled = next.disabled;
+      button.textContent = next.label;
+      button.title = next.title;
+    };
+    qualitySelect.addEventListener("change", () => {
+      rememberSelection();
+      updateEstimate();
+      syncDownloadButton();
+    });
+    audioSelect.addEventListener("change", () => {
+      rememberSelection();
+      updateEstimate();
+      syncDownloadButton();
+    });
+    profileSelect.addEventListener("change", () => {
+      preferred = { ...preferred, profileId: profileSelect.value };
+      renderQualityOptions();
+      rememberSelection();
+      updateEstimate();
+      syncDownloadButton();
+    });
+    updateEstimate();
+    function rememberSelection() {
+      preferred = {
+        profileId: profileSelect.value,
+        qualityLabel: qualityKey(qualitySelect.selectedOptions[0]),
+        audioLabel: audioSelect.selectedOptions[0]?.textContent || ""
+      };
+      onSelectionChange(preferred);
+      historyJob = null;
+      historyKey = null;
+      editing = false;
+      renderHistory();
+      onOutputChange(getOutput());
+    }
+    for (const select of [profileSelect, qualitySelect, audioSelect])
+      select.setAttribute("aria-label", select.title);
+    function qualityKey(option) {
+      return option ? `${option.parentElement?.label || ""}|${option.textContent}` : "";
+    }
+    const button = document.createElement("button");
+    button.className = "media-download";
+    const presentation = downloadButtonPresentation(
+      availability,
+      helper,
+      downloadItem
+    );
+    button.disabled = presentation.disabled;
+    button.textContent = presentation.label;
+    button.title = presentation.title;
+    const getOutput = () => ({
+      profileId: profileSelect.value || profiles[0]?.id,
+      videoTrackId: profileSelect.value === "audio-ogg" ? null : qualitySelect.value || null,
+      audioTrackId: audioSelect.value || qualityVerdict?.audioOption?.id || null,
+      allowEquivalentVideo: qualityVerdict?.videoOptions?.find(
+        (option) => option.id === qualitySelect.value
+      )?.availability === "equivalent" || profileSelect.value !== "audio-ogg" && !qualitySelect.value && needsYouTubePreflight
+    });
+    async function startDownload(event, repeatOf = null) {
+      if (!event.isTrusted) return;
+      if (submitting) return;
+      submitting = true;
+      button.disabled = true;
+      if (helper.status !== "ready" || !helperCanDownload(downloadItem, helper)) {
+        try {
+          await setupMediaHelper2(button, helper);
+        } finally {
+          submitting = false;
+        }
+        return;
+      }
+      button.textContent = "Starting\u2026";
+      try {
+        const response = await chrome.runtime.sendMessage({
+          type: "CREATE_MEDIA_DOWNLOAD_JOB",
+          tabId: tab.id,
+          mediaId: downloadItem.id,
+          connections: settings2?.mediaDownloadConnections ?? 8,
+          output: getOutput(),
+          repeatOf
+        });
+        if (["already_downloaded", "already_downloading"].includes(response?.status)) {
+          editing = false;
+          historyKey = null;
+          setHistory({ exactJob: response.job, latestJob: response.job });
+          return;
+        }
+        if (response?.status !== "started")
+          throw new Error(
+            response?.reason || response?.error || "Could not start the helper download job."
+          );
+        button.textContent = "Started";
+        historyJob = null;
+        historyKey = null;
+        editing = false;
+        renderHistory();
+        await updateMediaJobs2();
+      } catch (error) {
+        button.disabled = false;
+        button.textContent = "Retry";
+        button.title = error?.message || String(error);
+      } finally {
+        submitting = false;
+      }
+    }
+    button.addEventListener("click", (event) => void startDownload(event));
+    if (availability.supported) control.append(estimateLabel);
+    if (availability.supported && downloadItem.kind === "adaptive" && profiles.some((profile) => profile.id === "video-mp4"))
+      control.append(qualitySelect);
+    if (availability.supported && profiles.length) control.append(profileSelect);
+    if (availability.supported && downloadItem.kind === "adaptive" && audioTrackOptions.length)
+      control.append(audioSelect);
+    control.append(button);
+    const history = document.createElement("div");
+    history.hidden = true;
+    control.append(history);
+    async function outputAction(type) {
+      const response = await chrome.runtime.sendMessage({
+        type,
+        jobId: historyJob.id
+      });
+      if (response?.status !== "opened" && response?.status !== "revealed")
+        throw new Error(
+          response?.error || response?.reason || "Could not open saved file. It may have moved."
+        );
+    }
+    function renderHistory() {
+      const card = !editing && historyJob ? createDownloadHistoryCard(historyJob, {
+        exact: historyExact,
+        open: () => outputAction("OPEN_MEDIA_DOWNLOAD_OUTPUT"),
+        folder: () => outputAction("REVEAL_MEDIA_DOWNLOAD_OUTPUT"),
+        repeat: (event) => startDownload(event, historyJob.id),
+        options: historyExact ? () => {
+          editing = true;
+          renderHistory();
+          syncDownloadButton();
+        } : null,
+        manager: openManager
+      }) : null;
+      history.replaceChildren(...card ? [card] : []);
+      history.hidden = !card;
+      for (const child of control.children)
+        if (child !== history) child.hidden = Boolean(card && historyExact);
+    }
+    function setHistory(context) {
+      if (submitting && !context?.exactJob) return;
+      const job = context?.exactJob || context?.latestJob || null;
+      const exact = Boolean(context?.exactJob);
+      const key = job ? `${job.id}|${job.status}|${job.fileStatus}|${exact}` : "none";
+      if (key === historyKey) return;
+      const old = historyJob;
+      historyKey = key;
+      historyJob = job;
+      historyExact = exact;
+      if (old?.id !== job?.id || old?.status !== job?.status) editing = false;
+      renderHistory();
+      if ((!job || !exact) && !submitting) syncDownloadButton();
+    }
+    onController({ getOutput, setHistory });
+    if (needsYouTubePreflight && helper.status === "ready" && helper.canResolveYouTubeQualityPreflight === true) {
+      if (!qualityVerdict) {
+        const request = chrome.runtime.sendMessage({
+          type: "PREFLIGHT_MEDIA_DOWNLOAD_QUALITIES",
+          tabId: tab?.id,
+          mediaId: downloadItem.id
+        }).then((response) => {
+          qualityVerdict = normalizePopupYouTubePreflight(response);
+          if (preflightKey && qualityVerdict)
+            youtubeQualityPreflightCache2.set(preflightKey, qualityVerdict);
+          if (!control.isConnected) return;
+          renderQualityOptions();
+          renderAudioOptions();
+          syncDownloadButton();
+          updateEstimate();
+          onOutputChange(getOutput());
+        }).catch((error) => {
+          qualityVerdict = {
+            status: "unavailable",
+            videoOptions: [],
+            reason: error?.message || String(error)
+          };
+          if (control.isConnected) {
+            renderQualityOptions();
+            renderAudioOptions();
+            syncDownloadButton();
+          }
+        });
+        void request;
+      }
+      syncDownloadButton();
+    }
+    onOutputChange(getOutput());
+    return control;
+  }
+  function normalizePopupYouTubePreflight(response) {
+    const result = response?.result || response;
+    const options = Array.isArray(result?.videoOptions) ? result.videoOptions.filter(
+      (option) => option && typeof option.id === "string" && ["exact", "equivalent"].includes(option.availability)
+    ) : [];
+    return {
+      status: result?.status === "ready" ? "ready" : "unavailable",
+      videoOptions: options,
+      audioOption: result?.audioOption && typeof result.audioOption.id === "string" ? {
+        id: result.audioOption.id,
+        sourceLabel: typeof result.audioOption.sourceLabel === "string" ? result.audioOption.sourceLabel : "Audio source"
+      } : null,
+      audioOptions: Array.isArray(result?.audioOptions) ? result.audioOptions.filter(
+        (option) => option && typeof option.id === "string"
+      ) : result?.audioOption && typeof result.audioOption.id === "string" ? [result.audioOption] : [],
+      reason: typeof result?.reason === "string" ? result.reason : null
+    };
+  }
+  function formatDownloadEstimate(estimate) {
+    const quality = estimate.resolution?.height ? `${estimate.resolution.height}p` : "Source quality";
+    const size = estimate.estimatedBytes ? `${estimate.basis === "source_headers" ? "" : "Est. "}${formatBytes(
+      estimate.estimatedBytes
+    )}` : "Size unavailable";
+    return `${quality} \xB7 ${size}`;
+  }
+  function formatDownloadEstimateTitle(estimate) {
+    if (!estimate.estimatedBytes) {
+      return "The manifest does not expose enough bitrate data to estimate size before download.";
+    }
+    if (estimate.basis === "source_headers")
+      return "Total file size from the media response headers.";
+    return "Estimated from manifest bitrate and duration. Final file size may differ.";
+  }
+  function downloadButtonPresentation(availability, helper, item) {
+    if (!availability.supported) {
+      return {
+        disabled: true,
+        label: downloadUnavailableLabel(availability.reason),
+        title: availability.reason
+      };
+    }
+    if (helper.status === "permission_required") {
+      return {
+        disabled: false,
+        label: "Set up",
+        title: "Enable the optional Media Helper connection to download video."
+      };
+    }
+    if (helper.status === "not_installed") {
+      return {
+        disabled: false,
+        label: "Install",
+        title: "Media Helper is required for video downloads."
+      };
+    }
+    if (helper.status === "ready" && !helperCanDownload(item, helper)) {
+      return {
+        disabled: true,
+        label: "Helper update",
+        title: `The installed Media Helper does not support ${item.kind.toUpperCase()} downloads yet.`
+      };
+    }
+    if (helper.status !== "ready") {
+      return {
+        disabled: false,
+        label: "Retry",
+        title: helper.error || "Could not connect to Media Helper."
+      };
+    }
+    return {
+      disabled: false,
+      label: "Download",
+      title: "Download with AdsFriendly Media Helper."
+    };
+  }
+  function helperCanDownload(item, helper) {
+    if (item.kind === "direct") return helper.canDownloadDirect === true;
+    if (item.kind === "hls")
+      return helper.canDownloadHls === true && (item.probeSource !== "decrypted_blob" || helper.canDownloadDecryptedHls === true);
+    if (item.kind === "adaptive")
+      return helper.canDownloadAdaptive === true && (item.acquisitionProfile !== "youtube_player_js_challenge" || helper.canResolveYouTubePlayerJs === true) && (!hasYouTubeProviderPendingTracks(item) || helper.canResolveYouTubeProviderFormats === true);
+    return helper.canDownloadDash === true;
+  }
+  function downloadUnavailableLabel(reason = "") {
+    if (reason.includes("DRM") || reason.includes("Playback only"))
+      return "Playback only";
+    if (reason.includes("Live")) return "Live";
+    if (reason.includes("Encrypted")) return "Encrypted";
+    if (reason.includes("waiting") || reason.includes("not exposed") || reason.includes("player-resolved"))
+      return "Watching";
+    if (reason.includes("no media")) return "No media";
+    return "Unavailable";
+  }
+
+  // src/runtime/ecosystem-catalog.js
+  var PRODUCT_IDS = Object.freeze({
+    AD_PROTECTION: "ad-protection",
+    MEDIA_TOOLS: "media-tools"
+  });
+  var COMPONENT_IDS = Object.freeze({
+    BROWSER_EXTENSION: "browser-extension",
+    MEDIA_HELPER: "media-helper"
+  });
+  var P = PRODUCT_IDS;
+  var C = COMPONENT_IDS;
+  var PRODUCT_CATALOG = Object.freeze({
+    [P.AD_PROTECTION]: product(P.AD_PROTECTION, {
+      name: "AdsFriendly Protection",
+      requiredComponents: [C.BROWSER_EXTENSION],
+      optionalComponents: []
+    }),
+    [P.MEDIA_TOOLS]: product(P.MEDIA_TOOLS, {
+      name: "AdsFriendly Media Tools",
+      requiredComponents: [C.BROWSER_EXTENSION],
+      optionalComponents: [C.MEDIA_HELPER]
+    })
+  });
+  validateProductCatalog();
+  function getProductDefinition(productId) {
+    const definition = PRODUCT_CATALOG[productId];
+    if (!definition) {
+      throw new Error(
+        `[EcosystemRegistry] Unknown product "${productId}". Register it in ecosystem-catalog.js before use.`
+      );
+    }
+    return definition;
+  }
+  function assertRegisteredProduct(productId) {
+    getProductDefinition(productId);
+    return productId;
+  }
+  function assertRegisteredComponent(componentId) {
+    if (!Object.values(COMPONENT_IDS).includes(componentId)) {
+      throw new Error(
+        `[EcosystemRegistry] Unknown component "${componentId}". Register it in ecosystem-catalog.js before use.`
+      );
+    }
+    return componentId;
+  }
+  function product(id, { name, requiredComponents = [], optionalComponents = [] }) {
+    return Object.freeze({
+      id,
+      name,
+      requiredComponents: Object.freeze([...requiredComponents]),
+      optionalComponents: Object.freeze([...optionalComponents])
+    });
+  }
+  function validateProductCatalog() {
+    const productIds = Object.values(PRODUCT_IDS);
+    if (new Set(productIds).size !== productIds.length) {
+      throw new Error("[EcosystemRegistry] Duplicate product ID.");
+    }
+    for (const productId of productIds) {
+      const definition = PRODUCT_CATALOG[productId];
+      if (!definition || definition.id !== productId) {
+        throw new Error(
+          `[EcosystemRegistry] Product "${productId}" has no metadata definition.`
+        );
+      }
+      const components = [
+        ...definition.requiredComponents,
+        ...definition.optionalComponents
+      ];
+      if (new Set(components).size !== components.length) {
+        throw new Error(
+          `[EcosystemRegistry] Product "${productId}" declares a component more than once.`
+        );
+      }
+      for (const componentId of components) {
+        assertRegisteredComponent(componentId);
+      }
+    }
+  }
+
+  // src/runtime/feature-catalog.js
+  var PROTECTION_MODES = Object.freeze({
+    SAFE: "safe",
+    ASSIST: "assist",
+    AUTO: "auto"
+  });
+  var CAPABILITY_TRIGGERS = Object.freeze({
+    CORE: "core",
+    PASSIVE: "passive",
+    USER: "user",
+    SUGGESTION: "suggestion",
+    AUTOMATIC: "automatic",
+    STORAGE: "storage"
+  });
+  var CAPABILITIES = Object.freeze({
+    CORE_MESSAGING: "core.messaging",
+    CORE_MAINTENANCE: "core.maintenance",
+    NAVIGATION_GUARD: "navigation.guard",
+    NAVIGATION_REVERSE_POPUNDER: "navigation.reverse_popunder",
+    NAVIGATION_INTENT: "navigation.intent",
+    NAVIGATION_FEEDBACK: "navigation.feedback",
+    DOM_STATIC_RULES: "dom.static_rules",
+    DOM_OBSERVE: "dom.observe",
+    DOM_SUGGEST: "dom.suggest",
+    DOM_AUTO_HIDE: "dom.auto_hide",
+    DOM_MANUAL_PICKER: "dom.manual_picker",
+    LEARNING_SEED: "learning.seed",
+    LEARNING_FEEDBACK: "learning.feedback",
+    LEARNING_APPLY: "learning.apply_patterns",
+    TELEMETRY_QUEUE: "telemetry.queue",
+    MEDIA_OBSERVE: "media.observe",
+    MEDIA_NETWORK_OBSERVE: "media.network_observe",
+    MEDIA_CATALOG: "media.catalog",
+    MEDIA_DOWNLOAD: "media.download",
+    MEDIA_NATIVE_DOWNLOAD: "media.native_download",
+    VIDEO_OBSERVE: "video.observe",
+    VIDEO_RESTORE_STATE: "video.restore_state",
+    VIDEO_USER_ACTION: "video.user_action",
+    VIDEO_AUTO_ACTION: "video.auto_action"
+  });
+  var C2 = CAPABILITIES;
+  var T = CAPABILITY_TRIGGERS;
+  var P2 = PRODUCT_IDS;
+  var R = COMPONENT_IDS;
+  var MODE_RANK = Object.freeze({
+    [PROTECTION_MODES.SAFE]: 0,
+    [PROTECTION_MODES.ASSIST]: 1,
+    [PROTECTION_MODES.AUTO]: 2
+  });
+  var CAPABILITY_CATALOG = Object.freeze({
+    [C2.CORE_MESSAGING]: capability(C2.CORE_MESSAGING, "safe", T.CORE, {
+      availableWhenDisabled: true,
+      productIds: [P2.AD_PROTECTION, P2.MEDIA_TOOLS]
+    }),
+    [C2.CORE_MAINTENANCE]: capability(C2.CORE_MAINTENANCE, "safe", T.CORE, {
+      availableWhenDisabled: true,
+      productIds: [P2.AD_PROTECTION, P2.MEDIA_TOOLS]
+    }),
+    [C2.NAVIGATION_GUARD]: capability(C2.NAVIGATION_GUARD, "safe", T.AUTOMATIC, {
+      productIds: [P2.AD_PROTECTION]
+    }),
+    [C2.NAVIGATION_REVERSE_POPUNDER]: capability(
+      C2.NAVIGATION_REVERSE_POPUNDER,
+      "safe",
+      T.AUTOMATIC,
+      { productIds: [P2.AD_PROTECTION] }
+    ),
+    [C2.NAVIGATION_INTENT]: capability(C2.NAVIGATION_INTENT, "safe", T.PASSIVE, {
+      productIds: [P2.AD_PROTECTION]
+    }),
+    [C2.NAVIGATION_FEEDBACK]: capability(C2.NAVIGATION_FEEDBACK, "safe", T.USER, {
+      productIds: [P2.AD_PROTECTION]
+    }),
+    [C2.DOM_STATIC_RULES]: capability(C2.DOM_STATIC_RULES, "safe", T.AUTOMATIC, {
+      productIds: [P2.AD_PROTECTION]
+    }),
+    [C2.DOM_OBSERVE]: capability(C2.DOM_OBSERVE, "assist", T.PASSIVE, {
+      productIds: [P2.AD_PROTECTION]
+    }),
+    [C2.DOM_SUGGEST]: capability(C2.DOM_SUGGEST, "assist", T.SUGGESTION, {
+      productIds: [P2.AD_PROTECTION]
+    }),
+    [C2.DOM_AUTO_HIDE]: capability(C2.DOM_AUTO_HIDE, "auto", T.AUTOMATIC, {
+      productIds: [P2.AD_PROTECTION]
+    }),
+    [C2.DOM_MANUAL_PICKER]: capability(C2.DOM_MANUAL_PICKER, "safe", T.USER, {
+      productIds: [P2.AD_PROTECTION]
+    }),
+    [C2.LEARNING_SEED]: capability(C2.LEARNING_SEED, "safe", T.STORAGE, {
+      productIds: [P2.AD_PROTECTION]
+    }),
+    [C2.LEARNING_FEEDBACK]: capability(C2.LEARNING_FEEDBACK, "safe", T.USER, {
+      productIds: [P2.AD_PROTECTION]
+    }),
+    [C2.LEARNING_APPLY]: capability(C2.LEARNING_APPLY, "auto", T.AUTOMATIC, {
+      productIds: [P2.AD_PROTECTION]
+    }),
+    [C2.TELEMETRY_QUEUE]: capability(C2.TELEMETRY_QUEUE, "safe", T.STORAGE, {
+      productIds: [P2.AD_PROTECTION]
+    }),
+    [C2.MEDIA_OBSERVE]: capability(C2.MEDIA_OBSERVE, "assist", T.PASSIVE, {
+      productIds: [P2.AD_PROTECTION, P2.MEDIA_TOOLS]
+    }),
+    [C2.MEDIA_NETWORK_OBSERVE]: capability(
+      C2.MEDIA_NETWORK_OBSERVE,
+      "assist",
+      T.PASSIVE,
+      {
+        browserPermissions: ["webRequest"],
+        productIds: [P2.AD_PROTECTION, P2.MEDIA_TOOLS]
+      }
+    ),
+    [C2.MEDIA_CATALOG]: capability(C2.MEDIA_CATALOG, "assist", T.PASSIVE, {
+      productIds: [P2.AD_PROTECTION, P2.MEDIA_TOOLS]
+    }),
+    [C2.MEDIA_DOWNLOAD]: capability(C2.MEDIA_DOWNLOAD, "assist", T.USER, {
+      browserPermissions: ["storage", "tabs"],
+      productIds: [P2.MEDIA_TOOLS]
+    }),
+    [C2.MEDIA_NATIVE_DOWNLOAD]: capability(
+      C2.MEDIA_NATIVE_DOWNLOAD,
+      "assist",
+      T.USER,
+      {
+        browserPermissions: ["nativeMessaging"],
+        productIds: [P2.MEDIA_TOOLS],
+        requiredComponents: [R.BROWSER_EXTENSION, R.MEDIA_HELPER]
+      }
+    ),
+    [C2.VIDEO_OBSERVE]: capability(C2.VIDEO_OBSERVE, "assist", T.PASSIVE, {
+      productIds: [P2.AD_PROTECTION]
+    }),
+    [C2.VIDEO_RESTORE_STATE]: capability(C2.VIDEO_RESTORE_STATE, "safe", T.CORE, {
+      availableWhenDisabled: true,
+      productIds: [P2.AD_PROTECTION]
+    }),
+    [C2.VIDEO_USER_ACTION]: capability(C2.VIDEO_USER_ACTION, "assist", T.USER, {
+      productIds: [P2.AD_PROTECTION]
+    }),
+    [C2.VIDEO_AUTO_ACTION]: capability(C2.VIDEO_AUTO_ACTION, "auto", T.AUTOMATIC, {
+      productIds: [P2.AD_PROTECTION]
+    })
+  });
+  var FEATURE_CATALOG = Object.freeze([
+    feature("background.message-router", "background", C2.CORE_MESSAGING, [
+      C2.CORE_MAINTENANCE,
+      C2.NAVIGATION_INTENT,
+      C2.NAVIGATION_FEEDBACK,
+      C2.LEARNING_FEEDBACK,
+      C2.TELEMETRY_QUEUE,
+      C2.MEDIA_CATALOG,
+      C2.MEDIA_DOWNLOAD
+    ]),
+    feature("background.media-catalog", "background", C2.MEDIA_CATALOG),
+    feature("background.media-debug-capture", "background", C2.MEDIA_CATALOG),
+    feature("background.media-manifest-handoff", "background", C2.MEDIA_CATALOG),
+    feature(
+      "background.media-request-observer",
+      "background",
+      C2.MEDIA_NETWORK_OBSERVE,
+      [C2.MEDIA_CATALOG]
+    ),
+    feature("background.media-download-jobs", "background", C2.MEDIA_DOWNLOAD, [
+      C2.MEDIA_NATIVE_DOWNLOAD
+    ]),
+    feature("background.navigation-guard", "background", C2.NAVIGATION_GUARD, [
+      C2.NAVIGATION_REVERSE_POPUNDER,
+      C2.NAVIGATION_FEEDBACK,
+      C2.TELEMETRY_QUEUE
+    ]),
+    feature("background.telemetry-flush", "background", C2.TELEMETRY_QUEUE),
+    feature("background.memory-cleanup", "background", C2.CORE_MAINTENANCE),
+    feature("background.pattern-seed", "background", C2.LEARNING_SEED),
+    feature(
+      "background.training-store-migration",
+      "background",
+      C2.CORE_MAINTENANCE
+    ),
+    feature("background.settings-package-seed", "background", C2.CORE_MAINTENANCE),
+    feature("content.media-observer", "content", C2.MEDIA_OBSERVE, [
+      C2.MEDIA_CATALOG
+    ]),
+    feature("content.youtube-cleaner", "content", C2.DOM_STATIC_RULES),
+    feature("content.player-download", "content", C2.MEDIA_DOWNLOAD, [
+      C2.MEDIA_CATALOG
+    ]),
+    feature("content.navigation-intent", "content", C2.NAVIGATION_INTENT),
+    feature("content.navigation-toast", "content", C2.NAVIGATION_FEEDBACK),
+    feature("content.dom-static-blocker", "content", C2.DOM_STATIC_RULES, [
+      C2.LEARNING_FEEDBACK,
+      C2.TELEMETRY_QUEUE
+    ]),
+    feature("content.dom-candidate-collector", "content", C2.DOM_OBSERVE, [
+      C2.DOM_SUGGEST,
+      C2.DOM_AUTO_HIDE,
+      C2.LEARNING_FEEDBACK
+    ]),
+    feature("content.dom-learned-blocker", "content", C2.LEARNING_APPLY, [
+      C2.DOM_AUTO_HIDE
+    ]),
+    feature("media-frame.observer", "media-frame", C2.MEDIA_OBSERVE, [
+      C2.MEDIA_CATALOG
+    ]),
+    feature("media-frame.navigation-intent", "media-frame", C2.NAVIGATION_INTENT),
+    feature("media-frame.player-download", "media-frame", C2.MEDIA_DOWNLOAD, [
+      C2.MEDIA_CATALOG
+    ]),
+    feature("video.surgeon", "video", C2.VIDEO_OBSERVE, [
+      C2.VIDEO_RESTORE_STATE,
+      C2.VIDEO_USER_ACTION,
+      C2.VIDEO_AUTO_ACTION
+    ]),
+    feature("picker.controller", "picker", C2.DOM_MANUAL_PICKER, [
+      C2.LEARNING_FEEDBACK
+    ]),
+    feature("main-world.network-capture", "main-world", C2.CORE_MESSAGING, [
+      C2.MEDIA_OBSERVE
+    ]),
+    feature("main-world.player-source-observer", "main-world", C2.CORE_MESSAGING, [
+      C2.MEDIA_OBSERVE
+    ]),
+    feature(
+      "main-world.youtube-player-response",
+      "main-world",
+      C2.CORE_MESSAGING,
+      [C2.MEDIA_OBSERVE]
+    ),
+    feature(
+      "main-world.decrypted-manifest-observer",
+      "main-world",
+      C2.CORE_MESSAGING,
+      [C2.MEDIA_OBSERVE]
+    ),
+    feature("main-world.blob-source-tracer", "main-world", C2.CORE_MESSAGING, [
+      C2.MEDIA_OBSERVE
+    ]),
+    feature("main-world.eme-observer", "main-world", C2.MEDIA_OBSERVE),
+    feature("main-world.timer-control", "main-world", C2.VIDEO_AUTO_ACTION)
+  ]);
+  var CAPABILITY_SET = new Set(Object.values(CAPABILITIES));
+  var FEATURE_BY_ID = new Map(FEATURE_CATALOG.map((item) => [item.id, item]));
+  validateCatalog();
+  var MODE_CAPABILITIES = Object.freeze(
+    Object.fromEntries(
+      Object.values(PROTECTION_MODES).map((mode) => [
+        mode,
+        Object.freeze(resolveCapabilitiesForMode(mode))
+      ])
+    )
+  );
+  function assertRegisteredCapability(capabilityId) {
+    if (!CAPABILITY_SET.has(capabilityId) || !CAPABILITY_CATALOG[capabilityId]) {
+      throw new Error(
+        `[FeatureRegistry] Unknown capability "${capabilityId}". Register it in feature-catalog.js before use.`
+      );
+    }
+    return capabilityId;
+  }
+  function getCapabilitiesForMode(mode) {
+    assertProtectionMode(mode);
+    return MODE_CAPABILITIES[mode];
+  }
+  function capability(id, minMode, trigger, {
+    availableWhenDisabled = false,
+    browserPermissions = [],
+    productIds = [P2.AD_PROTECTION, P2.MEDIA_TOOLS],
+    requiredComponents = [R.BROWSER_EXTENSION]
+  } = {}) {
+    return Object.freeze({
+      id,
+      minMode,
+      trigger,
+      availableWhenDisabled,
+      browserPermissions: Object.freeze([...browserPermissions]),
+      productIds: Object.freeze([...productIds]),
+      requiredComponents: Object.freeze([...requiredComponents])
+    });
+  }
+  function feature(id, context, startCapability, extraCapabilities = []) {
+    return Object.freeze({
+      id,
+      context,
+      startCapability,
+      capabilities: Object.freeze([startCapability, ...extraCapabilities])
+    });
+  }
+  function resolveCapabilitiesForMode(mode) {
+    assertProtectionMode(mode);
+    return Object.values(CAPABILITY_CATALOG).filter((definition) => MODE_RANK[mode] >= MODE_RANK[definition.minMode]).map((definition) => definition.id);
+  }
+  function assertProtectionMode(mode) {
+    if (!(mode in MODE_RANK)) {
+      throw new Error(`[FeatureRegistry] Unknown protection mode "${mode}".`);
+    }
+  }
+  function validateCatalog() {
+    const capabilityIds = Object.values(CAPABILITIES);
+    if (new Set(capabilityIds).size !== capabilityIds.length) {
+      throw new Error("[FeatureRegistry] Duplicate capability ID.");
+    }
+    for (const capabilityId of capabilityIds) {
+      const definition = CAPABILITY_CATALOG[capabilityId];
+      if (!definition || definition.id !== capabilityId) {
+        throw new Error(
+          `[FeatureRegistry] Capability "${capabilityId}" has no metadata definition.`
+        );
+      }
+      assertProtectionMode(definition.minMode);
+      if (!Object.values(CAPABILITY_TRIGGERS).includes(definition.trigger)) {
+        throw new Error(
+          `[FeatureRegistry] Capability "${capabilityId}" has unknown trigger "${definition.trigger}".`
+        );
+      }
+      if (!definition.productIds.length) {
+        throw new Error(
+          `[FeatureRegistry] Capability "${capabilityId}" must belong to at least one product.`
+        );
+      }
+      for (const productId of definition.productIds) {
+        assertRegisteredProduct(productId);
+      }
+      if (!definition.requiredComponents.length) {
+        throw new Error(
+          `[FeatureRegistry] Capability "${capabilityId}" must require at least one component.`
+        );
+      }
+      for (const componentId of definition.requiredComponents) {
+        assertRegisteredComponent(componentId);
+      }
+    }
+    const ids = /* @__PURE__ */ new Set();
+    for (const definition of FEATURE_CATALOG) {
+      if (ids.has(definition.id)) {
+        throw new Error(
+          `[FeatureRegistry] Duplicate feature "${definition.id}".`
+        );
+      }
+      ids.add(definition.id);
+      if (new Set(definition.capabilities).size !== definition.capabilities.length) {
+        throw new Error(
+          `[FeatureRegistry] Feature "${definition.id}" declares a capability more than once.`
+        );
+      }
+      for (const capabilityId of definition.capabilities) {
+        assertRegisteredCapability(capabilityId);
+      }
+    }
+  }
+
+  // src/runtime/settings-store.js
+  var SETTINGS_KEY = "appSettings";
+  var DEFAULT_SETTINGS = Object.freeze({
+    enabled: true,
+    protectionMode: PROTECTION_MODES.SAFE,
+    featureOverrides: Object.freeze({}),
+    mediaDownloadConnections: 8
+  });
+  function normalizeSettings(value = {}) {
+    const protectionMode = Object.values(PROTECTION_MODES).includes(
+      value.protectionMode
+    ) ? value.protectionMode : DEFAULT_SETTINGS.protectionMode;
+    return {
+      enabled: value.enabled !== false,
+      protectionMode,
+      featureOverrides: value.featureOverrides && typeof value.featureOverrides === "object" ? { ...value.featureOverrides } : {},
+      mediaDownloadConnections: normalizeMediaDownloadConnections(
+        value.mediaDownloadConnections
+      )
+    };
+  }
+  function normalizeMediaDownloadConnections(value) {
+    const connections = Number(
+      value ?? DEFAULT_SETTINGS.mediaDownloadConnections
+    );
+    return [4, 8, 12, 16].includes(connections) ? connections : DEFAULT_SETTINGS.mediaDownloadConnections;
+  }
+  function migrateLegacySettings(stored = {}) {
+    if (stored[SETTINGS_KEY]) return normalizeSettings(stored[SETTINGS_KEY]);
+    const protectionMode = stored.friendlyMode === false ? PROTECTION_MODES.AUTO : PROTECTION_MODES.SAFE;
+    return normalizeSettings({
+      enabled: stored.isEnabled !== false,
+      protectionMode
+    });
+  }
+  async function loadSettings(storage = chrome.storage.local, { persistMissing = false } = {}) {
+    const stored = await storage.get([SETTINGS_KEY, "isEnabled", "friendlyMode"]);
+    const settings2 = migrateLegacySettings(stored);
+    if (!stored[SETTINGS_KEY] && persistMissing) {
+      await storage.set({ [SETTINGS_KEY]: settings2 });
+    }
+    return settings2;
+  }
+  async function saveSettings(nextSettings, storage = chrome.storage.local) {
+    const settings2 = normalizeSettings(nextSettings);
+    const updates = {
+      [SETTINGS_KEY]: settings2,
+      isEnabled: settings2.enabled,
+      friendlyMode: settings2.protectionMode === PROTECTION_MODES.SAFE
+    };
+    await storage.set(updates);
+    const saved = await storage.get(Object.keys(updates));
+    for (const [key, expected] of Object.entries(updates)) {
+      if (JSON.stringify(saved[key]) !== JSON.stringify(expected))
+        throw new Error(`Could not verify saved setting: ${key}.`);
+    }
+    return settings2;
+  }
+
   // src/media/resolution-diagnostics.js
   var MEDIA_RESOLUTION_STAGES = Object.freeze({
     NETWORK_OBSERVATION: "network_observation",
@@ -1840,7 +2419,7 @@ var AdsFriendlyPopup = (() => {
       }
     }
     const sorted = [...displayItems].sort(
-      (left, right) => (right.firstSeenAt || 0) - (left.firstSeenAt || 0) || String(left.id || "").localeCompare(String(right.id || ""))
+      (left, right) => playbackPriority(right) - playbackPriority(left) || (right.firstSeenAt || 0) - (left.firstSeenAt || 0) || String(left.id || "").localeCompare(String(right.id || ""))
     );
     const visible = [];
     const adaptivePages = new Set(
@@ -1886,6 +2465,11 @@ var AdsFriendlyPopup = (() => {
       visible.push(grouped);
     }
     return visible.slice(0, maximum);
+  }
+  function playbackPriority(item) {
+    if (item.playback?.playing === true) return 2;
+    if (item.playback?.visible === true) return 1;
+    return 0;
   }
   function groupFacebookDirectRepresentations(items) {
     const groups = /* @__PURE__ */ new Map();
@@ -2646,6 +3230,7 @@ ${blobTitleKey(item.title)}`;
       playlistType: item.playlistType,
       streamType: item.streamType,
       duration: item.duration,
+      contentLength: item.contentLength,
       resolution: item.resolution,
       bandwidth: item.bandwidth,
       averageBandwidth: item.averageBandwidth,
@@ -2893,6 +3478,7 @@ ${blobTitleKey(item.title)}`;
   var mediaStatus = document.getElementById("media-status");
   var mediaHelperAction = document.getElementById("media-helper-action");
   var mediaList = document.getElementById("media-list");
+  var mediaMoreButton = document.getElementById("media-more-button");
   var mediaJobList = document.getElementById("media-job-list");
   var mediaManagerLink = document.getElementById("media-manager-link");
   var pageDecisionsButton = document.getElementById("page-decisions-btn");
@@ -2918,6 +3504,8 @@ ${blobTitleKey(item.title)}`;
   };
   var activeMediaTabId = null;
   var mediaRenderSignature = null;
+  var showAllMediaItems = false;
+  var downloadUiPreferences = {};
   var scheduledMediaRefresh = null;
   var hasMediaDownloadJobs = false;
   var youtubeQualityPreflightCache = /* @__PURE__ */ new Map();
@@ -2941,14 +3529,17 @@ ${blobTitleKey(item.title)}`;
     await renderMode();
     await updateMediaCatalog();
   });
+  mediaMoreButton.addEventListener("click", () => {
+    showAllMediaItems = !showAllMediaItems;
+    mediaRenderSignature = null;
+    void updateMediaCatalog();
+  });
   mediaHelperAction.addEventListener("click", async () => {
     mediaHelperAction.disabled = true;
     await setupMediaHelper(mediaHelperAction, mediaHelperStatus);
   });
   mediaManagerLink.addEventListener("click", () => {
-    void chrome.tabs.create({
-      url: chrome.runtime.getURL("options/options.html#downloads")
-    });
+    void chrome.runtime.sendMessage({ type: "OPEN_PLAYER_DOWNLOAD_MANAGER" });
   });
   document.getElementById("settings-btn").addEventListener("click", () => {
     chrome.runtime.openOptionsPage();
@@ -2956,9 +3547,9 @@ ${blobTitleKey(item.title)}`;
   pageDecisionsButton.addEventListener("click", async () => {
     const tab = await getActiveHttpTab();
     if (!tab) return;
-    const hostname = new URL(tab.url).hostname;
-    void chrome.tabs.create({
-      url: chrome.runtime.getURL("options/options.html") + `?site=${encodeURIComponent(hostname)}#element-decisions`
+    void chrome.runtime.sendMessage({
+      type: "OPEN_ELEMENT_DECISIONS",
+      tabId: tab.id
     });
   });
   document.getElementById("magic-wand-btn").addEventListener("click", async () => {
@@ -3047,6 +3638,7 @@ ${blobTitleKey(item.title)}`;
   chrome.storage.onChanged.addListener(onMediaStorageChanged);
   async function initialize() {
     settings = await loadSettings();
+    ({ mediaDownloadUiPreferences: downloadUiPreferences = {} } = await chrome.storage.local.get("mediaDownloadUiPreferences"));
     await render();
   }
   async function render() {
@@ -3088,7 +3680,12 @@ ${blobTitleKey(item.title)}`;
     }
   }
   async function renderMediaCatalog(tab) {
-    activeMediaTabId = tab?.id ?? null;
+    const nextTabId = tab?.id ?? null;
+    if (activeMediaTabId !== nextTabId) {
+      showAllMediaItems = false;
+      mediaRenderSignature = null;
+    }
+    activeMediaTabId = nextTabId;
     if (!settings.enabled) {
       commitMediaCatalog({
         status: "Protection is off; media observation is paused."
@@ -3135,15 +3732,30 @@ ${blobTitleKey(item.title)}`;
         tab,
         status: formatMediaHelperSummary(mediaHelperStatus, downloadState),
         items,
-        helper: mediaHelperStatus
+        helper: mediaHelperStatus,
+        preferredMediaId: response?.preferredMediaId
       });
     } catch (error) {
       setText(mediaStatus, "Could not refresh media \xB7 showing previous results.");
       console.debug("[AdsFriendly Popup] Media catalog unavailable", error);
     }
   }
-  function commitMediaCatalog({ status, items = [], tab = null, helper = null }) {
-    const visibleItems = selectVisibleMediaItems(items);
+  function commitMediaCatalog({
+    status,
+    items = [],
+    tab = null,
+    helper = null,
+    preferredMediaId = null
+  }) {
+    const allVisibleItems = selectVisibleMediaItems(
+      items,
+      Number.POSITIVE_INFINITY
+    );
+    if (preferredMediaId)
+      allVisibleItems.sort(
+        (a, b) => Number(b.id === preferredMediaId) - Number(a.id === preferredMediaId)
+      );
+    const visibleItems = showAllMediaItems ? allVisibleItems : allVisibleItems.slice(0, 1);
     if (!visibleItems.length && hasMediaDownloadJobs && /Open an HTTP video page|No MP4, WebM, HLS, or DASH/i.test(status)) {
       status = "No media on this tab \xB7 downloads remain available below.";
     }
@@ -3154,8 +3766,10 @@ ${blobTitleKey(item.title)}`;
       helper,
       items: visibleItems
     });
-    setText(mediaCount, String(visibleItems.length));
+    setText(mediaCount, String(allVisibleItems.length));
     setText(mediaStatus, status);
+    mediaMoreButton.hidden = allVisibleItems.length <= 1;
+    mediaMoreButton.textContent = showAllMediaItems ? "Show fewer" : `Other media \xB7 ${allVisibleItems.length - visibleItems.length}`;
     renderMediaHelperAction(helper, downloadState);
     if (signature === mediaRenderSignature) return;
     const fragment = document.createDocumentFragment();
@@ -3216,7 +3830,7 @@ ${blobTitleKey(item.title)}`;
     actions.className = "media-actions";
     if (["direct", "hls", "dash", "adaptive"].includes(item.kind) || item.kind === "blob" && item.selectedMediaId) {
       const downloadItem = itemsById.get(item.selectedMediaId) || item;
-      actions.append(createMediaDownloadControl(item, downloadItem, tab, helper));
+      actions.append(createMediaDownloadControl2(item, downloadItem, tab, helper));
     }
     const debugMediaId = debugCaptureMediaId(item);
     if (tab && debugMediaId)
@@ -3320,294 +3934,24 @@ ${blobTitleKey(item.title)}`;
   function sanitizeFilename(value) {
     return value.replace(/[<>:"/\\|?*\x00-\x1F]/g, "-").slice(0, 180);
   }
-  function createMediaDownloadControl(item, downloadItem, tab, helper) {
-    const availability = getMediaDownloadAvailability(downloadItem);
-    const control = document.createElement("div");
-    control.className = "media-download-control";
+  function createMediaDownloadControl2(item, downloadItem, tab, helper) {
     if (isPlayerOutputCanaryEligible(item)) {
+      const control = document.createElement("div");
+      control.className = "media-download-control";
       return createPlayerOutputCanaryControl(item, tab, helper, control);
     }
-    const profiles = getMediaDownloadProfiles(downloadItem, {
-      canSelectContainer: helper.canSelectContainer === true
-    });
-    const profileSelect = document.createElement("select");
-    profileSelect.className = "media-download-profile";
-    profileSelect.title = "Output format";
-    for (const profile of profiles) {
-      const option = document.createElement("option");
-      option.value = profile.id;
-      option.textContent = profile.label;
-      option.title = profile.description;
-      profileSelect.append(option);
-    }
-    profileSelect.disabled = !availability.supported || profiles.length < 2;
-    const qualityOptions = getMediaVideoQualityOptions(downloadItem);
-    const needsYouTubePreflight = downloadItem.kind === "adaptive" && downloadItem.provider === "youtube" && hasYouTubeProviderPendingTracks(downloadItem);
-    const preflightKey = needsYouTubePreflight ? `${tab?.id || ""}|${downloadItem.id}` : null;
-    let qualityVerdict = preflightKey ? youtubeQualityPreflightCache.get(preflightKey) || null : null;
-    const qualitySelect = document.createElement("select");
-    qualitySelect.className = "media-download-profile";
-    qualitySelect.title = "Video quality";
-    const audioTrackOptions = getMediaAudioTrackOptions(downloadItem);
-    const audioSelect = document.createElement("select");
-    audioSelect.className = "media-download-profile";
-    audioSelect.title = "Audio track";
-    const renderAudioOptions = () => {
-      audioSelect.replaceChildren();
-      const availableById = new Map(
-        (qualityVerdict?.audioOptions || []).map((option) => [option.id, option])
-      );
-      const visibleAudio = needsYouTubePreflight ? audioTrackOptions.filter((option) => availableById.has(option.id)) : audioTrackOptions;
-      if (!visibleAudio.length) {
-        const option = document.createElement("option");
-        option.textContent = needsYouTubePreflight && !qualityVerdict ? "Audio \xB7 Checking availability\u2026" : "Audio \xB7 unavailable";
-        option.disabled = true;
-        audioSelect.append(option);
-        audioSelect.disabled = true;
-        return;
-      }
-      for (const audio of visibleAudio) {
-        const option = document.createElement("option");
-        option.value = audio.id;
-        option.textContent = audio.label;
-        const verdict = availableById.get(audio.id);
-        option.title = verdict?.sourceLabel || audio.label;
-        audioSelect.append(option);
-      }
-      audioSelect.disabled = !availability.supported || visibleAudio.length < 2;
-    };
-    const renderQualityOptions = () => {
-      qualitySelect.replaceChildren();
-      if (profileSelect.value === "audio-ogg") {
-        const option = document.createElement("option");
-        option.textContent = "Audio only \xB7 OGG";
-        option.title = "The selected audio track will be converted to OGG.";
-        option.disabled = true;
-        qualitySelect.append(option);
-        qualitySelect.disabled = true;
-        return;
-      }
-      if (needsYouTubePreflight && (helper.status !== "ready" || helper.canResolveYouTubeQualityPreflight !== true)) {
-        const option = document.createElement("option");
-        option.textContent = helper.status === "ready" ? "Quality \xB7 update helper to check" : "Quality \xB7 helper required";
-        option.title = helper.status === "ready" ? "Update Media Helper to verify downloadable YouTube qualities." : "Connect Media Helper to verify downloadable YouTube qualities.";
-        option.disabled = true;
-        qualitySelect.append(option);
-        qualitySelect.disabled = true;
-        return;
-      }
-      if (needsYouTubePreflight && !qualityVerdict) {
-        const option = document.createElement("option");
-        option.textContent = "Quality \xB7 Checking availability\u2026";
-        option.disabled = true;
-        qualitySelect.append(option);
-        qualitySelect.disabled = true;
-        return;
-      }
-      if (needsYouTubePreflight && qualityVerdict?.status !== "ready") {
-        const option = document.createElement("option");
-        option.textContent = "Quality \xB7 unavailable";
-        option.title = qualityVerdict?.reason || "No downloadable quality was found.";
-        option.disabled = true;
-        qualitySelect.append(option);
-        qualitySelect.disabled = true;
-        return;
-      }
-      const automaticQuality = document.createElement("option");
-      automaticQuality.value = "";
-      automaticQuality.textContent = needsYouTubePreflight ? "Quality \xB7 Auto (best available)" : "Quality \xB7 Auto (best)";
-      qualitySelect.append(automaticQuality);
-      const availableById = new Map(
-        (qualityVerdict?.videoOptions || []).map((option) => [option.id, option])
-      );
-      const visibleQualities = needsYouTubePreflight ? qualityOptions.filter((quality) => availableById.has(quality.id)) : qualityOptions;
-      const qualityGroups = /* @__PURE__ */ new Map();
-      for (const quality of visibleQualities) {
-        const option = document.createElement("option");
-        option.value = quality.id;
-        const verdict = availableById.get(quality.id);
-        option.textContent = quality.optionLabel || quality.label || "Source quality";
-        if (verdict?.availability === "equivalent") {
-          option.textContent += " \xB7 compatible equivalent";
-          option.title = `Provider source: ${verdict.sourceLabel}`;
-        } else if (verdict?.sourceLabel) {
-          option.title = `Provider source: ${verdict.sourceLabel}`;
-        }
-        const groupLabel = quality.groupLabel || "Source quality";
-        let group = qualityGroups.get(groupLabel);
-        if (!group) {
-          group = document.createElement("optgroup");
-          group.label = groupLabel;
-          qualityGroups.set(groupLabel, group);
-          qualitySelect.append(group);
-        }
-        group.append(option);
-      }
-      qualitySelect.disabled = !availability.supported || !visibleQualities.length;
-    };
-    renderAudioOptions();
-    renderQualityOptions();
-    const estimateLabel = document.createElement("span");
-    estimateLabel.className = "media-download-estimate";
-    const updateEstimate = () => {
-      const estimate = getMediaDownloadEstimate(downloadItem, item, {
-        videoTrackId: qualitySelect.value || null,
-        audioTrackId: audioSelect.value || null,
-        audioOnly: profileSelect.value === "audio-ogg"
-      });
-      estimateLabel.textContent = formatDownloadEstimate(estimate);
-      estimateLabel.title = formatDownloadEstimateTitle(estimate);
-    };
-    const syncDownloadButton = () => {
-      const presentation2 = downloadButtonPresentation(
-        availability,
-        helper,
-        downloadItem
-      );
-      let next = presentation2;
-      if (needsYouTubePreflight && helper.status === "ready" && helper.canResolveYouTubeQualityPreflight !== true) {
-        next = {
-          disabled: true,
-          label: "Update helper",
-          title: "Update Media Helper to verify YouTube qualities before downloading."
-        };
-      } else if (needsYouTubePreflight && helper.status === "ready" && helper.canResolveYouTubeQualityPreflight === true) {
-        if (!qualityVerdict) {
-          next = {
-            disabled: true,
-            label: "Checking\u2026",
-            title: "Checking which YouTube qualities are downloadable."
-          };
-        } else if (profileSelect.value !== "audio-ogg" && qualityVerdict.status !== "ready") {
-          next = {
-            disabled: true,
-            label: "Unavailable",
-            title: qualityVerdict.reason || "No YouTube quality is available through the current provider profile."
-          };
-        } else if (profileSelect.value !== "audio-ogg" && qualityVerdict.videoOptions.length === 0) {
-          next = {
-            disabled: true,
-            label: "Unavailable",
-            title: "No downloadable YouTube video quality is available."
-          };
-        } else if (profileSelect.value !== "audio-ogg" && qualitySelect.value && !qualityVerdict.videoOptions.some(
-          (option) => option.id === qualitySelect.value
-        )) {
-          next = {
-            disabled: true,
-            label: "Unavailable",
-            title: "The selected YouTube quality is not downloadable."
-          };
-        } else if (profileSelect.value === "audio-ogg" && !qualityVerdict.audioOptions?.some(
-          (option) => option.id === audioSelect.value
-        )) {
-          next = {
-            disabled: true,
-            label: "Unavailable",
-            title: "No downloadable YouTube audio track is available."
-          };
-        }
-      }
-      button.disabled = next.disabled;
-      button.textContent = next.label;
-      button.title = next.title;
-    };
-    qualitySelect.addEventListener("change", () => {
-      updateEstimate();
-      syncDownloadButton();
-    });
-    audioSelect.addEventListener("change", () => {
-      updateEstimate();
-      syncDownloadButton();
-    });
-    profileSelect.addEventListener("change", () => {
-      renderQualityOptions();
-      updateEstimate();
-      syncDownloadButton();
-    });
-    updateEstimate();
-    const button = document.createElement("button");
-    button.className = "media-download";
-    const presentation = downloadButtonPresentation(
-      availability,
-      helper,
-      downloadItem
-    );
-    button.disabled = presentation.disabled;
-    button.textContent = presentation.label;
-    button.title = presentation.title;
-    button.addEventListener("click", async () => {
-      button.disabled = true;
-      if (helper.status !== "ready" || !helperCanDownload(downloadItem, helper)) {
-        await setupMediaHelper(button, helper);
-        return;
-      }
-      button.textContent = "Starting\u2026";
-      try {
-        const response = await chrome.runtime.sendMessage({
-          type: "CREATE_MEDIA_DOWNLOAD_JOB",
-          tabId: tab.id,
-          mediaId: downloadItem.id,
-          connections: settings?.mediaDownloadConnections ?? 8,
-          output: {
-            profileId: profileSelect.value || profiles[0]?.id,
-            videoTrackId: profileSelect.value === "audio-ogg" ? null : qualitySelect.value || null,
-            audioTrackId: audioSelect.value || qualityVerdict?.audioOption?.id || null,
-            allowEquivalentVideo: qualityVerdict?.videoOptions?.find(
-              (option) => option.id === qualitySelect.value
-            )?.availability === "equivalent" || profileSelect.value !== "audio-ogg" && !qualitySelect.value && needsYouTubePreflight
-          }
+    return createMediaDownloadControl(item, downloadItem, tab, helper, {
+      settings,
+      qualityPreflightCache: youtubeQualityPreflightCache,
+      setupMediaHelper,
+      onStarted: updateMediaJobs,
+      initialSelection: downloadUiPreferences,
+      onSelectionChange: (preference) => {
+        downloadUiPreferences = preference;
+        void chrome.storage.local.set({ mediaDownloadUiPreferences: preference }).catch(() => {
         });
-        if (response?.status !== "started")
-          throw new Error(
-            response?.reason || response?.error || "Could not start the helper download job."
-          );
-        button.textContent = "Started";
-        await updateMediaJobs();
-      } catch (error) {
-        button.disabled = false;
-        button.textContent = "Retry";
-        button.title = error?.message || String(error);
       }
     });
-    if (availability.supported) control.append(estimateLabel);
-    if (availability.supported && downloadItem.kind === "adaptive" && profiles.some((profile) => profile.id === "video-mp4"))
-      control.append(qualitySelect);
-    if (availability.supported && profiles.length) control.append(profileSelect);
-    if (availability.supported && downloadItem.kind === "adaptive" && audioTrackOptions.length)
-      control.append(audioSelect);
-    control.append(button);
-    if (needsYouTubePreflight && helper.status === "ready" && helper.canResolveYouTubeQualityPreflight === true) {
-      if (!qualityVerdict) {
-        const request = chrome.runtime.sendMessage({
-          type: "PREFLIGHT_MEDIA_DOWNLOAD_QUALITIES",
-          tabId: tab?.id,
-          mediaId: downloadItem.id
-        }).then((response) => {
-          qualityVerdict = normalizePopupYouTubePreflight(response);
-          if (preflightKey && qualityVerdict)
-            youtubeQualityPreflightCache.set(preflightKey, qualityVerdict);
-          if (!control.isConnected) return;
-          renderQualityOptions();
-          renderAudioOptions();
-          syncDownloadButton();
-        }).catch((error) => {
-          qualityVerdict = {
-            status: "unavailable",
-            videoOptions: [],
-            reason: error?.message || String(error)
-          };
-          if (control.isConnected) {
-            renderQualityOptions();
-            renderAudioOptions();
-            syncDownloadButton();
-          }
-        });
-        void request;
-      }
-      syncDownloadButton();
-    }
-    return control;
   }
   function createPlayerOutputCanaryControl(item, tab, helper, control) {
     const button = document.createElement("button");
@@ -3759,85 +4103,6 @@ ${blobTitleKey(item.title)}`;
     ];
     const timeline = result.timeline?.status === "aligned" ? " \xB7 timestamps aligned" : result.timeline?.status === "misaligned" ? ` \xB7 timestamp gap ${result.timeline.deltaSeconds?.toFixed?.(2) || "?"}s` : " \xB7 timestamp alignment unknown";
     return `FFprobe recognized ${streamTypes.join(" + ") || "media"}${codecs.length ? ` \xB7 ${codecs.join(" / ")}` : ""}${timeline}. Helper temporary files were discarded after validation.`;
-  }
-  function normalizePopupYouTubePreflight(response) {
-    const result = response?.result || response;
-    const options = Array.isArray(result?.videoOptions) ? result.videoOptions.filter(
-      (option) => option && typeof option.id === "string" && ["exact", "equivalent"].includes(option.availability)
-    ) : [];
-    return {
-      status: result?.status === "ready" ? "ready" : "unavailable",
-      videoOptions: options,
-      audioOption: result?.audioOption && typeof result.audioOption.id === "string" ? {
-        id: result.audioOption.id,
-        sourceLabel: typeof result.audioOption.sourceLabel === "string" ? result.audioOption.sourceLabel : "Audio source"
-      } : null,
-      audioOptions: Array.isArray(result?.audioOptions) ? result.audioOptions.filter(
-        (option) => option && typeof option.id === "string"
-      ) : result?.audioOption && typeof result.audioOption.id === "string" ? [result.audioOption] : [],
-      reason: typeof result?.reason === "string" ? result.reason : null
-    };
-  }
-  function formatDownloadEstimate(estimate) {
-    const quality = estimate.resolution?.height ? `${estimate.resolution.height}p` : "Source quality";
-    const size = estimate.estimatedBytes ? `Est. ${formatBytes(estimate.estimatedBytes)}` : "Size unavailable";
-    return `${quality} \xB7 ${size}`;
-  }
-  function formatDownloadEstimateTitle(estimate) {
-    if (!estimate.estimatedBytes) {
-      return "The manifest does not expose enough bitrate data to estimate size before download.";
-    }
-    return "Estimated from manifest bitrate and duration. Final file size may differ.";
-  }
-  function downloadButtonPresentation(availability, helper, item) {
-    if (!availability.supported) {
-      return {
-        disabled: true,
-        label: downloadUnavailableLabel(availability.reason),
-        title: availability.reason
-      };
-    }
-    if (helper.status === "permission_required") {
-      return {
-        disabled: false,
-        label: "Set up",
-        title: "Enable the optional Media Helper connection to download video."
-      };
-    }
-    if (helper.status === "not_installed") {
-      return {
-        disabled: false,
-        label: "Install",
-        title: "Media Helper is required for video downloads."
-      };
-    }
-    if (helper.status === "ready" && !helperCanDownload(item, helper)) {
-      return {
-        disabled: true,
-        label: "Helper update",
-        title: `The installed Media Helper does not support ${item.kind.toUpperCase()} downloads yet.`
-      };
-    }
-    if (helper.status !== "ready") {
-      return {
-        disabled: false,
-        label: "Retry",
-        title: helper.error || "Could not connect to Media Helper."
-      };
-    }
-    return {
-      disabled: false,
-      label: "Download",
-      title: "Download with AdsFriendly Media Helper."
-    };
-  }
-  function helperCanDownload(item, helper) {
-    if (item.kind === "direct") return helper.canDownloadDirect === true;
-    if (item.kind === "hls")
-      return helper.canDownloadHls === true && (item.probeSource !== "decrypted_blob" || helper.canDownloadDecryptedHls === true);
-    if (item.kind === "adaptive")
-      return helper.canDownloadAdaptive === true && (item.acquisitionProfile !== "youtube_player_js_challenge" || helper.canResolveYouTubePlayerJs === true) && (!hasYouTubeProviderPendingTracks(item) || helper.canResolveYouTubeProviderFormats === true);
-    return helper.canDownloadDash === true;
   }
   async function setupMediaHelper(button, helper) {
     try {
@@ -4089,16 +4354,6 @@ ${blobTitleKey(item.title)}`;
       button.textContent = button.dataset.actionType === "output" ? originalLabel : "Retry action";
       button.title = error?.message || String(error);
     }
-  }
-  function downloadUnavailableLabel(reason = "") {
-    if (reason.includes("DRM") || reason.includes("Playback only"))
-      return "Playback only";
-    if (reason.includes("Live")) return "Live";
-    if (reason.includes("Encrypted")) return "Encrypted";
-    if (reason.includes("waiting") || reason.includes("not exposed") || reason.includes("player-resolved"))
-      return "Watching";
-    if (reason.includes("no media")) return "No media";
-    return "Unavailable";
   }
   async function getActiveHttpTab() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });

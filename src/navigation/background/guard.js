@@ -1,17 +1,12 @@
-import { parseUrl, sameHostnameOrSubdomain } from "../../shared/url.js";
-import { runtimeState } from "../../background/state.js";
-import { getDynamicTrustWindow } from "../../background/reputation.js";
 import { logBlockedNavigation } from "../../background/logs.js";
-import { getTrustedPath, syncTrustedPath } from "./trusted-paths.js";
-import { PREFILLED_SEARCH_TRUST_TARGET } from "../shared/search-navigation.js";
 import { CAPABILITIES } from "../../runtime/feature-catalog.js";
 import {
   NEW_TAB_DECISIONS,
   NEW_TAB_REVIEW_SURFACES,
-  chooseNewTabReviewSurface,
-  decideNewTabNavigation,
   isBrowserUiNewTab,
-  isExplicitAddressBarNavigation,
+  isWebNavigationTarget,
+  isExplicitAddressBarCommitForUrl,
+  shouldEvaluateCommittedNavigation,
   shouldKeepTrackingNewTab,
 } from "./new-tab-policy.js";
 import {
@@ -20,110 +15,227 @@ import {
   isReversePopunderSequence,
   isSelfCloneNavigation,
 } from "./reverse-popunder.js";
-import { classifyNavigationIntent } from "../shared/intent-classifier.js";
 import {
   NAVIGATION_SEQUENCES,
   createNavigationEnforcementPlan,
 } from "./navigation-sequences.js";
-
-const TRUSTED_INITIATORS = [
-  "google.com",
-  "bing.com",
-  "duckduckgo.com",
-  "yahoo.com",
-  "search.yahoo.com",
-  "github.com",
-  "microsoft.com",
-  "login.microsoftonline.com",
-  "live.com",
-  "apple.com",
-  "appleid.apple.com",
-  "facebook.com",
-  "accounts.facebook.com",
-  "cloudflare.com",
-  "challenges.cloudflare.com",
-];
-
-const TRUSTED_TARGETS = [
-  ...TRUSTED_INITIATORS,
-  "paypal.com",
-  "stripe.com",
-  "checkout.stripe.com",
-  "pay.google.com",
-  "payments.google.com",
-  "shop.app",
-  "klarna.com",
-  "adyen.com",
-  "authorize.net",
-];
+import { navigationDiagnostics } from "./diagnostics.js";
+import {
+  ATTRIBUTION_EVIDENCE,
+  navigationAttribution,
+  navigationAttributionFacts,
+} from "./attribution.js";
+import { managedNavigationTabs } from "./managed-tabs.js";
+import { evaluateNavigationPolicy } from "./policy.js";
+import { userNavigationTracker } from "./user-navigation.js";
 
 const pendingTabs = new Map();
 const handledTabs = new Map();
-const evaluatingTabs = new Set();
+const evaluatingTabs = new Map();
 const reverseCandidatesBySource = new Map();
 const reverseCandidatesByClone = new Map();
 const committedUrlsByTab = new Map();
+const committedNavigationsByTab = new Map();
 const pendingReviewToasts = new Map();
 const blockedNoticesBySource = new Map();
-const userOpenedNavigations = new Map();
 const browserUiTabs = new Map();
+const explicitNavigationEpochs = new Map();
 let navigationPolicy = null;
+let guardGeneration = 0;
 
 export function registerNavigationGuard(policy) {
+  const generation = ++guardGeneration;
   navigationPolicy = policy;
   chrome.tabs
     .query({})
     .then((tabs) => {
+      if (generation !== guardGeneration) return;
       for (const tab of tabs) rememberCommittedUrl(tab.id, tab.url);
     })
     .catch(() => {});
   const onCreatedNavigationTarget = (details) => {
-    trackReverseCandidate({
+    if (
+      deferManagedTab({ id: details.tabId, url: details.url }, () =>
+        onCreatedNavigationTarget(details),
+      )
+    )
+      return;
+    if (!isBlankUrl(details.url) && !isWebNavigationTarget(details.url)) return;
+    if (
+      browserUiTabs.has(details.tabId) ||
+      isExplicitAddressBarCommitForUrl(
+        details.url,
+        committedNavigationsByTab.get(details.tabId),
+      )
+    )
+      return;
+    recordNavigationTrace({
+      type: "navigation_target_created",
       sourceTabId: details.sourceTabId,
-      cloneTabId: details.tabId,
-      cloneUrl: details.url,
-    }).catch(logReversePopunderError);
+      tabId: details.tabId,
+      url: details.url,
+      role: "web_created_target",
+    });
+    const context = registerPendingTab(
+      { id: details.tabId, url: details.url },
+      details.sourceTabId,
+      ATTRIBUTION_EVIDENCE.WEB_TARGET,
+      details.sourceFrameId,
+    );
+    if (!context) return;
     evaluateNewTab({
       sourceTabId: details.sourceTabId,
       tabId: details.tabId,
       url: details.url,
+      context,
     });
   };
 
-  const registerPendingTab = (tab, sourceTabId, hasRealOpener) => {
+  const registerPendingTab = (
+    tab,
+    sourceTabId,
+    evidence,
+    sourceFrameId = null,
+  ) => {
     if (!Number.isInteger(tab?.id) || !Number.isInteger(sourceTabId)) return;
-    rememberCommittedUrl(tab.id, tab.pendingUrl || tab.url);
-    pendingTabs.set(tab.id, {
+    const destination = tab.pendingUrl || tab.url;
+    if (
+      destination &&
+      !isBlankUrl(destination) &&
+      !isWebNavigationTarget(destination)
+    )
+      return;
+    const initialUrl = tab.pendingUrl || tab.url;
+    if (
+      isExplicitAddressBarCommitForUrl(
+        initialUrl,
+        committedNavigationsByTab.get(tab.id),
+      )
+    )
+      return;
+    const context = navigationAttribution.link({
+      targetTabId: tab.id,
       sourceTabId,
-      createdAt: Date.now(),
-      hasRealOpener,
+      sourceFrameId,
+      targetUrl: initialUrl,
+      sourceUrl: committedUrlsByTab.get(sourceTabId),
+      evidence,
     });
+    if (!context || context.origin !== "website") return;
+    if (context.targetUrl !== initialUrl) return context;
+    recordNavigationTrace({
+      type: "candidate_linked",
+      tabId: tab.id,
+      sourceTabId: context.sourceTabId,
+      openerTabId: tab.openerTabId,
+      url: tab.pendingUrl || tab.url,
+      role: evidence,
+      ...navigationAttributionFacts(context),
+    });
+    rememberCommittedUrl(tab.id, tab.pendingUrl || tab.url);
+    pendingTabs.set(tab.id, context);
     trackReverseCandidate({
-      sourceTabId,
+      sourceTabId: context.sourceTabId,
       cloneTabId: tab.id,
       cloneUrl: tab.pendingUrl || tab.url,
+      context,
     }).catch(logReversePopunderError);
-    setTimeout(
-      () => pendingTabs.delete(tab.id),
-      hasRealOpener ? 10000 : REVERSE_POPUNDER_WINDOW_MS + 500,
-    );
-    const initialUrl = tab.pendingUrl || tab.url;
+    setTimeout(() => {
+      if (pendingTabs.get(tab.id) === context) pendingTabs.delete(tab.id);
+    }, 10000);
     if (initialUrl && !isBlankUrl(initialUrl)) {
-      evaluateNewTab({ sourceTabId, tabId: tab.id, url: initialUrl });
+      // tabs.onCreated can observe the tab after its address-bar navigation
+      // has already committed. Never evaluate that URL without its transition
+      // metadata; onCommitted will handle it if it has not arrived yet.
+      const committed = committedNavigationsByTab.get(tab.id);
+      if (isExplicitAddressBarCommitForUrl(initialUrl, committed)) {
+        pendingTabs.delete(tab.id);
+        return;
+      }
+      if (committed?.url === initialUrl) {
+        evaluateNewTab({
+          sourceTabId: context.sourceTabId,
+          tabId: tab.id,
+          url: initialUrl,
+          context,
+        });
+      }
     }
+    return context;
+  };
+
+  const markManagedTab = (tab) => {
+    const receipt = managedNavigationTabs.owns(
+      tab.id,
+      tab.pendingUrl || tab.url,
+    );
+    if (!receipt) return false;
+    cancelTabAttribution(tab.id);
+    recordNavigationTrace({
+      type: "candidate_linked",
+      tabId: tab.id,
+      url: receipt.url,
+      navigationSchema: "navigation-context.v1",
+      navigationId: receipt.navigationId,
+      origin: "extension",
+      attribution: "confirmed",
+      attributionEvidence: ["registered_extension_action"],
+      reason: receipt.reason,
+    });
+    return true;
+  };
+  const deferManagedTab = (tab, retry) => {
+    if (markManagedTab(tab)) return true;
+    if (!managedNavigationTabs.hasPending(tab)) return false;
+    managedNavigationTabs
+      .waitForCreatedTab(tab)
+      .then((owned) => {
+        if (!navigationPolicy || generation !== guardGeneration) return;
+        if (owned) markManagedTab(tab);
+        else retry();
+      })
+      .catch(() => {});
+    return true;
   };
 
   const onCreated = (tab) => {
     rememberCommittedUrl(tab.id, tab.pendingUrl || tab.url);
-    if (isBrowserUiNewTab(tab) && Number.isInteger(tab.id)) {
+    recordNavigationTrace({
+      type: "tab_created",
+      tabId: tab.id,
+      openerTabId: tab.openerTabId,
+      url: tab.pendingUrl || tab.url,
+      role: Number.isInteger(tab.openerTabId) ? "has_opener" : "no_opener",
+    });
+    if (deferManagedTab(tab, () => onCreated(tab))) return;
+    if (
+      isBrowserUiNewTab({ ...tab, openerTabId: null }) &&
+      Number.isInteger(tab.id)
+    ) {
       browserUiTabs.set(tab.id, Date.now());
       setTimeout(() => browserUiTabs.delete(tab.id), 2 * 60 * 1000);
       return;
     }
-    const sourceTabId =
-      tab.openerTabId || getRecentUserGestureSourceTabId(2500);
-    if (sourceTabId) {
-      registerPendingTab(tab, sourceTabId, !!tab.openerTabId);
+    // Browser new-tab UI is handled before non-web filtering or opener inference.
+    const initialUrl = tab.pendingUrl || tab.url;
+    if (
+      initialUrl &&
+      !isBlankUrl(initialUrl) &&
+      !isWebNavigationTarget(initialUrl)
+    )
+      return;
+    const recentIntent = navigationAttribution.latestIntent();
+    const sourceTabId = Number.isInteger(tab.openerTabId)
+      ? tab.openerTabId
+      : recentIntent?.tabId;
+    if (Number.isInteger(sourceTabId)) {
+      registerPendingTab(
+        tab,
+        sourceTabId,
+        Number.isInteger(tab.openerTabId)
+          ? ATTRIBUTION_EVIDENCE.OPENER
+          : ATTRIBUTION_EVIDENCE.RECENT_CLICK,
+      );
       return;
     }
     if (!Number.isInteger(tab.id)) return;
@@ -132,56 +244,93 @@ export function registerNavigationGuard(policy) {
     setTimeout(async () => {
       if (
         !navigationPolicy ||
+        generation !== guardGeneration ||
         pendingTabs.has(tab.id) ||
-        handledTabs.has(tab.id)
+        handledTabs.has(tab.id) ||
+        browserUiTabs.has(tab.id)
       )
         return;
-      const delayedSourceTabId = getRecentUserGestureSourceTabId(2500);
-      if (!delayedSourceTabId) return;
+      const delayedSourceTabId = navigationAttribution.latestIntent()?.tabId;
+      if (!Number.isInteger(delayedSourceTabId)) return;
       try {
         const currentTab = await chrome.tabs.get(tab.id);
-        registerPendingTab(currentTab, delayedSourceTabId, false);
+        if (deferManagedTab(currentTab, () => onCreated(currentTab))) return;
+        registerPendingTab(
+          currentTab,
+          delayedSourceTabId,
+          ATTRIBUTION_EVIDENCE.RECENT_CLICK,
+        );
       } catch {}
     }, 300);
   };
 
-  const onUpdated = (tabId, changeInfo) => {
-    if (!changeInfo.url || isBlankUrl(changeInfo.url)) return;
-    if (browserUiTabs.has(tabId)) {
-      browserUiTabs.delete(tabId);
-      pendingTabs.delete(tabId);
-      return;
-    }
-    observeReverseNavigation(tabId, changeInfo.url);
-    const pending = pendingTabs.get(tabId);
-    if (!pending) return;
-    if (isExpiredFallbackPending(pending)) {
-      pendingTabs.delete(tabId);
-      return;
-    }
-    evaluateNewTab({
-      sourceTabId: pending.sourceTabId,
-      tabId,
-      url: changeInfo.url,
-    });
-  };
-
   const onCommitted = (details) => {
     if (details.frameId !== 0 || isBlankUrl(details.url)) return;
-    if (
-      browserUiTabs.has(details.tabId) ||
-      isExplicitAddressBarNavigation(details)
-    ) {
+    if (markManagedTab({ id: details.tabId, url: details.url })) return;
+    if (!isWebNavigationTarget(details.url)) {
+      // Cancel any in-flight website decision without trusting future web URLs.
+      cancelTabAttribution(details.tabId);
+      return;
+    }
+    const wasBrowserUiTab = browserUiTabs.has(details.tabId);
+    const explicitAddressBarCommit =
+      !shouldEvaluateCommittedNavigation(details);
+    committedNavigationsByTab.set(details.tabId, {
+      url: details.url,
+      transitionType: details.transitionType,
+      transitionQualifiers: details.transitionQualifiers || [],
+    });
+    if (explicitAddressBarCommit) {
+      if (
+        pendingTabs.has(details.tabId) ||
+        evaluatingTabs.has(details.tabId) ||
+        reverseCandidatesByClone.has(details.tabId) ||
+        reverseCandidatesBySource.has(details.tabId)
+      ) {
+        triggerNavigationDiagnosticCapture(
+          "address_bar_commit_superseded_pending_ad_candidate",
+        );
+      }
+    }
+    recordNavigationTrace({
+      type: "navigation_committed",
+      tabId: details.tabId,
+      url: details.url,
+      transitionType: details.transitionType,
+      transitionQualifiers: details.transitionQualifiers,
+      role: wasBrowserUiTab
+        ? "browser_ui_tab"
+        : explicitAddressBarCommit
+          ? "explicit_user_navigation"
+          : "tracked_or_unknown",
+    });
+    const userRedirect = userNavigationTracker.continueRedirect(details);
+    if (wasBrowserUiTab || explicitAddressBarCommit || userRedirect) {
+      cancelTabAttribution(details.tabId);
+      if (!userRedirect)
+        userNavigationTracker.begin(details.tabId, details.url);
       browserUiTabs.delete(details.tabId);
       pendingTabs.delete(details.tabId);
       rememberCommittedUrl(details.tabId, details.url);
       return;
     }
+    const previousContext = pendingTabs.get(details.tabId);
+    if (previousContext) {
+      const updated = navigationAttribution.retarget(
+        previousContext,
+        details.url,
+      );
+      if (updated) {
+        pendingTabs.set(details.tabId, updated);
+        const clone = reverseCandidatesByClone.get(details.tabId);
+        if (clone) clone.context = updated;
+      }
+    }
     observeReverseNavigation(details.tabId, details.url);
     rememberCommittedUrl(details.tabId, details.url);
     const pending = pendingTabs.get(details.tabId);
     if (!pending) return;
-    if (isExpiredFallbackPending(pending)) {
+    if (!navigationAttribution.isCurrent(pending)) {
       pendingTabs.delete(details.tabId);
       return;
     }
@@ -189,29 +338,49 @@ export function registerNavigationGuard(policy) {
       sourceTabId: pending.sourceTabId,
       tabId: details.tabId,
       url: details.url,
+      context: pending,
     });
   };
 
   const onRemoved = (tabId) => {
+    recordNavigationTrace({
+      type: "tab_removed",
+      tabId,
+      url: committedUrlsByTab.get(tabId),
+      sourceTabId: pendingTabs.get(tabId)?.sourceTabId,
+      role: "no_extension_removal_cause_recorded",
+    });
     committedUrlsByTab.delete(tabId);
+    committedNavigationsByTab.delete(tabId);
     pendingReviewToasts.delete(tabId);
     browserUiTabs.delete(tabId);
+    explicitNavigationEpochs.delete(tabId);
+    pendingTabs.delete(tabId);
+    handledTabs.delete(tabId);
+    navigationAttribution.removeTab(tabId);
+    managedNavigationTabs.removeTab(tabId);
+    userNavigationTracker.removeTab(tabId);
+    for (const candidate of new Set([
+      reverseCandidatesBySource.get(tabId),
+      reverseCandidatesByClone.get(tabId),
+    ]))
+      if (candidate) cleanupReverseCandidate(candidate);
   };
 
   chrome.webNavigation.onCreatedNavigationTarget.addListener(
     onCreatedNavigationTarget,
   );
   chrome.tabs.onCreated.addListener(onCreated);
-  chrome.tabs.onUpdated.addListener(onUpdated);
   chrome.webNavigation.onCommitted.addListener(onCommitted);
   chrome.tabs.onRemoved.addListener(onRemoved);
 
   return () => {
+    if (generation !== guardGeneration) return;
+    guardGeneration++;
     chrome.webNavigation.onCreatedNavigationTarget.removeListener(
       onCreatedNavigationTarget,
     );
     chrome.tabs.onCreated.removeListener(onCreated);
-    chrome.tabs.onUpdated.removeListener(onUpdated);
     chrome.webNavigation.onCommitted.removeListener(onCommitted);
     chrome.tabs.onRemoved.removeListener(onRemoved);
     pendingTabs.clear();
@@ -219,39 +388,50 @@ export function registerNavigationGuard(policy) {
     reverseCandidatesBySource.clear();
     reverseCandidatesByClone.clear();
     committedUrlsByTab.clear();
+    committedNavigationsByTab.clear();
     pendingReviewToasts.clear();
     blockedNoticesBySource.clear();
-    userOpenedNavigations.clear();
+    handledTabs.clear();
+    navigationAttribution.clear();
+    managedNavigationTabs.clear();
+    userNavigationTracker.clear();
     browserUiTabs.clear();
+    explicitNavigationEpochs.clear();
     navigationPolicy = null;
   };
 }
 
-function getRecentUserGestureSourceTabId(windowMs) {
-  const click = runtimeState.lastTrustedClick;
-  if (
-    !click.tabId ||
-    !click.sourceUrl ||
-    Date.now() - click.timestamp >= windowMs
-  )
-    return null;
-  return click.tabId;
-}
-
-function isExpiredFallbackPending(pending) {
-  return (
-    !pending.hasRealOpener &&
-    Date.now() - pending.createdAt > REVERSE_POPUNDER_WINDOW_MS
+function cancelTabAttribution(tabId) {
+  explicitNavigationEpochs.set(
+    tabId,
+    (explicitNavigationEpochs.get(tabId) || 0) + 1,
   );
+  navigationAttribution.invalidate(tabId);
+  pendingTabs.delete(tabId);
+  pendingReviewToasts.delete(tabId);
+  for (const candidate of new Set([
+    reverseCandidatesBySource.get(tabId),
+    reverseCandidatesByClone.get(tabId),
+  ]))
+    if (candidate) cleanupReverseCandidate(candidate);
 }
 
-async function trackReverseCandidate({ sourceTabId, cloneTabId, cloneUrl }) {
+async function trackReverseCandidate({
+  sourceTabId,
+  cloneTabId,
+  cloneUrl,
+  context,
+}) {
   if (
     !navigationPolicy?.can(CAPABILITIES.NAVIGATION_REVERSE_POPUNDER) ||
     !sourceTabId ||
     !cloneTabId
   )
     return;
+  if (!navigationAttribution.isCurrent(context)) return;
+  const previousClone = reverseCandidatesByClone.get(cloneTabId);
+  if (previousClone && previousClone.sourceTabId !== sourceTabId)
+    cleanupReverseCandidate(previousClone);
 
   let candidate = reverseCandidatesBySource.get(sourceTabId);
   if (candidate && candidate.cloneTabId !== cloneTabId) {
@@ -263,12 +443,16 @@ async function trackReverseCandidate({ sourceTabId, cloneTabId, cloneUrl }) {
       sourceTabId,
       cloneTabId,
       originalUrl:
-        getRecentSourceUrl(sourceTabId) || committedUrlsByTab.get(sourceTabId),
+        context.sourceUrl ||
+        context.intent?.sourceUrl ||
+        committedUrlsByTab.get(sourceTabId),
+      context,
       cloneUrl: null,
       redirectedUrl: null,
       createdAt: Date.now(),
       handling: false,
       reviewTimer: null,
+      revision: 0,
     };
     reverseCandidatesBySource.set(sourceTabId, candidate);
     reverseCandidatesByClone.set(cloneTabId, candidate);
@@ -277,6 +461,7 @@ async function trackReverseCandidate({ sourceTabId, cloneTabId, cloneUrl }) {
       REVERSE_POPUNDER_WINDOW_MS + 500,
     );
   }
+  candidate.context = context;
 
   if (!candidate.originalUrl) {
     try {
@@ -286,6 +471,7 @@ async function trackReverseCandidate({ sourceTabId, cloneTabId, cloneUrl }) {
       }
     } catch {}
   }
+  if (!isCurrentReverseCandidate(candidate)) return;
   if (cloneUrl && !isBlankUrl(cloneUrl)) candidate.cloneUrl = cloneUrl;
   maybeHandleReversePopunder(candidate).catch(logReversePopunderError);
 }
@@ -293,12 +479,14 @@ async function trackReverseCandidate({ sourceTabId, cloneTabId, cloneUrl }) {
 function observeReverseNavigation(tabId, url) {
   const cloneCandidate = reverseCandidatesByClone.get(tabId);
   if (cloneCandidate) {
+    if (cloneCandidate.cloneUrl !== url) cloneCandidate.revision++;
     cloneCandidate.cloneUrl = url;
     maybeHandleReversePopunder(cloneCandidate).catch(logReversePopunderError);
   }
 
   const sourceCandidate = reverseCandidatesBySource.get(tabId);
   if (sourceCandidate) {
+    if (sourceCandidate.redirectedUrl !== url) sourceCandidate.revision++;
     sourceCandidate.redirectedUrl = url;
     maybeHandleReversePopunder(sourceCandidate).catch(logReversePopunderError);
   }
@@ -306,6 +494,7 @@ function observeReverseNavigation(tabId, url) {
 
 async function maybeHandleReversePopunder(candidate) {
   if (
+    !isCurrentReverseCandidate(candidate) ||
     candidate.handling ||
     !candidate.originalUrl ||
     !candidate.cloneUrl ||
@@ -326,30 +515,83 @@ async function maybeHandleReversePopunder(candidate) {
     return;
   }
 
+  // A temporal guess needs an actual same-page clone + source redirect before
+  // it can become confirmed. Ordinary unrelated tabs cannot produce this proof.
+  if (candidate.context.attribution !== "confirmed") {
+    const context = navigationAttribution.link({
+      targetTabId: candidate.cloneTabId,
+      sourceTabId: candidate.sourceTabId,
+      sourceFrameId: candidate.context.sourceFrameId,
+      sourceUrl: candidate.originalUrl,
+      targetUrl: candidate.cloneUrl,
+      evidence: ATTRIBUTION_EVIDENCE.REVERSE_SEQUENCE,
+    });
+    if (!context || context.origin !== "website") return;
+    candidate.context = context;
+    pendingTabs.set(candidate.cloneTabId, context);
+    recordNavigationTrace({
+      type: "candidate_linked",
+      tabId: candidate.cloneTabId,
+      sourceTabId: candidate.sourceTabId,
+      role: "reverse_sequence_confirmed",
+      ...navigationAttributionFacts(context),
+    });
+  }
+
   candidate.handling = true;
+  const expectedRevision = candidate.revision;
+  const expectedContext = candidate.context;
+  const isCurrent = () =>
+    isCurrentReverseCandidate(candidate) &&
+    candidate.revision === expectedRevision &&
+    navigationAttribution.isCurrent(expectedContext);
   if (await isAllowedReverseRedirect(candidate)) {
     cleanupReverseCandidate(candidate);
     return;
   }
+  if (!isCurrent()) return;
 
   const sourceHost = new URL(candidate.originalUrl).hostname;
-  await logBlockedNavigationIfAllowed(candidate.redirectedUrl, sourceHost);
+  try {
+    const sourceTab = await chrome.tabs.get(candidate.sourceTabId);
+    if (
+      !isCurrent() ||
+      (sourceTab.pendingUrl || sourceTab.url) !== candidate.redirectedUrl
+    )
+      return;
+  } catch {
+    return;
+  }
 
   let enforcementPlan = createNavigationEnforcementPlan({
     sequence: NAVIGATION_SEQUENCES.ORIGINAL_TAB_WAS_REDIRECTED,
     originalTabId: candidate.sourceTabId,
     openedTabId: candidate.cloneTabId,
   });
+  let applied = false;
   try {
     const cloneTab = await chrome.tabs.get(candidate.cloneTabId);
+    if (!isCurrent()) return;
     if (
       !cloneTab?.url ||
       !isSelfCloneNavigation(candidate.originalUrl, cloneTab.url)
     )
       throw new Error("clone gone");
     await chrome.tabs.update(enforcementPlan.survivingTabId, { active: true });
+    if (!isCurrent()) return;
+    recordNavigationTrace({
+      type: "enforcement_requested",
+      tabId: enforcementPlan.closeTabId,
+      sourceTabId: enforcementPlan.notifyTabId,
+      targetUrl: candidate.redirectedUrl,
+      action: "close_tab",
+      role: "reverse_popunder",
+      ...navigationAttributionFacts(expectedContext),
+    });
     await chrome.tabs.remove(enforcementPlan.closeTabId);
+    applied = true;
   } catch {
+    if (!isCurrent()) return;
     enforcementPlan = createNavigationEnforcementPlan({
       sequence: NAVIGATION_SEQUENCES.ORIGINAL_TAB_WAS_REDIRECTED,
       originalTabId: candidate.sourceTabId,
@@ -360,17 +602,35 @@ async function maybeHandleReversePopunder(candidate) {
       await chrome.tabs.update(enforcementPlan.restoreTabId, {
         url: candidate.originalUrl,
       });
+      applied = true;
     } catch {}
   } finally {
-    pendingTabs.delete(candidate.cloneTabId);
-    handledTabs.set(candidate.sourceTabId, Date.now());
-    await showBlockedNavigationToast({
-      sourceTabId: enforcementPlan.notifyTabId,
-      url: candidate.redirectedUrl,
-      source: sourceHost,
-      target: new URL(candidate.redirectedUrl).hostname,
-    });
-    cleanupReverseCandidate(candidate);
+    if (applied) {
+      recordNavigationTrace({
+        type: "enforcement_completed",
+        tabId: enforcementPlan.closeTabId ?? enforcementPlan.restoreTabId,
+        sourceTabId: enforcementPlan.notifyTabId,
+        action:
+          enforcementPlan.restoreTabId === null
+            ? "close_tab"
+            : "restore_original",
+        role: "reverse_popunder",
+        ...navigationAttributionFacts(expectedContext),
+      });
+      void logBlockedNavigationIfAllowed(
+        candidate.redirectedUrl,
+        sourceHost,
+        expectedContext,
+      );
+      pendingTabs.delete(candidate.cloneTabId);
+      await showBlockedNavigationToast({
+        sourceTabId: enforcementPlan.notifyTabId,
+        url: candidate.redirectedUrl,
+        source: sourceHost,
+        target: new URL(candidate.redirectedUrl).hostname,
+      });
+      cleanupReverseCandidate(candidate);
+    }
   }
 }
 
@@ -393,11 +653,7 @@ function scheduleReverseRedirectReview(candidate) {
 }
 
 async function reviewReverseRedirect(candidate) {
-  if (
-    candidate.handling ||
-    reverseCandidatesBySource.get(candidate.sourceTabId) !== candidate
-  )
-    return;
+  if (candidate.handling || !isCurrentReverseCandidate(candidate)) return;
   const elapsedMs = Date.now() - candidate.createdAt;
   if (
     isReversePopunderSequence({
@@ -421,19 +677,29 @@ async function reviewReverseRedirect(candidate) {
     return;
 
   candidate.handling = true;
+  const revision = candidate.revision;
+  const context = candidate.context;
   const evaluation = await evaluateNavigationPolicy({
     sourceUrl: candidate.originalUrl,
     targetUrl: candidate.redirectedUrl,
     sourceTabId: candidate.sourceTabId,
     allowMatchingIntent: true,
     allowTrustedInitiator: false,
+    context,
   });
+  if (
+    !isCurrentReverseCandidate(candidate) ||
+    candidate.revision !== revision ||
+    !navigationAttribution.isCurrent(context)
+  )
+    return;
   if (evaluation.decision !== NEW_TAB_DECISIONS.ALLOW) {
     await showNavigationReviewToast({
       tabId: candidate.sourceTabId,
       url: candidate.redirectedUrl,
       source: evaluation.sourceUrl.hostname,
       target: evaluation.targetDomain,
+      context,
     });
   }
   cleanupReverseCandidate(candidate);
@@ -446,6 +712,7 @@ async function isAllowedReverseRedirect(candidate) {
     sourceTabId: candidate.sourceTabId,
     allowMatchingIntent: true,
     allowTrustedInitiator: false,
+    context: candidate.context,
   });
   if (evaluation.allowedSearch) {
     await showAllowedSearchToast({
@@ -458,15 +725,12 @@ async function isAllowedReverseRedirect(candidate) {
   return evaluation.decision === NEW_TAB_DECISIONS.ALLOW;
 }
 
-function getRecentSourceUrl(sourceTabId) {
-  const click = runtimeState.lastTrustedClick;
-  if (
-    click.tabId === sourceTabId &&
-    click.sourceUrl?.startsWith("http") &&
-    Date.now() - click.timestamp < 2000
-  )
-    return click.sourceUrl;
-  return null;
+function isCurrentReverseCandidate(candidate) {
+  return (
+    reverseCandidatesBySource.get(candidate.sourceTabId) === candidate &&
+    reverseCandidatesByClone.get(candidate.cloneTabId) === candidate &&
+    navigationAttribution.isCurrent(candidate.context)
+  );
 }
 
 function cleanupReverseCandidate(candidate) {
@@ -490,106 +754,62 @@ function logReversePopunderError(error) {
   console.error("Reverse pop-under guard failed:", error);
 }
 
-async function evaluateNavigationPolicy({
-  sourceUrl: sourceValue,
-  targetUrl: targetValue,
-  sourceTabId,
-  allowMatchingIntent = false,
-  allowTrustedInitiator = true,
-  waitForIntent = false,
-}) {
-  const sourceUrl = new URL(sourceValue);
-  const targetUrl = new URL(targetValue);
-  const targetDomain = targetUrl.hostname;
-  const sameSite =
-    sameHostnameOrSubdomain(sourceUrl.hostname, targetDomain) ||
-    sameHostnameOrSubdomain(targetDomain, sourceUrl.hostname);
-  const targetClassification = classifyNavigationIntent({
-    intentUrl: targetUrl.href,
-    sourceUrl: sourceUrl.href,
-  });
-  const prefilledSearch = targetClassification.reasons.includes(
-    "prefilled_search_navigation",
-  );
-  const trustTarget = prefilledSearch
-    ? PREFILLED_SEARCH_TRUST_TARGET
-    : targetDomain;
-  const [{ whitelist = [], blacklist = [] }, path, trustWindow] =
-    await Promise.all([
-      chrome.storage.local.get(["whitelist", "blacklist"]),
-      getTrustedPath(sourceUrl.hostname, trustTarget),
-      getDynamicTrustWindow(sourceUrl.hostname),
-    ]);
-  if (waitForIntent) await delay(180);
-  const intentClassification = getRecentIntentClassification(
-    sourceTabId,
-    trustWindow,
-  );
-  const promotionalIntent = intentClassification.likelyAd;
-  const allowedSearch = prefilledSearch && path?.isManual === true;
-  const matchingIntent =
-    allowMatchingIntent &&
-    hasMatchingIntent(sourceTabId, targetDomain, trustWindow);
-  const decision = allowedSearch
-    ? NEW_TAB_DECISIONS.ALLOW
-    : decideNewTabNavigation({
-        sameSite,
-        trustedInitiator:
-          allowTrustedInitiator && isTrustedInitiator(sourceUrl.hostname),
-        trustedTarget: isTrustedTarget(targetDomain),
-        whitelisted: whitelist.includes(targetDomain),
-        blacklisted: isBlacklistedTarget(targetDomain, blacklist),
-        trustedPath:
-          matchingIntent || !!path?.isManual || (path?.visits || 0) >= 3,
-        promotionalIntent,
-        targetLikelyAd: targetClassification.likelyAd,
-      });
-  const reviewSurface =
-    decision === NEW_TAB_DECISIONS.VERIFY
-      ? chooseNewTabReviewSurface({
-          promotionalIntent,
-          targetLikelyAd: targetClassification.likelyAd,
-          intentReasons: intentClassification.reasons,
-          targetReasons: targetClassification.reasons,
-        })
-      : null;
-  return {
-    sourceUrl,
-    targetUrl,
-    targetDomain,
-    sameSite,
-    trustTarget,
-    allowedSearch,
-    decision,
-    reviewSurface,
-  };
-}
-
-async function evaluateNewTab({ sourceTabId, tabId, url }) {
+async function evaluateNewTab({ sourceTabId, tabId, url, context }) {
   if (!navigationPolicy?.can(CAPABILITIES.NAVIGATION_GUARD)) return;
   if (!sourceTabId || !tabId || !url || isBlankUrl(url)) return;
-  if (handledTabs.has(tabId) || evaluatingTabs.has(tabId)) return;
-  if (consumeUserOpenedNavigation(url)) {
-    pendingTabs.delete(tabId);
-    handledTabs.set(tabId, Date.now());
-    setTimeout(() => handledTabs.delete(tabId), 15000);
+  if (!isWebNavigationTarget(url)) return;
+  if (context?.targetUrl !== url) return;
+  if (
+    !navigationAttribution.isCurrent(context) ||
+    handledTabs.get(tabId) === context
+  )
     return;
-  }
-  evaluatingTabs.add(tabId);
+  if (evaluatingTabs.get(tabId) === context) return;
+  evaluatingTabs.set(tabId, context);
+  const evaluationEpoch = explicitNavigationEpochs.get(tabId) || 0;
+  const isCurrentEvaluation = () =>
+    navigationPolicy &&
+    navigationAttribution.isCurrent(context) &&
+    (explicitNavigationEpochs.get(tabId) || 0) === evaluationEpoch;
+  const canEnforce = async () => {
+    if (!isCurrentEvaluation()) return false;
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      return isCurrentEvaluation() && (tab.pendingUrl || tab.url) === url;
+    } catch {
+      return false;
+    }
+  };
 
   let shouldFinalize = false;
   try {
     const sourceTab = await chrome.tabs.get(sourceTabId);
     const capturedSourceUrl =
-      reverseCandidatesBySource.get(sourceTabId)?.originalUrl || sourceTab?.url;
+      context.sourceUrl || context.intent?.sourceUrl || sourceTab?.url;
     if (!capturedSourceUrl?.startsWith("http")) return;
     const evaluation = await evaluateNavigationPolicy({
       sourceUrl: capturedSourceUrl,
       targetUrl: url,
       sourceTabId,
-      waitForIntent: true,
+      context,
     });
+    // A user may type a destination into an ad-created blank tab while the
+    // original popup decision is still waiting on storage/intent signals.
+    // An explicit address-bar commit supersedes that stale decision.
+    if (!isCurrentEvaluation()) return;
     const { sourceUrl, targetDomain, decision, reviewSurface } = evaluation;
+    recordNavigationTrace({
+      type: "policy_decided",
+      tabId,
+      sourceTabId,
+      sourceUrl: sourceUrl.href,
+      targetUrl: url,
+      decision,
+      reviewSurface,
+      reasons: evaluation.reasons,
+      reason: evaluation.attributionReason,
+      ...navigationAttributionFacts(context),
+    });
     // A same-site landing page may only be an intermediate redirect. Keep the
     // tab associated with its source until it leaves the site or expires.
     if (shouldKeepTrackingNewTab({ sameSite: evaluation.sameSite })) return;
@@ -608,32 +828,43 @@ async function evaluateNewTab({ sourceTabId, tabId, url }) {
       shouldFinalize = true;
       return;
     }
-    if (decision === NEW_TAB_DECISIONS.CLOSE) {
-      shouldFinalize = true;
-      const enforcementPlan = createNavigationEnforcementPlan({
-        sequence: NAVIGATION_SEQUENCES.OPENED_TAB_IS_TARGET,
-        originalTabId: sourceTabId,
-        openedTabId: tabId,
-      });
-      await logBlockedNavigationIfAllowed(url, sourceUrl.hostname);
-      await closeTabQuietly(enforcementPlan.closeTabId);
-      return showBlockedNavigationToast({
-        sourceTabId: enforcementPlan.notifyTabId,
-        url,
-        source: sourceUrl.hostname,
-        target: targetDomain,
-      });
-    }
-
     shouldFinalize = true;
-    if (reviewSurface === NEW_TAB_REVIEW_SURFACES.CLOSE) {
+    if (
+      decision === NEW_TAB_DECISIONS.CLOSE ||
+      reviewSurface === NEW_TAB_REVIEW_SURFACES.CLOSE
+    ) {
       const enforcementPlan = createNavigationEnforcementPlan({
         sequence: NAVIGATION_SEQUENCES.OPENED_TAB_IS_TARGET,
         originalTabId: sourceTabId,
         openedTabId: tabId,
       });
-      await logBlockedNavigationIfAllowed(url, sourceUrl.hostname);
-      await closeTabQuietly(enforcementPlan.closeTabId);
+      if (!(await canEnforce())) return;
+      recordNavigationTrace({
+        type: "enforcement_requested",
+        tabId: enforcementPlan.closeTabId,
+        sourceTabId: enforcementPlan.notifyTabId,
+        sourceUrl: sourceUrl.href,
+        targetUrl: url,
+        decision,
+        action: "close_tab",
+        reason:
+          decision === NEW_TAB_DECISIONS.CLOSE
+            ? "blacklisted_target"
+            : "review_policy_close",
+        ...navigationAttributionFacts(context),
+      });
+      const outcome = await closeTabQuietly(
+        enforcementPlan.closeTabId,
+        canEnforce,
+      );
+      if (!outcome) return;
+      recordNavigationTrace({
+        type: "enforcement_completed",
+        tabId,
+        action: outcome,
+        ...navigationAttributionFacts(context),
+      });
+      void logBlockedNavigationIfAllowed(url, sourceUrl.hostname, context);
       return showBlockedNavigationToast({
         sourceTabId: enforcementPlan.notifyTabId,
         url,
@@ -642,25 +873,41 @@ async function evaluateNewTab({ sourceTabId, tabId, url }) {
       });
     }
     if (reviewSurface === NEW_TAB_REVIEW_SURFACES.FULL_PAGE) {
-      return redirectToBlockedPage(tabId, url, sourceUrl.hostname);
+      return redirectToBlockedPage(
+        tabId,
+        url,
+        sourceUrl.hostname,
+        canEnforce,
+        context,
+      );
     }
 
+    if (!(await canEnforce())) return;
     const toastShown = await showNavigationReviewToast({
       tabId,
       url,
       source: sourceUrl.hostname,
       target: targetDomain,
+      context,
     });
-    if (toastShown) return;
-    return redirectToBlockedPage(tabId, url, sourceUrl.hostname);
+    if (toastShown || evaluation.mayReplacePage === false) return;
+    return redirectToBlockedPage(
+      tabId,
+      url,
+      sourceUrl.hostname,
+      canEnforce,
+      context,
+    );
   } catch (err) {
     console.error("Error evaluating navigation:", err);
   } finally {
-    evaluatingTabs.delete(tabId);
-    if (shouldFinalize) {
+    if (evaluatingTabs.get(tabId) === context) evaluatingTabs.delete(tabId);
+    if (shouldFinalize && isCurrentEvaluation()) {
       pendingTabs.delete(tabId);
-      handledTabs.set(tabId, Date.now());
-      setTimeout(() => handledTabs.delete(tabId), 15000);
+      handledTabs.set(tabId, context);
+      setTimeout(() => {
+        if (handledTabs.get(tabId) === context) handledTabs.delete(tabId);
+      }, 15000);
     }
   }
 }
@@ -678,29 +925,6 @@ async function showAllowedSearchToast({ tabId, url, source, target }) {
 
 export function showAllowedSearchNavigation(details) {
   return showAllowedSearchToast(details);
-}
-
-export function allowUserOpenedNavigation(url) {
-  let normalized;
-  try {
-    normalized = new URL(url).href;
-  } catch {
-    return false;
-  }
-  userOpenedNavigations.set(normalized, Date.now() + 5000);
-  return true;
-}
-
-function consumeUserOpenedNavigation(url) {
-  let normalized;
-  try {
-    normalized = new URL(url).href;
-  } catch {
-    return false;
-  }
-  const expiresAt = userOpenedNavigations.get(normalized) || 0;
-  userOpenedNavigations.delete(normalized);
-  return expiresAt > Date.now();
 }
 
 async function showBlockedNavigationToast({
@@ -736,29 +960,22 @@ async function showBlockedNavigationToast({
   return queueNavigationToast(sourceTabId, notice.message);
 }
 
-function hasMatchingIntent(sourceTabId, targetDomain, trustWindow) {
-  const click = runtimeState.lastTrustedClick;
-  if (click.tabId !== sourceTabId) return false;
-  const intent = parseUrl(click.intentUrl);
-  if (isPromotionalIntent(sourceTabId)) return false;
-  const timeSinceClick = Date.now() - click.timestamp;
-  return (
-    timeSinceClick >= 0 &&
-    timeSinceClick < trustWindow &&
-    !!intent &&
-    (sameHostnameOrSubdomain(targetDomain, intent.hostname) ||
-      sameHostnameOrSubdomain(intent.hostname, targetDomain))
-  );
-}
-
-async function showNavigationReviewToast({ tabId, url, source, target }) {
+async function showNavigationReviewToast({
+  tabId,
+  url,
+  source,
+  target,
+  context,
+}) {
   if (!navigationPolicy?.can(CAPABILITIES.NAVIGATION_FEEDBACK)) return false;
   const message = {
     type: "SHOW_GRAY_NAVIGATION",
     tabId,
     url,
-    source,
+    // Keep/Block feedback must not create trusted workflows for a guessed source.
+    source: context?.attribution === "confirmed" ? source : "",
     target,
+    navigationAttribution: navigationAttributionFacts(context),
   };
   return queueNavigationToast(tabId, message);
 }
@@ -781,8 +998,12 @@ async function queueNavigationToast(tabId, message) {
     }
     if (attempt < 5) await delay(220);
   }
-  // The content controller announces readiness after startup or redirects.
-  return pendingReviewToasts.has(tabId);
+  // Do not report success merely because a toast is queued. If the destination
+  // never starts its content script, the caller must use its visible fallback
+  // instead of silently allowing an unreviewed tab.
+  const pending = pendingReviewToasts.get(tabId);
+  if (pending?.message === message) pendingReviewToasts.delete(tabId);
+  return false;
 }
 
 export async function deliverPendingNavigationReview(tabId) {
@@ -802,59 +1023,79 @@ export async function deliverPendingNavigationReview(tabId) {
   }
 }
 
-function isPromotionalIntent(sourceTabId) {
-  return getRecentIntentClassification(sourceTabId).likelyAd;
-}
-
-function getRecentIntentClassification(sourceTabId, windowMs = 2500) {
-  const click = runtimeState.lastTrustedClick;
-  if (
-    click.tabId !== sourceTabId ||
-    Date.now() - click.timestamp < 0 ||
-    Date.now() - click.timestamp >= windowMs
-  )
-    return { likelyAd: false, reasons: [] };
-  const classification = classifyNavigationIntent({
-    intentUrl: click.intentUrl,
-    sourceUrl: click.sourceUrl,
-    evidence: click.intentKind === "promotional" ? "promo" : "",
-  });
-  const reasons = [
-    ...new Set([...(click.intentReasons || []), ...classification.reasons]),
-  ];
-  return {
-    likelyAd: click.intentKind === "promotional" || classification.likelyAd,
-    reasons,
-  };
-}
-
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function redirectToBlockedPage(tabId, url, source) {
-  await logBlockedNavigationIfAllowed(url, source);
+async function redirectToBlockedPage(
+  tabId,
+  url,
+  source,
+  shouldContinue = () => true,
+  context,
+) {
+  if (!(await shouldContinue())) return false;
+  recordNavigationTrace({
+    type: "enforcement_requested",
+    tabId,
+    sourceUrl: `https://${source}`,
+    targetUrl: url,
+    decision: NEW_TAB_DECISIONS.VERIFY,
+    action: "redirect_to_blocked_page",
+    reason: "review_fallback",
+    ...navigationAttributionFacts(context),
+  });
   await chrome.tabs.update(tabId, {
     url: chrome.runtime.getURL(
       `ui/blocked.html?url=${encodeURIComponent(url)}&source=${encodeURIComponent(source)}`,
     ),
   });
+  recordNavigationTrace({
+    type: "enforcement_completed",
+    tabId,
+    action: "redirect_to_blocked_page",
+    ...navigationAttributionFacts(context),
+  });
+  void logBlockedNavigationIfAllowed(url, source, context);
+  return true;
 }
 
-async function logBlockedNavigationIfAllowed(url, source) {
-  if (navigationPolicy?.can(CAPABILITIES.TELEMETRY_QUEUE)) {
-    await logBlockedNavigation(url, source);
+async function logBlockedNavigationIfAllowed(url, source, context) {
+  if (!navigationPolicy?.can(CAPABILITIES.TELEMETRY_QUEUE)) return;
+  try {
+    await logBlockedNavigation(
+      url,
+      source,
+      navigationAttributionFacts(context),
+    );
+  } catch (error) {
+    console.debug("Navigation logging unavailable", error);
   }
 }
 
-async function closeTabQuietly(tabId) {
+async function closeTabQuietly(tabId, shouldContinue) {
   try {
     await chrome.tabs.remove(tabId);
+    return "close_tab";
   } catch {
+    if (!(await shouldContinue())) return null;
     try {
       await chrome.tabs.update(tabId, { url: "about:blank" });
-    } catch {}
+      return "blank_tab";
+    } catch {
+      return null;
+    }
   }
+}
+
+function recordNavigationTrace(event) {
+  navigationDiagnostics.record(event).catch(() => {});
+}
+
+function triggerNavigationDiagnosticCapture(reason) {
+  navigationDiagnostics
+    .startCapture({ durationMs: 10 * 60 * 1000, reason })
+    .catch(() => {});
 }
 
 function isBlankUrl(url) {
@@ -863,37 +1104,5 @@ function isBlankUrl(url) {
     url === "about:blank" ||
     url.startsWith("about:") ||
     url.startsWith("chrome:")
-  );
-}
-
-function isTrustedInitiator(hostname) {
-  return hostMatchesAny(hostname, TRUSTED_INITIATORS) || isGoogleHost(hostname);
-}
-
-function isTrustedTarget(hostname) {
-  return hostMatchesAny(hostname, TRUSTED_TARGETS) || isGoogleHost(hostname);
-}
-
-function isBlacklistedTarget(hostname, blacklist = []) {
-  const normalized = hostname.toLowerCase();
-  return blacklist.some((entry) => {
-    const value = String(entry || "")
-      .replace(/^\|\|/, "")
-      .replace(/\^$/, "")
-      .toLowerCase();
-    return normalized === value || normalized.endsWith(`.${value}`);
-  });
-}
-
-function hostMatchesAny(hostname, domains) {
-  const normalized = hostname.toLowerCase();
-  return domains.some(
-    (domain) => normalized === domain || normalized.endsWith(`.${domain}`),
-  );
-}
-
-function isGoogleHost(hostname) {
-  return /^(.+\.)?google\.(com|[a-z]{2}|com\.[a-z]{2}|co\.[a-z]{2})$/.test(
-    hostname.toLowerCase(),
   );
 }

@@ -1,4 +1,5 @@
 import { startMediaObserver } from "../content/media-observer.js";
+import { startPlayerDownload } from "../content/player-download.js";
 import { startIntentTracker } from "../navigation/content/intent-tracker.js";
 import { createMainController } from "../runtime/main-controller.js";
 
@@ -7,6 +8,7 @@ if (window.top !== window) {
     context: "media-frame",
     implementations: {
       "media-frame.observer": () => startMediaObserver(),
+      "media-frame.player-download": () => startPlayerDownload(),
       "media-frame.navigation-intent": () => startIntentTracker(),
     },
   });

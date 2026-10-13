@@ -1,3 +1,4 @@
+import { createMediaDownloadControl as createSharedDownloadControl } from "../media/ui/download-control.js";
 import { loadSettings, saveSettings } from "../runtime/settings-store.js";
 import {
   CAPABILITIES,
@@ -7,12 +8,6 @@ import {
   DOWNLOAD_JOB_PREFIX,
   getMediaDownloadAvailability,
 } from "../media/download-job-contract.js";
-import {
-  getMediaAudioTrackOptions,
-  getMediaDownloadEstimate,
-  getMediaDownloadProfiles,
-  getMediaVideoQualityOptions,
-} from "../media/download-options.js";
 import {
   formatCompactMediaJobDetails,
   formatBytes,
@@ -33,7 +28,6 @@ import {
 } from "../media/catalog-view.js";
 import { mediaCatalogSessionKey } from "../media/storage-keys.js";
 import { evaluateMediaDeepInspection } from "../media/deep-inspection.js";
-import { hasYouTubeProviderPendingTracks } from "../media/adaptive-track-policy.js";
 import {
   stageMediaDeepInspectionProfile,
   verifyMediaDeepInspectionProfiles,
@@ -47,6 +41,7 @@ const mediaCount = document.getElementById("media-count");
 const mediaStatus = document.getElementById("media-status");
 const mediaHelperAction = document.getElementById("media-helper-action");
 const mediaList = document.getElementById("media-list");
+const mediaMoreButton = document.getElementById("media-more-button");
 const mediaJobList = document.getElementById("media-job-list");
 const mediaManagerLink = document.getElementById("media-manager-link");
 const pageDecisionsButton = document.getElementById("page-decisions-btn");
@@ -74,6 +69,8 @@ let mediaHelperStatus = {
 };
 let activeMediaTabId = null;
 let mediaRenderSignature = null;
+let showAllMediaItems = false;
+let downloadUiPreferences = {};
 let scheduledMediaRefresh = null;
 let hasMediaDownloadJobs = false;
 const youtubeQualityPreflightCache = new Map();
@@ -100,15 +97,19 @@ modeSelect.addEventListener("change", async () => {
   await updateMediaCatalog();
 });
 
+mediaMoreButton.addEventListener("click", () => {
+  showAllMediaItems = !showAllMediaItems;
+  mediaRenderSignature = null;
+  void updateMediaCatalog();
+});
+
 mediaHelperAction.addEventListener("click", async () => {
   mediaHelperAction.disabled = true;
   await setupMediaHelper(mediaHelperAction, mediaHelperStatus);
 });
 
 mediaManagerLink.addEventListener("click", () => {
-  void chrome.tabs.create({
-    url: chrome.runtime.getURL("options/options.html#downloads"),
-  });
+  void chrome.runtime.sendMessage({ type: "OPEN_PLAYER_DOWNLOAD_MANAGER" });
 });
 
 document.getElementById("settings-btn").addEventListener("click", () => {
@@ -118,11 +119,9 @@ document.getElementById("settings-btn").addEventListener("click", () => {
 pageDecisionsButton.addEventListener("click", async () => {
   const tab = await getActiveHttpTab();
   if (!tab) return;
-  const hostname = new URL(tab.url).hostname;
-  void chrome.tabs.create({
-    url:
-      chrome.runtime.getURL("options/options.html") +
-      `?site=${encodeURIComponent(hostname)}#element-decisions`,
+  void chrome.runtime.sendMessage({
+    type: "OPEN_ELEMENT_DECISIONS",
+    tabId: tab.id,
   });
 });
 
@@ -226,6 +225,8 @@ chrome.storage.onChanged.addListener(onMediaStorageChanged);
 
 async function initialize() {
   settings = await loadSettings();
+  ({ mediaDownloadUiPreferences: downloadUiPreferences = {} } =
+    await chrome.storage.local.get("mediaDownloadUiPreferences"));
   await render();
 }
 
@@ -277,7 +278,12 @@ async function updateMediaCatalog() {
 }
 
 async function renderMediaCatalog(tab) {
-  activeMediaTabId = tab?.id ?? null;
+  const nextTabId = tab?.id ?? null;
+  if (activeMediaTabId !== nextTabId) {
+    showAllMediaItems = false;
+    mediaRenderSignature = null;
+  }
+  activeMediaTabId = nextTabId;
   if (!settings.enabled) {
     commitMediaCatalog({
       status: "Protection is off; media observation is paused.",
@@ -329,6 +335,7 @@ async function renderMediaCatalog(tab) {
       status: formatMediaHelperSummary(mediaHelperStatus, downloadState),
       items,
       helper: mediaHelperStatus,
+      preferredMediaId: response?.preferredMediaId,
     });
   } catch (error) {
     setText(mediaStatus, "Could not refresh media · showing previous results.");
@@ -336,8 +343,25 @@ async function renderMediaCatalog(tab) {
   }
 }
 
-function commitMediaCatalog({ status, items = [], tab = null, helper = null }) {
-  const visibleItems = selectVisibleMediaItems(items);
+function commitMediaCatalog({
+  status,
+  items = [],
+  tab = null,
+  helper = null,
+  preferredMediaId = null,
+}) {
+  const allVisibleItems = selectVisibleMediaItems(
+    items,
+    Number.POSITIVE_INFINITY,
+  );
+  if (preferredMediaId)
+    allVisibleItems.sort(
+      (a, b) =>
+        Number(b.id === preferredMediaId) - Number(a.id === preferredMediaId),
+    );
+  const visibleItems = showAllMediaItems
+    ? allVisibleItems
+    : allVisibleItems.slice(0, 1);
   if (
     !visibleItems.length &&
     hasMediaDownloadJobs &&
@@ -353,8 +377,12 @@ function commitMediaCatalog({ status, items = [], tab = null, helper = null }) {
     items: visibleItems,
   });
 
-  setText(mediaCount, String(visibleItems.length));
+  setText(mediaCount, String(allVisibleItems.length));
   setText(mediaStatus, status);
+  mediaMoreButton.hidden = allVisibleItems.length <= 1;
+  mediaMoreButton.textContent = showAllMediaItems
+    ? "Show fewer"
+    : `Other media · ${allVisibleItems.length - visibleItems.length}`;
   renderMediaHelperAction(helper, downloadState);
   if (signature === mediaRenderSignature) return;
 
@@ -550,371 +578,24 @@ function sanitizeFilename(value) {
 }
 
 function createMediaDownloadControl(item, downloadItem, tab, helper) {
-  const availability = getMediaDownloadAvailability(downloadItem);
-  const control = document.createElement("div");
-  control.className = "media-download-control";
   if (isPlayerOutputCanaryEligible(item)) {
+    const control = document.createElement("div");
+    control.className = "media-download-control";
     return createPlayerOutputCanaryControl(item, tab, helper, control);
   }
-  const profiles = getMediaDownloadProfiles(downloadItem, {
-    canSelectContainer: helper.canSelectContainer === true,
+  return createSharedDownloadControl(item, downloadItem, tab, helper, {
+    settings,
+    qualityPreflightCache: youtubeQualityPreflightCache,
+    setupMediaHelper,
+    onStarted: updateMediaJobs,
+    initialSelection: downloadUiPreferences,
+    onSelectionChange: (preference) => {
+      downloadUiPreferences = preference;
+      void chrome.storage.local
+        .set({ mediaDownloadUiPreferences: preference })
+        .catch(() => {});
+    },
   });
-  const profileSelect = document.createElement("select");
-  profileSelect.className = "media-download-profile";
-  profileSelect.title = "Output format";
-  for (const profile of profiles) {
-    const option = document.createElement("option");
-    option.value = profile.id;
-    option.textContent = profile.label;
-    option.title = profile.description;
-    profileSelect.append(option);
-  }
-  profileSelect.disabled = !availability.supported || profiles.length < 2;
-  const qualityOptions = getMediaVideoQualityOptions(downloadItem);
-  const needsYouTubePreflight =
-    downloadItem.kind === "adaptive" &&
-    downloadItem.provider === "youtube" &&
-    hasYouTubeProviderPendingTracks(downloadItem);
-  const preflightKey = needsYouTubePreflight
-    ? `${tab?.id || ""}|${downloadItem.id}`
-    : null;
-  let qualityVerdict = preflightKey
-    ? youtubeQualityPreflightCache.get(preflightKey) || null
-    : null;
-  const qualitySelect = document.createElement("select");
-  qualitySelect.className = "media-download-profile";
-  qualitySelect.title = "Video quality";
-  const audioTrackOptions = getMediaAudioTrackOptions(downloadItem);
-  const audioSelect = document.createElement("select");
-  audioSelect.className = "media-download-profile";
-  audioSelect.title = "Audio track";
-  const renderAudioOptions = () => {
-    audioSelect.replaceChildren();
-    const availableById = new Map(
-      (qualityVerdict?.audioOptions || []).map((option) => [option.id, option]),
-    );
-    const visibleAudio = needsYouTubePreflight
-      ? audioTrackOptions.filter((option) => availableById.has(option.id))
-      : audioTrackOptions;
-    if (!visibleAudio.length) {
-      const option = document.createElement("option");
-      option.textContent =
-        needsYouTubePreflight && !qualityVerdict
-          ? "Audio · Checking availability…"
-          : "Audio · unavailable";
-      option.disabled = true;
-      audioSelect.append(option);
-      audioSelect.disabled = true;
-      return;
-    }
-    for (const audio of visibleAudio) {
-      const option = document.createElement("option");
-      option.value = audio.id;
-      option.textContent = audio.label;
-      const verdict = availableById.get(audio.id);
-      option.title = verdict?.sourceLabel || audio.label;
-      audioSelect.append(option);
-    }
-    audioSelect.disabled = !availability.supported || visibleAudio.length < 2;
-  };
-  const renderQualityOptions = () => {
-    qualitySelect.replaceChildren();
-    if (profileSelect.value === "audio-ogg") {
-      const option = document.createElement("option");
-      option.textContent = "Audio only · OGG";
-      option.title = "The selected audio track will be converted to OGG.";
-      option.disabled = true;
-      qualitySelect.append(option);
-      qualitySelect.disabled = true;
-      return;
-    }
-    if (
-      needsYouTubePreflight &&
-      (helper.status !== "ready" ||
-        helper.canResolveYouTubeQualityPreflight !== true)
-    ) {
-      const option = document.createElement("option");
-      option.textContent =
-        helper.status === "ready"
-          ? "Quality · update helper to check"
-          : "Quality · helper required";
-      option.title =
-        helper.status === "ready"
-          ? "Update Media Helper to verify downloadable YouTube qualities."
-          : "Connect Media Helper to verify downloadable YouTube qualities.";
-      option.disabled = true;
-      qualitySelect.append(option);
-      qualitySelect.disabled = true;
-      return;
-    }
-    if (needsYouTubePreflight && !qualityVerdict) {
-      const option = document.createElement("option");
-      option.textContent = "Quality · Checking availability…";
-      option.disabled = true;
-      qualitySelect.append(option);
-      qualitySelect.disabled = true;
-      return;
-    }
-    if (needsYouTubePreflight && qualityVerdict?.status !== "ready") {
-      const option = document.createElement("option");
-      option.textContent = "Quality · unavailable";
-      option.title =
-        qualityVerdict?.reason || "No downloadable quality was found.";
-      option.disabled = true;
-      qualitySelect.append(option);
-      qualitySelect.disabled = true;
-      return;
-    }
-    const automaticQuality = document.createElement("option");
-    automaticQuality.value = "";
-    automaticQuality.textContent = needsYouTubePreflight
-      ? "Quality · Auto (best available)"
-      : "Quality · Auto (best)";
-    qualitySelect.append(automaticQuality);
-    const availableById = new Map(
-      (qualityVerdict?.videoOptions || []).map((option) => [option.id, option]),
-    );
-    const visibleQualities = needsYouTubePreflight
-      ? qualityOptions.filter((quality) => availableById.has(quality.id))
-      : qualityOptions;
-    const qualityGroups = new Map();
-    for (const quality of visibleQualities) {
-      const option = document.createElement("option");
-      option.value = quality.id;
-      const verdict = availableById.get(quality.id);
-      option.textContent =
-        quality.optionLabel || quality.label || "Source quality";
-      if (verdict?.availability === "equivalent") {
-        option.textContent += " · compatible equivalent";
-        option.title = `Provider source: ${verdict.sourceLabel}`;
-      } else if (verdict?.sourceLabel) {
-        option.title = `Provider source: ${verdict.sourceLabel}`;
-      }
-      const groupLabel = quality.groupLabel || "Source quality";
-      let group = qualityGroups.get(groupLabel);
-      if (!group) {
-        group = document.createElement("optgroup");
-        group.label = groupLabel;
-        qualityGroups.set(groupLabel, group);
-        qualitySelect.append(group);
-      }
-      group.append(option);
-    }
-    qualitySelect.disabled =
-      !availability.supported || !visibleQualities.length;
-  };
-  renderAudioOptions();
-  renderQualityOptions();
-  const estimateLabel = document.createElement("span");
-  estimateLabel.className = "media-download-estimate";
-  const updateEstimate = () => {
-    const estimate = getMediaDownloadEstimate(downloadItem, item, {
-      videoTrackId: qualitySelect.value || null,
-      audioTrackId: audioSelect.value || null,
-      audioOnly: profileSelect.value === "audio-ogg",
-    });
-    estimateLabel.textContent = formatDownloadEstimate(estimate);
-    estimateLabel.title = formatDownloadEstimateTitle(estimate);
-  };
-  const syncDownloadButton = () => {
-    const presentation = downloadButtonPresentation(
-      availability,
-      helper,
-      downloadItem,
-    );
-    let next = presentation;
-    if (
-      needsYouTubePreflight &&
-      helper.status === "ready" &&
-      helper.canResolveYouTubeQualityPreflight !== true
-    ) {
-      next = {
-        disabled: true,
-        label: "Update helper",
-        title:
-          "Update Media Helper to verify YouTube qualities before downloading.",
-      };
-    } else if (
-      needsYouTubePreflight &&
-      helper.status === "ready" &&
-      helper.canResolveYouTubeQualityPreflight === true
-    ) {
-      if (!qualityVerdict) {
-        next = {
-          disabled: true,
-          label: "Checking…",
-          title: "Checking which YouTube qualities are downloadable.",
-        };
-      } else if (
-        profileSelect.value !== "audio-ogg" &&
-        qualityVerdict.status !== "ready"
-      ) {
-        next = {
-          disabled: true,
-          label: "Unavailable",
-          title:
-            qualityVerdict.reason ||
-            "No YouTube quality is available through the current provider profile.",
-        };
-      } else if (
-        profileSelect.value !== "audio-ogg" &&
-        qualityVerdict.videoOptions.length === 0
-      ) {
-        next = {
-          disabled: true,
-          label: "Unavailable",
-          title: "No downloadable YouTube video quality is available.",
-        };
-      } else if (
-        profileSelect.value !== "audio-ogg" &&
-        qualitySelect.value &&
-        !qualityVerdict.videoOptions.some(
-          (option) => option.id === qualitySelect.value,
-        )
-      ) {
-        next = {
-          disabled: true,
-          label: "Unavailable",
-          title: "The selected YouTube quality is not downloadable.",
-        };
-      } else if (
-        profileSelect.value === "audio-ogg" &&
-        !qualityVerdict.audioOptions?.some(
-          (option) => option.id === audioSelect.value,
-        )
-      ) {
-        next = {
-          disabled: true,
-          label: "Unavailable",
-          title: "No downloadable YouTube audio track is available.",
-        };
-      }
-    }
-    button.disabled = next.disabled;
-    button.textContent = next.label;
-    button.title = next.title;
-  };
-  qualitySelect.addEventListener("change", () => {
-    updateEstimate();
-    syncDownloadButton();
-  });
-  audioSelect.addEventListener("change", () => {
-    updateEstimate();
-    syncDownloadButton();
-  });
-  profileSelect.addEventListener("change", () => {
-    renderQualityOptions();
-    updateEstimate();
-    syncDownloadButton();
-  });
-  updateEstimate();
-  const button = document.createElement("button");
-  button.className = "media-download";
-  const presentation = downloadButtonPresentation(
-    availability,
-    helper,
-    downloadItem,
-  );
-  button.disabled = presentation.disabled;
-  button.textContent = presentation.label;
-  button.title = presentation.title;
-  button.addEventListener("click", async () => {
-    button.disabled = true;
-    if (helper.status !== "ready" || !helperCanDownload(downloadItem, helper)) {
-      await setupMediaHelper(button, helper);
-      return;
-    }
-    button.textContent = "Starting…";
-    try {
-      const response = await chrome.runtime.sendMessage({
-        type: "CREATE_MEDIA_DOWNLOAD_JOB",
-        tabId: tab.id,
-        mediaId: downloadItem.id,
-        connections: settings?.mediaDownloadConnections ?? 8,
-        output: {
-          profileId: profileSelect.value || profiles[0]?.id,
-          videoTrackId:
-            profileSelect.value === "audio-ogg"
-              ? null
-              : qualitySelect.value || null,
-          audioTrackId:
-            audioSelect.value || qualityVerdict?.audioOption?.id || null,
-          allowEquivalentVideo:
-            qualityVerdict?.videoOptions?.find(
-              (option) => option.id === qualitySelect.value,
-            )?.availability === "equivalent" ||
-            (profileSelect.value !== "audio-ogg" &&
-              !qualitySelect.value &&
-              needsYouTubePreflight),
-        },
-      });
-      if (response?.status !== "started")
-        throw new Error(
-          response?.reason ||
-            response?.error ||
-            "Could not start the helper download job.",
-        );
-      button.textContent = "Started";
-      await updateMediaJobs();
-    } catch (error) {
-      button.disabled = false;
-      button.textContent = "Retry";
-      button.title = error?.message || String(error);
-    }
-  });
-  if (availability.supported) control.append(estimateLabel);
-  if (
-    availability.supported &&
-    downloadItem.kind === "adaptive" &&
-    profiles.some((profile) => profile.id === "video-mp4")
-  )
-    control.append(qualitySelect);
-  if (availability.supported && profiles.length) control.append(profileSelect);
-  if (
-    availability.supported &&
-    downloadItem.kind === "adaptive" &&
-    audioTrackOptions.length
-  )
-    control.append(audioSelect);
-  control.append(button);
-  if (
-    needsYouTubePreflight &&
-    helper.status === "ready" &&
-    helper.canResolveYouTubeQualityPreflight === true
-  ) {
-    if (!qualityVerdict) {
-      const request = chrome.runtime
-        .sendMessage({
-          type: "PREFLIGHT_MEDIA_DOWNLOAD_QUALITIES",
-          tabId: tab?.id,
-          mediaId: downloadItem.id,
-        })
-        .then((response) => {
-          qualityVerdict = normalizePopupYouTubePreflight(response);
-          if (preflightKey && qualityVerdict)
-            youtubeQualityPreflightCache.set(preflightKey, qualityVerdict);
-          if (!control.isConnected) return;
-          renderQualityOptions();
-          renderAudioOptions();
-          syncDownloadButton();
-        })
-        .catch((error) => {
-          qualityVerdict = {
-            status: "unavailable",
-            videoOptions: [],
-            reason: error?.message || String(error),
-          };
-          if (control.isConnected) {
-            renderQualityOptions();
-            renderAudioOptions();
-            syncDownloadButton();
-          }
-        });
-      void request;
-    }
-    syncDownloadButton();
-  }
-  return control;
 }
 
 function createPlayerOutputCanaryControl(item, tab, helper, control) {
@@ -1098,119 +779,6 @@ function formatPlayerOutputCanaryResult(result) {
   return `FFprobe recognized ${streamTypes.join(" + ") || "media"}${
     codecs.length ? ` · ${codecs.join(" / ")}` : ""
   }${timeline}. Helper temporary files were discarded after validation.`;
-}
-
-function normalizePopupYouTubePreflight(response) {
-  const result = response?.result || response;
-  const options = Array.isArray(result?.videoOptions)
-    ? result.videoOptions.filter(
-        (option) =>
-          option &&
-          typeof option.id === "string" &&
-          ["exact", "equivalent"].includes(option.availability),
-      )
-    : [];
-  return {
-    status: result?.status === "ready" ? "ready" : "unavailable",
-    videoOptions: options,
-    audioOption:
-      result?.audioOption && typeof result.audioOption.id === "string"
-        ? {
-            id: result.audioOption.id,
-            sourceLabel:
-              typeof result.audioOption.sourceLabel === "string"
-                ? result.audioOption.sourceLabel
-                : "Audio source",
-          }
-        : null,
-    audioOptions: Array.isArray(result?.audioOptions)
-      ? result.audioOptions.filter(
-          (option) => option && typeof option.id === "string",
-        )
-      : result?.audioOption && typeof result.audioOption.id === "string"
-        ? [result.audioOption]
-        : [],
-    reason: typeof result?.reason === "string" ? result.reason : null,
-  };
-}
-
-function formatDownloadEstimate(estimate) {
-  const quality = estimate.resolution?.height
-    ? `${estimate.resolution.height}p`
-    : "Source quality";
-  const size = estimate.estimatedBytes
-    ? `Est. ${formatBytes(estimate.estimatedBytes)}`
-    : "Size unavailable";
-  return `${quality} · ${size}`;
-}
-
-function formatDownloadEstimateTitle(estimate) {
-  if (!estimate.estimatedBytes) {
-    return "The manifest does not expose enough bitrate data to estimate size before download.";
-  }
-  return "Estimated from manifest bitrate and duration. Final file size may differ.";
-}
-
-function downloadButtonPresentation(availability, helper, item) {
-  if (!availability.supported) {
-    return {
-      disabled: true,
-      label: downloadUnavailableLabel(availability.reason),
-      title: availability.reason,
-    };
-  }
-  if (helper.status === "permission_required") {
-    return {
-      disabled: false,
-      label: "Set up",
-      title: "Enable the optional Media Helper connection to download video.",
-    };
-  }
-  if (helper.status === "not_installed") {
-    return {
-      disabled: false,
-      label: "Install",
-      title: "Media Helper is required for video downloads.",
-    };
-  }
-  if (helper.status === "ready" && !helperCanDownload(item, helper)) {
-    return {
-      disabled: true,
-      label: "Helper update",
-      title: `The installed Media Helper does not support ${item.kind.toUpperCase()} downloads yet.`,
-    };
-  }
-  if (helper.status !== "ready") {
-    return {
-      disabled: false,
-      label: "Retry",
-      title: helper.error || "Could not connect to Media Helper.",
-    };
-  }
-  return {
-    disabled: false,
-    label: "Download",
-    title: "Download with AdsFriendly Media Helper.",
-  };
-}
-
-function helperCanDownload(item, helper) {
-  if (item.kind === "direct") return helper.canDownloadDirect === true;
-  if (item.kind === "hls")
-    return (
-      helper.canDownloadHls === true &&
-      (item.probeSource !== "decrypted_blob" ||
-        helper.canDownloadDecryptedHls === true)
-    );
-  if (item.kind === "adaptive")
-    return (
-      helper.canDownloadAdaptive === true &&
-      (item.acquisitionProfile !== "youtube_player_js_challenge" ||
-        helper.canResolveYouTubePlayerJs === true) &&
-      (!hasYouTubeProviderPendingTracks(item) ||
-        helper.canResolveYouTubeProviderFormats === true)
-    );
-  return helper.canDownloadDash === true;
 }
 
 async function setupMediaHelper(button, helper) {
@@ -1499,21 +1067,6 @@ async function runMediaJobAction(button) {
       button.dataset.actionType === "output" ? originalLabel : "Retry action";
     button.title = error?.message || String(error);
   }
-}
-
-function downloadUnavailableLabel(reason = "") {
-  if (reason.includes("DRM") || reason.includes("Playback only"))
-    return "Playback only";
-  if (reason.includes("Live")) return "Live";
-  if (reason.includes("Encrypted")) return "Encrypted";
-  if (
-    reason.includes("waiting") ||
-    reason.includes("not exposed") ||
-    reason.includes("player-resolved")
-  )
-    return "Watching";
-  if (reason.includes("no media")) return "No media";
-  return "Unavailable";
 }
 
 async function getActiveHttpTab() {

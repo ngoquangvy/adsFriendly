@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { stat } from "node:fs/promises";
+import { stat, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import process from "node:process";
@@ -23,6 +23,14 @@ export async function revealManagedOutput(rawPath: string): Promise<void> {
 }
 
 async function managedOutputPath(rawPath: string): Promise<string> {
+  const outputPath = await resolveManagedOutput(rawPath);
+  const output = await stat(outputPath);
+  if (!output.isFile())
+    throw new Error("Downloaded output file was not found.");
+  return outputPath;
+}
+
+async function resolveManagedOutput(rawPath: string): Promise<string> {
   if (!isAbsolute(rawPath)) throw new Error("Output path must be absolute.");
   const downloadsRoot = resolve(homedir(), "Downloads");
   const outputPath = resolve(rawPath);
@@ -34,10 +42,34 @@ async function managedOutputPath(rawPath: string): Promise<string> {
   ) {
     throw new Error("Output path is outside the managed Downloads directory.");
   }
-  const output = await stat(outputPath);
-  if (!output.isFile())
-    throw new Error("Downloaded output file was not found.");
-  return outputPath;
+  // Junctions/symlinks must not turn a managed Downloads path into arbitrary
+  // filesystem access. No scanning or reading media bytes is needed.
+  const [realRoot, realOutput] = await Promise.all([
+    realpath(downloadsRoot),
+    realpath(outputPath),
+  ]);
+  const realRelative = relative(realRoot, realOutput);
+  if (
+    !realRelative ||
+    realRelative.startsWith("..") ||
+    isAbsolute(realRelative)
+  )
+    throw new Error("Output path is outside the managed Downloads directory.");
+  return realOutput;
+}
+
+export async function inspectManagedOutput(rawPath: string) {
+  try {
+    const outputPath = await resolveManagedOutput(rawPath);
+    const output = await stat(outputPath);
+    return output.isFile()
+      ? { status: "available", size: output.size, modifiedAt: output.mtimeMs }
+      : { status: "missing", size: null, modifiedAt: null };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT")
+      return { status: "missing", size: null, modifiedAt: null };
+    throw error;
+  }
 }
 
 function spawnDetached(command: string, args: string[]): Promise<void> {

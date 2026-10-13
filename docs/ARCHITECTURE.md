@@ -81,6 +81,11 @@ but removing a setting never depends on training storage.
 
 ## Navigation Protection Pipeline
 
+Source attribution, intent association and destination/ad classification are
+separate stages. See [Navigation attribution](NAVIGATION_ATTRIBUTION.md) for
+module contracts, evidence/action ceilings, event-race safeguards and the
+versioned metadata projection used by diagnostics and future training.
+
 New-tab ads and reverse pop-unders are two detectors, not two independent rule
 systems. They both feed the same navigation policy, which owns URL
 classification, whitelist/blacklist checks, trusted source-to-target workflows,
@@ -156,6 +161,17 @@ contracts in `src/media/contracts.js`; downloader events and video-ad evidence
 remain separate even when both reference the same media ID.
 
 ## Media Sessions and Timeline
+
+The Chrome Settings navigation and page lifecycle are documented in
+[SETTINGS_INTERFACE.md](./SETTINGS_INTERFACE.md). Its section registry and
+filters are presentation-only; existing background policies and storage schemas
+remain the owners of protection and download behavior.
+
+On-player completion and recent-download policy are described in
+[PLAYER_DOWNLOAD_HISTORY.md](./PLAYER_DOWNLOAD_HISTORY.md). The UI consumes a
+minimal, source-scoped history presentation; a registered background action owns
+duplicate decisions and per-selection start serialization. File checks use the
+optional Helper capability, not filesystem or download logic in content scripts.
 
 `media.playback_observed` is the content-neutral boundary between browser media
 observation and future video-ad reasoning. Each HTML media element receives an

@@ -1,8 +1,9 @@
 import { classifyNavigationIntent } from "../shared/intent-classifier.js";
+import { isOwnedUiEvent } from "./owned-ui.js";
 
 export function startIntentTracker() {
   const recordIntent = (event) => {
-    if (!event.isTrusted) return;
+    if (!event.isTrusted || isOwnedUiEvent(event)) return;
     try {
       const link = event.target?.closest?.("a[href]");
       const sourceUrl =

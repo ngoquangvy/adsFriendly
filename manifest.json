@@ -60,7 +60,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["ui/blocked.html"],
+      "resources": ["ui/blocked.html", "icons/icon48.png"],
       "matches": ["<all_urls>"]
     }
   ]

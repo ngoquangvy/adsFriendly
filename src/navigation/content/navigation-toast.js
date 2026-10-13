@@ -25,6 +25,7 @@ export function startNavigationToast() {
       target: message.target,
       tabId: message.tabId,
       count: message.count || 1,
+      navigationAttribution: message.navigationAttribution,
     };
     showNavigationToast();
   };
@@ -81,6 +82,7 @@ function ensureToast() {
 
   toast = document.createElement("div");
   toast.id = TOAST_ID;
+  toast.dataset.adsfriendlyUi = "navigation-toast";
   toast.className = "adsfriendly-toast-hidden";
   toast.setAttribute("role", "status");
   toast.setAttribute("aria-live", "polite");

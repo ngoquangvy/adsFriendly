@@ -17,6 +17,7 @@ import {
   clearMediaHelperDownloadHistory,
   getMediaHelperStatus,
   listMediaHelperDownloads,
+  inspectMediaHelperOutput,
   removeMediaHelperDownloadHistory,
   runMediaHelperOutputAction,
   startMediaHelperDownload,
@@ -31,8 +32,17 @@ import { getMediaManifestHandoff } from "./media-manifest-handoff.js";
 import { normalizeMediaDownloadOutput } from "../media/download-options.js";
 import { hasYouTubeProviderPendingTracks } from "../media/adaptive-track-policy.js";
 import { selectVisibleMediaItems } from "../media/catalog-view.js";
+import {
+  buildMediaDownloadIdentity,
+  buildMediaDownloadSummary,
+} from "../media/download-identity.js";
+import { createRecentDownloadService } from "./recent-downloads.js";
 
 let broker = null;
+const recentDownloads = createRecentDownloadService({
+  listJobs: listMediaHelperDownloads,
+  checkFile: inspectMediaHelperOutput,
+});
 
 export async function startMediaDownloadJobStore(policy) {
   await removeStaleJobs();
@@ -44,6 +54,7 @@ export async function startMediaDownloadJobStore(policy) {
       [ACTIONS.MEDIA_DOWNLOAD_CLEAR_HISTORY]: clearJobHistory,
       [ACTIONS.MEDIA_DOWNLOAD_CREATE]: createJob,
       [ACTIONS.MEDIA_DOWNLOAD_PREFLIGHT]: preflightJob,
+      [ACTIONS.MEDIA_DOWNLOAD_LOOKUP]: lookupDownload,
       [ACTIONS.MEDIA_OUTPUT_CANARY]: validatePlayerOutput,
       [ACTIONS.MEDIA_OUTPUT_CAPTURE_START]: startPlayerOutputCapture,
       [ACTIONS.MEDIA_DOWNLOAD_PAUSE]: pauseJob,
@@ -56,6 +67,7 @@ export async function startMediaDownloadJobStore(policy) {
   });
   return () => {
     broker = null;
+    recentDownloads.clear();
   };
 }
 
@@ -67,6 +79,25 @@ export async function requestMediaDownloadJob(payload) {
 export async function requestMediaDownloadQualityPreflight(payload) {
   if (!broker) return { status: "download_disabled" };
   return broker.execute(ACTIONS.MEDIA_DOWNLOAD_PREFLIGHT, payload);
+}
+
+export async function requestMediaDownloadContext(payload) {
+  if (!broker) return { status: "download_disabled" };
+  return broker.execute(ACTIONS.MEDIA_DOWNLOAD_LOOKUP, payload);
+}
+
+async function lookupDownload({
+  tabId,
+  mediaId,
+  output,
+  verifyFile = false,
+} = {}) {
+  if (!Number.isInteger(tabId) || typeof mediaId !== "string")
+    return { status: "invalid_media" };
+  const catalog = await listDiscoveredMedia(tabId);
+  const candidate = findDownloadCandidate(catalog.items, mediaId);
+  if (!candidate) return { status: "media_not_found" };
+  return recentDownloads.lookup(candidate, output, { verifyFile });
 }
 
 export async function requestPlayerOutputCanary(payload) {
@@ -376,7 +407,13 @@ function isPlayerOutputCanaryEligible(candidate) {
   });
 }
 
-async function createJob({ tabId, mediaId, connections, output } = {}) {
+async function createJob({
+  tabId,
+  mediaId,
+  connections,
+  output,
+  repeatOf = null,
+} = {}) {
   if (!Number.isInteger(tabId) || tabId < 0) return { status: "invalid_tab" };
   if (typeof mediaId !== "string" || !mediaId)
     return { status: "invalid_media" };
@@ -388,36 +425,57 @@ async function createJob({ tabId, mediaId, connections, output } = {}) {
       response.items.find((item) => item.id === candidate.selectedMediaId) ||
       candidate;
   }
-  candidate = await attachFreshYouTubeBrowserHandoff(tabId, candidate);
-  const availability = getMediaDownloadAvailability(candidate);
-  if (!availability.supported)
-    return { status: "unsupported", reason: availability.reason };
   const normalizedOutput = normalizeMediaDownloadOutput(output, candidate);
-  const qualityCheck = await normalizeYouTubeQualityCheck(
+  const downloadIdentity = await buildMediaDownloadIdentity(
     candidate,
     normalizedOutput,
   );
-  if (qualityCheck.status !== "ready") return qualityCheck;
-  const checkedOutput = qualityCheck.output;
-  const helperFailure = await helperFailureFor(candidate, checkedOutput);
-  if (helperFailure) return helperFailure;
-  const handoffResult = await attachManifestHandoff(tabId, candidate);
-  if (handoffResult.status !== "ready") return handoffResult;
-  candidate = handoffResult.candidate;
-  candidate = await attachAesKeyHandoff(tabId, candidate);
-  const job = normalizeMediaDownloadJob({
-    id: randomId(),
-    createdAt: Date.now(),
-    sourceTabId: tabId,
-    output: checkedOutput,
+  const downloadSummary = buildMediaDownloadSummary(
     candidate,
-  });
-  const settings = await loadSettings();
-  return startMediaHelperDownload(job, {
-    connections: normalizeMediaDownloadConnections(
-      connections ?? settings.mediaDownloadConnections,
-    ),
-  });
+    normalizedOutput,
+  );
+  return recentDownloads.withRequestLock(
+    downloadIdentity.requestKey,
+    async () => {
+      const duplicate = await recentDownloads.duplicate(
+        candidate,
+        normalizedOutput,
+        repeatOf,
+      );
+      if (duplicate) return duplicate;
+      candidate = await attachFreshYouTubeBrowserHandoff(tabId, candidate);
+      const availability = getMediaDownloadAvailability(candidate);
+      if (!availability.supported)
+        return { status: "unsupported", reason: availability.reason };
+      const qualityCheck = await normalizeYouTubeQualityCheck(
+        candidate,
+        normalizedOutput,
+      );
+      if (qualityCheck.status !== "ready") return qualityCheck;
+      const checkedOutput = qualityCheck.output;
+      const helperFailure = await helperFailureFor(candidate, checkedOutput);
+      if (helperFailure) return helperFailure;
+      const handoffResult = await attachManifestHandoff(tabId, candidate);
+      if (handoffResult.status !== "ready") return handoffResult;
+      candidate = handoffResult.candidate;
+      candidate = await attachAesKeyHandoff(tabId, candidate);
+      const job = normalizeMediaDownloadJob({
+        id: randomId(),
+        createdAt: Date.now(),
+        sourceTabId: tabId,
+        output: checkedOutput,
+        candidate,
+      });
+      const settings = await loadSettings();
+      return startMediaHelperDownload(job, {
+        downloadIdentity,
+        downloadSummary,
+        connections: normalizeMediaDownloadConnections(
+          connections ?? settings.mediaDownloadConnections,
+        ),
+      });
+    },
+  );
 }
 
 async function preflightJob({ tabId, mediaId } = {}) {
@@ -646,6 +704,8 @@ async function restartJob(state, requestedConnections) {
       requestedConnections ?? settings.mediaDownloadConnections,
     ),
     attempt: Math.max(1, Number(state.attempt) || 1) + 1,
+    downloadIdentity: state.downloadIdentity,
+    downloadSummary: state.downloadSummary,
   });
 }
 

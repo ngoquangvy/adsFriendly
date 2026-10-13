@@ -97,10 +97,18 @@ var AdsFriendlyContent = (() => {
     };
   }
 
+  // src/navigation/content/owned-ui.js
+  function isOwnedUiEvent(event2) {
+    const path = event2.composedPath?.() || [event2.target];
+    return path.some(
+      (node) => node?.closest?.("[data-adsfriendly-ui], [data-afs-ui]")
+    );
+  }
+
   // src/navigation/content/intent-tracker.js
   function startIntentTracker() {
     const recordIntent = (event2) => {
-      if (!event2.isTrusted) return;
+      if (!event2.isTrusted || isOwnedUiEvent(event2)) return;
       try {
         const link = event2.target?.closest?.("a[href]");
         const sourceUrl = window.top === window ? location.href : document.referrer || location.href;
@@ -1466,6 +1474,9 @@ var AdsFriendlyContent = (() => {
       C2.MEDIA_CATALOG
     ]),
     feature("content.youtube-cleaner", "content", C2.DOM_STATIC_RULES),
+    feature("content.player-download", "content", C2.MEDIA_DOWNLOAD, [
+      C2.MEDIA_CATALOG
+    ]),
     feature("content.navigation-intent", "content", C2.NAVIGATION_INTENT),
     feature("content.navigation-toast", "content", C2.NAVIGATION_FEEDBACK),
     feature("content.dom-static-blocker", "content", C2.DOM_STATIC_RULES, [
@@ -1484,6 +1495,9 @@ var AdsFriendlyContent = (() => {
       C2.MEDIA_CATALOG
     ]),
     feature("media-frame.navigation-intent", "media-frame", C2.NAVIGATION_INTENT),
+    feature("media-frame.player-download", "media-frame", C2.MEDIA_DOWNLOAD, [
+      C2.MEDIA_CATALOG
+    ]),
     feature("video.surgeon", "video", C2.VIDEO_OBSERVE, [
       C2.VIDEO_RESTORE_STATE,
       C2.VIDEO_USER_ACTION,
@@ -2469,7 +2483,8 @@ var AdsFriendlyContent = (() => {
         source: message.source,
         target: message.target,
         tabId: message.tabId,
-        count: message.count || 1
+        count: message.count || 1,
+        navigationAttribution: message.navigationAttribution
       };
       showNavigationToast();
     };
@@ -2515,6 +2530,7 @@ var AdsFriendlyContent = (() => {
     if (toast) return toast;
     toast = document.createElement("div");
     toast.id = TOAST_ID2;
+    toast.dataset.adsfriendlyUi = "navigation-toast";
     toast.className = "adsfriendly-toast-hidden";
     toast.setAttribute("role", "status");
     toast.setAttribute("aria-live", "polite");
@@ -3085,6 +3101,7 @@ var AdsFriendlyContent = (() => {
         "streamType"
       ),
       duration: optionalFiniteNumber(value.duration),
+      contentLength: optionalNonNegativeInteger(value.contentLength),
       resolution: normalizeResolution(value.resolution),
       playback: normalizePlaybackState(value.playback),
       bandwidth: optionalPositiveNumber(value.bandwidth),
@@ -3623,6 +3640,7 @@ var AdsFriendlyContent = (() => {
     mimeType = null,
     title = null,
     duration = null,
+    contentLength = null,
     resolution = null,
     playback = null,
     detectedBy = MEDIA_DETECTION_SOURCES.DOM
@@ -3640,6 +3658,7 @@ var AdsFriendlyContent = (() => {
       title,
       mimeType,
       duration,
+      contentLength: kind === MEDIA_KINDS.DIRECT ? contentLength : null,
       resolution,
       playback,
       detectedBy,
@@ -4823,11 +4842,2542 @@ var AdsFriendlyContent = (() => {
     }
   }
 
+  // src/media/adaptive-track-policy.js
+  var ADAPTIVE_TRACK_RESOLUTION = Object.freeze({
+    RESOLVED: "resolved",
+    N_TRANSFORM_PENDING: "n_transform_pending",
+    SIGNATURE_CIPHER_PENDING: "signature_cipher_pending",
+    PROVIDER_CLIENT_PENDING: "provider_client_pending"
+  });
+  function hasHttpAdaptiveTrackUrl(track) {
+    try {
+      return ["http:", "https:"].includes(
+        new URL(track?.sourceUrl || track?.url).protocol
+      );
+    } catch {
+      return false;
+    }
+  }
+  function isYouTubeProviderResolvableTrack(candidate, track) {
+    return candidate?.provider === "youtube" && track?.urlResolution === ADAPTIVE_TRACK_RESOLUTION.PROVIDER_CLIENT_PENDING && /^\d{1,6}$/.test(String(track?.itag || ""));
+  }
+  function isAcquirableAdaptiveTrack(candidate, track) {
+    if (isYouTubeProviderResolvableTrack(candidate, track)) return true;
+    if (!hasHttpAdaptiveTrackUrl(track)) return false;
+    if ([
+      ADAPTIVE_TRACK_RESOLUTION.N_TRANSFORM_PENDING,
+      ADAPTIVE_TRACK_RESOLUTION.SIGNATURE_CIPHER_PENDING
+    ].includes(track?.urlResolution))
+      return Boolean(candidate?.playerUrl);
+    return true;
+  }
+  function hasYouTubeProviderPendingTracks(candidate) {
+    return [
+      ...candidate?.variants || [],
+      ...candidate?.audioTracks || []
+    ].some((track) => isYouTubeProviderResolvableTrack(candidate, track));
+  }
+
+  // src/media/audio-language-label.js
+  var ROLE_LABELS = Object.freeze({
+    original: "Original",
+    dubbed: "Dubbed",
+    auto_dubbed: "Auto-dubbed",
+    descriptive: "Audio Description",
+    secondary: "Secondary"
+  });
+  var LOCALIZED_LANGUAGE_NAMES = Object.freeze({
+    "ti\u1EBFng vi\u1EC7t": "Vietnamese",
+    "ti\u1EBFng anh": "English",
+    "ti\u1EBFng trung": "Chinese",
+    "ti\u1EBFng trung qu\u1ED1c": "Chinese",
+    "ti\u1EBFng nh\u1EADt": "Japanese",
+    "ti\u1EBFng h\xE0n": "Korean"
+  });
+  function formatAudioLanguageLabel({
+    language = null,
+    name = null,
+    role = null,
+    isDefault = false
+  } = {}) {
+    const locale = normalizedLocale(language);
+    const baseName = englishLanguageName(locale?.language) || normalizedSourceName(name);
+    const region = normalizedRegion(
+      locale?.region || regionFromName(name),
+      locale?.language
+    );
+    const effectiveRole = role || roleFromName(name);
+    const qualifiers = [region, ROLE_LABELS[effectiveRole]].filter(Boolean);
+    const identity = baseName || (isDefault ? "Default Audio" : "Audio");
+    return qualifiers.length ? `${identity} (${qualifiers.join(", ")})` : identity;
+  }
+  function normalizedLocale(value) {
+    if (typeof value !== "string" || !value.trim()) return null;
+    try {
+      return new Intl.Locale(value.replace(/_/g, "-"));
+    } catch {
+      return null;
+    }
+  }
+  function englishLanguageName(value) {
+    if (!value) return null;
+    try {
+      return new Intl.DisplayNames(["en"], { type: "language" }).of(value);
+    } catch {
+      return null;
+    }
+  }
+  function normalizedSourceName(value) {
+    if (typeof value !== "string" || !value.trim()) return null;
+    const withoutQualifiers = value.replace(/\s*\([^)]*\)\s*$/u, "").trim();
+    return LOCALIZED_LANGUAGE_NAMES[withoutQualifiers.toLowerCase()] || withoutQualifiers;
+  }
+  function regionFromName(value) {
+    if (typeof value !== "string") return null;
+    return value.match(/\((US|UK|GB|United States|United Kingdom)\b/i)?.[1] || null;
+  }
+  function normalizedRegion(value, language) {
+    if (!value) return null;
+    const region = String(value).toUpperCase();
+    if (language === "vi" && region === "VN" || language === "zh" && region === "CN" || language === "ja" && region === "JP" || language === "ko" && region === "KR")
+      return null;
+    if (region === "UNITED STATES") return "US";
+    if (region === "UNITED KINGDOM") return "UK";
+    return region === "GB" ? "UK" : region;
+  }
+  function roleFromName(value) {
+    if (typeof value !== "string") return null;
+    const qualifier = value.match(/\(([^)]*)\)\s*$/u)?.[1]?.toLowerCase() || "";
+    if (/\boriginal\b/.test(qualifier)) return "original";
+    if (/\bauto[- ]?dubbed\b/.test(qualifier)) return "auto_dubbed";
+    if (/\bdubbed\b/.test(qualifier)) return "dubbed";
+    return null;
+  }
+
+  // src/media/download-options.js
+  var MEDIA_OUTPUT_CONTAINERS = Object.freeze({
+    SOURCE: "source",
+    MP4: "mp4",
+    MKV: "mkv",
+    OGG: "ogg"
+  });
+  function getMediaDownloadProfiles(candidate = {}, { canSelectContainer = true } = {}) {
+    if (candidate.kind === "direct") {
+      const container = classifyDirectMediaContainer(candidate);
+      return [
+        Object.freeze({
+          id: "source",
+          container: MEDIA_OUTPUT_CONTAINERS.SOURCE,
+          extension: container ? `.${container}` : null,
+          label: `Original${container ? ` \xB7 ${container.toUpperCase()}` : ""}`,
+          description: "Download the original file without conversion."
+        })
+      ];
+    }
+    if (!["hls", "dash", "adaptive"].includes(candidate.kind)) return [];
+    const profiles = [];
+    if (candidate.kind !== "adaptive" || (candidate.variants || []).length) {
+      profiles.push(
+        Object.freeze({
+          id: "video-mp4",
+          container: MEDIA_OUTPUT_CONTAINERS.MP4,
+          extension: ".mp4",
+          label: "MP4 \xB7 compatible",
+          description: "Best compatibility for browsers, phones, and TVs."
+        })
+      );
+    }
+    if (candidate.provider === "youtube" && (candidate.audioTracks || []).length) {
+      profiles.push(
+        Object.freeze({
+          id: "audio-ogg",
+          container: MEDIA_OUTPUT_CONTAINERS.OGG,
+          extension: ".ogg",
+          label: "Audio \xB7 OGG",
+          description: "Download the best available YouTube audio as an OGG file."
+        })
+      );
+    }
+    if (canSelectContainer && (candidate.kind !== "adaptive" || (candidate.variants || []).length)) {
+      profiles.push(
+        Object.freeze({
+          id: "video-mkv",
+          container: MEDIA_OUTPUT_CONTAINERS.MKV,
+          extension: ".mkv",
+          label: "MKV \xB7 flexible",
+          description: "Keeps more source codecs without re-encoding."
+        })
+      );
+    }
+    return profiles;
+  }
+  function getMediaAudioTrackOptions(candidate = {}) {
+    if (candidate.kind !== "adaptive") return [];
+    return uniqueObjects(candidate.audioTracks || []).filter((track) => isAcquirableAdaptiveTrack(candidate, track)).sort(compareAudioPreference).map(
+      (track) => Object.freeze({
+        id: track.id,
+        label: audioTrackLabel(track),
+        language: track.language || null,
+        role: track.audioRole || null,
+        isOriginal: track.audioRole === "original",
+        isDefault: track.audioIsDefault === true,
+        estimatedBytes: positiveInteger2(track.contentLength)
+      })
+    );
+  }
+  function getMediaVideoQualityOptions(candidate = {}) {
+    if (candidate.kind !== "adaptive") return [];
+    const hasSeparateAudio = (candidate.audioTracks || []).some(
+      (track) => isAcquirableAdaptiveTrack(candidate, track)
+    );
+    return uniqueObjects(candidate.variants || []).filter(
+      (track) => isAcquirableAdaptiveTrack(candidate, track) && (track.muxed === true || hasSeparateAudio)
+    ).sort(compareVideoQuality).map(
+      (track) => Object.freeze({
+        id: track.id,
+        label: videoQualityLabel(track),
+        groupLabel: videoQualityGroupLabel(track),
+        optionLabel: videoQualityOptionLabel(track),
+        height: positiveInteger2(track.resolution?.height || track.height),
+        muxed: track.muxed === true,
+        estimatedBytes: positiveInteger2(track.contentLength)
+      })
+    );
+  }
+  function compareVideoQuality(left, right) {
+    return (right.resolution?.height || right.height || 0) - (left.resolution?.height || left.height || 0) || qualityFps(right) - qualityFps(left) || videoCompatibilityScore(right) - videoCompatibilityScore(left) || (right.averageBandwidth || right.bandwidth || 0) - (left.averageBandwidth || left.bandwidth || 0);
+  }
+  function videoQualityLabel(track) {
+    return [videoQualityGroupLabel(track), videoQualityOptionLabel(track)].filter(Boolean).join(" \xB7 ");
+  }
+  function videoQualityGroupLabel(track) {
+    const quality = track.qualityLabel || (track.resolution?.height || track.height ? `${track.resolution?.height || track.height}p` : "Source quality");
+    return quality;
+  }
+  function videoQualityOptionLabel(track) {
+    const format = String(track.mimeType || "").includes("webm") ? "WebM" : String(track.mimeType || "").includes("mp4") ? "MP4" : null;
+    const codec = codecLabel(track.codecs);
+    return [format, codec, track.muxed === true ? "audio included" : null].filter(Boolean).join(" \xB7 ");
+  }
+  function qualityFps(track) {
+    const explicit = positiveInteger2(track.fps);
+    if (explicit) return explicit;
+    return positiveInteger2(String(track.qualityLabel || "").match(/p(\d+)$/i)?.[1]) || 0;
+  }
+  function videoCompatibilityScore(track) {
+    const mime = String(track.mimeType || "").toLowerCase();
+    const codec = String(track.codecs || "").toLowerCase();
+    if (mime.includes("mp4") && (codec.includes("avc1") || codec.includes("avc3")))
+      return 40;
+    if (mime.includes("mp4") && codec.includes("av01")) return 30;
+    if (mime.includes("webm") && (codec.includes("vp9") || codec.includes("vp09")))
+      return 20;
+    if (mime.includes("mp4")) return 10;
+    return 0;
+  }
+  function codecLabel(value) {
+    const codec = String(value || "").toLowerCase();
+    if (codec.includes("avc1") || codec.includes("avc3")) return "H.264";
+    if (codec.includes("av01")) return "AV1";
+    if (codec.includes("vp9") || codec.includes("vp09")) return "VP9";
+    if (codec.includes("hev1") || codec.includes("hvc1")) return "HEVC";
+    if (codec.includes("mp4a") || codec.includes("aac")) return "AAC";
+    if (codec.includes("opus")) return "Opus";
+    if (codec.includes("vorbis")) return "Vorbis";
+    return null;
+  }
+  function classifyDirectMediaContainer(candidate = {}) {
+    const mime = String(candidate.mimeType || "").split(";", 1)[0].trim().toLowerCase();
+    const byMime = {
+      "video/mp4": "mp4",
+      "video/webm": "webm",
+      "video/quicktime": "mov",
+      "audio/mpeg": "mp3",
+      "audio/mp4": "m4a",
+      "audio/webm": "webm",
+      "audio/ogg": "ogg"
+    }[mime];
+    if (byMime) return byMime;
+    try {
+      const path = new URL(candidate.sourceUrl).pathname;
+      const extension = path.match(/\.([a-z0-9]{2,6})$/i)?.[1]?.toLowerCase();
+      return extension || null;
+    } catch {
+      return null;
+    }
+  }
+  function getMediaDownloadEstimate(candidate = {}, displayItem = null, { videoTrackId = null, audioTrackId = null, audioOnly = false } = {}) {
+    const presentation = displayItem || candidate;
+    const resolved = presentation.resolvedStream || candidate.resolvedStream;
+    const allVariants = uniqueObjects([
+      ...candidate.variants || [],
+      ...presentation.variants || []
+    ]);
+    const variants = (candidate.kind === "adaptive" ? allVariants.filter(
+      (track) => isAcquirableAdaptiveTrack(candidate, track)
+    ) : allVariants).sort(compareBandwidth);
+    const selectedVariant = audioOnly ? null : variants.find((variant) => variant.id === videoTrackId) || variants[0] || null;
+    const resolution = resolved?.resolution || (candidate.kind === "adaptive" ? selectedVariant?.resolution : null) || candidate.resolution || presentation.resolution || selectedVariant?.resolution || null;
+    const duration = firstPositiveNumber(
+      resolved?.duration,
+      candidate.duration,
+      presentation.duration
+    );
+    let bandwidth = firstPositiveNumber(
+      audioOnly ? null : resolved?.bandwidth,
+      resolved?.bandwidth,
+      candidate.kind === "adaptive" ? selectedVariant?.averageBandwidth : null,
+      candidate.kind === "adaptive" ? selectedVariant?.bandwidth : null,
+      candidate.averageBandwidth,
+      candidate.bandwidth,
+      selectedVariant?.averageBandwidth,
+      selectedVariant?.bandwidth
+    );
+    if (["dash", "adaptive"].includes(candidate.kind) && bandwidth && selectedVariant?.muxed !== true) {
+      const audioBandwidth = [...candidate.audioTracks || []].filter(
+        (track) => (candidate.kind !== "adaptive" || isAcquirableAdaptiveTrack(candidate, track)) && (!audioTrackId || track.id === audioTrackId)
+      ).map(
+        (track) => firstPositiveNumber(track.averageBandwidth, track.bandwidth)
+      ).filter(Boolean).sort((left, right) => right - left)[0];
+      if (audioBandwidth) bandwidth += audioBandwidth;
+    }
+    if (audioOnly) {
+      bandwidth = firstPositiveNumber(
+        ...(candidate.audioTracks || []).filter((track) => !audioTrackId || track.id === audioTrackId).map((track) => track.averageBandwidth || track.bandwidth)
+      );
+    }
+    const adaptiveBytes = candidate.kind === "adaptive" ? adaptiveContentLength(
+      candidate,
+      selectedVariant,
+      audioOnly,
+      audioTrackId
+    ) : null;
+    const directBytes = candidate.kind === "direct" ? positiveInteger2(candidate.contentLength || presentation.contentLength) : null;
+    const estimatedBytes = directBytes || adaptiveBytes || (duration && bandwidth ? Math.round(duration * bandwidth / 8) : null);
+    return Object.freeze({
+      resolution: resolution ? {
+        width: positiveInteger2(resolution.width),
+        height: positiveInteger2(resolution.height)
+      } : null,
+      duration,
+      bandwidth,
+      estimatedBytes,
+      basis: estimatedBytes ? directBytes ? "source_headers" : candidate.kind === "adaptive" ? adaptiveBytes ? "track_content_length" : "track_bitrate" : "manifest_bandwidth" : null
+    });
+  }
+  function adaptiveContentLength(candidate, selectedVariant = null, audioOnly = false, audioTrackId = null) {
+    if (audioOnly) {
+      const audio2 = [...candidate.audioTracks || []].filter(
+        (track) => isAcquirableAdaptiveTrack(candidate, track) && (!audioTrackId || track.id === audioTrackId)
+      ).sort(compareAudioPreference)[0]?.contentLength;
+      const total2 = Number(audio2) || 0;
+      return Number.isSafeInteger(total2) && total2 > 0 ? total2 : null;
+    }
+    const video = selectedVariant?.contentLength || [...candidate.variants || []].sort(compareBandwidth)[0]?.contentLength;
+    if (selectedVariant?.muxed === true) {
+      const total2 = Number(video) || 0;
+      return Number.isSafeInteger(total2) && total2 > 0 ? total2 : null;
+    }
+    const audio = [...candidate.audioTracks || []].filter(
+      (track) => isAcquirableAdaptiveTrack(candidate, track) && (!audioTrackId || track.id === audioTrackId)
+    ).sort(compareAudioPreference)[0]?.contentLength;
+    const total = (Number(video) || 0) + (Number(audio) || 0);
+    return Number.isSafeInteger(total) && total > 0 ? total : null;
+  }
+  function compareAudioPreference(left, right) {
+    return audioRoleScore(right) - audioRoleScore(left) || Number(right.audioIsDefault === true) - Number(left.audioIsDefault === true) || Number(left.isDrc === true) - Number(right.isDrc === true) || compareBandwidth(left, right) || mp4AudioScore(right) - mp4AudioScore(left);
+  }
+  function audioRoleScore(track) {
+    return {
+      original: 50,
+      secondary: 30,
+      dubbed: 20,
+      auto_dubbed: 10,
+      descriptive: 5
+    }[track.audioRole] || 25;
+  }
+  function audioTrackLabel(track) {
+    const language = formatAudioLanguageLabel({
+      language: track.language,
+      name: track.audioTrackName,
+      role: track.audioRole,
+      isDefault: track.audioIsDefault === true
+    });
+    const codec = codecLabel(track.codecs);
+    const bitrate = audioBitrateLabel(
+      firstPositiveNumber(track.averageBandwidth, track.bandwidth)
+    );
+    return [
+      language,
+      bitrate,
+      codec,
+      audioChannelsLabel(track.audioChannels),
+      audioSampleRateLabel(track.audioSampleRate),
+      track.isDrc ? "DRC" : null
+    ].filter(Boolean).join(" \xB7 ");
+  }
+  function audioBitrateLabel(value) {
+    const bitrate = positiveInteger2(value);
+    return bitrate ? `${Math.round(bitrate / 1e3)} kbps` : null;
+  }
+  function audioChannelsLabel(value) {
+    const channels = positiveInteger2(value);
+    if (channels === 1) return "Mono";
+    if (channels === 2) return "Stereo";
+    return channels ? `${channels} channels` : null;
+  }
+  function audioSampleRateLabel(value) {
+    const rate = positiveInteger2(value);
+    if (!rate) return null;
+    const khz = rate / 1e3;
+    return `${Number.isInteger(khz) ? khz : khz.toFixed(1)} kHz`;
+  }
+  function mp4AudioScore(track) {
+    return /\/(?:mp4|m4a)(?:$|;)/i.test(track.mimeType || "") ? 1 : 0;
+  }
+  function compareBandwidth(left, right) {
+    return (firstPositiveNumber(right.averageBandwidth, right.bandwidth) || 0) - (firstPositiveNumber(left.averageBandwidth, left.bandwidth) || 0) || (right.resolution?.height || 0) - (left.resolution?.height || 0);
+  }
+  function uniqueObjects(items) {
+    const unique = /* @__PURE__ */ new Map();
+    for (const item of items) {
+      if (!item || typeof item !== "object") continue;
+      unique.set(
+        item.id || `${item.url || ""}:${item.bandwidth || ""}:${item.resolution?.height || ""}`,
+        item
+      );
+    }
+    return [...unique.values()];
+  }
+  function firstPositiveNumber(...values) {
+    for (const value of values) {
+      const number = Number(value);
+      if (Number.isFinite(number) && number > 0) return number;
+    }
+    return null;
+  }
+  function positiveInteger2(value) {
+    const number = Number(value);
+    return Number.isSafeInteger(number) && number > 0 ? number : null;
+  }
+
+  // src/media/protection-policy.js
+  var STRONG_DRM_EVIDENCE = /* @__PURE__ */ new Set(["hls-keyformat", "eme-key-system-access"]);
+  function hasStrongDrmEvidence(candidate = {}) {
+    if (candidate.drm === "confirmed") return true;
+    if (candidate.drm !== "suspected") return false;
+    if (candidate.drmSystem) return true;
+    if ((candidate.drmEvidence || []).some(
+      (evidence) => STRONG_DRM_EVIDENCE.has(String(evidence).toLowerCase())
+    )) {
+      return true;
+    }
+    const eme = candidate.eme;
+    return Boolean(
+      eme?.keySystems?.length || eme?.keyStatuses?.length || eme?.licenseStatus
+    );
+  }
+  function isWeakSampleAesSignal(candidate = {}) {
+    if (candidate.drm !== "suspected") return false;
+    if (candidate.encryptionScheme !== "sample-aes") return false;
+    return !hasStrongDrmEvidence(candidate);
+  }
+  function isFfmpegCompatibleSampleAes(candidate = {}) {
+    if (!isWeakSampleAesSignal(candidate)) return false;
+    if (hasUnsupportedHlsKeyFormat(candidate)) return false;
+    const methods = candidate.encryptionMethods || [];
+    return methods.length === 0 || methods.every((method) => {
+      const normalized = String(method).trim().toUpperCase();
+      return normalized === "AES-128" || normalized.startsWith("SAMPLE-AES");
+    });
+  }
+  function hasUnsupportedHlsKeyFormat(candidate = {}) {
+    return (candidate.encryptionKeyFormats || []).map(normalizeHlsKeyFormat).filter(Boolean).some((format) => format !== "identity");
+  }
+  function normalizeHlsKeyFormat(value) {
+    return String(value || "").trim().replace(/^["']|["']$/g, "").trim().toLowerCase().slice(0, 100);
+  }
+
+  // src/media/download-job-contract.js
+  var DOWNLOAD_JOB_PREFIX = "adsfriendly.mediaDownloadJob.";
+  var DOWNLOAD_JOB_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
+  function getMediaDownloadAvailability(candidate = {}) {
+    if (candidate.kind === "direct") {
+      try {
+        requiredHttpUrl(candidate.sourceUrl, "candidate.sourceUrl");
+      } catch {
+        return { supported: false, reason: "Direct media URL is not ready." };
+      }
+      if (hasStrongDrmEvidence(candidate))
+        return { supported: false, reason: drmPlaybackOnlyReason(candidate) };
+      return { supported: true, reason: null };
+    }
+    if (candidate.kind === "dash") {
+      if (candidate.probeStatus !== "ready")
+        return { supported: false, reason: "DASH manifest is not ready." };
+      if (hasStrongDrmEvidence(candidate))
+        return { supported: false, reason: drmPlaybackOnlyReason(candidate) };
+      if (candidate.streamType === "live")
+        return { supported: false, reason: "Live DASH is not supported yet." };
+      if (candidate.streamType !== "vod")
+        return { supported: false, reason: "Unknown DASH stream type." };
+      if (!candidate.variants?.length && !candidate.audioTracks?.length)
+        return { supported: false, reason: "DASH manifest has no media tracks." };
+      return { supported: true, reason: null };
+    }
+    if (candidate.kind === "adaptive") {
+      if (candidate.probeStatus !== "ready")
+        return {
+          supported: false,
+          reason: "Adaptive media is waiting for both video and audio tracks."
+        };
+      if (hasStrongDrmEvidence(candidate))
+        return { supported: false, reason: drmPlaybackOnlyReason(candidate) };
+      if (candidate.streamType !== "vod")
+        return {
+          supported: false,
+          reason: "Only completed adaptive media is supported."
+        };
+      let variants;
+      let audioTracks;
+      try {
+        variants = normalizeAdaptiveTracks(
+          candidate.variants,
+          "video",
+          candidate
+        );
+        audioTracks = normalizeAdaptiveTracks(
+          candidate.audioTracks,
+          "audio",
+          candidate
+        );
+      } catch {
+        return {
+          supported: false,
+          reason: "An adaptive track URL is invalid or no longer usable."
+        };
+      }
+      const hasMuxedTrack = variants.some((track) => track.muxed === true);
+      const audioOnlyYouTube = candidate.provider === "youtube" && !variants.length && audioTracks.length > 0;
+      if (!variants.length && !audioOnlyYouTube || !audioTracks.length && !hasMuxedTrack && !audioOnlyYouTube)
+        return {
+          supported: false,
+          reason: "Adaptive media needs one resolved video and audio track."
+        };
+      return { supported: true, reason: null };
+    }
+    if (candidate.kind !== "hls")
+      return {
+        supported: false,
+        reason: "This media type is not supported yet."
+      };
+    if (candidate.probeStatus !== "ready")
+      return { supported: false, reason: "Manifest is not ready." };
+    if (candidate.probeSource === "decrypted_blob" && !hasCurrentManifestHandoff(candidate))
+      return {
+        supported: false,
+        reason: "Player-decrypted manifest found; secure download handoff is not ready yet."
+      };
+    if (hasStrongDrmEvidence(candidate))
+      return { supported: false, reason: drmPlaybackOnlyReason(candidate) };
+    if (hasUnsupportedHlsKeyFormat(candidate))
+      return {
+        supported: false,
+        reason: customHlsPlaybackOnlyReason(candidate)
+      };
+    if (isWeakSampleAesSignal(candidate) && !isFfmpegCompatibleSampleAes(candidate))
+      return {
+        supported: false,
+        reason: "SAMPLE-AES signal needs player-resolved segments before download."
+      };
+    if (candidate.encryptionMethods?.length && !isDownloadableHlsEncryption(candidate))
+      return { supported: false, reason: "Encrypted HLS is not supported yet." };
+    if (candidate.playlistType === "unknown")
+      return {
+        supported: false,
+        reason: "HLS endpoint has not exposed a media playlist yet."
+      };
+    if (candidate.playlistType === "media" && candidate.streamType === "unknown")
+      return {
+        supported: false,
+        reason: "HLS media playlist is waiting for segments."
+      };
+    if (candidate.playlistType === "media" && candidate.streamType === "live")
+      return { supported: false, reason: "Live HLS is not supported yet." };
+    if (candidate.playlistType === "media" && candidate.streamType === "vod" && !candidate.segmentCount)
+      return { supported: false, reason: "HLS VOD has no media segments." };
+    if (candidate.playlistType === "master" && !candidate.variants?.length)
+      return { supported: false, reason: "No quality variants found." };
+    if (!["master", "media"].includes(candidate.playlistType))
+      return { supported: false, reason: "Unknown HLS playlist type." };
+    return { supported: true, reason: null };
+  }
+  function normalizeAdaptiveTracks(value, expectedType, candidate) {
+    if (!Array.isArray(value)) return [];
+    return value.filter(
+      (track) => track && typeof track === "object" && isAcquirableAdaptiveTrack(candidate, track)
+    ).slice(0, 24).map((track, index) => ({
+      id: optionalString2(track.id) || `${expectedType}-${index + 1}`,
+      type: expectedType,
+      sourceUrl: isYouTubeProviderResolvableTrack(candidate, track) ? null : requiredHttpUrl(
+        track.sourceUrl || track.url,
+        `candidate.${expectedType}Tracks[${index}].sourceUrl`
+      ),
+      mimeType: optionalString2(track.mimeType),
+      codecs: optionalString2(track.codecs),
+      itag: optionalString2(track.itag),
+      bandwidth: optionalFiniteNumber2(track.bandwidth),
+      averageBandwidth: optionalFiniteNumber2(track.averageBandwidth),
+      contentLength: optionalNonNegativeInteger2(track.contentLength),
+      width: optionalNonNegativeInteger2(track.width || track.resolution?.width),
+      height: optionalNonNegativeInteger2(
+        track.height || track.resolution?.height
+      ),
+      resolution: track.resolution && typeof track.resolution === "object" ? {
+        width: optionalNonNegativeInteger2(track.resolution.width),
+        height: optionalNonNegativeInteger2(track.resolution.height)
+      } : null,
+      qualityLabel: optionalString2(track.qualityLabel),
+      urlResolution: Object.values(ADAPTIVE_TRACK_RESOLUTION).includes(
+        track.urlResolution
+      ) ? track.urlResolution : "resolved",
+      signatureCipher: optionalString2(track.signatureCipher),
+      muxed: track.muxed === true,
+      requestUserAgent: optionalString2(track.requestUserAgent),
+      providerClient: optionalString2(track.providerClient),
+      requestMode: optionalEnumValue2(
+        track.requestMode,
+        ["youtube_query_range", "http_range"],
+        `candidate.${expectedType}Tracks[${index}].requestMode`
+      ),
+      requestCpn: typeof track.requestCpn === "string" && /^[A-Za-z0-9_-]{8,64}$/.test(track.requestCpn) ? track.requestCpn : null,
+      language: optionalString2(track.language),
+      audioTrackId: optionalString2(track.audioTrackId),
+      audioTrackName: optionalString2(track.audioTrackName),
+      audioRole: optionalEnumValue2(
+        track.audioRole,
+        ["original", "dubbed", "auto_dubbed", "descriptive", "secondary"],
+        `candidate.${expectedType}Tracks[${index}].audioRole`
+      ),
+      audioIsDefault: track.audioIsDefault === true,
+      isDrc: track.isDrc === true,
+      audioSampleRate: optionalNonNegativeInteger2(track.audioSampleRate),
+      audioChannels: optionalNonNegativeInteger2(track.audioChannels),
+      audioQuality: optionalString2(track.audioQuality)
+    }));
+  }
+  function hasCurrentManifestHandoff(candidate) {
+    return candidate.manifestHandoff?.mediaId === candidate.id && candidate.manifestHandoff?.manifestUrl === candidate.manifestUrl && Number(candidate.manifestHandoff?.expiresAt) > Date.now();
+  }
+  function isDownloadableHlsEncryption(candidate) {
+    if (isFfmpegCompatibleSampleAes(candidate)) return true;
+    const methods = candidate.encryptionMethods || [];
+    const formats = candidate.encryptionKeyFormats || [];
+    return methods.length > 0 && methods.every((method) => String(method).toUpperCase() === "AES-128") && formats.every((format) => String(format).toLowerCase() === "identity");
+  }
+  function drmPlaybackOnlyReason(candidate) {
+    const state = candidate.drm === "confirmed" ? "confirmed" : "suspected";
+    const system = candidate.drmSystem ? ` \xB7 ${formatDrmSystem(candidate.drmSystem)}` : "";
+    return `DRM ${state}${system} \xB7 Playback only.`;
+  }
+  function customHlsPlaybackOnlyReason(candidate) {
+    const format = (candidate.encryptionKeyFormats || []).map((value) => String(value || "").trim()).find((value) => value && value.toLowerCase() !== "identity");
+    return `Custom protected HLS${format ? ` \xB7 ${format}` : ""} \xB7 Playback only.`;
+  }
+  function formatDrmSystem(value) {
+    return value === "widevine" ? "Widevine" : value === "playready" ? "PlayReady" : value === "fairplay" ? "FairPlay" : value === "clearkey" ? "Clear Key" : "Unknown system";
+  }
+  function requiredString2(value, field) {
+    if (typeof value !== "string" || !value.trim())
+      throw new Error(`[MediaDownload] ${field} is required.`);
+    return value;
+  }
+  function requiredHttpUrl(value, field) {
+    const url = requiredString2(value, field);
+    try {
+      if (!["http:", "https:"].includes(new URL(url).protocol)) throw new Error();
+    } catch {
+      throw new Error(`[MediaDownload] ${field} must be an HTTP(S) URL.`);
+    }
+    return url;
+  }
+  function finiteNumber(value, field) {
+    const number = Number(value);
+    if (!Number.isFinite(number))
+      throw new Error(`[MediaDownload] ${field} must be finite.`);
+    return number;
+  }
+  function nonNegativeInteger(value, field) {
+    const number = Number(value);
+    if (!Number.isInteger(number) || number < 0)
+      throw new Error(`[MediaDownload] ${field} must be non-negative.`);
+    return number;
+  }
+  function optionalString2(value) {
+    return typeof value === "string" && value ? value : null;
+  }
+  function optionalEnumValue2(value, allowed, field) {
+    if (value === null || value === void 0 || value === "") return null;
+    if (!allowed.includes(value))
+      throw new Error(`[MediaDownload] ${field} is invalid.`);
+    return value;
+  }
+  function optionalFiniteNumber2(value) {
+    if (value === null || value === void 0) return null;
+    return finiteNumber(value, "optional number");
+  }
+  function optionalNonNegativeInteger2(value) {
+    if (value === null || value === void 0) return null;
+    return nonNegativeInteger(value, "optional integer");
+  }
+
+  // src/media/resolution-diagnostics.js
+  var MEDIA_RESOLUTION_STAGES = Object.freeze({
+    NETWORK_OBSERVATION: "network_observation",
+    MANIFEST_PROBE: "manifest_probe",
+    CHILD_DISCOVERY: "child_discovery",
+    CHILD_PROBE: "child_probe",
+    SOURCE_MATCHING: "source_matching",
+    PLAYER_DECRYPTION: "player_decryption",
+    PLAYER_SEGMENT_RESOLUTION: "player_segment_resolution",
+    DOWNLOAD_READY: "download_ready",
+    PLAYBACK_ONLY: "playback_only"
+  });
+  var MEDIA_RESOLUTION_DIAGNOSTIC_STATES = Object.freeze({
+    WAITING: "waiting",
+    FAILED: "failed",
+    UNHANDLED: "unhandled",
+    READY: "ready",
+    BLOCKED: "blocked"
+  });
+  var S = MEDIA_RESOLUTION_STAGES;
+  var D = MEDIA_RESOLUTION_DIAGNOSTIC_STATES;
+  var MEDIA_RESOLUTION_STAGE_CATALOG = Object.freeze({
+    [S.NETWORK_OBSERVATION]: stage("Browser media request", "Catalog candidate"),
+    [S.MANIFEST_PROBE]: stage("Manifest candidate", "Parsed manifest"),
+    [S.CHILD_DISCOVERY]: stage(
+      "Master or playback request",
+      "Observed child playlist"
+    ),
+    [S.CHILD_PROBE]: stage("Observed child playlist", "Playable child stream"),
+    [S.SOURCE_MATCHING]: stage(
+      "Playable child stream + player context",
+      "Selected media source"
+    ),
+    [S.PLAYER_DECRYPTION]: stage(
+      "Encrypted manifest + player Blob",
+      "Parsed plaintext manifest"
+    ),
+    [S.PLAYER_SEGMENT_RESOLUTION]: stage(
+      "SAMPLE-AES candidate + player playback",
+      "Resolved media segment sequence"
+    ),
+    [S.DOWNLOAD_READY]: stage("Selected media source", "Download plan input"),
+    [S.PLAYBACK_ONLY]: stage("Protected media metadata", "Playback-only result")
+  });
+  function diagnoseMediaResolution(item, items = []) {
+    const byId = new Map(items.map((candidate) => [candidate.id, candidate]));
+    const target = item.kind === "blob" && item.selectedMediaId ? byId.get(item.selectedMediaId) || item.resolvedStream || item : item;
+    if (target.kind === "direct")
+      return diagnostic(S.DOWNLOAD_READY, D.READY, "direct_ready", {
+        message: "Download ready \xB7 direct media"
+      });
+    if (target.kind === "blob")
+      return diagnostic(S.NETWORK_OBSERVATION, D.WAITING, "blob_source_missing", {
+        message: "Network observation \xB7 Blob found \xB7 source request missing"
+      });
+    if (!["hls", "dash"].includes(target.kind))
+      return diagnostic(S.NETWORK_OBSERVATION, D.UNHANDLED, "media_unhandled", {
+        message: "Network observation \xB7 media type not handled"
+      });
+    if (hasStrongDrmEvidence(target))
+      return diagnostic(S.PLAYBACK_ONLY, D.BLOCKED, "drm_playback_only", {
+        message: "Playback only \xB7 DRM protected"
+      });
+    if (hasUnsupportedHlsKeyFormat(target))
+      return diagnostic(
+        S.PLAYBACK_ONLY,
+        D.BLOCKED,
+        "custom_hls_protection_playback_only",
+        { message: "Playback only \xB7 custom HLS protection" }
+      );
+    if (target.probeStatus === "ready" && isWeakSampleAesSignal(target) && !isFfmpegCompatibleSampleAes(target))
+      return diagnostic(
+        S.PLAYER_SEGMENT_RESOLUTION,
+        D.WAITING,
+        "sample_aes_player_segments_pending",
+        {
+          message: "Player URL resolution \xB7 waiting for resolved media segments"
+        }
+      );
+    if (target.kind === "dash") return diagnoseDash(target);
+    if (target.probeSource === "decrypted_blob" && !(Number(target.manifestHandoff?.expiresAt) > Date.now()))
+      return diagnostic(
+        S.PLAYER_DECRYPTION,
+        D.UNHANDLED,
+        "decrypted_manifest_handoff_pending",
+        {
+          message: "Player decryption \xB7 manifest parsed \xB7 download handoff pending"
+        }
+      );
+    if (target.resolutionStatus === "resolved" || target.probeStatus === "ready" && target.playlistType === "media" && target.streamType === "vod" && target.segmentCount > 0)
+      return diagnostic(S.DOWNLOAD_READY, D.READY, "hls_ready", {
+        message: "Download ready \xB7 HLS VOD resolved"
+      });
+    if (target.probeStatus === "unsupported")
+      return diagnostic(
+        S.MANIFEST_PROBE,
+        D.UNHANDLED,
+        "hls_manifest_unsupported",
+        { message: "Manifest probe \xB7 HLS format not handled" }
+      );
+    const latestTargetProbe = latestProbeDiagnostic([target]);
+    if (latestTargetProbe?.code?.startsWith("contextual_probe_")) {
+      const described2 = describeProbeDiagnostic(latestTargetProbe);
+      return diagnostic(S.MANIFEST_PROBE, described2.status, described2.code, {
+        probeDiagnostic: latestTargetProbe,
+        message: `Manifest probe \xB7 ${described2.message}`
+      });
+    }
+    const children = findObservedChildren(target, items);
+    const readyChildren = children.filter(isUsableChild);
+    const failedChildren = children.filter(
+      (candidate) => candidate.probeStatus === "failed"
+    );
+    const facts = {
+      observedChildCount: children.length,
+      readyChildCount: readyChildren.length,
+      failedChildCount: failedChildren.length,
+      masterProbeStatus: target.probeStatus || "discovered",
+      masterProbeError: target.probeError || null
+    };
+    if (!children.length) {
+      const masterFailure = formatProbeFailure(target);
+      if (target.probeStatus !== "failed" && target.playlistType !== "master") {
+        return diagnostic(S.MANIFEST_PROBE, D.WAITING, "hls_probe_pending", {
+          ...facts,
+          message: "Manifest probe \xB7 HLS response not parsed yet"
+        });
+      }
+      return diagnostic(
+        S.CHILD_DISCOVERY,
+        target.probeStatus === "failed" ? D.FAILED : D.WAITING,
+        target.probeStatus === "failed" ? "master_failed_child_not_observed" : "child_request_not_observed",
+        {
+          ...facts,
+          message: `Child discovery \xB7 0 child playlists${masterFailure ? ` \xB7 ${masterFailure}` : ""}`
+        }
+      );
+    }
+    if (readyChildren.length && !target.selectedMediaId) {
+      return diagnostic(S.SOURCE_MATCHING, D.WAITING, "child_ready_not_matched", {
+        ...facts,
+        message: `Source matching \xB7 ${readyChildren.length} child ready \xB7 not linked to player`
+      });
+    }
+    const latestChildProbe = latestProbeDiagnostic(children);
+    if (latestChildProbe) {
+      const described2 = describeProbeDiagnostic(latestChildProbe);
+      return diagnostic(S.CHILD_PROBE, described2.status, described2.code, {
+        ...facts,
+        probeDiagnostic: latestChildProbe,
+        message: `Child probe \xB7 ${described2.message}`
+      });
+    }
+    if (failedChildren.length === children.length) {
+      return diagnostic(S.CHILD_PROBE, D.FAILED, "child_probe_failed", {
+        ...facts,
+        message: `Child probe \xB7 ${failedChildren.length} failed \xB7 ${formatProbeFailure(failedChildren[0]) || "request rejected"}`
+      });
+    }
+    return diagnostic(S.CHILD_PROBE, D.WAITING, "child_observed_probe_pending", {
+      ...facts,
+      message: `Child probe \xB7 ${children.length} observed \xB7 manifest not parsed`
+    });
+  }
+  function diagnoseDash(item) {
+    if (item.probeStatus === "failed")
+      return diagnostic(S.MANIFEST_PROBE, D.FAILED, "dash_probe_failed", {
+        message: `Manifest probe \xB7 DASH failed${item.probeError ? ` \xB7 ${item.probeError}` : ""}`
+      });
+    if (item.probeStatus !== "ready")
+      return diagnostic(S.MANIFEST_PROBE, D.WAITING, "dash_probe_pending", {
+        message: "Manifest probe \xB7 DASH tracks not parsed"
+      });
+    return diagnostic(S.DOWNLOAD_READY, D.READY, "dash_ready", {
+      message: "Download ready \xB7 DASH tracks resolved"
+    });
+  }
+  function findObservedChildren(parent, items) {
+    const explicitIds = new Set(parent.childManifestIds || []);
+    return items.filter((candidate) => {
+      if (candidate.kind !== "hls" || candidate.id === parent.id) return false;
+      if (explicitIds.has(candidate.id) || candidate.parentManifestIds?.includes(parent.id))
+        return true;
+      if (!sameFrame(parent, candidate)) return false;
+      const parentAt = parent.firstSeenAt || parent.lastSeenAt;
+      const childAt = candidate.firstSeenAt || candidate.lastSeenAt;
+      return Number.isFinite(parentAt) && Number.isFinite(childAt) && Math.abs(parentAt - childAt) <= 6e4;
+    });
+  }
+  function isUsableChild(item) {
+    return item.probeStatus === "ready" && item.playlistType === "media" && ["vod", "live"].includes(item.streamType) && (item.segmentCount > 0 || item.partialSegmentCount > 0);
+  }
+  function sameFrame(left, right) {
+    return Number.isInteger(left.frameId) && Number.isInteger(right.frameId) && left.frameId === right.frameId;
+  }
+  function formatProbeFailure(item) {
+    if (item.probeError === "manifest_http_403") return "master probe 403";
+    if (item.probeError === "fallback_fetch_blocked")
+      return "probe blocked by page/CORS";
+    if (item.probeStatus === "failed") return "manifest probe failed";
+    return null;
+  }
+  function latestProbeDiagnostic(items) {
+    return items.flatMap((item) => item.probeDiagnostics || [item.probeDiagnostic]).filter(Boolean).sort((left, right) => (right.observedAt || 0) - (left.observedAt || 0))[0];
+  }
+  function describeProbeDiagnostic(diagnostic2) {
+    const code = diagnostic2.code || "probe_status_unknown";
+    if (code === "iframe_probe_scheduled")
+      return described(D.WAITING, code, "scheduled in player frame");
+    if (code === "manifest_fetch_dispatched")
+      return described(D.WAITING, code, "request sent \xB7 waiting for response");
+    if (code === "contextual_probe_prepared")
+      return described(
+        D.WAITING,
+        code,
+        "Referer/Origin prepared \xB7 retry starting"
+      );
+    if (code === "contextual_manifest_fetch_dispatched")
+      return described(
+        D.WAITING,
+        code,
+        "contextual request sent \xB7 waiting for response"
+      );
+    if (code.startsWith("contextual_probe_"))
+      return described(
+        D.FAILED,
+        code,
+        `context setup failed \xB7 ${code.slice("contextual_probe_".length)}`
+      );
+    if (code === "content_duplicate")
+      return described(D.WAITING, code, "duplicate schedule skipped");
+    if (code === "probe_gate_duplicate")
+      return described(D.WAITING, code, "probe already in progress or completed");
+    if (code === "manifest_probe_timeout")
+      return described(D.FAILED, code, "timed out after 10s");
+    if (/^manifest_http_\d+$/.test(code))
+      return described(
+        D.FAILED,
+        code,
+        `HTTP ${diagnostic2.httpStatus || code.split("_").at(-1)}`
+      );
+    if (code === "fallback_fetch_blocked")
+      return described(D.FAILED, code, "request blocked by page/CORS");
+    if (code === "manifest_body_received")
+      return described(
+        D.WAITING,
+        code,
+        `${formatBodySize(diagnostic2.bodyBytes)} body received \xB7 ${diagnostic2.bodyFormat || "unknown"} format \xB7 parser pending`
+      );
+    if (code === "manifest_parsed_zero_segments")
+      return described(
+        D.UNHANDLED,
+        code,
+        `${formatBodySize(diagnostic2.bodyBytes)} ${diagnostic2.bodyFormat || "unknown"} parsed \xB7 0 segments`
+      );
+    if (code === "manifest_parsed_no_stream")
+      return described(
+        D.UNHANDLED,
+        code,
+        `${formatBodySize(diagnostic2.bodyBytes)} body parsed \xB7 no playable stream`
+      );
+    if (code === "manifest_unsupported")
+      return described(D.UNHANDLED, code, "body received \xB7 format unsupported");
+    if (code === "manifest_parsed")
+      return described(
+        D.WAITING,
+        code,
+        `${diagnostic2.playlistType || "manifest"} parsed \xB7 ${diagnostic2.segmentCount || 0} segments \xB7 matching pending`
+      );
+    if (code === "decrypted_manifest_blob_observed")
+      return described(
+        D.WAITING,
+        code,
+        `player decrypted ${diagnostic2.bodyFormat || "manifest"} \xB7 parser pending`
+      );
+    if (code === "decrypted_manifest_parsed")
+      return described(
+        D.READY,
+        code,
+        `player-decrypted ${diagnostic2.playlistType || "manifest"} parsed \xB7 ${diagnostic2.segmentCount || 0} segments`
+      );
+    if (code === "decrypted_manifest_zero_segments")
+      return described(
+        D.UNHANDLED,
+        code,
+        "player-decrypted manifest \xB7 0 segments"
+      );
+    if (code === "decrypted_manifest_no_stream")
+      return described(
+        D.UNHANDLED,
+        code,
+        "player-decrypted manifest \xB7 no playable stream"
+      );
+    if (code === "decrypted_manifest_unsupported")
+      return described(D.UNHANDLED, code, "player-decrypted format unsupported");
+    if (code === "decrypted_manifest_parse_failed")
+      return described(D.FAILED, code, "player-decrypted manifest parse failed");
+    return described(
+      diagnostic2.phase === "failed" ? D.FAILED : D.WAITING,
+      code,
+      code.replaceAll("_", " ")
+    );
+  }
+  function described(status, code, message) {
+    return { status, code, message };
+  }
+  function formatBodySize(bytes) {
+    if (!Number.isFinite(bytes)) return "Unknown-size";
+    if (bytes < 1024) return `${bytes} B`;
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+  function diagnostic(stage2, status, code, facts = {}) {
+    const contract = MEDIA_RESOLUTION_STAGE_CATALOG[stage2];
+    return Object.freeze({
+      stage: stage2,
+      status,
+      code,
+      input: contract.input,
+      output: contract.output,
+      ...facts
+    });
+  }
+  function stage(input, output) {
+    return Object.freeze({ input, output });
+  }
+
+  // src/media/catalog-view.js
+  function selectVisibleMediaItems(items = [], maximum = 8) {
+    const diagnosedItems = items.map((item) => ({
+      ...item,
+      resolutionDiagnostic: diagnoseMediaResolution(item, items)
+    }));
+    const displayItems = prioritizeFacebookPlayback(
+      groupFacebookDirectRepresentations(diagnosedItems)
+    );
+    const blobResolvedSourceIds = new Set(
+      diagnosedItems.filter((item) => item.kind === "blob" && item.selectedMediaId).flatMap((item) => [
+        item.selectedMediaId,
+        ...item.resolvedMediaIds || [],
+        ...item.blobTrace?.candidateIds || []
+      ]).filter(Boolean)
+    );
+    for (const blob of diagnosedItems.filter(
+      (item) => item.kind === "blob" && item.selectedMediaId
+    )) {
+      for (const source of diagnosedItems) {
+        if (source.kind !== "blob" && samePlaybackFrame(blob, source) && (source.selectedMediaId === blob.selectedMediaId || source.resolvedMediaIds?.includes(blob.selectedMediaId) || (blob.resolvedMediaIds || []).some(
+          (id) => source.resolvedMediaIds?.includes(id)
+        ))) {
+          blobResolvedSourceIds.add(source.id);
+        }
+      }
+    }
+    const sorted = [...displayItems].sort(
+      (left, right) => playbackPriority(right) - playbackPriority(left) || (right.firstSeenAt || 0) - (left.firstSeenAt || 0) || String(left.id || "").localeCompare(String(right.id || ""))
+    );
+    const visible = [];
+    const adaptivePages = new Set(
+      displayItems.filter((item) => item.kind === "adaptive").map((item) => item.pageUrl)
+    );
+    const blobGroups = /* @__PURE__ */ new Map();
+    const directGroups = /* @__PURE__ */ new Map();
+    const resolvedBlobGroupKeys = resolvedBlobGroupKeysByPage(diagnosedItems);
+    for (const item of sorted) {
+      if (item.kind === "blob" && adaptivePages.has(item.pageUrl)) continue;
+      if (item.kind !== "blob" && blobResolvedSourceIds.has(item.id)) continue;
+      if (item.kind === "hls" && item.parentManifestIds?.length) continue;
+      if (item.kind === "direct") {
+        const key2 = directMediaGroupKey(item);
+        const existing2 = directGroups.get(key2);
+        if (existing2) {
+          existing2.relatedCount += 1;
+          continue;
+        }
+        const grouped2 = { ...item, relatedCount: 1 };
+        directGroups.set(key2, grouped2);
+        visible.push(grouped2);
+        continue;
+      }
+      if (item.kind !== "blob") {
+        visible.push(item);
+        continue;
+      }
+      const key = blobGroupKey(item, resolvedBlobGroupKeys);
+      const existing = blobGroups.get(key);
+      if (existing) {
+        existing.relatedCount += 1;
+        if (item.selectedMediaId && !existing.selectedMediaId) {
+          const resolved = { ...item, relatedCount: existing.relatedCount };
+          blobGroups.set(key, resolved);
+          const visibleIndex = visible.indexOf(existing);
+          if (visibleIndex >= 0) visible[visibleIndex] = resolved;
+        }
+        continue;
+      }
+      const grouped = { ...item, relatedCount: 1 };
+      blobGroups.set(key, grouped);
+      visible.push(grouped);
+    }
+    return visible.slice(0, maximum);
+  }
+  function playbackPriority(item) {
+    if (item.playback?.playing === true) return 2;
+    if (item.playback?.visible === true) return 1;
+    return 0;
+  }
+  function groupFacebookDirectRepresentations(items) {
+    const groups = /* @__PURE__ */ new Map();
+    for (const item of items) {
+      if (item.kind !== "direct") continue;
+      const key = facebookMediaAssetKey(item);
+      if (!key) continue;
+      const group = groups.get(key) || [];
+      group.push(item);
+      groups.set(key, group);
+    }
+    const consumed = /* @__PURE__ */ new Set();
+    const synthetic = [];
+    for (const [key, group] of groups) {
+      if (group.length < 2) continue;
+      const adaptive = createFacebookAdaptiveGroup(key, group);
+      if (!adaptive) continue;
+      group.forEach((item) => consumed.add(item.id));
+      synthetic.push(adaptive);
+    }
+    return [
+      ...items.filter(
+        (item) => !consumed.has(item.id) && !isFacebookAudioTrack(item)
+      ),
+      ...synthetic
+    ];
+  }
+  function prioritizeFacebookPlayback(items) {
+    const facebookItems = items.filter(isFacebookMediaItem);
+    if (facebookItems.length <= 1) return items;
+    const playing = facebookItems.filter((item) => item.playback?.playing);
+    const visible = facebookItems.filter((item) => item.playback?.visible);
+    const preferred = playing.length ? playing : visible.length ? visible : [...facebookItems].sort(
+      (left, right) => (right.lastSeenAt || right.firstSeenAt || 0) - (left.lastSeenAt || left.firstSeenAt || 0)
+    ).slice(0, 1);
+    const preferredIds = new Set(preferred.map((item) => item.id));
+    return items.filter(
+      (item) => !isFacebookMediaItem(item) || preferredIds.has(item.id)
+    );
+  }
+  function isFacebookMediaItem(item) {
+    if (item.provider === "facebook") return true;
+    try {
+      return item.kind === "direct" && isFacebookCdnHost(new URL(item.sourceUrl).hostname);
+    } catch {
+      return false;
+    }
+  }
+  function createFacebookAdaptiveGroup(key, items) {
+    const audioItems = items.filter(isFacebookAudioTrack);
+    const representations = collapseFacebookRepresentations(
+      items.filter((item) => !isFacebookAudioTrack(item))
+    );
+    if (!representations.length) return null;
+    const sorted = [...representations].sort(
+      (left, right) => facebookQualityScore(right) - facebookQualityScore(left) || (right.contentLength || 0) - (left.contentLength || 0) || (right.lastSeenAt || 0) - (left.lastSeenAt || 0)
+    );
+    const primary = sorted[0];
+    const variants = sorted.map((item, index) => ({
+      id: item.id,
+      type: "video",
+      sourceUrl: facebookFullMediaUrl(item.sourceUrl),
+      mimeType: item.mimeType || "video/mp4",
+      codecs: null,
+      itag: null,
+      bandwidth: item.bandwidth || null,
+      averageBandwidth: item.averageBandwidth || null,
+      contentLength: facebookUrlHasByteLimit(item.sourceUrl) ? null : item.contentLength || null,
+      width: item.resolution?.width || null,
+      height: item.resolution?.height || null,
+      qualityLabel: facebookQualityLabel(item) || `Source ${index + 1}`,
+      urlResolution: "resolved",
+      signatureCipher: null,
+      muxed: !isFacebookDashTrack(item)
+    }));
+    const audioTracks = createFacebookAudioTracks(audioItems);
+    return {
+      ...primary,
+      id: stableMediaId("adaptive", key),
+      kind: "adaptive",
+      provider: "facebook",
+      title: primary.title && !/^(?:\(\d+\+?\)\s*)?facebook$/i.test(primary.title.trim()) ? primary.title : "Facebook video",
+      sourceUrl: facebookFullMediaUrl(primary.sourceUrl),
+      contentLength: facebookUrlHasByteLimit(primary.sourceUrl) ? null : primary.contentLength || null,
+      mimeType: "video/mp4",
+      variants,
+      audioTracks,
+      subtitles: [],
+      acquisitionProfile: "facebook_direct_representations",
+      probeStatus: "ready",
+      streamType: "vod",
+      relatedCount: items.length,
+      playback: newestPlaybackState(items),
+      firstSeenAt: Math.min(...items.map((item) => item.firstSeenAt || 0)),
+      lastSeenAt: Math.max(...items.map((item) => item.lastSeenAt || 0))
+    };
+  }
+  function createFacebookAudioTracks(items) {
+    if (!items.length) return [];
+    const selected = [...items].sort(
+      (left, right) => facebookAudioScore(right) - facebookAudioScore(left) || facebookObservationTime(right) - facebookObservationTime(left)
+    )[0];
+    return [
+      {
+        id: selected.id,
+        type: "audio",
+        sourceUrl: facebookFullMediaUrl(selected.sourceUrl),
+        mimeType: selected.mimeType || "audio/mp4",
+        codecs: null,
+        bandwidth: selected.bandwidth || null,
+        averageBandwidth: selected.averageBandwidth || null,
+        contentLength: facebookUrlHasByteLimit(selected.sourceUrl) ? null : selected.contentLength || null,
+        qualityLabel: "Facebook audio",
+        urlResolution: "resolved",
+        signatureCipher: null,
+        muxed: false,
+        language: null,
+        audioTrackName: "Facebook audio",
+        audioRole: "original",
+        audioIsDefault: true
+      }
+    ];
+  }
+  function isFacebookAudioTrack(item) {
+    const mimeType = String(item?.mimeType || "").toLowerCase();
+    if (mimeType.startsWith("audio/")) return true;
+    const tag = facebookEncodingTag(item?.sourceUrl);
+    return /(?:^|[_-])(?:audio|aac|opus)(?:[_-]|$)/i.test(tag || "");
+  }
+  function isFacebookDashTrack(item) {
+    return /(?:^|[_-])dash(?:[_-]|$)/i.test(
+      facebookEncodingTag(item?.sourceUrl) || ""
+    );
+  }
+  function facebookAudioScore(item) {
+    const bandwidth = item.averageBandwidth || item.bandwidth;
+    if (Number.isFinite(bandwidth) && bandwidth > 0) return bandwidth;
+    const tag = facebookEncodingTag(item.sourceUrl) || "";
+    const kilobits = Number(
+      tag.match(/(?:audio|aac|opus)[_-]?(\d{2,3})(?:k|kbps)?/i)?.[1]
+    );
+    return Number.isFinite(kilobits) ? kilobits * 1e3 : 0;
+  }
+  function collapseFacebookRepresentations(items) {
+    const representations = /* @__PURE__ */ new Map();
+    for (const item of items) {
+      const quality = facebookQualityLabel(item);
+      const key = quality?.toLowerCase() || "source";
+      const existing = representations.get(key);
+      if (!existing || facebookObservationTime(item) >= facebookObservationTime(existing))
+        representations.set(key, item);
+    }
+    return [...representations.values()];
+  }
+  function facebookObservationTime(item) {
+    return item.playback?.observedAt || item.lastSeenAt || item.firstSeenAt || 0;
+  }
+  function facebookFullMediaUrl(value) {
+    try {
+      const url = new URL(value || "");
+      for (const name of ["range", "bytestart", "byteend"])
+        url.searchParams.delete(name);
+      return url.href;
+    } catch {
+      return value;
+    }
+  }
+  function facebookUrlHasByteLimit(value) {
+    try {
+      const url = new URL(value || "");
+      return ["range", "bytestart", "byteend"].some(
+        (name) => url.searchParams.has(name)
+      );
+    } catch {
+      return false;
+    }
+  }
+  function newestPlaybackState(items) {
+    const states = items.map((item) => item.playback).filter(Boolean).sort((left, right) => (right.observedAt || 0) - (left.observedAt || 0));
+    if (!states.length) return null;
+    const active2 = states.find((state) => state.playing) || states[0];
+    return {
+      ...active2,
+      playing: states.some((state) => state.playing),
+      visible: states.some((state) => state.visible)
+    };
+  }
+  function facebookMediaAssetKey(item) {
+    try {
+      const source = new URL(item.sourceUrl || "");
+      if (!isFacebookCdnHost(source.hostname)) return null;
+      const envelope = decodeFacebookEfg(source.searchParams.get("efg"));
+      const assetId = findFacebookAssetId(envelope);
+      if (assetId) return `facebook-asset:${assetId}`;
+      const pageId = facebookPageVideoId(item.pageUrl);
+      return pageId ? `facebook-page:${pageId}` : null;
+    } catch {
+      return null;
+    }
+  }
+  function decodeFacebookEfg(value) {
+    if (typeof value !== "string" || !value || value.length > 1e4)
+      return null;
+    try {
+      const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+      const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+      return JSON.parse(atob(padded));
+    } catch {
+      return null;
+    }
+  }
+  function findFacebookAssetId(value, depth = 0) {
+    if (!value || typeof value !== "object" || depth > 2) return null;
+    for (const key of ["xpv_asset_id", "video_id", "asset_id"]) {
+      const candidate = value[key];
+      if (typeof candidate === "string" || Number.isSafeInteger(candidate))
+        return String(candidate);
+    }
+    for (const child of Object.values(value)) {
+      const candidate = findFacebookAssetId(child, depth + 1);
+      if (candidate) return candidate;
+    }
+    return null;
+  }
+  function facebookPageVideoId(value) {
+    try {
+      const page = new URL(value || "");
+      if (!(page.hostname === "facebook.com" || page.hostname.endsWith(".facebook.com")))
+        return null;
+      return page.searchParams.get("v") || page.pathname.match(/\/(?:reel|videos)\/(\d+)/i)?.[1] || null;
+    } catch {
+      return null;
+    }
+  }
+  function facebookQualityLabel(item) {
+    const tag = facebookEncodingTag(item.sourceUrl);
+    const height = item.resolution?.height || Number(tag?.match(/(?:^|[^0-9])(\d{3,4})p/i)?.[1]);
+    if (height) return `${height}p`;
+    if (/\bhd\b/i.test(tag || "")) return "HD";
+    if (/\bsd\b/i.test(tag || "")) return "SD";
+    return null;
+  }
+  function facebookQualityScore(item) {
+    const label = facebookQualityLabel(item);
+    const height = Number(label?.match(/^(\d+)p$/)?.[1]);
+    if (height) return height;
+    if (label === "HD") return 720;
+    if (label === "SD") return 480;
+    return 0;
+  }
+  function facebookEncodingTag(value) {
+    try {
+      const envelope = decodeFacebookEfg(new URL(value).searchParams.get("efg"));
+      return typeof envelope?.vencode_tag === "string" ? envelope.vencode_tag : null;
+    } catch {
+      return null;
+    }
+  }
+  function directMediaGroupKey(item) {
+    const sourceUrl = item.sourceUrl || "";
+    try {
+      const url = new URL(sourceUrl);
+      url.hash = "";
+      if (isFacebookCdnHost(url.hostname))
+        return `facebook:${url.pathname.toLowerCase()}`;
+      for (const name of ["range", "bytestart", "byteend"])
+        url.searchParams.delete(name);
+      const entries = [...url.searchParams.entries()].sort(
+        ([leftKey, left], [rightKey, right]) => leftKey.localeCompare(rightKey) || left.localeCompare(right)
+      );
+      url.search = "";
+      for (const [name, value] of entries) url.searchParams.append(name, value);
+      return url.href;
+    } catch {
+      return sourceUrl;
+    }
+  }
+  function isFacebookCdnHost(value) {
+    const host = String(value || "").toLowerCase();
+    return host === "fbcdn.net" || host.endsWith(".fbcdn.net");
+  }
+  function readableMediaTitle(value) {
+    const title = typeof value === "string" ? value.trim() : "";
+    if (!title || title.length > 160) return null;
+    if (/^[a-f0-9]{24,}$/i.test(title)) return null;
+    return title;
+  }
+  function resolvedBlobGroupKeysByPage(items) {
+    const byPage = /* @__PURE__ */ new Map();
+    for (const item of items) {
+      if (item.kind !== "blob" || !item.selectedMediaId) continue;
+      const pageUrl = item.pageUrl || "";
+      const matches = byPage.get(pageUrl) || [];
+      matches.push(item);
+      byPage.set(pageUrl, matches);
+    }
+    return new Map(
+      [...byPage].flatMap(
+        ([pageUrl, matches]) => matches.length === 1 ? [[pageUrl, `${pageUrl}
+${blobTitleKey(matches[0].title)}`]] : []
+      )
+    );
+  }
+  function blobGroupKey(item, resolvedGroupKeys) {
+    const pageUrl = item.pageUrl || "";
+    if (!item.selectedMediaId && isGenericBlobTitle(item.title)) {
+      const resolvedKey = resolvedGroupKeys.get(pageUrl);
+      if (resolvedKey) return resolvedKey;
+    }
+    return `${pageUrl}
+${blobTitleKey(item.title)}`;
+  }
+  function blobTitleKey(value) {
+    return readableMediaTitle(value)?.toLowerCase() || "blob";
+  }
+  function isGenericBlobTitle(value) {
+    const title = typeof value === "string" ? value.trim() : "";
+    return !readableMediaTitle(title) || /^(blob|blob media stream|media stream)$/i.test(title);
+  }
+  function samePlaybackFrame(left, right) {
+    if (Number.isInteger(left.frameId) && Number.isInteger(right.frameId))
+      return left.frameId === right.frameId;
+    return Boolean(
+      left.frameUrl && right.frameUrl && left.frameUrl === right.frameUrl
+    );
+  }
+
+  // src/media/player-download-target.js
+  function readPlayerSource(video) {
+    if (video.error || video.networkState === 3) return "";
+    if (video.getAttribute("src")) return video.src;
+    if (video.currentSrc) return video.currentSrc;
+    const sources = [
+      ...new Set(
+        Array.from(video.querySelectorAll?.("source[src]") || []).filter((source) => source.getAttribute?.("src") !== "").map((source) => source.src).filter(Boolean)
+      )
+    ];
+    return sources.length === 1 ? sources[0] : "";
+  }
+  function resolvePlayerDownloadTarget({
+    sourceUrl,
+    pageUrl,
+    frameId,
+    items = []
+  }) {
+    if (!sourceUrl) return null;
+    const scoped = items.filter((item) => item.frameId === frameId);
+    const displayed = selectVisibleMediaItems(scoped, Infinity);
+    const raw = scoped.find((item) => sameSource(item.sourceUrl, sourceUrl));
+    let matches = displayed.filter(
+      (item) => sameSource(item.sourceUrl, sourceUrl) || item.variants?.some((track) => sameSource(track.sourceUrl, sourceUrl))
+    );
+    if (!matches.length && raw?.kind === "blob") {
+      const ids = new Set(
+        [raw.selectedMediaId, ...raw.blobTrace?.candidateIds || []].filter(
+          Boolean
+        )
+      );
+      matches = displayed.filter(
+        (item) => ids.has(item.id) || item.selectedMediaId && ids.has(item.selectedMediaId)
+      );
+      if (!matches.length) {
+        try {
+          const page = new URL(pageUrl);
+          const id = page.searchParams.get("v") || page.pathname.match(/^\/shorts\/([^/]+)/)?.[1];
+          if (id && /(^|\.)youtube\.com$/.test(page.hostname)) {
+            matches = displayed.filter(
+              (item) => item.provider === "youtube" && item.id === stableMediaId("adaptive", `youtube:${id}`)
+            );
+          }
+        } catch {
+        }
+      }
+    }
+    if (matches.length !== 1) return null;
+    const presentation = matches[0];
+    const candidate = scoped.find((item) => item.id === presentation.selectedMediaId) || presentation;
+    if (!getMediaDownloadAvailability(candidate).supported) return null;
+    return { presentation, candidate };
+  }
+  function sameSource(left, right) {
+    if (!left || !right) return false;
+    if (left === right) return true;
+    try {
+      const normalize = (value) => {
+        const url = new URL(value);
+        for (const key of ["range", "bytestart", "byteend"])
+          url.searchParams.delete(key);
+        url.hash = "";
+        url.searchParams.sort();
+        return url.href;
+      };
+      return normalize(left) === normalize(right);
+    } catch {
+      return false;
+    }
+  }
+
+  // src/media/download-job-view.js
+  var ACTIVE_STATUSES = /* @__PURE__ */ new Set([
+    "starting",
+    "probing",
+    "downloading",
+    "finalizing"
+  ]);
+  function isMediaJobActive(job = {}) {
+    return [...ACTIVE_STATUSES, "pausing", "cancelling"].includes(job.status);
+  }
+  function formatBytes(bytes) {
+    const value = Math.max(0, Number(bytes) || 0);
+    if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(1)} GB`;
+    if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MB`;
+    return `${Math.round(value / 1024)} KB`;
+  }
+
+  // src/media/ui/download-history.js
+  function downloadHistoryView(job, exact = true) {
+    if (!job) return null;
+    const active2 = isMediaJobActive(job);
+    const missing = ["missing", "changed"].includes(job.fileStatus);
+    if (!active2 && job.status !== "completed") return null;
+    return {
+      active: active2,
+      missing,
+      status: active2 ? "Downloading" : "Completed",
+      detail: active2 ? exact ? "This selection is already downloading." : "Another selection is downloading." : missing ? "Saved file is missing or has changed. You can download it again." : job.fileStatus === "unchecked" ? "Downloaded recently \xB7 file not checked" : exact ? "Downloaded recently" : "Another selection was downloaded recently",
+      size: job.progress?.totalBytes || job.progress?.downloadedBytes || 0,
+      canOpen: !active2 && !missing && Boolean(job.outputPath),
+      canRepeat: exact && !active2
+    };
+  }
+  function createDownloadHistoryCard(job, { exact = true, open, folder, repeat, options, manager } = {}) {
+    const view = downloadHistoryView(job, exact);
+    if (!view) return null;
+    const card = document.createElement("div");
+    card.className = "media-download-history";
+    card.setAttribute("role", "status");
+    const status = document.createElement("strong");
+    status.textContent = view.status;
+    const detail = document.createElement("span");
+    detail.textContent = view.detail;
+    const metadata = document.createElement("span");
+    metadata.textContent = [
+      view.size ? formatBytes(view.size) : null,
+      job.summary?.qualityLabel,
+      job.summary?.profileLabel,
+      job.summary?.audioLabel
+    ].filter(Boolean).join(" \xB7 ");
+    card.append(status, detail, metadata);
+    const actions = document.createElement("div");
+    actions.className = "media-download-history-actions";
+    const action = (label, run) => {
+      if (!run) return;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = label;
+      button.addEventListener("click", async (event2) => {
+        if (!event2.isTrusted) return;
+        button.disabled = true;
+        try {
+          await run(event2);
+        } catch (error) {
+          detail.textContent = error?.message || "Action failed. Try again.";
+        } finally {
+          button.disabled = false;
+        }
+      });
+      actions.append(button);
+    };
+    if (view.canOpen) {
+      action("Open", open);
+      action("Folder", folder);
+    }
+    if (view.canRepeat)
+      action(view.missing ? "Download" : "Download again", repeat);
+    if (view.active) action("View download", manager);
+    action("Change options", options);
+    card.append(actions);
+    return card;
+  }
+
+  // src/media/ui/download-control.js
+  function createMediaDownloadControl(item, downloadItem, tab, helper, {
+    settings = null,
+    qualityPreflightCache: youtubeQualityPreflightCache = /* @__PURE__ */ new Map(),
+    setupMediaHelper,
+    onStarted: updateMediaJobs = async () => {
+    },
+    initialSelection = {},
+    onSelectionChange = () => {
+    },
+    onOutputChange = () => {
+    },
+    onController = () => {
+    },
+    openManager = null
+  } = {}) {
+    let preferred = initialSelection;
+    let historyJob = null;
+    let historyExact = true;
+    let historyKey = null;
+    let editing = false;
+    let submitting = false;
+    const availability = getMediaDownloadAvailability(downloadItem);
+    const control = document.createElement("div");
+    control.className = "media-download-control";
+    const profiles = getMediaDownloadProfiles(downloadItem, {
+      canSelectContainer: helper.canSelectContainer === true
+    });
+    const profileSelect = document.createElement("select");
+    profileSelect.className = "media-download-profile";
+    profileSelect.title = "Output format";
+    for (const profile of profiles) {
+      const option = document.createElement("option");
+      option.value = profile.id;
+      option.textContent = profile.label;
+      option.title = profile.description;
+      profileSelect.append(option);
+    }
+    profileSelect.disabled = !availability.supported || profiles.length < 2;
+    if (profiles.some((profile) => profile.id === preferred.profileId))
+      profileSelect.value = preferred.profileId;
+    const qualityOptions = getMediaVideoQualityOptions(downloadItem);
+    const needsYouTubePreflight = downloadItem.kind === "adaptive" && downloadItem.provider === "youtube" && hasYouTubeProviderPendingTracks(downloadItem);
+    const preflightKey = needsYouTubePreflight ? `${tab?.id || ""}|${downloadItem.id}` : null;
+    let qualityVerdict = preflightKey ? youtubeQualityPreflightCache.get(preflightKey) || null : null;
+    const qualitySelect = document.createElement("select");
+    qualitySelect.className = "media-download-profile";
+    qualitySelect.title = "Video quality";
+    const audioTrackOptions = getMediaAudioTrackOptions(downloadItem);
+    const audioSelect = document.createElement("select");
+    audioSelect.className = "media-download-profile";
+    audioSelect.title = "Audio track";
+    const renderAudioOptions = () => {
+      audioSelect.replaceChildren();
+      const availableById = new Map(
+        (qualityVerdict?.audioOptions || []).map((option) => [option.id, option])
+      );
+      const visibleAudio = needsYouTubePreflight ? audioTrackOptions.filter((option) => availableById.has(option.id)) : audioTrackOptions;
+      if (!visibleAudio.length) {
+        const option = document.createElement("option");
+        option.textContent = needsYouTubePreflight && !qualityVerdict ? "Audio \xB7 Checking availability\u2026" : "Audio \xB7 unavailable";
+        option.disabled = true;
+        audioSelect.append(option);
+        audioSelect.disabled = true;
+        return;
+      }
+      for (const audio of visibleAudio) {
+        const option = document.createElement("option");
+        option.value = audio.id;
+        option.textContent = audio.label;
+        const verdict = availableById.get(audio.id);
+        option.title = verdict?.sourceLabel || audio.label;
+        audioSelect.append(option);
+      }
+      audioSelect.disabled = !availability.supported || visibleAudio.length < 2;
+      const previous = [...audioSelect.options].find(
+        (option) => option.textContent === preferred.audioLabel
+      );
+      if (previous) audioSelect.value = previous.value;
+    };
+    const renderQualityOptions = () => {
+      qualitySelect.replaceChildren();
+      if (profileSelect.value === "audio-ogg") {
+        const option = document.createElement("option");
+        option.textContent = "Audio only \xB7 OGG";
+        option.title = "The selected audio track will be converted to OGG.";
+        option.disabled = true;
+        qualitySelect.append(option);
+        qualitySelect.disabled = true;
+        return;
+      }
+      if (needsYouTubePreflight && (helper.status !== "ready" || helper.canResolveYouTubeQualityPreflight !== true)) {
+        const option = document.createElement("option");
+        option.textContent = helper.status === "ready" ? "Quality \xB7 update helper to check" : "Quality \xB7 helper required";
+        option.title = helper.status === "ready" ? "Update Media Helper to verify downloadable YouTube qualities." : "Connect Media Helper to verify downloadable YouTube qualities.";
+        option.disabled = true;
+        qualitySelect.append(option);
+        qualitySelect.disabled = true;
+        return;
+      }
+      if (needsYouTubePreflight && !qualityVerdict) {
+        const option = document.createElement("option");
+        option.textContent = "Quality \xB7 Checking availability\u2026";
+        option.disabled = true;
+        qualitySelect.append(option);
+        qualitySelect.disabled = true;
+        return;
+      }
+      if (needsYouTubePreflight && qualityVerdict?.status !== "ready") {
+        const option = document.createElement("option");
+        option.textContent = "Quality \xB7 unavailable";
+        option.title = qualityVerdict?.reason || "No downloadable quality was found.";
+        option.disabled = true;
+        qualitySelect.append(option);
+        qualitySelect.disabled = true;
+        return;
+      }
+      const automaticQuality = document.createElement("option");
+      automaticQuality.value = "";
+      automaticQuality.textContent = needsYouTubePreflight ? "Quality \xB7 Auto (best available)" : "Quality \xB7 Auto (best)";
+      qualitySelect.append(automaticQuality);
+      const availableById = new Map(
+        (qualityVerdict?.videoOptions || []).map((option) => [option.id, option])
+      );
+      const visibleQualities = needsYouTubePreflight ? qualityOptions.filter((quality) => availableById.has(quality.id)) : qualityOptions;
+      const qualityGroups = /* @__PURE__ */ new Map();
+      for (const quality of visibleQualities) {
+        const option = document.createElement("option");
+        option.value = quality.id;
+        const verdict = availableById.get(quality.id);
+        option.textContent = quality.optionLabel || quality.label || "Source quality";
+        if (quality.groupLabel && !option.textContent.startsWith(quality.groupLabel))
+          option.textContent = `${quality.groupLabel} \xB7 ${option.textContent}`;
+        if (verdict?.availability === "equivalent") {
+          option.textContent += " \xB7 compatible equivalent";
+          option.title = `Provider source: ${verdict.sourceLabel}`;
+        } else if (verdict?.sourceLabel) {
+          option.title = `Provider source: ${verdict.sourceLabel}`;
+        }
+        const groupLabel = quality.groupLabel || "Source quality";
+        let group = qualityGroups.get(groupLabel);
+        if (!group) {
+          group = document.createElement("optgroup");
+          group.label = groupLabel;
+          qualityGroups.set(groupLabel, group);
+          qualitySelect.append(group);
+        }
+        group.append(option);
+      }
+      qualitySelect.disabled = !availability.supported || !visibleQualities.length;
+      const previous = [...qualitySelect.options].find(
+        (option) => qualityKey(option) === preferred.qualityLabel
+      );
+      if (previous) qualitySelect.value = previous.value;
+    };
+    renderAudioOptions();
+    renderQualityOptions();
+    const estimateLabel = document.createElement("span");
+    estimateLabel.className = "media-download-estimate";
+    const updateEstimate = () => {
+      const estimate = getMediaDownloadEstimate(downloadItem, item, {
+        videoTrackId: qualitySelect.value || null,
+        audioTrackId: audioSelect.value || null,
+        audioOnly: profileSelect.value === "audio-ogg"
+      });
+      estimateLabel.textContent = formatDownloadEstimate(estimate);
+      estimateLabel.title = formatDownloadEstimateTitle(estimate);
+    };
+    const syncDownloadButton = () => {
+      const presentation2 = downloadButtonPresentation(
+        availability,
+        helper,
+        downloadItem
+      );
+      let next = presentation2;
+      if (needsYouTubePreflight && helper.status === "ready" && helper.canResolveYouTubeQualityPreflight !== true) {
+        next = {
+          disabled: true,
+          label: "Update helper",
+          title: "Update Media Helper to verify YouTube qualities before downloading."
+        };
+      } else if (needsYouTubePreflight && helper.status === "ready" && helper.canResolveYouTubeQualityPreflight === true) {
+        if (!qualityVerdict) {
+          next = {
+            disabled: true,
+            label: "Checking\u2026",
+            title: "Checking which YouTube qualities are downloadable."
+          };
+        } else if (profileSelect.value !== "audio-ogg" && qualityVerdict.status !== "ready") {
+          next = {
+            disabled: true,
+            label: "Unavailable",
+            title: qualityVerdict.reason || "No YouTube quality is available through the current provider profile."
+          };
+        } else if (profileSelect.value !== "audio-ogg" && qualityVerdict.videoOptions.length === 0) {
+          next = {
+            disabled: true,
+            label: "Unavailable",
+            title: "No downloadable YouTube video quality is available."
+          };
+        } else if (profileSelect.value !== "audio-ogg" && qualitySelect.value && !qualityVerdict.videoOptions.some(
+          (option) => option.id === qualitySelect.value
+        )) {
+          next = {
+            disabled: true,
+            label: "Unavailable",
+            title: "The selected YouTube quality is not downloadable."
+          };
+        } else if (profileSelect.value === "audio-ogg" && !qualityVerdict.audioOptions?.some(
+          (option) => option.id === audioSelect.value
+        )) {
+          next = {
+            disabled: true,
+            label: "Unavailable",
+            title: "No downloadable YouTube audio track is available."
+          };
+        }
+      }
+      button.disabled = next.disabled;
+      button.textContent = next.label;
+      button.title = next.title;
+    };
+    qualitySelect.addEventListener("change", () => {
+      rememberSelection();
+      updateEstimate();
+      syncDownloadButton();
+    });
+    audioSelect.addEventListener("change", () => {
+      rememberSelection();
+      updateEstimate();
+      syncDownloadButton();
+    });
+    profileSelect.addEventListener("change", () => {
+      preferred = { ...preferred, profileId: profileSelect.value };
+      renderQualityOptions();
+      rememberSelection();
+      updateEstimate();
+      syncDownloadButton();
+    });
+    updateEstimate();
+    function rememberSelection() {
+      preferred = {
+        profileId: profileSelect.value,
+        qualityLabel: qualityKey(qualitySelect.selectedOptions[0]),
+        audioLabel: audioSelect.selectedOptions[0]?.textContent || ""
+      };
+      onSelectionChange(preferred);
+      historyJob = null;
+      historyKey = null;
+      editing = false;
+      renderHistory();
+      onOutputChange(getOutput());
+    }
+    for (const select of [profileSelect, qualitySelect, audioSelect])
+      select.setAttribute("aria-label", select.title);
+    function qualityKey(option) {
+      return option ? `${option.parentElement?.label || ""}|${option.textContent}` : "";
+    }
+    const button = document.createElement("button");
+    button.className = "media-download";
+    const presentation = downloadButtonPresentation(
+      availability,
+      helper,
+      downloadItem
+    );
+    button.disabled = presentation.disabled;
+    button.textContent = presentation.label;
+    button.title = presentation.title;
+    const getOutput = () => ({
+      profileId: profileSelect.value || profiles[0]?.id,
+      videoTrackId: profileSelect.value === "audio-ogg" ? null : qualitySelect.value || null,
+      audioTrackId: audioSelect.value || qualityVerdict?.audioOption?.id || null,
+      allowEquivalentVideo: qualityVerdict?.videoOptions?.find(
+        (option) => option.id === qualitySelect.value
+      )?.availability === "equivalent" || profileSelect.value !== "audio-ogg" && !qualitySelect.value && needsYouTubePreflight
+    });
+    async function startDownload(event2, repeatOf = null) {
+      if (!event2.isTrusted) return;
+      if (submitting) return;
+      submitting = true;
+      button.disabled = true;
+      if (helper.status !== "ready" || !helperCanDownload(downloadItem, helper)) {
+        try {
+          await setupMediaHelper(button, helper);
+        } finally {
+          submitting = false;
+        }
+        return;
+      }
+      button.textContent = "Starting\u2026";
+      try {
+        const response = await chrome.runtime.sendMessage({
+          type: "CREATE_MEDIA_DOWNLOAD_JOB",
+          tabId: tab.id,
+          mediaId: downloadItem.id,
+          connections: settings?.mediaDownloadConnections ?? 8,
+          output: getOutput(),
+          repeatOf
+        });
+        if (["already_downloaded", "already_downloading"].includes(response?.status)) {
+          editing = false;
+          historyKey = null;
+          setHistory({ exactJob: response.job, latestJob: response.job });
+          return;
+        }
+        if (response?.status !== "started")
+          throw new Error(
+            response?.reason || response?.error || "Could not start the helper download job."
+          );
+        button.textContent = "Started";
+        historyJob = null;
+        historyKey = null;
+        editing = false;
+        renderHistory();
+        await updateMediaJobs();
+      } catch (error) {
+        button.disabled = false;
+        button.textContent = "Retry";
+        button.title = error?.message || String(error);
+      } finally {
+        submitting = false;
+      }
+    }
+    button.addEventListener("click", (event2) => void startDownload(event2));
+    if (availability.supported) control.append(estimateLabel);
+    if (availability.supported && downloadItem.kind === "adaptive" && profiles.some((profile) => profile.id === "video-mp4"))
+      control.append(qualitySelect);
+    if (availability.supported && profiles.length) control.append(profileSelect);
+    if (availability.supported && downloadItem.kind === "adaptive" && audioTrackOptions.length)
+      control.append(audioSelect);
+    control.append(button);
+    const history = document.createElement("div");
+    history.hidden = true;
+    control.append(history);
+    async function outputAction(type) {
+      const response = await chrome.runtime.sendMessage({
+        type,
+        jobId: historyJob.id
+      });
+      if (response?.status !== "opened" && response?.status !== "revealed")
+        throw new Error(
+          response?.error || response?.reason || "Could not open saved file. It may have moved."
+        );
+    }
+    function renderHistory() {
+      const card = !editing && historyJob ? createDownloadHistoryCard(historyJob, {
+        exact: historyExact,
+        open: () => outputAction("OPEN_MEDIA_DOWNLOAD_OUTPUT"),
+        folder: () => outputAction("REVEAL_MEDIA_DOWNLOAD_OUTPUT"),
+        repeat: (event2) => startDownload(event2, historyJob.id),
+        options: historyExact ? () => {
+          editing = true;
+          renderHistory();
+          syncDownloadButton();
+        } : null,
+        manager: openManager
+      }) : null;
+      history.replaceChildren(...card ? [card] : []);
+      history.hidden = !card;
+      for (const child of control.children)
+        if (child !== history) child.hidden = Boolean(card && historyExact);
+    }
+    function setHistory(context) {
+      if (submitting && !context?.exactJob) return;
+      const job = context?.exactJob || context?.latestJob || null;
+      const exact = Boolean(context?.exactJob);
+      const key = job ? `${job.id}|${job.status}|${job.fileStatus}|${exact}` : "none";
+      if (key === historyKey) return;
+      const old = historyJob;
+      historyKey = key;
+      historyJob = job;
+      historyExact = exact;
+      if (old?.id !== job?.id || old?.status !== job?.status) editing = false;
+      renderHistory();
+      if ((!job || !exact) && !submitting) syncDownloadButton();
+    }
+    onController({ getOutput, setHistory });
+    if (needsYouTubePreflight && helper.status === "ready" && helper.canResolveYouTubeQualityPreflight === true) {
+      if (!qualityVerdict) {
+        const request = chrome.runtime.sendMessage({
+          type: "PREFLIGHT_MEDIA_DOWNLOAD_QUALITIES",
+          tabId: tab?.id,
+          mediaId: downloadItem.id
+        }).then((response) => {
+          qualityVerdict = normalizePopupYouTubePreflight(response);
+          if (preflightKey && qualityVerdict)
+            youtubeQualityPreflightCache.set(preflightKey, qualityVerdict);
+          if (!control.isConnected) return;
+          renderQualityOptions();
+          renderAudioOptions();
+          syncDownloadButton();
+          updateEstimate();
+          onOutputChange(getOutput());
+        }).catch((error) => {
+          qualityVerdict = {
+            status: "unavailable",
+            videoOptions: [],
+            reason: error?.message || String(error)
+          };
+          if (control.isConnected) {
+            renderQualityOptions();
+            renderAudioOptions();
+            syncDownloadButton();
+          }
+        });
+        void request;
+      }
+      syncDownloadButton();
+    }
+    onOutputChange(getOutput());
+    return control;
+  }
+  function normalizePopupYouTubePreflight(response) {
+    const result = response?.result || response;
+    const options = Array.isArray(result?.videoOptions) ? result.videoOptions.filter(
+      (option) => option && typeof option.id === "string" && ["exact", "equivalent"].includes(option.availability)
+    ) : [];
+    return {
+      status: result?.status === "ready" ? "ready" : "unavailable",
+      videoOptions: options,
+      audioOption: result?.audioOption && typeof result.audioOption.id === "string" ? {
+        id: result.audioOption.id,
+        sourceLabel: typeof result.audioOption.sourceLabel === "string" ? result.audioOption.sourceLabel : "Audio source"
+      } : null,
+      audioOptions: Array.isArray(result?.audioOptions) ? result.audioOptions.filter(
+        (option) => option && typeof option.id === "string"
+      ) : result?.audioOption && typeof result.audioOption.id === "string" ? [result.audioOption] : [],
+      reason: typeof result?.reason === "string" ? result.reason : null
+    };
+  }
+  function formatDownloadEstimate(estimate) {
+    const quality = estimate.resolution?.height ? `${estimate.resolution.height}p` : "Source quality";
+    const size = estimate.estimatedBytes ? `${estimate.basis === "source_headers" ? "" : "Est. "}${formatBytes(
+      estimate.estimatedBytes
+    )}` : "Size unavailable";
+    return `${quality} \xB7 ${size}`;
+  }
+  function formatDownloadEstimateTitle(estimate) {
+    if (!estimate.estimatedBytes) {
+      return "The manifest does not expose enough bitrate data to estimate size before download.";
+    }
+    if (estimate.basis === "source_headers")
+      return "Total file size from the media response headers.";
+    return "Estimated from manifest bitrate and duration. Final file size may differ.";
+  }
+  function downloadButtonPresentation(availability, helper, item) {
+    if (!availability.supported) {
+      return {
+        disabled: true,
+        label: downloadUnavailableLabel(availability.reason),
+        title: availability.reason
+      };
+    }
+    if (helper.status === "permission_required") {
+      return {
+        disabled: false,
+        label: "Set up",
+        title: "Enable the optional Media Helper connection to download video."
+      };
+    }
+    if (helper.status === "not_installed") {
+      return {
+        disabled: false,
+        label: "Install",
+        title: "Media Helper is required for video downloads."
+      };
+    }
+    if (helper.status === "ready" && !helperCanDownload(item, helper)) {
+      return {
+        disabled: true,
+        label: "Helper update",
+        title: `The installed Media Helper does not support ${item.kind.toUpperCase()} downloads yet.`
+      };
+    }
+    if (helper.status !== "ready") {
+      return {
+        disabled: false,
+        label: "Retry",
+        title: helper.error || "Could not connect to Media Helper."
+      };
+    }
+    return {
+      disabled: false,
+      label: "Download",
+      title: "Download with AdsFriendly Media Helper."
+    };
+  }
+  function helperCanDownload(item, helper) {
+    if (item.kind === "direct") return helper.canDownloadDirect === true;
+    if (item.kind === "hls")
+      return helper.canDownloadHls === true && (item.probeSource !== "decrypted_blob" || helper.canDownloadDecryptedHls === true);
+    if (item.kind === "adaptive")
+      return helper.canDownloadAdaptive === true && (item.acquisitionProfile !== "youtube_player_js_challenge" || helper.canResolveYouTubePlayerJs === true) && (!hasYouTubeProviderPendingTracks(item) || helper.canResolveYouTubeProviderFormats === true);
+    return helper.canDownloadDash === true;
+  }
+  function downloadUnavailableLabel(reason = "") {
+    if (reason.includes("DRM") || reason.includes("Playback only"))
+      return "Playback only";
+    if (reason.includes("Live")) return "Live";
+    if (reason.includes("Encrypted")) return "Encrypted";
+    if (reason.includes("waiting") || reason.includes("not exposed") || reason.includes("player-resolved"))
+      return "Watching";
+    if (reason.includes("no media")) return "No media";
+    return "Unavailable";
+  }
+
+  // src/media/player-download-position.js
+  function playerDownloadPosition(rect, viewportWidth, launcherHeight) {
+    const margin = 8;
+    const width = Math.min(
+      300,
+      rect.width - margin * 2,
+      viewportWidth - margin * 2
+    );
+    const left = Math.max(
+      margin,
+      Math.min(
+        rect.left + (rect.width - width) / 2,
+        viewportWidth - width - margin
+      )
+    );
+    const top = Math.max(margin, rect.top - Math.max(0, launcherHeight) * 0.7);
+    return { width, left, top };
+  }
+
+  // src/media/ui/player-download-attention.js
+  var PLAYER_DOWNLOAD_NOTICE_MS = 3e3;
+  function createPlayerDownloadAttention({
+    onNotice,
+    setTimer = setTimeout,
+    clearTimer = clearTimeout
+  }) {
+    let visible = false;
+    let timer = null;
+    let revision = 0;
+    let disposed = false;
+    function reset() {
+      revision++;
+      visible = false;
+      if (timer !== null) clearTimer(timer);
+      timer = null;
+      onNotice(false);
+    }
+    return {
+      setVisible(next) {
+        if (disposed || Boolean(next) === visible) return;
+        if (!next) {
+          reset();
+          return;
+        }
+        visible = true;
+        const expected = ++revision;
+        onNotice(true);
+        timer = setTimer(() => {
+          if (disposed || expected !== revision || !visible) return;
+          timer = null;
+          onNotice(false);
+        }, PLAYER_DOWNLOAD_NOTICE_MS);
+      },
+      reset() {
+        if (!disposed) reset();
+      },
+      dispose() {
+        if (!disposed) {
+          reset();
+          disposed = true;
+        }
+      }
+    };
+  }
+
+  // src/media/storage-keys.js
+  var MEDIA_CATALOG_SESSION_PREFIX = "adsfriendly.mediaCatalog.";
+
+  // src/content/player-download.js
+  function startPlayerDownload({ shadowMode = "closed" } = {}) {
+    const players = /* @__PURE__ */ new Map();
+    const preflightCache = /* @__PURE__ */ new Map();
+    let stopped = false;
+    let refreshing = false;
+    let refreshingJobs = false;
+    let snapshot = null;
+    let chosenVideo = null;
+    let nextOverlay = 0;
+    let openEntry = null;
+    const make = (video) => {
+      const host = document.createElement("div");
+      host.hidden = true;
+      host.id = `adsfriendly-player-download-${nextOverlay++}`;
+      host.dataset.adsfriendlyUi = "player-download";
+      const shadow = host.attachShadow({ mode: shadowMode });
+      shadow.innerHTML = `<style>
+      :host{position:fixed;z-index:2147483646;display:block;font:13px system-ui;color:#e2e8f0;pointer-events:none}:host([hidden]){display:none!important}
+      *{box-sizing:border-box}button,select{font:inherit}button{cursor:pointer}button:disabled{cursor:default;opacity:.65}
+      .launcher{display:flex;align-items:center;gap:2px;width:max-content;margin:auto;padding:2px;border:1px solid #64748b;background:#172033ed;border-radius:18px;box-shadow:0 2px 6px #0005;pointer-events:auto;opacity:.4;transition:opacity .3s ease}
+      :host([data-notice]) .launcher,:host([data-open]) .launcher,.launcher:hover,.launcher:has(:focus-visible){opacity:1}.launcher:hover .dismiss,.launcher:has(:focus-visible) .dismiss{opacity:1}.launch{display:flex;align-items:center;gap:6px;min-height:28px;border:0;background:transparent;color:#e2e8f0;border-radius:14px;padding:2px 8px 2px 3px;font-size:12px}.launch:hover{background:#334155}.brand{display:block;width:24px;height:24px;border-radius:6px;pointer-events:none}
+      .dismiss,.close{display:grid;place-items:center;flex-shrink:0;width:28px;height:28px;border:1px solid #475569;background:#1e293b;color:#cbd5e1;border-radius:50%;font-size:18px;line-height:1;opacity:.7;transition:opacity .15s ease,background .15s ease}.dismiss{margin-right:2px}.dismiss:hover,.dismiss:focus-visible,.close:hover,.close:focus-visible{opacity:1;background:#475569;color:#fff}.launch:focus-visible,.dismiss:focus-visible,.close:focus-visible{outline:2px solid #86efac;outline-offset:2px}
+      @media(hover:none){.dismiss,.close{opacity:1}.launch,.dismiss,.close{min-height:36px}.dismiss,.close{min-width:36px}}@media(prefers-reduced-motion:reduce){.launcher,.dismiss,.close{transition:none}}
+      .panel{pointer-events:auto;margin-top:6px;background:#0f172af5;border:1px solid #475569;border-radius:12px;padding:12px;box-shadow:0 6px 24px #0007;max-height:300px;overflow:auto}
+      [hidden]{display:none!important}.heading{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}.title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+      .media-download-control{display:flex;flex-direction:column;gap:8px}.media-download-profile{width:100%;background:#1e293b;color:#e2e8f0;border:1px solid #475569;border-radius:6px;padding:7px;font-size:12px}.media-download{background:#166534;color:#dcfce7;border:1px solid #22c55e;border-radius:6px;padding:7px}.media-download-estimate{font-size:12px;color:#93c5fd}.manager{margin-top:8px;background:transparent;color:#93c5fd;border:0;padding:4px 0;font-size:12px}
+      .quick-open{border:0;background:transparent;color:#86efac;padding:4px;font-size:12px;border-radius:8px}.quick-open:hover{background:#334155}.media-download-history{display:flex;flex-direction:column;gap:6px;font-size:12px}.media-download-history strong{color:#86efac}.media-download-history-actions{display:flex;flex-wrap:wrap;gap:6px}.media-download-history-actions button{border:1px solid #475569;border-radius:6px;background:#1e293b;color:#e2e8f0;padding:6px;font-size:12px}
+    </style><div class="launcher"><button class="launch" type="button" title="AdsFriendly \xB7 Download this video" aria-label="Download this video" aria-expanded="false"><img class="brand" alt="" aria-hidden="true"><span class="launch-label">\u2193 Download</span></button><button class="quick-open" hidden type="button" title="Open downloaded file">Open</button><button class="dismiss" type="button" title="Hide this button for this video \xB7 downloads keep running" aria-label="Hide download button for this video">\xD7</button></div><section class="panel" hidden aria-label="Video download options"><div class="heading"><span class="title"></span><button class="close" type="button" title="Close download options" aria-label="Close download options">\xD7</button></div><div class="controls"></div><button class="manager">Download Manager</button></section>`;
+      shadow.querySelector(".brand").src = chrome.runtime.getURL("icons/icon48.png");
+      const entry = {
+        video,
+        host,
+        shadow,
+        target: null,
+        source: null,
+        controlKey: null,
+        opening: false,
+        dismissedSource: null,
+        controller: null,
+        output: null,
+        context: null,
+        revision: 0,
+        checkedCompletion: null,
+        contextRequest: 0,
+        attention: createPlayerDownloadAttention({
+          onNotice: (active2) => host.toggleAttribute("data-notice", active2)
+        })
+      };
+      shadow.querySelector(".quick-open").addEventListener("click", async (event2) => {
+        if (!event2.isTrusted) return;
+        const job = entry.context?.latestJob;
+        if (!job || entry.source !== readPlayerSource(video)) return;
+        const button = event2.currentTarget;
+        button.disabled = true;
+        try {
+          const result = await chrome.runtime.sendMessage({
+            type: "OPEN_MEDIA_DOWNLOAD_OUTPUT",
+            jobId: job.id
+          });
+          if (result?.status !== "opened")
+            button.title = result?.error || "Could not open saved file.";
+        } catch (error) {
+          button.title = error?.message || "Could not open saved file.";
+        } finally {
+          button.disabled = false;
+        }
+      });
+      shadow.querySelector(".launch").addEventListener("click", () => void toggle(entry));
+      shadow.querySelector(".close").addEventListener("click", () => {
+        close(entry);
+        shadow.querySelector(".launch").focus({ preventScroll: true });
+      });
+      shadow.querySelector(".dismiss").addEventListener("click", () => {
+        entry.dismissedSource = entry.source;
+        close(entry);
+        position();
+        video.focus({ preventScroll: true });
+      });
+      shadow.querySelector(".manager").addEventListener("click", () => void openManager());
+      shadow.addEventListener("keydown", (event2) => {
+        if (event2.key === "Escape") {
+          event2.stopPropagation();
+          close(entry);
+          shadow.querySelector(".launch").focus();
+        }
+      });
+      players.set(video, entry);
+      document.documentElement.append(host);
+      return entry;
+    };
+    function close(entry) {
+      entry.host.removeAttribute("data-open");
+      entry.shadow.querySelector(".panel").hidden = true;
+      entry.shadow.querySelector(".launch").setAttribute("aria-expanded", "false");
+      if (openEntry === entry) openEntry = null;
+    }
+    async function openManager() {
+      await chrome.runtime.sendMessage({ type: "OPEN_PLAYER_DOWNLOAD_MANAGER" }).catch(() => {
+      });
+    }
+    async function toggle(entry) {
+      if (entry.opening) return;
+      if (openEntry === entry) {
+        close(entry);
+        return;
+      }
+      if (openEntry) close(openEntry);
+      entry.opening = true;
+      const expectedSource = entry.source;
+      try {
+        const helper = await chrome.runtime.sendMessage({
+          type: "GET_MEDIA_HELPER_STATUS"
+        });
+        if (stopped || entry.dismissedSource === expectedSource || !entry.video.isConnected || expectedSource !== readPlayerSource(entry.video))
+          return;
+        const { presentation, candidate } = entry.target;
+        await chrome.runtime.sendMessage({
+          type: "SELECT_PLAYER_MEDIA",
+          sourceUrl: expectedSource
+        });
+        const { mediaDownloadUiPreferences = {} } = await chrome.storage.local.get("mediaDownloadUiPreferences");
+        const settings = await loadSettings();
+        if (stopped || entry.dismissedSource === expectedSource || expectedSource !== readPlayerSource(entry.video) || candidate.id !== entry.target?.candidate.id)
+          return;
+        const control = createMediaDownloadControl(
+          presentation,
+          candidate,
+          snapshot.tab,
+          helper || {},
+          {
+            settings,
+            qualityPreflightCache: preflightCache,
+            initialSelection: mediaDownloadUiPreferences,
+            onController: (controller2) => {
+              entry.controller = controller2;
+            },
+            onOutputChange: (output) => {
+              if (entry.source !== expectedSource || candidate.id !== entry.target?.candidate.id)
+                return;
+              entry.output = output;
+              entry.revision++;
+              void refreshEntryJobs(entry, true);
+            },
+            openManager,
+            onSelectionChange: (preference) => void chrome.storage.local.set({ mediaDownloadUiPreferences: preference }).catch(() => {
+            }),
+            setupMediaHelper: async (button) => {
+              await openManager();
+              button.disabled = false;
+              button.textContent = "Set up helper";
+            },
+            onStarted: async () => {
+              if (stopped || entry.source !== expectedSource || candidate.id !== entry.target?.candidate.id)
+                return;
+              entry.shadow.querySelector(".launch-label").textContent = "\u2193 Started";
+              await refreshJobs();
+            }
+          }
+        );
+        entry.shadow.querySelector(".controls").replaceChildren(control);
+        entry.shadow.querySelector(".title").textContent = presentation.title || "Download video";
+        entry.shadow.querySelector(".panel").hidden = false;
+        entry.host.setAttribute("data-open", "");
+        entry.shadow.querySelector(".launch").setAttribute("aria-expanded", "true");
+        openEntry = entry;
+        await refreshEntryJobs(entry, true);
+        position();
+      } catch (error) {
+        entry.shadow.querySelector(".launch").title = error?.message || "Could not open download options. Try again.";
+      } finally {
+        entry.opening = false;
+      }
+    }
+    function position() {
+      if (document.hidden) return;
+      const eligible = [...players.values()].filter((entry) => {
+        const rect = entry.video.getBoundingClientRect();
+        return entry.video.isConnected && rect.width >= 240 && rect.height >= 120 && rect.bottom > 0 && rect.top < innerHeight && rect.right > 0 && rect.left < innerWidth && getComputedStyle(entry.video).visibility !== "hidden" && !entry.video.closest(
+          '[data-ad],.ima-ad-container,.vast-ad,[aria-label="Advertisement"]'
+        );
+      });
+      const primary = eligible.find((entry) => entry.video === chosenVideo) || eligible.sort((a, b) => {
+        const ar = a.video.getBoundingClientRect();
+        const br = b.video.getBoundingClientRect();
+        return br.width * br.height - ar.width * ar.height || (Number.isFinite(b.video.duration) ? b.video.duration : 0) - (Number.isFinite(a.video.duration) ? a.video.duration : 0);
+      })[0];
+      for (const entry of players.values()) {
+        const rect = entry.video.getBoundingClientRect();
+        const visible = entry === primary && entry.target && entry.dismissedSource !== entry.source && rect.width >= 240 && rect.height >= 120 && rect.bottom > 0 && rect.top < innerHeight && rect.right > 0 && rect.left < innerWidth && getComputedStyle(entry.video).visibility !== "hidden";
+        entry.host.hidden = !visible;
+        entry.attention.setVisible(visible);
+        if (!visible) {
+          close(entry);
+          continue;
+        }
+        const { width, left, top } = playerDownloadPosition(
+          rect,
+          innerWidth,
+          entry.shadow.querySelector(".launcher").getBoundingClientRect().height
+        );
+        entry.host.style.width = `${width}px`;
+        entry.host.style.left = `${left}px`;
+        entry.host.style.top = `${top}px`;
+        const container = document.fullscreenElement || document.documentElement;
+        if (!container.contains(entry.host) && !container.matches("video"))
+          container.append(entry.host);
+      }
+    }
+    async function refreshJobs() {
+      if (stopped || refreshingJobs || document.hidden || ![...players.values()].some((entry) => !entry.host.hidden))
+        return;
+      refreshingJobs = true;
+      try {
+        await Promise.all(
+          [...players.values()].filter((entry) => !entry.host.hidden).map((entry) => refreshEntryJobs(entry))
+        );
+      } finally {
+        refreshingJobs = false;
+      }
+    }
+    async function refreshEntryJobs(entry, verifyFile = false) {
+      const source = entry.source;
+      const revision = entry.revision;
+      if (!entry.target || stopped) return;
+      const request = ++entry.contextRequest;
+      let response = await chrome.runtime.sendMessage({
+        type: "GET_PLAYER_DOWNLOAD_CONTEXT",
+        sourceUrl: source,
+        output: entry.output || {},
+        verifyFile
+      }).catch(() => null);
+      if (stopped || request !== entry.contextRequest || source !== readPlayerSource(entry.video) || source !== entry.source || revision !== entry.revision || response?.status !== "ok")
+        return;
+      const completedJob = response.latestJob?.status === "completed" ? response.latestJob : null;
+      const completionKey = completedJob ? `${completedJob.id}|${completedJob.updatedAt}` : null;
+      if (!verifyFile && completedJob?.fileStatus === "unchecked" && completionKey !== entry.checkedCompletion) {
+        entry.checkedCompletion = completionKey;
+        const checked = await chrome.runtime.sendMessage({
+          type: "GET_PLAYER_DOWNLOAD_CONTEXT",
+          sourceUrl: source,
+          output: entry.output || {},
+          verifyFile: true
+        }).catch(() => null);
+        if (stopped || request !== entry.contextRequest || source !== readPlayerSource(entry.video) || source !== entry.source || revision !== entry.revision)
+          return;
+        if (checked?.status === "ok") response = checked;
+      }
+      entry.context = response;
+      const job = response.latestJob;
+      const completed = job?.status === "completed" && !["missing", "changed"].includes(job.fileStatus);
+      entry.shadow.querySelector(".launch-label").textContent = job && isMediaJobActive(job) ? `\u2193 ${formatBytes(job.progress?.bytesPerSecond || 0)}/s` : completed ? "\u2713 Completed" : "\u2193 Download";
+      entry.shadow.querySelector(".quick-open").hidden = !completed || !job.outputPath;
+      entry.controller?.setHistory(response);
+    }
+    async function refresh() {
+      if (stopped || refreshing || document.hidden) return;
+      refreshing = true;
+      try {
+        const videos = [...document.querySelectorAll("video")];
+        for (const [video, entry] of players)
+          if (!videos.includes(video)) {
+            entry.attention.dispose();
+            close(entry);
+            entry.host.remove();
+            players.delete(video);
+          }
+        if (!videos.length) return;
+        snapshot = await chrome.runtime.sendMessage({
+          type: "GET_PLAYER_MEDIA_CONTEXT"
+        });
+        if (stopped) return;
+        for (const video of videos) {
+          const source = readPlayerSource(video);
+          const target = resolvePlayerDownloadTarget({
+            sourceUrl: source,
+            pageUrl: location.href,
+            frameId: snapshot.frameId,
+            items: snapshot.items
+          });
+          let entry = players.get(video) || make(video);
+          if (!target) {
+            if (entry) {
+              entry.target = null;
+              entry.host.hidden = true;
+              entry.attention.setVisible(false);
+              close(entry);
+            }
+            continue;
+          }
+          if (source !== entry.source || target.candidate.id !== entry.target?.candidate.id) {
+            close(entry);
+            entry.attention.reset();
+            if (source !== entry.source) entry.dismissedSource = null;
+            entry.shadow.querySelector(".launch-label").textContent = "\u2193 Download";
+            entry.shadow.querySelector(".quick-open").hidden = true;
+            entry.controller = null;
+            entry.context = null;
+            entry.output = null;
+            entry.checkedCompletion = null;
+            entry.revision++;
+          }
+          entry.source = source;
+          entry.target = target;
+        }
+        position();
+        await refreshJobs();
+      } catch {
+      } finally {
+        refreshing = false;
+      }
+    }
+    const timer = setInterval(() => void refresh(), 2e3);
+    const onStorage = (changes, area) => {
+      if (area === "session") {
+        if (Object.keys(changes).some(
+          (key) => key.startsWith(MEDIA_CATALOG_SESSION_PREFIX)
+        ))
+          void refresh();
+        if (Object.keys(changes).some((key) => key.startsWith(DOWNLOAD_JOB_PREFIX)))
+          void refreshJobs();
+      }
+    };
+    const onViewport = () => position();
+    const onVisibility = () => {
+      if (document.hidden) {
+        for (const entry of players.values()) entry.attention.setVisible(false);
+      } else {
+        position();
+        void refresh();
+      }
+    };
+    const onMedia = () => {
+      for (const entry of players.values())
+        if (entry.source !== readPlayerSource(entry.video)) {
+          entry.target = null;
+          entry.host.hidden = true;
+          entry.attention.setVisible(false);
+          close(entry);
+        }
+      void refresh();
+    };
+    const onPointer = (event2) => {
+      if (!event2.isTrusted) return;
+      const container = event2.target.closest?.("video,.video-js,[data-player]");
+      const video = container?.matches("video") ? container : container?.querySelector("video");
+      if (video) {
+        chosenVideo = video;
+        position();
+      }
+    };
+    chrome.storage.onChanged.addListener(onStorage);
+    window.addEventListener("scroll", onViewport, true);
+    window.addEventListener("resize", onViewport);
+    document.addEventListener("fullscreenchange", onViewport);
+    document.addEventListener("visibilitychange", onVisibility);
+    document.addEventListener("play", onMedia, true);
+    document.addEventListener("loadstart", onMedia, true);
+    document.addEventListener("emptied", onMedia, true);
+    document.addEventListener("pointerdown", onPointer, true);
+    void refresh();
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+      chrome.storage.onChanged.removeListener(onStorage);
+      window.removeEventListener("scroll", onViewport, true);
+      window.removeEventListener("resize", onViewport);
+      document.removeEventListener("fullscreenchange", onViewport);
+      document.removeEventListener("visibilitychange", onVisibility);
+      document.removeEventListener("play", onMedia, true);
+      document.removeEventListener("loadstart", onMedia, true);
+      document.removeEventListener("emptied", onMedia, true);
+      document.removeEventListener("pointerdown", onPointer, true);
+      for (const entry of players.values()) {
+        entry.attention.dispose();
+        entry.host.remove();
+      }
+      players.clear();
+    };
+  }
+
   // src/content/index.js
   var controller = createMainController({
     context: "content",
     implementations: {
       "content.media-observer": () => startMediaObserver(),
+      "content.player-download": () => startPlayerDownload(),
       "content.youtube-cleaner": () => startYouTubeCleaner(),
       "content.navigation-intent": () => startIntentTracker(),
       "content.navigation-toast": () => startNavigationToast(),

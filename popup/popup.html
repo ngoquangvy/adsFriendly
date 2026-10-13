@@ -270,6 +270,17 @@
         overflow-y: auto;
       }
 
+      .media-more {
+        margin-top: 6px;
+        padding: 3px 2px;
+        border: 0;
+        background: transparent;
+        color: #93c5fd;
+        font: inherit;
+        font-size: 0.63rem;
+        cursor: pointer;
+      }
+
       .media-item {
         display: grid;
         grid-template-columns: auto minmax(0, 1fr) auto;
@@ -330,6 +341,30 @@
         max-width: 124px;
         flex-direction: column;
         gap: 4px;
+      }
+
+      .media-download-history {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        font-size: 0.62rem;
+        overflow-wrap: anywhere;
+      }
+
+      .media-download-history-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+      }
+
+      .media-download-history-actions button {
+        background: #172033;
+        color: #bfdbfe;
+        border: 1px solid #475569;
+        border-radius: 6px;
+        padding: 4px;
+        font: inherit;
+        cursor: pointer;
       }
 
       .media-download-profile {
@@ -628,6 +663,9 @@
         Allow helper connection
       </button>
       <div class="media-list" id="media-list" hidden></div>
+      <button class="media-more" id="media-more-button" type="button" hidden>
+        Show more
+      </button>
       <div class="media-job-list" id="media-job-list" hidden></div>
       <button
         class="media-download media-manager-link"

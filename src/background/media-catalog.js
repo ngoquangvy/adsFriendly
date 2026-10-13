@@ -9,6 +9,7 @@ import { isLikelyMediaSegment } from "../media/detection.js";
 const catalog = createMediaCatalog();
 const PLAYBACK_CHECKPOINT_INTERVAL_MS = 10_000;
 const playbackCheckpointTimers = new Map();
+const preferredMedia = new Map();
 let active = false;
 
 export async function startBackgroundMediaCatalog() {
@@ -32,6 +33,7 @@ export async function startBackgroundMediaCatalog() {
     for (const timer of playbackCheckpointTimers.values()) clearTimeout(timer);
     playbackCheckpointTimers.clear();
     catalog.clearAll();
+    preferredMedia.clear();
     chrome.tabs.onRemoved.removeListener(onRemoved);
     chrome.tabs.onUpdated.removeListener(onUpdated);
     await clearSessionCatalog().catch(() => {});
@@ -92,7 +94,18 @@ export async function recordMediaPlaybackObservation(tabId, event) {
 
 export async function listDiscoveredMedia(tabId, pageUrl = null) {
   if (!active) return { status: "catalog_disabled", items: [] };
-  return { status: "ok", items: catalog.list(tabId, pageUrl) };
+  return {
+    status: "ok",
+    items: catalog.list(tabId, pageUrl),
+    preferredMediaId: preferredMedia.get(tabId) || null,
+  };
+}
+
+export async function preferDiscoveredMedia(tabId, mediaId) {
+  if (!active) return { status: "catalog_disabled" };
+  preferredMedia.set(tabId, mediaId);
+  await persistTab(tabId).catch(() => {});
+  return { status: "selected" };
 }
 
 export async function listMediaPlaybackSessions(tabId, pageUrl = null) {
@@ -110,6 +123,8 @@ async function hydrateCatalog() {
     if (!items.length && !sessions.length) continue;
     const tabId = Number(key.slice(MEDIA_CATALOG_SESSION_PREFIX.length));
     if (!Number.isInteger(tabId)) continue;
+    if (typeof stored?.preferredMediaId === "string")
+      preferredMedia.set(tabId, stored.preferredMediaId);
     for (const item of items) {
       if (
         item.kind === "direct" &&
@@ -216,7 +231,12 @@ async function persistTab(tabId) {
   if (!storage) return;
   const snapshot = catalog.snapshot(tabId);
   if (snapshot)
-    await storage.set({ [mediaCatalogSessionKey(tabId)]: snapshot });
+    await storage.set({
+      [mediaCatalogSessionKey(tabId)]: {
+        ...snapshot,
+        preferredMediaId: preferredMedia.get(tabId) || null,
+      },
+    });
 }
 
 function schedulePlaybackCheckpoint(tabId) {
@@ -240,6 +260,7 @@ async function clearTab(tabId) {
   if (timer) clearTimeout(timer);
   playbackCheckpointTimers.delete(tabId);
   catalog.clear(tabId);
+  preferredMedia.delete(tabId);
   if (chrome.storage.session)
     await chrome.storage.session.remove(mediaCatalogSessionKey(tabId));
 }

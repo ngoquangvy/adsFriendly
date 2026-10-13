@@ -18,6 +18,16 @@ const USER_NAVIGATION_TRANSITIONS = new Set([
   "auto_bookmark",
 ]);
 
+// Ad protection owns web navigation, not browser/extension UI destinations.
+export function isWebNavigationTarget(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 export function isBrowserUiNewTab({
   url = "",
   pendingUrl = "",
@@ -39,6 +49,16 @@ export function isExplicitAddressBarNavigation({
   return (
     USER_NAVIGATION_TRANSITIONS.has(transitionType) ||
     transitionQualifiers.includes("from_address_bar")
+  );
+}
+
+export function shouldEvaluateCommittedNavigation(details = {}) {
+  return !isExplicitAddressBarNavigation(details);
+}
+
+export function isExplicitAddressBarCommitForUrl(url, details = {}) {
+  return Boolean(
+    url && details.url === url && !shouldEvaluateCommittedNavigation(details),
   );
 }
 
