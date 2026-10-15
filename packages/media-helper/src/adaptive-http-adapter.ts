@@ -3,10 +3,10 @@ import { mkdir, mkdtemp, rename, rm, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import {
   availableOutputPath,
-  downloadDirectHttp,
   resolveOutputDirectory,
   sanitizeFilename,
-} from "./direct-http-adapter.js";
+} from "./output-paths.js";
+import { downloadDirectHttp } from "./direct-http-adapter.js";
 import type {
   AdaptiveHttpTrack,
   DownloadAdapter,

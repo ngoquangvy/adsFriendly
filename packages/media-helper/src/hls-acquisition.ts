@@ -15,7 +15,7 @@ import {
   getMediaAccessStrategy,
 } from "../../../src/media/access-strategy-catalog.js";
 import { formatAesKeyHandoffDiagnostic } from "../../../src/media/key-handoff-diagnostics.js";
-import { fetchRemote } from "./direct-http-adapter.js";
+import { fetchRemote } from "./http-remote.js";
 import {
   adaptiveRequestHeaderProfiles,
   adaptiveRequestHeaders,

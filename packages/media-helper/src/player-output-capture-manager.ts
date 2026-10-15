@@ -5,7 +5,7 @@ import {
   availableOutputPath,
   resolveOutputDirectory,
   sanitizeFilename,
-} from "./direct-http-adapter.js";
+} from "./output-paths.js";
 import { MEDIA_HELPER_EVENTS } from "../../../src/media/helper-contract.js";
 
 type Emit = (type: string, payload: Record<string, unknown>) => void;

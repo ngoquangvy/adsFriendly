@@ -33,7 +33,7 @@ import { validatePlayerOutputCanary } from "./player-output-canary.js";
 import { PlayerOutputCaptureManager } from "./player-output-capture-manager.js";
 import type { DownloadCandidate } from "./download-types.js";
 
-const HELPER_VERSION = "0.24.2";
+const HELPER_VERSION = "0.24.3";
 const callerOrigin = process.argv[2] || null;
 const reader = new NativeMessageReader();
 const adapters = new DownloadAdapterRegistry([

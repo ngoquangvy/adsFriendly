@@ -3,11 +3,10 @@ import { basename, extname, join } from "node:path";
 import { parseDashManifest } from "../../../src/media/dash-parser.js";
 import {
   availableOutputPath,
-  fetchRemote,
   resolveOutputDirectory,
   sanitizeFilename,
-  assertSafeRemoteUrl,
-} from "./direct-http-adapter.js";
+} from "./output-paths.js";
+import { fetchRemote, assertSafeRemoteUrl } from "./http-remote.js";
 import {
   adaptiveOutputExtension,
   adaptiveRequestHeaders,

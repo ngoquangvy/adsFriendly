@@ -10,7 +10,7 @@ import {
   resolveYouTubeWebPoToken,
 } from "./youtube-po-token-resolver.js";
 import { resolveYouTubeExternalTracks } from "./youtube-external-provider.js";
-import { preflightGoogleVideoTrack } from "./direct-http-adapter.js";
+import { preflightGoogleVideoTrack } from "./youtube-http-profile.js";
 import { formatAudioLanguageLabel } from "../../../src/media/audio-language-label.js";
 
 const RESPONSE_CACHE_MS = 5 * 60 * 1000;

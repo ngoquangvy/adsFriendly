@@ -12,7 +12,7 @@ import {
   availableOutputPath,
   resolveOutputDirectory,
   sanitizeFilename,
-} from "./direct-http-adapter.js";
+} from "./output-paths.js";
 import type {
   DownloadAdapter,
   DownloadContext,
