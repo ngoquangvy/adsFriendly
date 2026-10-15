@@ -1,3 +1,4 @@
+import { createDownloadEtaEstimator } from "../downloads/eta.js";
 import {
   MEDIA_HELPER_CAPABILITIES,
   MEDIA_HELPER_EVENTS,
@@ -27,6 +28,7 @@ let cachedStatus = null;
 let cachedAt = 0;
 let statusPromise = null;
 const activePorts = new Map();
+const downloadEta = createDownloadEtaEstimator();
 let historyWriteChain = Promise.resolve();
 const youtubeQualityPreflightCache = new Map();
 
@@ -974,6 +976,16 @@ async function updateJobState(jobId, changes) {
   const current = (await chrome.storage.session.get(key))[key];
   if (!current) return;
   const next = { ...current, ...changes, updatedAt: Date.now() };
+  if (changes.progress)
+    next.progress = {
+      ...changes.progress,
+      ...downloadEta.update(jobId, changes.progress, next.status),
+    };
+  else if (next.status !== "downloading") {
+    downloadEta.forget(jobId);
+    if (next.progress)
+      next.progress = { ...next.progress, etaSeconds: null, etaUpdatedAt: null };
+  }
   await persistJobState(next);
   if (["completed", "failed", "cancelled", "paused"].includes(next.status))
     await persistHistoryEntry(next);

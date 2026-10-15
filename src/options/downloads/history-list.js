@@ -6,6 +6,10 @@ import {
   getMediaJobPrimaryAction,
   getMediaJobProgress,
 } from "../../media/download-job-view.js";
+import {
+  createDownloadProgressBar,
+  updateDownloadProgressBar,
+} from "../../downloads/ui/progress-bar.js";
 
 export function isActiveDownload(job) {
   return [
@@ -88,11 +92,7 @@ export function createDownloadHistoryList({ document, window, actionButton }) {
     badge.className = "download-status";
     header.append(title, badge);
 
-    const progressTrack = document.createElement("div");
-    progressTrack.className = "download-progress-track";
-    const progressBar = document.createElement("div");
-    progressBar.className = "download-progress-bar";
-    progressTrack.append(progressBar);
+    const progressTrack = createDownloadProgressBar(document);
 
     const details = document.createElement("div");
     details.className = "download-history-details";
@@ -129,9 +129,7 @@ export function createDownloadHistoryList({ document, window, actionButton }) {
     badge.textContent = String(job.status || "unknown").toUpperCase();
     const progress = getMediaJobProgress(job);
     const progressTrack = row.querySelector(".download-progress-track");
-    progressTrack.hidden = !active;
-    row.querySelector(".download-progress-bar").style.width =
-      `${progress.percent ?? 0}%`;
+    updateDownloadProgressBar(progressTrack, progress.percent, active);
     const details = row.querySelector(".download-history-details");
     const completedSize =
       job.status === "completed" ? progress.totalBytes : null;

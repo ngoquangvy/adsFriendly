@@ -6965,6 +6965,86 @@ var AdsFriendlyBackground = (() => {
     };
   }
 
+  // src/downloads/progress.js
+  function getDownloadProgress(value = {}) {
+    value ||= {};
+    const pairs = [
+      ["bytes", value.downloadedBytes, value.totalBytes],
+      ["time", value.processedSeconds, value.duration],
+      ["resources", value.completedResources, value.totalResources]
+    ];
+    for (const [basis, done, total] of pairs) {
+      const completed = finite(done), maximum = finite(total);
+      if (completed === null || !(maximum > 0)) continue;
+      return {
+        percent: Math.min(
+          100,
+          Math.max(0, Math.round(completed / maximum * 100))
+        ),
+        basis
+      };
+    }
+    return { percent: null, basis: null };
+  }
+  function finite(value) {
+    if (value === null || value === void 0 || value === "") return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  // src/downloads/eta.js
+  var WINDOW_MS = 3e4;
+  var UPDATE_MS = 3e3;
+  function createDownloadEtaEstimator({ now = Date.now } = {}) {
+    const entries = /* @__PURE__ */ new Map();
+    function update(id, progress, status = progress?.phase) {
+      const time = now(), { basis } = getDownloadProgress(progress);
+      const fields = {
+        bytes: ["downloadedBytes", "totalBytes"],
+        time: ["processedSeconds", "duration"],
+        resources: ["completedResources", "totalResources"]
+      }[basis];
+      if (status !== "downloading" || !fields) {
+        entries.delete(id);
+        return { etaSeconds: null, etaUpdatedAt: null };
+      }
+      const done = Math.max(0, Number(progress[fields[0]])), total = Number(progress[fields[1]]);
+      let entry = entries.get(id);
+      if (!entry || entry.basis !== basis || entry.total !== total || done < entry.done || time - entry.lastSeen > 15e3 || entry.stage !== progress.stage) {
+        entry = {
+          basis,
+          total,
+          stage: progress.stage,
+          done,
+          lastSeen: time,
+          samples: [],
+          lastUpdate: time,
+          speed: null,
+          eta: null
+        };
+        entries.delete(id);
+        entries.set(id, entry);
+      }
+      entry.lastSeen = time;
+      entry.done = done;
+      entry.samples.push({ time, done });
+      while (entry.samples.length > 256 || entry.samples.length > 2 && entry.samples[1].time < time - WINDOW_MS)
+        entry.samples.shift();
+      while (entries.size > 100) entries.delete(entries.keys().next().value);
+      if (time - entry.lastUpdate >= UPDATE_MS) {
+        const first = entry.samples[0], elapsed = (time - first.time) / 1e3;
+        const speed = elapsed >= 3 ? (done - first.done) / elapsed : 0;
+        if (speed > 0) {
+          entry.speed = entry.speed === null ? speed : entry.speed * 0.75 + speed * 0.25;
+          entry.eta = Math.max(0, (total - done) / entry.speed);
+        } else entry.eta = null;
+        entry.lastUpdate = time;
+      }
+      return { etaSeconds: entry.eta, etaUpdatedAt: entry.lastUpdate };
+    }
+    return { update, forget: (id) => entries.delete(id) };
+  }
+
   // src/downloads/file-contract.js
   var FILE_HELPER_REQUESTS = Object.freeze({
     FILE_PREPARE: "file.prepare",
@@ -8169,6 +8249,7 @@ ${blobTitleKey(item.title)}`;
   var cachedAt = 0;
   var statusPromise = null;
   var activePorts = /* @__PURE__ */ new Map();
+  var downloadEta = createDownloadEtaEstimator();
   var historyWriteChain = Promise.resolve();
   var youtubeQualityPreflightCache = /* @__PURE__ */ new Map();
   var MEDIA_HELPER_STATES = Object.freeze({
@@ -8923,6 +9004,16 @@ ${blobTitleKey(item.title)}`;
     const current = (await chrome.storage.session.get(key))[key];
     if (!current) return;
     const next = { ...current, ...changes, updatedAt: Date.now() };
+    if (changes.progress)
+      next.progress = {
+        ...changes.progress,
+        ...downloadEta.update(jobId, changes.progress, next.status)
+      };
+    else if (next.status !== "downloading") {
+      downloadEta.forget(jobId);
+      if (next.progress)
+        next.progress = { ...next.progress, etaSeconds: null, etaUpdatedAt: null };
+    }
     await persistJobState(next);
     if (["completed", "failed", "cancelled", "paused"].includes(next.status))
       await persistHistoryEntry(next);
@@ -13275,6 +13366,7 @@ ${body}`;
   var isFileTransferActive = (row) => active2.has(row?.status);
   function createFileTransferStore(chrome2) {
     const jobs = /* @__PURE__ */ new Map();
+    const eta = createDownloadEtaEstimator();
     let chain = Promise.resolve(), timer = null, revision = 0;
     function project(row) {
       return {
@@ -13319,6 +13411,7 @@ ${body}`;
       return chain;
     }
     function put(row) {
+      if (row.status !== "downloading") eta.forget(row.id);
       jobs.set(row.id, { ...jobs.get(row.id), ...project(row) });
       while (jobs.size > 100) {
         const removable = [...jobs.values()].find(
@@ -13337,6 +13430,7 @@ ${body}`;
         totalBytes: row.totalBytes,
         bytesPerSecond: Number(value.bytesPerSecond) || 0
       };
+      Object.assign(row.progress, eta.update(id, row.progress, row.status));
       if (!timer)
         timer = setTimeout(() => {
           void publish().catch(() => {

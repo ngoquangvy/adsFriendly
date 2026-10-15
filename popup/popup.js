@@ -688,6 +688,44 @@ var AdsFriendlyPopup = (() => {
     return nonNegativeInteger(value, "optional integer");
   }
 
+  // src/downloads/progress.js
+  function getDownloadProgress(value = {}) {
+    value ||= {};
+    const pairs = [
+      ["bytes", value.downloadedBytes, value.totalBytes],
+      ["time", value.processedSeconds, value.duration],
+      ["resources", value.completedResources, value.totalResources]
+    ];
+    for (const [basis, done, total] of pairs) {
+      const completed = finite(done), maximum = finite(total);
+      if (completed === null || !(maximum > 0)) continue;
+      return {
+        percent: Math.min(
+          100,
+          Math.max(0, Math.round(completed / maximum * 100))
+        ),
+        basis
+      };
+    }
+    return { percent: null, basis: null };
+  }
+  function finite(value) {
+    if (value === null || value === void 0 || value === "") return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  // src/downloads/eta.js
+  function formatDownloadEta(progress, now = Date.now()) {
+    const seconds = progress?.etaSeconds;
+    if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0 || !Number.isFinite(progress.etaUpdatedAt) || now - progress.etaUpdatedAt > 12e3)
+      return null;
+    if (seconds < 60) return `${Math.max(10, Math.ceil(seconds / 10) * 10)} s`;
+    if (seconds < 3600) return `${Math.ceil(seconds / 60)} min`;
+    const minutes = Math.ceil(seconds / 300) * 5;
+    return `${Math.floor(minutes / 60)} h${minutes % 60 ? ` ${minutes % 60} min` : ""}`;
+  }
+
   // src/media/download-job-view.js
   var ACTIVE_STATUSES = /* @__PURE__ */ new Set([
     "starting",
@@ -698,15 +736,10 @@ var AdsFriendlyPopup = (() => {
   function getMediaJobProgress(job = {}) {
     const progress = job.progress || {};
     const downloadedBytes = finiteOrNull(progress.downloadedBytes);
-    const totalBytes = finiteOrNull(progress.totalBytes);
+    const totalBytes = finiteOrNull(progress.totalBytes ?? job.totalBytes);
     const processedSeconds = finiteOrNull(progress.processedSeconds);
     const duration = finiteOrNull(progress.duration);
-    let percent = null;
-    if (duration > 0 && processedSeconds !== null) {
-      percent = Math.min(100, Math.round(processedSeconds / duration * 100));
-    } else if (totalBytes > 0 && downloadedBytes !== null) {
-      percent = Math.min(100, Math.round(downloadedBytes / totalBytes * 100));
-    }
+    const { percent } = getDownloadProgress({ ...progress, totalBytes });
     return {
       percent,
       downloadedBytes,
@@ -811,6 +844,12 @@ var AdsFriendlyPopup = (() => {
       return `Pausing \xB7 ${speedFact} \xB7 ${connectionFact}`;
     const facts = [];
     if (progress.percent !== null) facts.push(`${progress.percent}%`);
+    else if (job.status === "downloading")
+      facts.push("Progress not yet available");
+    if (getDownloadProgress(job.progress).basis === "resources")
+      facts.push(
+        `${job.progress.completedResources} / ${job.progress.totalResources} resources`
+      );
     if (progress.duration > 0 && progress.processedSeconds !== null) {
       facts.push(
         `${formatDuration(progress.processedSeconds)} / ${formatDuration(progress.duration)}`
@@ -822,6 +861,8 @@ var AdsFriendlyPopup = (() => {
       );
     }
     facts.push(speedFact);
+    const eta = job.status === "downloading" && formatDownloadEta(job.progress);
+    if (eta) facts.push(eta);
     if (progress.resumedBytes > 0)
       facts.push(`resumed ${formatBytes(progress.resumedBytes)}`);
     if (job.kind !== "player_output") facts.push(connectionFact);

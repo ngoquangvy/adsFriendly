@@ -5,7 +5,10 @@ import {
 import { createMediaDownloadControl } from "../media/ui/download-control.js";
 import { playerDownloadPosition } from "../media/player-download-position.js";
 import { createPlayerDownloadAttention } from "../media/ui/player-download-attention.js";
-import { formatBytes, isMediaJobActive } from "../media/download-job-view.js";
+import {
+  formatMediaJobTransferSummary,
+  isMediaJobActive,
+} from "../media/download-job-view.js";
 import { loadSettings } from "../runtime/settings-store.js";
 import { MEDIA_CATALOG_SESSION_PREFIX } from "../media/storage-keys.js";
 import { DOWNLOAD_JOB_PREFIX } from "../media/download-job-contract.js";
@@ -356,7 +359,7 @@ export function startPlayerDownload({ shadowMode = "closed" } = {}) {
       !["missing", "changed"].includes(job.fileStatus);
     entry.shadow.querySelector(".launch-label").textContent =
       job && isMediaJobActive(job)
-        ? `↓ ${formatBytes(job.progress?.bytesPerSecond || 0)}/s`
+        ? `↓ ${formatMediaJobTransferSummary(job)}`
         : completed
           ? "✓ Completed"
           : "↓ Download";

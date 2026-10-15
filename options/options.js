@@ -670,6 +670,44 @@ var AdsFriendlyOptions = (() => {
     };
   }
 
+  // src/downloads/progress.js
+  function getDownloadProgress(value = {}) {
+    value ||= {};
+    const pairs = [
+      ["bytes", value.downloadedBytes, value.totalBytes],
+      ["time", value.processedSeconds, value.duration],
+      ["resources", value.completedResources, value.totalResources]
+    ];
+    for (const [basis, done, total] of pairs) {
+      const completed = finite(done), maximum = finite(total);
+      if (completed === null || !(maximum > 0)) continue;
+      return {
+        percent: Math.min(
+          100,
+          Math.max(0, Math.round(completed / maximum * 100))
+        ),
+        basis
+      };
+    }
+    return { percent: null, basis: null };
+  }
+  function finite(value) {
+    if (value === null || value === void 0 || value === "") return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  // src/downloads/eta.js
+  function formatDownloadEta(progress, now = Date.now()) {
+    const seconds = progress?.etaSeconds;
+    if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0 || !Number.isFinite(progress.etaUpdatedAt) || now - progress.etaUpdatedAt > 12e3)
+      return null;
+    if (seconds < 60) return `${Math.max(10, Math.ceil(seconds / 10) * 10)} s`;
+    if (seconds < 3600) return `${Math.ceil(seconds / 60)} min`;
+    const minutes = Math.ceil(seconds / 300) * 5;
+    return `${Math.floor(minutes / 60)} h${minutes % 60 ? ` ${minutes % 60} min` : ""}`;
+  }
+
   // src/media/download-job-view.js
   var ACTIVE_STATUSES = /* @__PURE__ */ new Set([
     "starting",
@@ -680,15 +718,10 @@ var AdsFriendlyOptions = (() => {
   function getMediaJobProgress(job = {}) {
     const progress = job.progress || {};
     const downloadedBytes = finiteOrNull(progress.downloadedBytes);
-    const totalBytes = finiteOrNull(progress.totalBytes);
+    const totalBytes = finiteOrNull(progress.totalBytes ?? job.totalBytes);
     const processedSeconds = finiteOrNull(progress.processedSeconds);
     const duration = finiteOrNull(progress.duration);
-    let percent = null;
-    if (duration > 0 && processedSeconds !== null) {
-      percent = Math.min(100, Math.round(processedSeconds / duration * 100));
-    } else if (totalBytes > 0 && downloadedBytes !== null) {
-      percent = Math.min(100, Math.round(downloadedBytes / totalBytes * 100));
-    }
+    const { percent } = getDownloadProgress({ ...progress, totalBytes });
     return {
       percent,
       downloadedBytes,
@@ -793,6 +826,12 @@ var AdsFriendlyOptions = (() => {
       return `Pausing \xB7 ${speedFact} \xB7 ${connectionFact}`;
     const facts = [];
     if (progress.percent !== null) facts.push(`${progress.percent}%`);
+    else if (job.status === "downloading")
+      facts.push("Progress not yet available");
+    if (getDownloadProgress(job.progress).basis === "resources")
+      facts.push(
+        `${job.progress.completedResources} / ${job.progress.totalResources} resources`
+      );
     if (progress.duration > 0 && progress.processedSeconds !== null) {
       facts.push(
         `${formatDuration(progress.processedSeconds)} / ${formatDuration(progress.duration)}`
@@ -804,6 +843,8 @@ var AdsFriendlyOptions = (() => {
       );
     }
     facts.push(speedFact);
+    const eta = job.status === "downloading" && formatDownloadEta(job.progress);
+    if (eta) facts.push(eta);
     if (progress.resumedBytes > 0)
       facts.push(`resumed ${formatBytes(progress.resumedBytes)}`);
     if (job.kind !== "player_output") facts.push(connectionFact);
@@ -854,6 +895,34 @@ var AdsFriendlyOptions = (() => {
   }
   function capitalize(value) {
     return value ? `${value[0].toUpperCase()}${value.slice(1)}` : "Starting";
+  }
+
+  // src/downloads/ui/progress-bar.js
+  function createDownloadProgressBar(document2) {
+    const track = document2.createElement("div");
+    track.className = "download-progress-track";
+    const bar = document2.createElement("div");
+    bar.className = "download-progress-bar";
+    track.append(bar);
+    return track;
+  }
+  function updateDownloadProgressBar(track, percent, active) {
+    track.hidden = !active;
+    track.setAttribute("role", "progressbar");
+    track.setAttribute("aria-label", "Download progress");
+    track.setAttribute("aria-valuemin", "0");
+    track.setAttribute("aria-valuemax", "100");
+    const known = Number.isFinite(percent);
+    const value = known ? Math.max(0, Math.min(100, percent)) : null;
+    track.classList.toggle("is-indeterminate", !known);
+    track.querySelector(".download-progress-bar").style.width = known ? `${value}%` : "100%";
+    if (known) {
+      track.setAttribute("aria-valuenow", String(value));
+      track.setAttribute("aria-valuetext", `${value}%`);
+    } else {
+      track.removeAttribute("aria-valuenow");
+      track.setAttribute("aria-valuetext", "Progress not yet available");
+    }
   }
 
   // src/options/downloads/history-list.js
@@ -932,11 +1001,7 @@ var AdsFriendlyOptions = (() => {
       const badge = document2.createElement("span");
       badge.className = "download-status";
       header.append(title, badge);
-      const progressTrack = document2.createElement("div");
-      progressTrack.className = "download-progress-track";
-      const progressBar = document2.createElement("div");
-      progressBar.className = "download-progress-bar";
-      progressTrack.append(progressBar);
+      const progressTrack = createDownloadProgressBar(document2);
       const details = document2.createElement("div");
       details.className = "download-history-details";
       const output = document2.createElement("div");
@@ -963,8 +1028,7 @@ var AdsFriendlyOptions = (() => {
       badge.textContent = String(job.status || "unknown").toUpperCase();
       const progress = getMediaJobProgress(job);
       const progressTrack = row.querySelector(".download-progress-track");
-      progressTrack.hidden = !active;
-      row.querySelector(".download-progress-bar").style.width = `${progress.percent ?? 0}%`;
+      updateDownloadProgressBar(progressTrack, progress.percent, active);
       const details = row.querySelector(".download-history-details");
       const completedSize = job.status === "completed" ? progress.totalBytes : null;
       details.hidden = !active && !completedSize;
@@ -1309,13 +1373,25 @@ var AdsFriendlyOptions = (() => {
               node.classList.add("download-history-controls");
             row.append(node);
           }
+          row.insertBefore(
+            createDownloadProgressBar(document2),
+            row.querySelector(".file-transfer-details")
+          );
         }
         row.querySelector(".file-transfer-title").textContent = job.filename;
         const active = ACTIVE.has(job.status);
+        const { percent } = getMediaJobProgress(job);
+        updateDownloadProgressBar(
+          row.querySelector(".download-progress-track"),
+          percent,
+          active
+        );
         row.querySelector(".file-transfer-details").textContent = [
           labels[job.status] || job.status,
+          active && percent !== null ? `${percent}%` : null,
+          job.status === "downloading" ? formatDownloadEta(job.progress) : null,
           active ? `${formatBytes(job.progress?.downloadedBytes || 0)} / ${formatBytes(job.totalBytes)} \xB7 ${formatBytes(job.progress?.bytesPerSecond || 0)}/s` : formatBytes(job.totalBytes)
-        ].join(" \xB7 ");
+        ].filter(Boolean).join(" \xB7 ");
         const path = row.querySelector(".file-transfer-path");
         path.textContent = job.outputPath || job.error || "";
         path.title = path.textContent;

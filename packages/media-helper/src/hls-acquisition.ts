@@ -413,12 +413,6 @@ export async function acquireHlsPlan(
   }
 
   const resumedBytes = await cachedBytes(plan.resources, cacheDirectory);
-  context.progress({
-    ...emptyAdaptiveProgress("downloading", "segment_download"),
-    downloadedBytes: resumedBytes,
-    resumable: true,
-    resumedBytes,
-  });
   await acquireResources(
     plan.resources,
     job,
@@ -477,6 +471,16 @@ async function acquireResources(
     if (existing?.isFile() && existing.size > 0) resumedBytes += existing.size;
     else pending.push(resource);
   }
+  const cachedResources = resources.length - pending.length;
+  if (phase === "downloading")
+    context.progress({
+      ...emptyAdaptiveProgress("downloading", "segment_download"),
+      downloadedBytes: resumedBytes,
+      completedResources: cachedResources,
+      totalResources: resources.length,
+      resumedBytes,
+      resumable: true,
+    });
   if (!pending.length) return;
   const startedAt = Date.now();
   const parallelDownload = downloadResourcesInParallel as unknown as (
@@ -494,7 +498,10 @@ async function acquireResources(
         bytes: Uint8Array,
         resource: HlsAcquisitionResource,
       ): Promise<void>;
-      onProgress(progress: { downloadedBytes: number }): void;
+      onProgress(progress: {
+        downloadedBytes: number;
+        writtenResources: number;
+      }): void;
     },
   ) => Promise<unknown>;
   await parallelDownload(pending, {
@@ -513,7 +520,10 @@ async function acquireResources(
       await writeFile(partialPath, bytes);
       await rename(partialPath, finalPath);
     },
-    onProgress: (progress: { downloadedBytes: number }) => {
+    onProgress: (progress: {
+      downloadedBytes: number;
+      writtenResources: number;
+    }) => {
       if (phase === "probing") {
         context.progress({
           ...emptyAdaptiveProgress("probing", "compatibility_check"),
@@ -527,6 +537,8 @@ async function acquireResources(
       context.progress({
         ...emptyAdaptiveProgress("downloading", "segment_download"),
         downloadedBytes,
+        completedResources: cachedResources + progress.writtenResources,
+        totalResources: resources.length,
         bytesPerSecond: Math.round(
           progress.downloadedBytes /
             Math.max(0.001, (Date.now() - startedAt) / 1000),

@@ -35,7 +35,7 @@ import type { DownloadCandidate } from "./download-types.js";
 import { FILE_HELPER_REQUESTS } from "../../../src/downloads/file-contract.js";
 import { FileJobManager } from "./file-job-manager.js";
 
-const HELPER_VERSION = "0.25.0";
+const HELPER_VERSION = "0.25.1";
 const callerOrigin = process.argv[2] || null;
 const reader = new NativeMessageReader();
 const adapters = new DownloadAdapterRegistry([

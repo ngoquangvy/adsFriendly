@@ -148,6 +148,8 @@ export interface DownloadProgress {
   resumedBytes: number;
   processedSeconds?: number | null;
   duration?: number | null;
+  completedResources?: number;
+  totalResources?: number;
 }
 
 export interface DownloadResult {

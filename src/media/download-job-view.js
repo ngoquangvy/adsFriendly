@@ -1,3 +1,6 @@
+import { getDownloadProgress } from "../downloads/progress.js";
+import { formatDownloadEta } from "../downloads/eta.js";
+
 const ACTIVE_STATUSES = new Set([
   "starting",
   "probing",
@@ -8,15 +11,10 @@ const ACTIVE_STATUSES = new Set([
 export function getMediaJobProgress(job = {}) {
   const progress = job.progress || {};
   const downloadedBytes = finiteOrNull(progress.downloadedBytes);
-  const totalBytes = finiteOrNull(progress.totalBytes);
+  const totalBytes = finiteOrNull(progress.totalBytes ?? job.totalBytes);
   const processedSeconds = finiteOrNull(progress.processedSeconds);
   const duration = finiteOrNull(progress.duration);
-  let percent = null;
-  if (duration > 0 && processedSeconds !== null) {
-    percent = Math.min(100, Math.round((processedSeconds / duration) * 100));
-  } else if (totalBytes > 0 && downloadedBytes !== null) {
-    percent = Math.min(100, Math.round((downloadedBytes / totalBytes) * 100));
-  }
+  const { percent } = getDownloadProgress({ ...progress, totalBytes });
   return {
     percent,
     downloadedBytes,
@@ -135,6 +133,12 @@ export function formatMediaJobDetails(job = {}) {
 
   const facts = [];
   if (progress.percent !== null) facts.push(`${progress.percent}%`);
+  else if (job.status === "downloading")
+    facts.push("Progress not yet available");
+  if (getDownloadProgress(job.progress).basis === "resources")
+    facts.push(
+      `${job.progress.completedResources} / ${job.progress.totalResources} resources`,
+    );
   if (progress.duration > 0 && progress.processedSeconds !== null) {
     facts.push(
       `${formatDuration(progress.processedSeconds)} / ${formatDuration(progress.duration)}`,
@@ -148,6 +152,8 @@ export function formatMediaJobDetails(job = {}) {
     );
   }
   facts.push(speedFact);
+  const eta = job.status === "downloading" && formatDownloadEta(job.progress);
+  if (eta) facts.push(eta);
   if (progress.resumedBytes > 0)
     facts.push(`resumed ${formatBytes(progress.resumedBytes)}`);
   if (job.kind !== "player_output") facts.push(connectionFact);
@@ -198,6 +204,17 @@ export function selectCompactMediaJobs(items, limit = 3) {
 
 export function isMediaJobActive(job = {}) {
   return [...ACTIVE_STATUSES, "pausing", "cancelling"].includes(job.status);
+}
+
+export function formatMediaJobTransferSummary(job = {}) {
+  const progress = getMediaJobProgress(job);
+  return [
+    progress.percent !== null ? `${progress.percent}%` : null,
+    `${formatBytes(progress.bytesPerSecond || 0)}/s`,
+    job.status === "downloading" ? formatDownloadEta(job.progress) : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 export function formatBytes(bytes) {

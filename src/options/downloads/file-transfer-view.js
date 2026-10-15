@@ -1,5 +1,13 @@
 import { FILE_MESSAGES as M } from "../../downloads/file-contract.js";
-import { formatBytes } from "../../media/download-job-view.js";
+import {
+  formatBytes,
+  getMediaJobProgress,
+} from "../../media/download-job-view.js";
+import {
+  createDownloadProgressBar,
+  updateDownloadProgressBar,
+} from "../../downloads/ui/progress-bar.js";
+import { formatDownloadEta } from "../../downloads/eta.js";
 const ACTIVE = new Set(["pause_requested", "downloading", "returning"]);
 
 // Stable keyed file rows and explicit user controls; no ownership logic.
@@ -151,15 +159,29 @@ export function createFileTransferView({
             node.classList.add("download-history-controls");
           row.append(node);
         }
+        row.insertBefore(
+          createDownloadProgressBar(document),
+          row.querySelector(".file-transfer-details"),
+        );
       }
       row.querySelector(".file-transfer-title").textContent = job.filename;
       const active = ACTIVE.has(job.status);
+      const { percent } = getMediaJobProgress(job);
+      updateDownloadProgressBar(
+        row.querySelector(".download-progress-track"),
+        percent,
+        active,
+      );
       row.querySelector(".file-transfer-details").textContent = [
         labels[job.status] || job.status,
+        active && percent !== null ? `${percent}%` : null,
+        job.status === "downloading" ? formatDownloadEta(job.progress) : null,
         active
           ? `${formatBytes(job.progress?.downloadedBytes || 0)} / ${formatBytes(job.totalBytes)} · ${formatBytes(job.progress?.bytesPerSecond || 0)}/s`
           : formatBytes(job.totalBytes),
-      ].join(" · ");
+      ]
+        .filter(Boolean)
+        .join(" · ");
       const path = row.querySelector(".file-transfer-path");
       path.textContent = job.outputPath || job.error || "";
       path.title = path.textContent;

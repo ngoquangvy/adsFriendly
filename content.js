@@ -6370,6 +6370,44 @@ ${blobTitleKey(item.title)}`;
     }
   }
 
+  // src/downloads/progress.js
+  function getDownloadProgress(value = {}) {
+    value ||= {};
+    const pairs = [
+      ["bytes", value.downloadedBytes, value.totalBytes],
+      ["time", value.processedSeconds, value.duration],
+      ["resources", value.completedResources, value.totalResources]
+    ];
+    for (const [basis, done, total] of pairs) {
+      const completed = finite(done), maximum = finite(total);
+      if (completed === null || !(maximum > 0)) continue;
+      return {
+        percent: Math.min(
+          100,
+          Math.max(0, Math.round(completed / maximum * 100))
+        ),
+        basis
+      };
+    }
+    return { percent: null, basis: null };
+  }
+  function finite(value) {
+    if (value === null || value === void 0 || value === "") return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  // src/downloads/eta.js
+  function formatDownloadEta(progress, now = Date.now()) {
+    const seconds = progress?.etaSeconds;
+    if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0 || !Number.isFinite(progress.etaUpdatedAt) || now - progress.etaUpdatedAt > 12e3)
+      return null;
+    if (seconds < 60) return `${Math.max(10, Math.ceil(seconds / 10) * 10)} s`;
+    if (seconds < 3600) return `${Math.ceil(seconds / 60)} min`;
+    const minutes = Math.ceil(seconds / 300) * 5;
+    return `${Math.floor(minutes / 60)} h${minutes % 60 ? ` ${minutes % 60} min` : ""}`;
+  }
+
   // src/media/download-job-view.js
   var ACTIVE_STATUSES = /* @__PURE__ */ new Set([
     "starting",
@@ -6377,14 +6415,50 @@ ${blobTitleKey(item.title)}`;
     "downloading",
     "finalizing"
   ]);
+  function getMediaJobProgress(job = {}) {
+    const progress = job.progress || {};
+    const downloadedBytes = finiteOrNull2(progress.downloadedBytes);
+    const totalBytes = finiteOrNull2(progress.totalBytes ?? job.totalBytes);
+    const processedSeconds = finiteOrNull2(progress.processedSeconds);
+    const duration = finiteOrNull2(progress.duration);
+    const { percent } = getDownloadProgress({ ...progress, totalBytes });
+    return {
+      percent,
+      downloadedBytes,
+      totalBytes,
+      bytesPerSecond: finiteOrNull2(progress.bytesPerSecond),
+      processedSeconds,
+      duration,
+      resumedBytes: finiteOrNull2(progress.resumedBytes),
+      resumable: progress.resumable === true,
+      connections: normalizeConnections(job.connections)
+    };
+  }
   function isMediaJobActive(job = {}) {
     return [...ACTIVE_STATUSES, "pausing", "cancelling"].includes(job.status);
+  }
+  function formatMediaJobTransferSummary(job = {}) {
+    const progress = getMediaJobProgress(job);
+    return [
+      progress.percent !== null ? `${progress.percent}%` : null,
+      `${formatBytes(progress.bytesPerSecond || 0)}/s`,
+      job.status === "downloading" ? formatDownloadEta(job.progress) : null
+    ].filter(Boolean).join(" \xB7 ");
   }
   function formatBytes(bytes) {
     const value = Math.max(0, Number(bytes) || 0);
     if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(1)} GB`;
     if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MB`;
     return `${Math.round(value / 1024)} KB`;
+  }
+  function finiteOrNull2(value) {
+    if (value === null || value === void 0 || value === "") return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  }
+  function normalizeConnections(value) {
+    const connections = Number(value);
+    return Number.isInteger(connections) && connections > 0 ? connections : 8;
   }
 
   // src/media/ui/download-history.js
@@ -7278,7 +7352,7 @@ ${blobTitleKey(item.title)}`;
       entry.context = response;
       const job = response.latestJob;
       const completed = job?.status === "completed" && !["missing", "changed"].includes(job.fileStatus);
-      entry.shadow.querySelector(".launch-label").textContent = job && isMediaJobActive(job) ? `\u2193 ${formatBytes(job.progress?.bytesPerSecond || 0)}/s` : completed ? "\u2713 Completed" : "\u2193 Download";
+      entry.shadow.querySelector(".launch-label").textContent = job && isMediaJobActive(job) ? `\u2193 ${formatMediaJobTransferSummary(job)}` : completed ? "\u2713 Completed" : "\u2193 Download";
       entry.shadow.querySelector(".quick-open").hidden = !completed || !job.outputPath;
       entry.controller?.setHistory(response);
     }

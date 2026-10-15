@@ -1,4 +1,5 @@
 import { FILE_TRANSFER_KEY } from "../../downloads/file-contract.js";
+import { createDownloadEtaEstimator } from "../../downloads/eta.js";
 const active = new Set(["pause_requested", "downloading", "returning"]);
 export const isFileTransferActive = (row) => active.has(row?.status);
 
@@ -6,6 +7,7 @@ export const isFileTransferActive = (row) => active.has(row?.status);
 // Source URLs/prepared tokens/native payloads are never accepted by this store.
 export function createFileTransferStore(chrome) {
   const jobs = new Map();
+  const eta = createDownloadEtaEstimator();
   let chain = Promise.resolve(),
     timer = null,
     revision = 0;
@@ -57,6 +59,7 @@ export function createFileTransferStore(chrome) {
     return chain;
   }
   function put(row) {
+    if (row.status !== "downloading") eta.forget(row.id);
     jobs.set(row.id, { ...jobs.get(row.id), ...project(row) });
     while (jobs.size > 100) {
       const removable = [...jobs.values()].find(
@@ -75,6 +78,7 @@ export function createFileTransferStore(chrome) {
       totalBytes: row.totalBytes,
       bytesPerSecond: Number(value.bytesPerSecond) || 0,
     };
+    Object.assign(row.progress, eta.update(id, row.progress, row.status));
     if (!timer)
       timer = setTimeout(() => {
         void publish().catch(() => {});
