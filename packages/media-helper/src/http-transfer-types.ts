@@ -35,6 +35,11 @@ export interface HttpTransferSource {
     etag?: string | null,
   ) => HttpRangeRequest;
   afterProbe?: (probe: SourceProbe, signal: AbortSignal) => Promise<void>;
+  validateRangeResponse?: (
+    response: Response,
+    range: ByteRange,
+    probe: SourceProbe,
+  ) => void | Promise<void>;
   probeFailure?: (url: string, status: number) => string;
   rangeFailure?: (
     url: string,

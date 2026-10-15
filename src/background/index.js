@@ -13,8 +13,27 @@ import { startBackgroundMediaRequestObserver } from "./media-request-observer.js
 import { startMediaDebugCaptureStore } from "./media-debug-capture.js";
 import { startMediaManifestHandoffStore } from "./media-manifest-handoff.js";
 import { createBrowserDownloadIntake } from "./downloads/intake-observer.js";
+import { createDownloadRequestEvidence } from "./downloads/request-evidence.js";
+import { createFileHandoff } from "./downloads/file-handoff.js";
 
-const downloadIntake = createBrowserDownloadIntake({ chrome });
+const requestEvidence = createDownloadRequestEvidence({ chrome });
+requestEvidence.bootstrap();
+let fileHandoff;
+const downloadIntake = createBrowserDownloadIntake({
+  chrome,
+  onAvailability: (enabled) => {
+    if (enabled) requestEvidence.start();
+    else {
+      requestEvidence.stop();
+      void fileHandoff?.returnAll().catch(() => {});
+    }
+  },
+});
+fileHandoff = createFileHandoff({
+  chrome,
+  intake: downloadIntake,
+  evidence: requestEvidence,
+});
 downloadIntake.bootstrap();
 
 const controller = createMainController({
@@ -22,7 +41,9 @@ const controller = createMainController({
   initialSettings: DEFAULT_SETTINGS,
   implementations: {
     "background.message-router": ({ policy }) =>
-      registerMessageRouter(policy, { downloadIntake }),
+      registerMessageRouter(policy, { downloadIntake, fileHandoff }),
+    "background.browser-file-handoff": ({ policy }) =>
+      fileHandoff.startFeature(policy),
     "background.browser-download-observer": ({ policy }) =>
       downloadIntake.startFeature(policy),
     "background.media-catalog": () => startBackgroundMediaCatalog(),

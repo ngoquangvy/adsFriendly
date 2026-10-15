@@ -154,7 +154,10 @@ const MESSAGE_CAPABILITIES = Object.freeze({
   GET_MEDIA_DOWNLOAD_JOBS: CAPABILITIES.MEDIA_DOWNLOAD,
 });
 
-export function registerMessageRouter(policy, { downloadIntake } = {}) {
+export function registerMessageRouter(
+  policy,
+  { downloadIntake, fileHandoff } = {},
+) {
   const onMessage = (message, sender, sendResponse) => {
     if (!policy.can(CAPABILITIES.CORE_MESSAGING)) {
       sendResponse({ status: "disabled" });
@@ -171,6 +174,7 @@ export function registerMessageRouter(policy, { downloadIntake } = {}) {
         sender,
         downloadIntake,
         chrome,
+        fileHandoff,
       );
       if (result !== null) {
         Promise.resolve(result)

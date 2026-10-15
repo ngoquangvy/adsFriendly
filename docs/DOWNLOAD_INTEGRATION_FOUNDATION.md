@@ -1,9 +1,9 @@
 # Download integration: foundation checkpoint
 
 This document records the initial refactor of existing media downloads.
-The subsequent observation-only checkpoint adds an optional Downloads permission;
-see BROWSER_DOWNLOAD_INTAKE.md. Automatic Chrome cancellation/takeover and the
-generic-file job contract have not been introduced.
+The subsequent checkpoints add optional Downloads observation and explicit
+checked generic-file handoff; see BROWSER_DOWNLOAD_INTAKE.md. Automatic takeover
+has not been introduced.
 
 ## Helper responsibilities
 
@@ -58,15 +58,15 @@ The opt-in observer and conservative policy are now described in
 [BROWSER_DOWNLOAD_INTAKE.md](./BROWSER_DOWNLOAD_INTAKE.md). This changes no existing
 media adapter or browser download ownership.
 
-## Remaining checkpoints
+## Confirmed generic-file checkpoint (implemented separately)
 
-Keep browser intake distinct from media candidates. Build the generic
-file executor on the neutral HTTP core, with an explicit filename policy.
-Do not reuse the media MP4 fallback or treat all browser downloads as replayable.
-POST/session-bound/one-shot/unsupported sources must remain browser-owned until
-there is a supported handoff strategy. A successful Helper handshake alone is
-not proof that a source can be transferred safely.
+Generic file contracts/execution are separate from media candidates. The shared
+range core now drains aborted sibling workers before returning, allowing safe
+generic partial-file cleanup without concurrent writes. Provider request policy,
+media adapters, chunk sizing and YouTube range logic are unchanged.
 
-The subsequent coordinator must test duplicate intake, extension-originated
-downloads, restart/disconnect, handoff failure and browser fallback before any
-automatic cancellation/takeover is enabled.
+The coordinator requires observed GET + strong size/ETag evidence, independent
+native validation and explicit acceptance. It journals pause ownership and keeps
+Chrome's resumable request until native completion is verified and saved. See
+[BROWSER_DOWNLOAD_INTAKE.md](./BROWSER_DOWNLOAD_INTAKE.md) for supported files,
+privacy, recovery, tests and remaining live-Chrome verification gates.

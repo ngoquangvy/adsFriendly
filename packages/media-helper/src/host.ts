@@ -32,8 +32,10 @@ import { preflightYouTubeProviderQualities } from "./youtube-provider-resolver.j
 import { validatePlayerOutputCanary } from "./player-output-canary.js";
 import { PlayerOutputCaptureManager } from "./player-output-capture-manager.js";
 import type { DownloadCandidate } from "./download-types.js";
+import { FILE_HELPER_REQUESTS } from "../../../src/downloads/file-contract.js";
+import { FileJobManager } from "./file-job-manager.js";
 
-const HELPER_VERSION = "0.24.3";
+const HELPER_VERSION = "0.25.0";
 const callerOrigin = process.argv[2] || null;
 const reader = new NativeMessageReader();
 const adapters = new DownloadAdapterRegistry([
@@ -44,9 +46,11 @@ const adapters = new DownloadAdapterRegistry([
 ]);
 const jobs = new DownloadJobManager(adapters);
 const playerOutputCaptures = new PlayerOutputCaptureManager();
+const fileJobs = new FileJobManager();
 
 process.stdin.on("end", () => {
   jobs.cancelAll();
+  fileJobs.cancelAll();
   void playerOutputCaptures.cancelAll();
 });
 
@@ -100,6 +104,12 @@ async function handleMessage(rawMessage: unknown): Promise<void> {
           await inspectCapabilities(),
         ),
       );
+      return;
+    }
+    if (Object.values(FILE_HELPER_REQUESTS).includes(request.type)) {
+      await fileJobs.handle(request.type, request.payload, (type, payload) => {
+        writeMessage(createHelperEvent(type, requestId, payload));
+      });
       return;
     }
     if (request.type === MEDIA_HELPER_REQUESTS.YOUTUBE_QUALITY_PREFLIGHT) {
@@ -227,6 +237,7 @@ async function inspectCapabilities() {
   const ffmpeg = await detectExecutable("ffmpeg", ["-version"]);
   const ffprobe = await detectExecutable("ffprobe", ["-version"]);
   return {
+    [MEDIA_HELPER_CAPABILITIES.FILE_HTTP_DOWNLOAD]: true,
     [MEDIA_HELPER_CAPABILITIES.DIRECT_HTTP_DOWNLOAD]: true,
     [MEDIA_HELPER_CAPABILITIES.HLS_VOD_DOWNLOAD]: ffmpeg.available,
     [MEDIA_HELPER_CAPABILITIES.HLS_PARALLEL_ACQUISITION]: ffmpeg.available,

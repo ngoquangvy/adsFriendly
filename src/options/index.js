@@ -5,6 +5,7 @@ import {
   DOWNLOAD_INTAKE_KEY,
   DOWNLOAD_OBSERVER_FEATURE,
 } from "../downloads/intake-contract.js";
+import { FILE_TRANSFER_KEY } from "../downloads/file-contract.js";
 import { createSettingsListFilters } from "./list-filters.js";
 import {
   BUNDLED_SETTINGS_PACKAGE_PATH,
@@ -146,7 +147,10 @@ async function renderActiveSection() {
 }
 
 function handleStorageChange(changes, areaName) {
-  if (areaName === "session" && DOWNLOAD_INTAKE_KEY in changes) {
+  if (
+    (areaName === "session" && DOWNLOAD_INTAKE_KEY in changes) ||
+    FILE_TRANSFER_KEY in changes
+  ) {
     downloadsSection.refreshIntake();
   }
   if (

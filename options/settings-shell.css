@@ -535,3 +535,13 @@ a {
   color: #94a3b8;
   font-size: 0.78rem;
 }
+.file-transfer-title {
+  font-weight: 600;
+}
+.file-transfer-details {
+  color: #94a3b8;
+  font-size: 0.8rem;
+}
+.file-transfer-error {
+  color: #fbbf24 !important;
+}

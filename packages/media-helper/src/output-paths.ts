@@ -8,14 +8,18 @@ export function resolveOutputDirectory(value: string | null) {
   return value;
 }
 
-export function sanitizeFilename(value: string, fallbackExtension: string) {
+export function sanitizeFilename(
+  value: string,
+  fallbackExtension: string,
+  fallbackStem = "video",
+) {
   let name = value
     .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
     .replace(/[. ]+$/g, "")
     .trim()
     .slice(0, 180);
   if (!name || /^(con|prn|aux|nul|com\d|lpt\d)$/i.test(name)) {
-    name = `video${fallbackExtension}`;
+    name = `${fallbackStem}${fallbackExtension}`;
   }
   if (!extname(name)) name += fallbackExtension;
   return name;

@@ -1,4 +1,9 @@
 import { normalizeMediaDownloadOutput } from "./download-options.js";
+import {
+  FILE_HELPER_REQUESTS,
+  FILE_HELPER_EVENTS,
+  FILE_HTTP_CAPABILITY,
+} from "../downloads/file-contract.js";
 import { isRegisteredMediaAccessStrategy } from "./access-strategy-catalog.js";
 import { normalizeAesKeyHandoffDiagnostic } from "./key-handoff-diagnostics.js";
 import {
@@ -10,6 +15,7 @@ export const MEDIA_HELPER_PROTOCOL_VERSION = 12;
 export const MEDIA_HELPER_HOST_NAME = "com.adsfriendly.media_helper";
 
 export const MEDIA_HELPER_REQUESTS = Object.freeze({
+  ...FILE_HELPER_REQUESTS,
   HELLO: "helper.hello",
   GET_CAPABILITIES: "helper.capabilities.get",
   YOUTUBE_QUALITY_PREFLIGHT: "youtube.quality_preflight",
@@ -26,6 +32,7 @@ export const MEDIA_HELPER_REQUESTS = Object.freeze({
 });
 
 export const MEDIA_HELPER_EVENTS = Object.freeze({
+  ...FILE_HELPER_EVENTS,
   READY: "helper.ready",
   CAPABILITIES: "helper.capabilities",
   YOUTUBE_QUALITY_PREFLIGHT: "youtube.quality_preflight",
@@ -42,6 +49,7 @@ export const MEDIA_HELPER_EVENTS = Object.freeze({
 });
 
 export const MEDIA_HELPER_CAPABILITIES = Object.freeze({
+  FILE_HTTP_DOWNLOAD: FILE_HTTP_CAPABILITY,
   DIRECT_HTTP_DOWNLOAD: "download.direct_http",
   HLS_VOD_DOWNLOAD: "download.hls_vod",
   HLS_PARALLEL_ACQUISITION: "download.hls_parallel_acquisition",

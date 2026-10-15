@@ -200,6 +200,7 @@ var AdsFriendlyVideo = (() => {
     MEDIA_DOWNLOAD: "media.download",
     MEDIA_NATIVE_DOWNLOAD: "media.native_download",
     BROWSER_DOWNLOAD_OBSERVE: "downloads.browser_observe",
+    BROWSER_FILE_TRANSFER: "downloads.file_transfer",
     VIDEO_OBSERVE: "video.observe",
     VIDEO_RESTORE_STATE: "video.restore_state",
     VIDEO_USER_ACTION: "video.user_action",
@@ -215,13 +216,24 @@ var AdsFriendlyVideo = (() => {
     [PROTECTION_MODES.AUTO]: 2
   });
   var CAPABILITY_CATALOG = Object.freeze({
+    [C2.BROWSER_FILE_TRANSFER]: capability(
+      C2.BROWSER_FILE_TRANSFER,
+      "safe",
+      T.USER,
+      {
+        availableWhenDisabled: true,
+        browserPermissions: ["downloads", "nativeMessaging"],
+        productIds: [P2.MEDIA_TOOLS],
+        requiredComponents: [R.BROWSER_EXTENSION, R.MEDIA_HELPER]
+      }
+    ),
     [C2.BROWSER_DOWNLOAD_OBSERVE]: capability(
       C2.BROWSER_DOWNLOAD_OBSERVE,
       "safe",
       T.PASSIVE,
       {
         availableWhenDisabled: true,
-        browserPermissions: ["downloads"],
+        browserPermissions: ["downloads", "webRequest"],
         productIds: [P2.MEDIA_TOOLS]
       }
     ),
@@ -319,6 +331,10 @@ var AdsFriendlyVideo = (() => {
     })
   });
   var FEATURE_CATALOG = Object.freeze([
+    feature("background.browser-file-handoff", "background", C2.CORE_MAINTENANCE, [
+      C2.BROWSER_FILE_TRANSFER,
+      C2.BROWSER_DOWNLOAD_OBSERVE
+    ]),
     feature(
       "background.browser-download-observer",
       "background",
@@ -555,6 +571,11 @@ var AdsFriendlyVideo = (() => {
 
   // src/runtime/action-catalog.js
   var ACTIONS = Object.freeze({
+    BROWSER_FILE_CHECK: "downloads.file.check",
+    BROWSER_FILE_ACCEPT: "downloads.file.accept",
+    BROWSER_FILE_RETURN: "downloads.file.return",
+    BROWSER_FILE_OPEN: "downloads.file.open",
+    BROWSER_FILE_REVEAL: "downloads.file.reveal",
     MEDIA_DOWNLOAD_CANCEL: "media.download.cancel",
     MEDIA_DOWNLOAD_CREATE: "media.download.create",
     MEDIA_DOWNLOAD_PREFLIGHT: "media.download.preflight",
@@ -576,6 +597,31 @@ var AdsFriendlyVideo = (() => {
   var A = ACTIONS;
   var C3 = CAPABILITIES;
   var ACTION_CATALOG = Object.freeze({
+    [A.BROWSER_FILE_CHECK]: action(
+      A.BROWSER_FILE_CHECK,
+      "background.browser-file-handoff",
+      C3.BROWSER_FILE_TRANSFER
+    ),
+    [A.BROWSER_FILE_ACCEPT]: action(
+      A.BROWSER_FILE_ACCEPT,
+      "background.browser-file-handoff",
+      C3.BROWSER_FILE_TRANSFER
+    ),
+    [A.BROWSER_FILE_RETURN]: action(
+      A.BROWSER_FILE_RETURN,
+      "background.browser-file-handoff",
+      C3.BROWSER_DOWNLOAD_OBSERVE
+    ),
+    [A.BROWSER_FILE_OPEN]: action(
+      A.BROWSER_FILE_OPEN,
+      "background.browser-file-handoff",
+      C3.BROWSER_FILE_TRANSFER
+    ),
+    [A.BROWSER_FILE_REVEAL]: action(
+      A.BROWSER_FILE_REVEAL,
+      "background.browser-file-handoff",
+      C3.BROWSER_FILE_TRANSFER
+    ),
     [A.MEDIA_DOWNLOAD_CANCEL]: action(
       A.MEDIA_DOWNLOAD_CANCEL,
       "background.media-download-jobs",
@@ -591,7 +637,11 @@ var AdsFriendlyVideo = (() => {
       "background.media-download-jobs",
       C3.MEDIA_NATIVE_DOWNLOAD
     ),
-    [A.MEDIA_DOWNLOAD_LOOKUP]: action(A.MEDIA_DOWNLOAD_LOOKUP, "background.media-download-jobs", C3.MEDIA_DOWNLOAD),
+    [A.MEDIA_DOWNLOAD_LOOKUP]: action(
+      A.MEDIA_DOWNLOAD_LOOKUP,
+      "background.media-download-jobs",
+      C3.MEDIA_DOWNLOAD
+    ),
     [A.MEDIA_OUTPUT_CANARY]: action(
       A.MEDIA_OUTPUT_CANARY,
       "background.media-download-jobs",

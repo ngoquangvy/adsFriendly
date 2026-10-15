@@ -746,8 +746,8 @@
             >
               <h2>Browser downloads <span class="beta-tag">Preview</span></h2>
               <p class="section-description">
-                Observe new Chrome downloads. Files stay in Chrome; no
-                interception or Helper required.
+                Observe new Chrome downloads. Check supported files with Helper,
+                then explicitly confirm a transfer. No automatic takeover.
               </p>
               <label class="browser-download-switch"
                 ><input type="checkbox" id="browser-download-observe" /> Observe
@@ -784,6 +784,21 @@
               <div
                 id="browser-download-observations"
                 class="browser-download-observations"
+              ></div>
+            </div>
+            <div
+              id="browser-file-transfer-card"
+              class="card browser-download-card"
+              hidden
+            >
+              <h2>Browser file transfers</h2>
+              <p class="section-description">
+                Chrome is kept as a paused fallback until Helper completes.
+                Return to Chrome stops Helper and resumes the original request.
+              </p>
+              <div
+                id="browser-file-transfers"
+                class="download-history-list"
               ></div>
             </div>
             <div class="card" style="border-left: 4px solid #38bdf8">

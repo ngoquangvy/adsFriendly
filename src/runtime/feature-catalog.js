@@ -42,6 +42,7 @@ export const CAPABILITIES = Object.freeze({
   MEDIA_DOWNLOAD: "media.download",
   MEDIA_NATIVE_DOWNLOAD: "media.native_download",
   BROWSER_DOWNLOAD_OBSERVE: "downloads.browser_observe",
+  BROWSER_FILE_TRANSFER: "downloads.file_transfer",
   VIDEO_OBSERVE: "video.observe",
   VIDEO_RESTORE_STATE: "video.restore_state",
   VIDEO_USER_ACTION: "video.user_action",
@@ -60,13 +61,24 @@ const MODE_RANK = Object.freeze({
 });
 
 export const CAPABILITY_CATALOG = Object.freeze({
+  [C.BROWSER_FILE_TRANSFER]: capability(
+    C.BROWSER_FILE_TRANSFER,
+    "safe",
+    T.USER,
+    {
+      availableWhenDisabled: true,
+      browserPermissions: ["downloads", "nativeMessaging"],
+      productIds: [P.MEDIA_TOOLS],
+      requiredComponents: [R.BROWSER_EXTENSION, R.MEDIA_HELPER],
+    },
+  ),
   [C.BROWSER_DOWNLOAD_OBSERVE]: capability(
     C.BROWSER_DOWNLOAD_OBSERVE,
     "safe",
     T.PASSIVE,
     {
       availableWhenDisabled: true,
-      browserPermissions: ["downloads"],
+      browserPermissions: ["downloads", "webRequest"],
       productIds: [P.MEDIA_TOOLS],
     },
   ),
@@ -165,6 +177,10 @@ export const CAPABILITY_CATALOG = Object.freeze({
 });
 
 export const FEATURE_CATALOG = Object.freeze([
+  feature("background.browser-file-handoff", "background", C.CORE_MAINTENANCE, [
+    C.BROWSER_FILE_TRANSFER,
+    C.BROWSER_DOWNLOAD_OBSERVE,
+  ]),
   feature(
     "background.browser-download-observer",
     "background",

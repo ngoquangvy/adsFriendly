@@ -1,10 +1,13 @@
 import { DOWNLOAD_INTAKE_MESSAGES } from "../../downloads/intake-contract.js";
 import { INTAKE_REASON_LABELS } from "../../downloads/intake-policy.js";
 import { formatBytes } from "../../media/download-job-view.js";
+import { createFileTransferView } from "./file-transfer-view.js";
 
-// Observation-only controls. No transfer or browser-cancel action exists here.
+// Observation presentation delegates explicit transfer controls to a separate
+// view. Chrome ownership decisions remain in the background coordinator.
 export function createDownloadIntakePanel({
   document,
+  window = document.defaultView,
   chrome,
   isActive,
   getEnabled = () => false,
@@ -25,6 +28,13 @@ export function createDownloadIntakePanel({
     bound = false,
     busy = false;
   const status = $("browser-download-intake-status");
+  const files = createFileTransferView({
+    document,
+    window,
+    chrome,
+    refresh: render,
+    onError: showError,
+  });
   function showError(error) {
     if (!disposed)
       status.textContent =
@@ -42,7 +52,8 @@ export function createDownloadIntakePanel({
       const labels = {
         off: "Off · downloads continue in Chrome",
         starting: "Starting browser download observation…",
-        observing: "Observation only · downloads stay in Chrome",
+        observing:
+          "Downloads stay in Chrome unless you check and confirm a Helper transfer",
         permission_required:
           "Downloads permission required · downloads stay in Chrome",
       };
@@ -51,7 +62,12 @@ export function createDownloadIntakePanel({
           "Observer unavailable · reload the extension") +
         (snapshot?.storageFailed ? " · Session storage unavailable" : "");
       const list = $("browser-download-observations");
-      list.replaceChildren();
+      const existing = new Map(
+        [...list.querySelectorAll(".browser-download-observation")].map(
+          (row) => [Number(row.dataset.browserId), row],
+        ),
+      );
+      list.querySelector(".empty-msg")?.remove();
       const items = Array.isArray(snapshot?.items) ? snapshot.items : [];
       $("browser-download-intake-clear").disabled = !items.length;
       if (!items.length) {
@@ -61,12 +77,21 @@ export function createDownloadIntakePanel({
           "No new browser downloads observed. Existing Chrome history is not scanned.";
         list.append(empty);
       }
-      for (const item of items) {
-        const row = document.createElement("article");
-        row.className = "browser-download-observation";
-        const title = document.createElement("strong");
+      for (const [index, item] of items.entries()) {
+        let row = existing.get(item.id);
+        if (!row) {
+          row = document.createElement("article");
+          row.className = "browser-download-observation";
+          row.dataset.browserId = item.id;
+          row.append(
+            document.createElement("strong"),
+            document.createElement("div"),
+            document.createElement("small"),
+          );
+        }
+        const title = row.querySelector("strong");
         title.textContent = item.filename || "Unnamed file";
-        const details = document.createElement("div");
+        const details = row.querySelector("div");
         details.textContent = [
           item.host || "Browser-local source",
           item.totalBytes === null
@@ -76,13 +101,22 @@ export function createDownloadIntakePanel({
         ]
           .filter(Boolean)
           .join(" · ");
-        const reason = document.createElement("small");
+        const reason = row.querySelector("small");
+        const checked = snapshot.checks?.some(
+          (check) => check.browserId === item.id,
+        );
         reason.textContent =
-          INTAKE_REASON_LABELS[item.assessment?.reason] ||
+          (checked && item.assessment?.disposition === "needs_validation"
+            ? "Checked with Helper · same GET file verified · confirmation required"
+            : INTAKE_REASON_LABELS[item.assessment?.reason]) ||
           "Request not verified · keep in Chrome";
-        row.append(title, details, reason);
-        list.append(row);
+        files.observation(row, item, snapshot);
+        if (list.children[index] !== row)
+          list.insertBefore(row, list.children[index] || null);
+        existing.delete(item.id);
       }
+      for (const row of existing.values()) row.remove();
+      files.render(snapshot);
     } catch (error) {
       if (request === revision && isActive()) showError(error);
     }
@@ -147,6 +181,7 @@ export function createDownloadIntakePanel({
   }
   function stop() {
     disposed = true;
+    files.stop();
     ++revision;
     clearTimeout(timer);
     toggle.removeEventListener("change", change);

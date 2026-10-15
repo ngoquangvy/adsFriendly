@@ -115,6 +115,7 @@ var AdsFriendlyOptions = (() => {
     MEDIA_DOWNLOAD: "media.download",
     MEDIA_NATIVE_DOWNLOAD: "media.native_download",
     BROWSER_DOWNLOAD_OBSERVE: "downloads.browser_observe",
+    BROWSER_FILE_TRANSFER: "downloads.file_transfer",
     VIDEO_OBSERVE: "video.observe",
     VIDEO_RESTORE_STATE: "video.restore_state",
     VIDEO_USER_ACTION: "video.user_action",
@@ -130,13 +131,24 @@ var AdsFriendlyOptions = (() => {
     [PROTECTION_MODES.AUTO]: 2
   });
   var CAPABILITY_CATALOG = Object.freeze({
+    [C2.BROWSER_FILE_TRANSFER]: capability(
+      C2.BROWSER_FILE_TRANSFER,
+      "safe",
+      T.USER,
+      {
+        availableWhenDisabled: true,
+        browserPermissions: ["downloads", "nativeMessaging"],
+        productIds: [P2.MEDIA_TOOLS],
+        requiredComponents: [R.BROWSER_EXTENSION, R.MEDIA_HELPER]
+      }
+    ),
     [C2.BROWSER_DOWNLOAD_OBSERVE]: capability(
       C2.BROWSER_DOWNLOAD_OBSERVE,
       "safe",
       T.PASSIVE,
       {
         availableWhenDisabled: true,
-        browserPermissions: ["downloads"],
+        browserPermissions: ["downloads", "webRequest"],
         productIds: [P2.MEDIA_TOOLS]
       }
     ),
@@ -234,6 +246,10 @@ var AdsFriendlyOptions = (() => {
     })
   });
   var FEATURE_CATALOG = Object.freeze([
+    feature("background.browser-file-handoff", "background", C2.CORE_MAINTENANCE, [
+      C2.BROWSER_FILE_TRANSFER,
+      C2.BROWSER_DOWNLOAD_OBSERVE
+    ]),
     feature(
       "background.browser-download-observer",
       "background",
@@ -1109,9 +1125,235 @@ var AdsFriendlyOptions = (() => {
     not_direct_file: "Not a direct file \xB7 use the media workflow if applicable"
   });
 
+  // src/downloads/file-contract.js
+  var FILE_HELPER_REQUESTS = Object.freeze({
+    FILE_PREPARE: "file.prepare",
+    FILE_START: "file.start",
+    FILE_CANCEL: "file.cancel"
+  });
+  var FILE_HELPER_EVENTS = Object.freeze({
+    FILE_PREPARED: "file.prepared",
+    FILE_STARTED: "file.started",
+    FILE_PROGRESS: "file.progress",
+    FILE_COMPLETED: "file.completed",
+    FILE_CANCELLED: "file.cancelled",
+    FILE_FAILED: "file.failed"
+  });
+  var FILE_TRANSFER_KEY = "browserFileTransfers.v1";
+  var FILE_MESSAGES = Object.freeze({
+    CHECK: "CHECK_BROWSER_FILE",
+    ACCEPT: "ACCEPT_BROWSER_FILE",
+    RETURN: "RETURN_BROWSER_FILE",
+    OPEN: "OPEN_BROWSER_FILE",
+    REVEAL: "REVEAL_BROWSER_FILE"
+  });
+  var FILE_EXTENSIONS = Object.freeze([
+    "zip",
+    "7z",
+    "rar",
+    "gz",
+    "tar",
+    "pdf",
+    "txt",
+    "csv",
+    "json",
+    "xml",
+    "epub",
+    "mp4",
+    "mkv",
+    "webm",
+    "mov",
+    "mp3",
+    "m4a",
+    "ogg",
+    "flac",
+    "wav",
+    "jpg",
+    "jpeg",
+    "png",
+    "gif",
+    "webp"
+  ]);
+
+  // src/options/downloads/file-transfer-view.js
+  var ACTIVE = /* @__PURE__ */ new Set(["pause_requested", "downloading", "returning"]);
+  function createFileTransferView({
+    document: document2,
+    window: window2,
+    chrome: chrome2,
+    refresh,
+    onError
+  }) {
+    let disposed2 = false;
+    function action(label, type, payload, { confirm: confirm2 = false, native = false } = {}) {
+      const button = document2.createElement("button");
+      button.type = "button";
+      button.className = "btn-secondary download-compact-action";
+      button.textContent = label;
+      button.onclick = async () => {
+        if (disposed2) return;
+        if (confirm2 && !window2.confirm(
+          "Transfer this checked file to Media Helper? Chrome will be paused as a fallback and cancelled only after Helper completes. If handoff fails, AdsFriendly will try to resume Chrome."
+        ))
+          return;
+        button.disabled = true;
+        button.textContent = "Working\u2026";
+        try {
+          if (native && !await chrome2.permissions.request({
+            permissions: ["nativeMessaging"]
+          }))
+            throw Error("Helper connection permission was not granted.");
+          const result = await chrome2.runtime.sendMessage({ type, ...payload });
+          if (![
+            "ready_for_handoff",
+            "transferring",
+            "returned_to_chrome",
+            "opened"
+          ].includes(result?.status))
+            throw Error(result?.error || "File action is unavailable.");
+          if (!disposed2) await refresh();
+        } catch (error) {
+          if (!disposed2) {
+            await refresh();
+            onError(error);
+          }
+        } finally {
+          if (!disposed2 && button.isConnected) {
+            button.disabled = false;
+            button.textContent = label;
+          }
+        }
+      };
+      return button;
+    }
+    function observation(row, item, snapshot) {
+      let controls = row.querySelector(".file-check-controls");
+      if (!controls) {
+        controls = document2.createElement("div");
+        controls.className = "file-check-controls download-history-controls";
+        row.append(controls);
+      }
+      const checked = snapshot.checks?.find(
+        (check) => check.browserId === item.id
+      );
+      const active = snapshot.fileTransfers?.find(
+        (job) => job.browserId === item.id && ACTIVE.has(job.status)
+      );
+      const error = snapshot.checkErrors?.find(
+        (entry) => entry.browserId === item.id
+      )?.error;
+      const key = JSON.stringify([
+        checked?.checkId,
+        active?.id,
+        item.assessment?.disposition,
+        error
+      ]);
+      if (controls.dataset.key === key) return;
+      controls.dataset.key = key;
+      controls.replaceChildren();
+      if (active) {
+        const text = document2.createElement("small");
+        text.textContent = "Managed below \xB7 Chrome retained as fallback";
+        controls.append(text);
+      } else if (item.assessment?.disposition === "needs_validation") {
+        controls.append(
+          checked ? action(
+            "Transfer to Helper",
+            FILE_MESSAGES.ACCEPT,
+            { browserId: item.id, checkId: checked.checkId },
+            { confirm: true }
+          ) : action(
+            "Check with Helper",
+            FILE_MESSAGES.CHECK,
+            { browserId: item.id },
+            { native: true }
+          )
+        );
+      }
+      if (error) {
+        const note = document2.createElement("small");
+        note.className = "file-transfer-error";
+        note.textContent = error;
+        controls.append(note);
+      }
+    }
+    function render(snapshot) {
+      const container = document2.getElementById("browser-file-transfers");
+      if (!container) return;
+      const items = snapshot.fileTransfers || [];
+      document2.getElementById("browser-file-transfer-card").hidden = !items.length;
+      const existing = new Map(
+        [...container.children].map((row) => [row.dataset.jobId, row])
+      );
+      const sorted = [...items].sort(
+        (a, b) => Number(ACTIVE.has(b.status)) - Number(ACTIVE.has(a.status))
+      );
+      const labels = {
+        pause_requested: "Preparing handoff",
+        downloading: "Downloading with Helper",
+        completed: "Completed",
+        returned_to_chrome: "Continued in Chrome",
+        needs_browser_attention: "Check Chrome"
+      };
+      for (const [index, job] of sorted.entries()) {
+        let row = existing.get(job.id);
+        if (!row) {
+          row = document2.createElement("article");
+          row.className = "download-history-item";
+          row.dataset.jobId = job.id;
+          for (const name of ["title", "details", "path", "note", "controls"]) {
+            const node = document2.createElement("div");
+            node.className = "file-transfer-" + name;
+            if (name === "path") node.classList.add("download-output-path");
+            if (name === "controls")
+              node.classList.add("download-history-controls");
+            row.append(node);
+          }
+        }
+        row.querySelector(".file-transfer-title").textContent = job.filename;
+        const active = ACTIVE.has(job.status);
+        row.querySelector(".file-transfer-details").textContent = [
+          labels[job.status] || job.status,
+          active ? `${formatBytes(job.progress?.downloadedBytes || 0)} / ${formatBytes(job.totalBytes)} \xB7 ${formatBytes(job.progress?.bytesPerSecond || 0)}/s` : formatBytes(job.totalBytes)
+        ].join(" \xB7 ");
+        const path = row.querySelector(".file-transfer-path");
+        path.textContent = job.outputPath || job.error || "";
+        path.title = path.textContent;
+        row.querySelector(".file-transfer-note").textContent = job.outputPath && job.error ? job.error : "";
+        const controls = row.querySelector(".file-transfer-controls");
+        if (controls.dataset.status !== job.status) {
+          controls.dataset.status = job.status;
+          controls.replaceChildren();
+          if (job.status === "downloading")
+            controls.append(
+              action("Return to Chrome", FILE_MESSAGES.RETURN, { jobId: job.id })
+            );
+          if (job.status === "completed" && job.outputPath) {
+            controls.append(
+              action("Open", FILE_MESSAGES.OPEN, { jobId: job.id }),
+              action("Folder", FILE_MESSAGES.REVEAL, { jobId: job.id })
+            );
+          }
+        }
+        if (container.children[index] !== row)
+          container.insertBefore(row, container.children[index] || null);
+        existing.delete(job.id);
+      }
+      for (const row of existing.values()) row.remove();
+    }
+    return {
+      observation,
+      render,
+      stop() {
+        disposed2 = true;
+      }
+    };
+  }
+
   // src/options/downloads/intake-panel.js
   function createDownloadIntakePanel({
     document: document2,
+    window: window2 = document2.defaultView,
     chrome: chrome2,
     isActive,
     getEnabled = () => false,
@@ -1132,6 +1374,13 @@ var AdsFriendlyOptions = (() => {
       };
     let disposed2 = false, revision = 0, timer = null, bound = false, busy = false;
     const status = $2("browser-download-intake-status");
+    const files = createFileTransferView({
+      document: document2,
+      window: window2,
+      chrome: chrome2,
+      refresh: render,
+      onError: showError
+    });
     function showError(error) {
       if (!disposed2)
         status.textContent = error?.message || "Browser download observation unavailable.";
@@ -1148,12 +1397,17 @@ var AdsFriendlyOptions = (() => {
         const labels = {
           off: "Off \xB7 downloads continue in Chrome",
           starting: "Starting browser download observation\u2026",
-          observing: "Observation only \xB7 downloads stay in Chrome",
+          observing: "Downloads stay in Chrome unless you check and confirm a Helper transfer",
           permission_required: "Downloads permission required \xB7 downloads stay in Chrome"
         };
         status.textContent = (labels[snapshot?.status] || "Observer unavailable \xB7 reload the extension") + (snapshot?.storageFailed ? " \xB7 Session storage unavailable" : "");
         const list = $2("browser-download-observations");
-        list.replaceChildren();
+        const existing = new Map(
+          [...list.querySelectorAll(".browser-download-observation")].map(
+            (row) => [Number(row.dataset.browserId), row]
+          )
+        );
+        list.querySelector(".empty-msg")?.remove();
         const items = Array.isArray(snapshot?.items) ? snapshot.items : [];
         $2("browser-download-intake-clear").disabled = !items.length;
         if (!items.length) {
@@ -1162,22 +1416,38 @@ var AdsFriendlyOptions = (() => {
           empty.textContent = "No new browser downloads observed. Existing Chrome history is not scanned.";
           list.append(empty);
         }
-        for (const item of items) {
-          const row = document2.createElement("article");
-          row.className = "browser-download-observation";
-          const title = document2.createElement("strong");
+        for (const [index, item] of items.entries()) {
+          let row = existing.get(item.id);
+          if (!row) {
+            row = document2.createElement("article");
+            row.className = "browser-download-observation";
+            row.dataset.browserId = item.id;
+            row.append(
+              document2.createElement("strong"),
+              document2.createElement("div"),
+              document2.createElement("small")
+            );
+          }
+          const title = row.querySelector("strong");
           title.textContent = item.filename || "Unnamed file";
-          const details = document2.createElement("div");
+          const details = row.querySelector("div");
           details.textContent = [
             item.host || "Browser-local source",
             item.totalBytes === null ? "Size unavailable" : formatBytes(item.totalBytes),
             item.state
           ].filter(Boolean).join(" \xB7 ");
-          const reason = document2.createElement("small");
-          reason.textContent = INTAKE_REASON_LABELS[item.assessment?.reason] || "Request not verified \xB7 keep in Chrome";
-          row.append(title, details, reason);
-          list.append(row);
+          const reason = row.querySelector("small");
+          const checked = snapshot.checks?.some(
+            (check) => check.browserId === item.id
+          );
+          reason.textContent = (checked && item.assessment?.disposition === "needs_validation" ? "Checked with Helper \xB7 same GET file verified \xB7 confirmation required" : INTAKE_REASON_LABELS[item.assessment?.reason]) || "Request not verified \xB7 keep in Chrome";
+          files.observation(row, item, snapshot);
+          if (list.children[index] !== row)
+            list.insertBefore(row, list.children[index] || null);
+          existing.delete(item.id);
         }
+        for (const row of existing.values()) row.remove();
+        files.render(snapshot);
       } catch (error) {
         if (request === revision && isActive()) showError(error);
       }
@@ -1237,6 +1507,7 @@ var AdsFriendlyOptions = (() => {
     }
     function stop() {
       disposed2 = true;
+      files.stop();
       ++revision;
       clearTimeout(timer);
       toggle.removeEventListener("change", change);
@@ -2032,7 +2303,7 @@ var AdsFriendlyOptions = (() => {
     handledElementLink = elementLink;
   }
   function handleStorageChange(changes, areaName) {
-    if (areaName === "session" && DOWNLOAD_INTAKE_KEY in changes) {
+    if (areaName === "session" && DOWNLOAD_INTAKE_KEY in changes || FILE_TRANSFER_KEY in changes) {
       downloadsSection.refreshIntake();
     }
     if (areaName === "session" && Object.keys(changes).some((key) => key.startsWith(DOWNLOAD_JOB_PREFIX))) {

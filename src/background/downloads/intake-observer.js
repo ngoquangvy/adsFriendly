@@ -12,7 +12,11 @@ import { CAPABILITIES } from "../../runtime/feature-catalog.js";
 // A bounded ingress is installed synchronously at the background entry point.
 // This retains the event waking MV3 while settings/session hydration is pending.
 // No history search, network request or browser download mutation is performed.
-export function createBrowserDownloadIntake({ chrome, now = Date.now }) {
+export function createBrowserDownloadIntake({
+  chrome,
+  now = Date.now,
+  onAvailability = () => {},
+}) {
   let enabled = false,
     ready = false,
     attached = false,
@@ -135,6 +139,7 @@ export function createBrowserDownloadIntake({ chrome, now = Date.now }) {
     }, 500);
   }
   function disable(nextStatus = "off") {
+    onAvailability(false);
     ++generation;
     enabled = false;
     ready = false;
@@ -157,6 +162,7 @@ export function createBrowserDownloadIntake({ chrome, now = Date.now }) {
     featurePolicy = policy;
     const epoch = ++generation;
     enabled = true;
+    onAvailability(true);
     ready = false;
     status = "starting";
     attach();
@@ -203,6 +209,7 @@ export function createBrowserDownloadIntake({ chrome, now = Date.now }) {
   function settleBootstrap() {
     settled = true;
     if (!enabled) {
+      onAvailability(false);
       pending = [];
       detach();
       // Remove stale session metadata even if the feature was disabled/imported.

@@ -84,13 +84,19 @@ export async function downloadRanges({
   emitProgress(true);
 
   const pending = ranges.filter((range) => !completed.has(range.index));
+  const workers = new AbortController();
+  const abortWorkers = () => workers.abort(context.signal.reason);
+  if (context.signal.aborted) abortWorkers();
+  else context.signal.addEventListener("abort", abortWorkers, { once: true });
+  const workerContext = { ...context, signal: workers.signal };
+  let firstFailure: unknown;
   let nextIndex = 0;
   const worker = async () => {
     while (nextIndex < pending.length) {
       const range = pending[nextIndex++];
       await downloadRangeWithRetry({
         source,
-        context,
+        context: workerContext,
         probe,
         range,
         partialPath,
@@ -114,10 +120,24 @@ export async function downloadRanges({
       emitProgress(true);
     }
   };
-  await Promise.all(
-    Array.from({ length: Math.min(connections, pending.length || 1) }, worker),
-  );
-  await persistChain;
+  try {
+    await Promise.allSettled(
+      Array.from({ length: Math.min(connections, pending.length || 1) }, () =>
+        worker().catch((error) => {
+          firstFailure ??= error;
+          workers.abort(error);
+          throw error;
+        }),
+      ),
+    );
+    await persistChain.catch((error) => {
+      firstFailure ??= error;
+    });
+    if (firstFailure) throw firstFailure;
+    context.signal.throwIfAborted();
+  } finally {
+    context.signal.removeEventListener("abort", abortWorkers);
+  }
   return { totalBytes: probe.totalBytes, resumedBytes };
 }
 
@@ -150,10 +170,17 @@ async function downloadRangeWithRetry({
         !response.ok ||
         !response.body
       ) {
+        await response.body?.cancel().catch(() => {});
         throw new Error(
           source.rangeFailure?.(probe.url, response.status, range, request) ||
             `Range request for bytes ${range.start}-${range.end} returned HTTP ${response.status}.`,
         );
+      }
+      try {
+        await source.validateRangeResponse?.(response, range, probe);
+      } catch (error) {
+        await response.body?.cancel().catch(() => {});
+        throw error;
       }
       const handle = await open(partialPath, "r+");
       try {

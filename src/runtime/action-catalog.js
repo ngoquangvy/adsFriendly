@@ -5,6 +5,11 @@ import {
 } from "./feature-catalog.js";
 
 export const ACTIONS = Object.freeze({
+  BROWSER_FILE_CHECK: "downloads.file.check",
+  BROWSER_FILE_ACCEPT: "downloads.file.accept",
+  BROWSER_FILE_RETURN: "downloads.file.return",
+  BROWSER_FILE_OPEN: "downloads.file.open",
+  BROWSER_FILE_REVEAL: "downloads.file.reveal",
   MEDIA_DOWNLOAD_CANCEL: "media.download.cancel",
   MEDIA_DOWNLOAD_CREATE: "media.download.create",
   MEDIA_DOWNLOAD_PREFLIGHT: "media.download.preflight",
@@ -28,6 +33,31 @@ const A = ACTIONS;
 const C = CAPABILITIES;
 
 export const ACTION_CATALOG = Object.freeze({
+  [A.BROWSER_FILE_CHECK]: action(
+    A.BROWSER_FILE_CHECK,
+    "background.browser-file-handoff",
+    C.BROWSER_FILE_TRANSFER,
+  ),
+  [A.BROWSER_FILE_ACCEPT]: action(
+    A.BROWSER_FILE_ACCEPT,
+    "background.browser-file-handoff",
+    C.BROWSER_FILE_TRANSFER,
+  ),
+  [A.BROWSER_FILE_RETURN]: action(
+    A.BROWSER_FILE_RETURN,
+    "background.browser-file-handoff",
+    C.BROWSER_DOWNLOAD_OBSERVE,
+  ),
+  [A.BROWSER_FILE_OPEN]: action(
+    A.BROWSER_FILE_OPEN,
+    "background.browser-file-handoff",
+    C.BROWSER_FILE_TRANSFER,
+  ),
+  [A.BROWSER_FILE_REVEAL]: action(
+    A.BROWSER_FILE_REVEAL,
+    "background.browser-file-handoff",
+    C.BROWSER_FILE_TRANSFER,
+  ),
   [A.MEDIA_DOWNLOAD_CANCEL]: action(
     A.MEDIA_DOWNLOAD_CANCEL,
     "background.media-download-jobs",
@@ -43,7 +73,11 @@ export const ACTION_CATALOG = Object.freeze({
     "background.media-download-jobs",
     C.MEDIA_NATIVE_DOWNLOAD,
   ),
-  [A.MEDIA_DOWNLOAD_LOOKUP]: action(A.MEDIA_DOWNLOAD_LOOKUP, "background.media-download-jobs", C.MEDIA_DOWNLOAD),
+  [A.MEDIA_DOWNLOAD_LOOKUP]: action(
+    A.MEDIA_DOWNLOAD_LOOKUP,
+    "background.media-download-jobs",
+    C.MEDIA_DOWNLOAD,
+  ),
   [A.MEDIA_OUTPUT_CANARY]: action(
     A.MEDIA_OUTPUT_CANARY,
     "background.media-download-jobs",
