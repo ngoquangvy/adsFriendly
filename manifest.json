@@ -12,7 +12,7 @@
     "unlimitedStorage",
     "scripting"
   ],
-  "optional_permissions": ["nativeMessaging"],
+  "optional_permissions": ["nativeMessaging", "downloads"],
   "options_ui": {
     "page": "options/options.html",
     "open_in_tab": true

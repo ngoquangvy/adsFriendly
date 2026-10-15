@@ -179,6 +179,7 @@ export function createFeaturePolicy(definitionOrId, readSettings) {
 function shouldStartFeature(definition, settings) {
   const override = settings.featureOverrides?.[definition.id];
   if (override === false) return false;
+  if (definition.enabledByDefault === false && override !== true) return false;
   return isCapabilityEnabled(definition.startCapability, settings);
 }
 

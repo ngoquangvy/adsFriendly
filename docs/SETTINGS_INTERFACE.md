@@ -21,6 +21,8 @@ protection policy, download adapter or package/training schema is changed.
 - `src/options/downloads/history-list.js`: stable keyed rows, error expansion,
   compact completion presentation and the 15-visible-item viewport. No Chrome IO;
   job actions are injected by the Downloads controller.
+- `src/options/downloads/intake-panel.js`: optional, observation-only Chrome
+  download intake; separate metadata/permission UI, with no Helper calls.
 - `options/settings-shell.css`: responsive shell and shared presentation.
 
 Exactly one page is visible. Desktop uses a sticky sidebar; narrow screens use

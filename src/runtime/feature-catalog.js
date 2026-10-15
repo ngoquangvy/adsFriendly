@@ -41,6 +41,7 @@ export const CAPABILITIES = Object.freeze({
   MEDIA_CATALOG: "media.catalog",
   MEDIA_DOWNLOAD: "media.download",
   MEDIA_NATIVE_DOWNLOAD: "media.native_download",
+  BROWSER_DOWNLOAD_OBSERVE: "downloads.browser_observe",
   VIDEO_OBSERVE: "video.observe",
   VIDEO_RESTORE_STATE: "video.restore_state",
   VIDEO_USER_ACTION: "video.user_action",
@@ -59,6 +60,16 @@ const MODE_RANK = Object.freeze({
 });
 
 export const CAPABILITY_CATALOG = Object.freeze({
+  [C.BROWSER_DOWNLOAD_OBSERVE]: capability(
+    C.BROWSER_DOWNLOAD_OBSERVE,
+    "safe",
+    T.PASSIVE,
+    {
+      availableWhenDisabled: true,
+      browserPermissions: ["downloads"],
+      productIds: [P.MEDIA_TOOLS],
+    },
+  ),
   [C.CORE_MESSAGING]: capability(C.CORE_MESSAGING, "safe", T.CORE, {
     availableWhenDisabled: true,
     productIds: [P.AD_PROTECTION, P.MEDIA_TOOLS],
@@ -154,6 +165,13 @@ export const CAPABILITY_CATALOG = Object.freeze({
 });
 
 export const FEATURE_CATALOG = Object.freeze([
+  feature(
+    "background.browser-download-observer",
+    "background",
+    C.BROWSER_DOWNLOAD_OBSERVE,
+    [],
+    { enabledByDefault: false },
+  ),
   feature("background.message-router", "background", C.CORE_MESSAGING, [
     C.CORE_MAINTENANCE,
     C.NAVIGATION_INTENT,
@@ -347,11 +365,18 @@ function capability(
   });
 }
 
-function feature(id, context, startCapability, extraCapabilities = []) {
+function feature(
+  id,
+  context,
+  startCapability,
+  extraCapabilities = [],
+  { enabledByDefault = true } = {},
+) {
   return Object.freeze({
     id,
     context,
     startCapability,
+    enabledByDefault,
     capabilities: Object.freeze([startCapability, ...extraCapabilities]),
   });
 }

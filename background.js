@@ -989,6 +989,7 @@ var AdsFriendlyBackground = (() => {
     MEDIA_CATALOG: "media.catalog",
     MEDIA_DOWNLOAD: "media.download",
     MEDIA_NATIVE_DOWNLOAD: "media.native_download",
+    BROWSER_DOWNLOAD_OBSERVE: "downloads.browser_observe",
     VIDEO_OBSERVE: "video.observe",
     VIDEO_RESTORE_STATE: "video.restore_state",
     VIDEO_USER_ACTION: "video.user_action",
@@ -1004,6 +1005,16 @@ var AdsFriendlyBackground = (() => {
     [PROTECTION_MODES.AUTO]: 2
   });
   var CAPABILITY_CATALOG = Object.freeze({
+    [C2.BROWSER_DOWNLOAD_OBSERVE]: capability(
+      C2.BROWSER_DOWNLOAD_OBSERVE,
+      "safe",
+      T.PASSIVE,
+      {
+        availableWhenDisabled: true,
+        browserPermissions: ["downloads"],
+        productIds: [P2.MEDIA_TOOLS]
+      }
+    ),
     [C2.CORE_MESSAGING]: capability(C2.CORE_MESSAGING, "safe", T.CORE, {
       availableWhenDisabled: true,
       productIds: [P2.AD_PROTECTION, P2.MEDIA_TOOLS]
@@ -1098,6 +1109,13 @@ var AdsFriendlyBackground = (() => {
     })
   });
   var FEATURE_CATALOG = Object.freeze([
+    feature(
+      "background.browser-download-observer",
+      "background",
+      C2.BROWSER_DOWNLOAD_OBSERVE,
+      [],
+      { enabledByDefault: false }
+    ),
     feature("background.message-router", "background", C2.CORE_MESSAGING, [
       C2.CORE_MAINTENANCE,
       C2.NAVIGATION_INTENT,
@@ -1253,11 +1271,12 @@ var AdsFriendlyBackground = (() => {
       requiredComponents: Object.freeze([...requiredComponents])
     });
   }
-  function feature(id, context, startCapability, extraCapabilities = []) {
+  function feature(id, context, startCapability, extraCapabilities = [], { enabledByDefault = true } = {}) {
     return Object.freeze({
       id,
       context,
       startCapability,
+      enabledByDefault,
       capabilities: Object.freeze([startCapability, ...extraCapabilities])
     });
   }
@@ -10906,6 +10925,117 @@ ${body}`;
     }
   }
 
+  // src/downloads/intake-contract.js
+  var DOWNLOAD_INTAKE_KEY = "browserDownloadIntake.v1";
+  var DOWNLOAD_INTAKE_MESSAGES = Object.freeze({
+    GET: "GET_BROWSER_DOWNLOAD_INTAKE",
+    CLEAR: "CLEAR_BROWSER_DOWNLOAD_INTAKE"
+  });
+  var INTAKE_LIMIT = 50;
+  var INTAKE_MAX_AGE_MS = 60 * 60 * 1e3;
+  function sourceFacts(value) {
+    try {
+      const url = new URL(value);
+      return {
+        protocol: url.protocol,
+        host: url.hostname,
+        credentialed: Boolean(url.username || url.password),
+        authorizationHints: [...url.searchParams.keys()].some(
+          (key) => /(^|[_-])(token|sig|signature|auth|expire|expires|policy|key|jwt|credential)([_-]|$)/i.test(
+            key
+          ) || /^(X-Amz-|X-Goog-)/i.test(key)
+        )
+      };
+    } catch {
+      return {
+        protocol: "unknown",
+        host: "",
+        credentialed: false,
+        authorizationHints: false
+      };
+    }
+  }
+  function normalizeDownloadIntake(item, now = Date.now()) {
+    if (!Number.isInteger(item?.id) || item.id < 0 || item.incognito || item.byExtensionId)
+      return null;
+    const original = sourceFacts(item.url);
+    const final = sourceFacts(item.finalUrl || item.url);
+    return {
+      id: item.id,
+      filename: String(item.filename || "").split(/[\\/]/).pop().replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 180) || "Unnamed file",
+      host: final.host,
+      protocol: final.protocol,
+      credentialed: original.credentialed || final.credentialed,
+      authorizationHints: original.authorizationHints || final.authorizationHints,
+      mime: String(item.mime || "").split(";")[0].slice(0, 100),
+      totalBytes: size(item.totalBytes),
+      state: ["in_progress", "complete", "interrupted"].includes(item.state) ? item.state : "unknown",
+      danger: String(item.danger || "unknown").slice(0, 64),
+      paused: item.paused === true,
+      observedAt: now,
+      method: "unknown"
+    };
+  }
+  function applyDownloadDelta(record, delta) {
+    const next = { ...record };
+    for (const key of [
+      "state",
+      "danger",
+      "paused",
+      "totalBytes",
+      "mime",
+      "filename"
+    ])
+      if (delta[key] && Object.hasOwn(delta[key], "current")) {
+        const value = delta[key].current;
+        if (key === "totalBytes") next[key] = size(value);
+        else if (key === "paused") next[key] = value === true;
+        else if (key === "filename")
+          next[key] = String(value || "").split(/[\\/]/).pop().replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 180) || "Unnamed file";
+        else next[key] = String(value || "unknown").slice(0, 100);
+      }
+    if (delta.finalUrl?.current || delta.url?.current) {
+      const facts = sourceFacts(delta.finalUrl?.current || delta.url.current);
+      next.host = facts.host;
+      next.protocol = facts.protocol;
+      next.credentialed ||= facts.credentialed;
+      next.authorizationHints ||= facts.authorizationHints;
+    }
+    return next;
+  }
+  function restoreDownloadIntake(value, now = Date.now()) {
+    if (value?.version !== 1 || !Array.isArray(value.items)) return [];
+    return value.items.slice(0, INTAKE_LIMIT).flatMap((row) => {
+      if (!Number.isInteger(row?.id) || !Number.isFinite(row.observedAt) || row.observedAt > now || now - row.observedAt > INTAKE_MAX_AGE_MS)
+        return [];
+      const normalized = normalizeDownloadIntake(
+        {
+          ...row,
+          url: `${row.protocol}//${row.host}/`,
+          incognito: false,
+          byExtensionId: null
+        },
+        row.observedAt
+      );
+      if (!normalized) return [];
+      normalized.authorizationHints = row.authorizationHints === true;
+      normalized.credentialed = row.credentialed === true;
+      return [normalized];
+    });
+  }
+  function size(value) {
+    return Number.isSafeInteger(value) && value >= 0 ? value : null;
+  }
+
+  // src/background/downloads/intake-messages.js
+  function routeDownloadIntakeMessage(message, sender, intake, chrome2) {
+    if (!Object.values(DOWNLOAD_INTAKE_MESSAGES).includes(message?.type))
+      return null;
+    if (sender?.id !== chrome2.runtime.id || sender?.url?.split(/[?#]/)[0] !== chrome2.runtime.getURL("options/options.html"))
+      return { status: "ignored" };
+    return message.type === DOWNLOAD_INTAKE_MESSAGES.GET ? intake.snapshot() : intake.clear();
+  }
+
   // src/background/message-router.js
   var NAVIGATION_DIAGNOSTICS_MESSAGES = /* @__PURE__ */ new Set([
     "START_NAVIGATION_DIAGNOSTICS",
@@ -10914,6 +11044,8 @@ ${body}`;
     "CLEAR_NAVIGATION_DIAGNOSTICS"
   ]);
   var MESSAGE_CAPABILITIES = Object.freeze({
+    [DOWNLOAD_INTAKE_MESSAGES.GET]: CAPABILITIES.CORE_MAINTENANCE,
+    [DOWNLOAD_INTAKE_MESSAGES.CLEAR]: CAPABILITIES.CORE_MAINTENANCE,
     TRUSTED_CLICK: CAPABILITIES.NAVIGATION_INTENT,
     SYNC_LEARNING: CAPABILITIES.LEARNING_FEEDBACK,
     NEGATIVE_LEARNING: CAPABILITIES.LEARNING_FEEDBACK,
@@ -10982,7 +11114,7 @@ ${body}`;
     RETRY_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
     GET_MEDIA_DOWNLOAD_JOBS: CAPABILITIES.MEDIA_DOWNLOAD
   });
-  function registerMessageRouter(policy) {
+  function registerMessageRouter(policy, { downloadIntake: downloadIntake2 } = {}) {
     const onMessage = (message, sender, sendResponse) => {
       if (!policy.can(CAPABILITIES.CORE_MESSAGING)) {
         sendResponse({ status: "disabled" });
@@ -10992,6 +11124,18 @@ ${body}`;
       if (capability2 && !policy.can(capability2)) {
         sendResponse({ status: "capability_disabled" });
         return false;
+      }
+      if (downloadIntake2) {
+        const result2 = routeDownloadIntakeMessage(
+          message,
+          sender,
+          downloadIntake2,
+          chrome
+        );
+        if (result2 !== null) {
+          Promise.resolve(result2).then(sendResponse).catch(() => sendResponse({ status: "error" }));
+          return true;
+        }
       }
       route(message, sender).then((r) => sendResponse(r || { status: "ok" })).catch((err) => sendResponse({ status: "error", error: err.message }));
       return true;
@@ -12061,6 +12205,7 @@ ${body}`;
   function shouldStartFeature(definition, settings) {
     const override = settings.featureOverrides?.[definition.id];
     if (override === false) return false;
+    if (definition.enabledByDefault === false && override !== true) return false;
     return isCapabilityEnabled(definition.startCapability, settings);
   }
   function validateFeatureOverrides(featureOverrides = {}) {
@@ -12115,7 +12260,7 @@ ${body}`;
     if (!type || !itag) return null;
     const normalizedUrl = new URL(url);
     normalizedUrl.searchParams.delete("range");
-    const size = parseSize(url.searchParams.get("size"));
+    const size2 = parseSize(url.searchParams.get("size"));
     const duration = positiveNumber(url.searchParams.get("dur"));
     const contentLength = positiveInteger3(url.searchParams.get("clen")) || contentRangeTotal(responseHeaders) || positiveInteger3(headerValue(responseHeaders, "content-length"));
     const bitrate = positiveInteger3(url.searchParams.get("bitrate"));
@@ -12136,9 +12281,9 @@ ${body}`;
       bandwidth: bitrate,
       averageBandwidth: bitrate,
       contentLength,
-      width: size?.width || null,
-      height: size?.height || null,
-      resolution: size,
+      width: size2?.width || null,
+      height: size2?.height || null,
+      resolution: size2,
       qualityLabel: safeToken(url.searchParams.get("quality_label"), 40) || safeToken(url.searchParams.get("quality"), 40),
       observedAt: Date.now()
     });
@@ -12658,12 +12803,262 @@ ${body}`;
     }
   }
 
+  // src/downloads/intake-policy.js
+  function assessDownloadIntake(record) {
+    let reason;
+    if (record.credentialed) reason = "url_credentials";
+    else if (!["https:", "http:"].includes(record.protocol))
+      reason = "unsupported_source";
+    else if (record.danger !== "safe") reason = "browser_safety_check";
+    else if (record.state !== "in_progress") reason = "not_active";
+    else if (record.paused) reason = "browser_paused";
+    else if (record.authorizationHints) reason = "authorization_not_verified";
+    else if (/^(text\/html|application\/(vnd.apple.mpegurl|x-mpegurl|dash\+xml))$/i.test(
+      record.mime
+    ))
+      reason = "not_direct_file";
+    else reason = "request_not_verified";
+    return {
+      disposition: reason === "request_not_verified" ? "needs_validation" : "browser_only",
+      reason,
+      canTakeOver: false
+    };
+  }
+  var INTAKE_REASON_LABELS = Object.freeze({
+    request_not_verified: "HTTP file \xB7 request method and browser session not verified",
+    authorization_not_verified: "Signed/session URL \xB7 replay not verified",
+    url_credentials: "URL credentials \xB7 keep in Chrome",
+    unsupported_source: "Browser-local or unsupported source \xB7 keep in Chrome",
+    browser_safety_check: "Chrome safety status not clear \xB7 keep in Chrome",
+    not_active: "Already finished or interrupted \xB7 keep in Chrome",
+    browser_paused: "Paused in Chrome",
+    not_direct_file: "Not a direct file \xB7 use the media workflow if applicable"
+  });
+
+  // src/background/downloads/intake-observer.js
+  function createBrowserDownloadIntake({ chrome: chrome2, now = Date.now }) {
+    let enabled = false, ready = false, attached = false, settled = false;
+    let generation = 0, writeTimer = null, writeChain = Promise.resolve();
+    let status = "off", storageFailed = false, pending = [];
+    let clearSequence = 0, featurePolicy = null;
+    const records = /* @__PURE__ */ new Map();
+    function accept(event2) {
+      if (!ready) {
+        if (!settled || enabled) {
+          pending.push(event2);
+          if (pending.length > INTAKE_LIMIT * 2) pending.shift();
+        }
+        return;
+      }
+      if (!enabled) return;
+      if (event2.type !== "create" && !records.has(event2.id)) return;
+      if (event2.type === "change" && !Object.keys(event2.patch).length) return;
+      apply(event2);
+      scheduleWrite();
+    }
+    const onCreated = (item) => {
+      const row = normalizeDownloadIntake(item, now());
+      if (row) accept({ type: "create", row });
+    };
+    const onChanged = (delta) => {
+      if (Number.isInteger(delta?.id))
+        accept({
+          type: "change",
+          id: delta.id,
+          patch: applyDownloadDelta({}, delta)
+        });
+    };
+    const onErased = (id) => accept({ type: "erase", id });
+    function attach() {
+      if (attached || !chrome2.downloads?.onCreated) return;
+      try {
+        chrome2.downloads.onCreated.addListener(onCreated);
+        chrome2.downloads.onChanged.addListener(onChanged);
+        chrome2.downloads.onErased.addListener(onErased);
+        attached = true;
+      } catch {
+        detach();
+        status = "permission_required";
+      }
+    }
+    function detach() {
+      chrome2.downloads?.onCreated?.removeListener(onCreated);
+      chrome2.downloads?.onChanged?.removeListener(onChanged);
+      chrome2.downloads?.onErased?.removeListener(onErased);
+      attached = false;
+    }
+    function prune() {
+      for (const [id, row] of records)
+        if (now() - row.observedAt > INTAKE_MAX_AGE_MS) records.delete(id);
+      while (records.size > INTAKE_LIMIT)
+        records.delete(records.keys().next().value);
+    }
+    function apply(event2) {
+      if (event2.type === "create") {
+        const previous = records.get(event2.row.id);
+        records.set(
+          event2.row.id,
+          previous ? {
+            ...event2.row,
+            observedAt: previous.observedAt,
+            authorizationHints: previous.authorizationHints || event2.row.authorizationHints,
+            credentialed: previous.credentialed || event2.row.credentialed
+          } : event2.row
+        );
+      } else if (event2.type === "change" && records.has(event2.id)) {
+        const previous = records.get(event2.id);
+        records.set(event2.id, {
+          ...previous,
+          ...event2.patch,
+          authorizationHints: previous.authorizationHints || event2.patch.authorizationHints === true,
+          credentialed: previous.credentialed || event2.patch.credentialed === true
+        });
+      } else if (event2.type === "erase") records.delete(event2.id);
+      prune();
+    }
+    function persist(remove = false) {
+      clearTimeout(writeTimer);
+      writeTimer = null;
+      prune();
+      const epoch = generation;
+      const value = { version: 1, items: [...records.values()] };
+      writeChain = writeChain.catch(() => {
+      }).then(async () => {
+        if (epoch !== generation) return;
+        try {
+          if (remove) await chrome2.storage.session.remove(DOWNLOAD_INTAKE_KEY);
+          else if (enabled && ready)
+            await chrome2.storage.session.set({ [DOWNLOAD_INTAKE_KEY]: value });
+          storageFailed = false;
+        } catch {
+          storageFailed = true;
+        }
+      });
+      return writeChain;
+    }
+    function scheduleWrite() {
+      if (writeTimer) return;
+      writeTimer = setTimeout(() => {
+        void persist();
+      }, 500);
+    }
+    function disable(nextStatus = "off") {
+      ++generation;
+      enabled = false;
+      ready = false;
+      status = nextStatus;
+      pending = [];
+      records.clear();
+      detach();
+      void persist(true);
+    }
+    const onRemoved = (change) => {
+      if (change.permissions?.includes("downloads"))
+        disable("permission_required");
+    };
+    const onAdded = (change) => {
+      if (change.permissions?.includes("downloads") && featurePolicy && !enabled)
+        void start(featurePolicy);
+    };
+    async function start(policy) {
+      policy.require(CAPABILITIES.BROWSER_DOWNLOAD_OBSERVE);
+      featurePolicy = policy;
+      const epoch = ++generation;
+      enabled = true;
+      ready = false;
+      status = "starting";
+      attach();
+      chrome2.permissions?.onRemoved?.addListener(onRemoved);
+      chrome2.permissions?.onAdded?.addListener(onAdded);
+      try {
+        const granted = await chrome2.permissions.contains({
+          permissions: ["downloads"]
+        });
+        if (epoch !== generation) return stop;
+        if (!granted || !attached) {
+          disable("permission_required");
+          return stop;
+        }
+        try {
+          const sequence = clearSequence;
+          const saved = await chrome2.storage.session.get(DOWNLOAD_INTAKE_KEY);
+          if (epoch !== generation) return stop;
+          if (sequence === clearSequence)
+            for (const row of restoreDownloadIntake(
+              saved?.[DOWNLOAD_INTAKE_KEY],
+              now()
+            ))
+              records.set(row.id, row);
+        } catch {
+          storageFailed = true;
+        }
+        if (epoch !== generation) return stop;
+        ready = true;
+        status = "observing";
+        for (const event2 of pending.splice(0)) apply(event2);
+        scheduleWrite();
+      } catch {
+        if (epoch === generation) disable("permission_required");
+      }
+      return stop;
+    }
+    function stop() {
+      featurePolicy = null;
+      chrome2.permissions?.onRemoved?.removeListener(onRemoved);
+      chrome2.permissions?.onAdded?.removeListener(onAdded);
+      disable();
+    }
+    function settleBootstrap() {
+      settled = true;
+      if (!enabled) {
+        pending = [];
+        detach();
+        void persist(true);
+      }
+    }
+    function snapshot() {
+      const previousSize = records.size;
+      prune();
+      if (records.size !== previousSize && enabled && ready) scheduleWrite();
+      return {
+        status,
+        storageFailed,
+        observationOnly: true,
+        maxItems: INTAKE_LIMIT,
+        items: [...records.values()].reverse().map((row) => ({ ...row, assessment: assessDownloadIntake(row) }))
+      };
+    }
+    async function clear() {
+      ++clearSequence;
+      records.clear();
+      pending = [];
+      await persist(true);
+      return { status: storageFailed ? "storage_error" : "cleared" };
+    }
+    return {
+      bootstrap: attach,
+      start,
+      startFeature(policy) {
+        void start(policy).catch(() => disable("unavailable"));
+        return stop;
+      },
+      settleBootstrap,
+      snapshot,
+      clear,
+      flush: () => persist(),
+      stop
+    };
+  }
+
   // src/background/index.js
+  var downloadIntake = createBrowserDownloadIntake({ chrome });
+  downloadIntake.bootstrap();
   var controller = createMainController({
     context: "background",
     initialSettings: DEFAULT_SETTINGS,
     implementations: {
-      "background.message-router": ({ policy }) => registerMessageRouter(policy),
+      "background.message-router": ({ policy }) => registerMessageRouter(policy, { downloadIntake }),
+      "background.browser-download-observer": ({ policy }) => downloadIntake.startFeature(policy),
       "background.media-catalog": () => startBackgroundMediaCatalog(),
       "background.media-debug-capture": () => startMediaDebugCaptureStore(),
       "background.media-manifest-handoff": () => startMediaManifestHandoffStore(),
@@ -12698,7 +13093,11 @@ ${body}`;
     () => loadSettings(chrome.storage.local, {
       persistMissing: true
     })
-  ).then((settings) => controller.updateSettings(settings)).catch(
-    (error) => console.error("[AdsFriendly Background] MainController failed", error)
-  );
+  ).then((settings) => controller.updateSettings(settings)).then(() => {
+    downloadIntake.settleBootstrap();
+    controller.onChange(() => downloadIntake.settleBootstrap());
+  }).catch((error) => {
+    downloadIntake.settleBootstrap();
+    console.error("[AdsFriendly Background] MainController failed", error);
+  });
 })();

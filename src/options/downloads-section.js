@@ -2,6 +2,7 @@ import {
   createDownloadHistoryList,
   isActiveDownload,
 } from "./downloads/history-list.js";
+import { createDownloadIntakePanel } from "./downloads/intake-panel.js";
 
 // One instance per Settings document. Owns subscriptions/actions, never protection policy.
 export function createDownloadsSection({
@@ -12,6 +13,8 @@ export function createDownloadsSection({
   updateFilters,
   saveConnections,
   onError,
+  getObserverEnabled,
+  saveObserverEnabled,
 }) {
   const $ = (id) => document.getElementById(id);
   const confirm = (message) => window.confirm(message);
@@ -19,6 +22,13 @@ export function createDownloadsSection({
   let downloadRenderRevision = 0;
   let downloadRefreshTimer = null;
   const bindings = [];
+  const intakePanel = createDownloadIntakePanel({
+    document,
+    chrome,
+    isActive,
+    getEnabled: getObserverEnabled,
+    saveEnabled: saveObserverEnabled,
+  });
   const historyList = createDownloadHistoryList({
     document,
     window,
@@ -27,6 +37,7 @@ export function createDownloadsSection({
 
   function bind() {
     if (disposed || bindings.length) return;
+    intakePanel.bind();
     for (const [id, event, action] of [
       ["btn-download-refresh", "click", renderDownloads],
       ["btn-download-clear", "click", clearDownloadHistory],
@@ -179,12 +190,14 @@ export function createDownloadsSection({
     disposed = true;
     ++downloadRenderRevision;
     clearTimeout(downloadRefreshTimer);
+    intakePanel.stop();
     for (const unbind of bindings.splice(0)) unbind();
   }
 
   return {
     bind,
-    render: renderDownloads,
+    render: () => Promise.all([renderDownloads(), intakePanel.render()]),
+    refreshIntake: intakePanel.scheduleRefresh,
     scheduleRefresh: scheduleDownloadRefresh,
     updateViewport: historyList.updateViewport,
     stop,

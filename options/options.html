@@ -740,6 +740,52 @@
             class="config-section"
             style="margin-bottom: 2rem; scroll-margin-top: 1.5rem"
           >
+            <div
+              class="card browser-download-card"
+              style="border-left: 4px solid #94a3b8"
+            >
+              <h2>Browser downloads <span class="beta-tag">Preview</span></h2>
+              <p class="section-description">
+                Observe new Chrome downloads. Files stay in Chrome; no
+                interception or Helper required.
+              </p>
+              <label class="browser-download-switch"
+                ><input type="checkbox" id="browser-download-observe" /> Observe
+                new browser downloads</label
+              >
+              <p class="section-description">
+                Optional Downloads permission. Session-only metadata: up to 50
+                entries with a one-hour visibility window. No old history scan,
+                signed URLs or private-tab records.
+              </p>
+              <div class="download-manager-actions">
+                <button
+                  type="button"
+                  class="btn-secondary"
+                  id="browser-download-intake-refresh"
+                >
+                  Refresh observations
+                </button>
+                <button
+                  type="button"
+                  class="btn-secondary"
+                  id="browser-download-intake-clear"
+                >
+                  Clear observations
+                </button>
+              </div>
+              <p
+                id="browser-download-intake-status"
+                class="package-status"
+                role="status"
+              >
+                Off · downloads continue in Chrome
+              </p>
+              <div
+                id="browser-download-observations"
+                class="browser-download-observations"
+              ></div>
+            </div>
             <div class="card" style="border-left: 4px solid #38bdf8">
               <div
                 class="download-history-header"

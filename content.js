@@ -1326,6 +1326,7 @@ var AdsFriendlyContent = (() => {
     MEDIA_CATALOG: "media.catalog",
     MEDIA_DOWNLOAD: "media.download",
     MEDIA_NATIVE_DOWNLOAD: "media.native_download",
+    BROWSER_DOWNLOAD_OBSERVE: "downloads.browser_observe",
     VIDEO_OBSERVE: "video.observe",
     VIDEO_RESTORE_STATE: "video.restore_state",
     VIDEO_USER_ACTION: "video.user_action",
@@ -1341,6 +1342,16 @@ var AdsFriendlyContent = (() => {
     [PROTECTION_MODES.AUTO]: 2
   });
   var CAPABILITY_CATALOG = Object.freeze({
+    [C2.BROWSER_DOWNLOAD_OBSERVE]: capability(
+      C2.BROWSER_DOWNLOAD_OBSERVE,
+      "safe",
+      T.PASSIVE,
+      {
+        availableWhenDisabled: true,
+        browserPermissions: ["downloads"],
+        productIds: [P2.MEDIA_TOOLS]
+      }
+    ),
     [C2.CORE_MESSAGING]: capability(C2.CORE_MESSAGING, "safe", T.CORE, {
       availableWhenDisabled: true,
       productIds: [P2.AD_PROTECTION, P2.MEDIA_TOOLS]
@@ -1435,6 +1446,13 @@ var AdsFriendlyContent = (() => {
     })
   });
   var FEATURE_CATALOG = Object.freeze([
+    feature(
+      "background.browser-download-observer",
+      "background",
+      C2.BROWSER_DOWNLOAD_OBSERVE,
+      [],
+      { enabledByDefault: false }
+    ),
     feature("background.message-router", "background", C2.CORE_MESSAGING, [
       C2.CORE_MAINTENANCE,
       C2.NAVIGATION_INTENT,
@@ -1590,11 +1608,12 @@ var AdsFriendlyContent = (() => {
       requiredComponents: Object.freeze([...requiredComponents])
     });
   }
-  function feature(id, context, startCapability, extraCapabilities = []) {
+  function feature(id, context, startCapability, extraCapabilities = [], { enabledByDefault = true } = {}) {
     return Object.freeze({
       id,
       context,
       startCapability,
+      enabledByDefault,
       capabilities: Object.freeze([startCapability, ...extraCapabilities])
     });
   }
@@ -2953,6 +2972,7 @@ var AdsFriendlyContent = (() => {
   function shouldStartFeature(definition, settings) {
     const override = settings.featureOverrides?.[definition.id];
     if (override === false) return false;
+    if (definition.enabledByDefault === false && override !== true) return false;
     return isCapabilityEnabled(definition.startCapability, settings);
   }
   function validateFeatureOverrides(featureOverrides = {}) {

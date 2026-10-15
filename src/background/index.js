@@ -12,12 +12,19 @@ import { startMediaDownloadJobStore } from "./media-download-jobs.js";
 import { startBackgroundMediaRequestObserver } from "./media-request-observer.js";
 import { startMediaDebugCaptureStore } from "./media-debug-capture.js";
 import { startMediaManifestHandoffStore } from "./media-manifest-handoff.js";
+import { createBrowserDownloadIntake } from "./downloads/intake-observer.js";
+
+const downloadIntake = createBrowserDownloadIntake({ chrome });
+downloadIntake.bootstrap();
 
 const controller = createMainController({
   context: "background",
   initialSettings: DEFAULT_SETTINGS,
   implementations: {
-    "background.message-router": ({ policy }) => registerMessageRouter(policy),
+    "background.message-router": ({ policy }) =>
+      registerMessageRouter(policy, { downloadIntake }),
+    "background.browser-download-observer": ({ policy }) =>
+      downloadIntake.startFeature(policy),
     "background.media-catalog": () => startBackgroundMediaCatalog(),
     "background.media-debug-capture": () => startMediaDebugCaptureStore(),
     "background.media-manifest-handoff": () => startMediaManifestHandoffStore(),
@@ -63,6 +70,11 @@ controller
     }),
   )
   .then((settings) => controller.updateSettings(settings))
-  .catch((error) =>
-    console.error("[AdsFriendly Background] MainController failed", error),
-  );
+  .then(() => {
+    downloadIntake.settleBootstrap();
+    controller.onChange(() => downloadIntake.settleBootstrap());
+  })
+  .catch((error) => {
+    downloadIntake.settleBootstrap();
+    console.error("[AdsFriendly Background] MainController failed", error);
+  });

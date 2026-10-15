@@ -1,6 +1,10 @@
 import { loadSettings, saveSettings } from "../runtime/settings-store.js";
 import { createSettingsNavigation } from "./section-navigation.js";
 import { createDownloadsSection } from "./downloads-section.js";
+import {
+  DOWNLOAD_INTAKE_KEY,
+  DOWNLOAD_OBSERVER_FEATURE,
+} from "../downloads/intake-contract.js";
 import { createSettingsListFilters } from "./list-filters.js";
 import {
   BUNDLED_SETTINGS_PACKAGE_PATH,
@@ -40,6 +44,20 @@ const downloadsSection = createDownloadsSection({
   isActive: () => settingsNavigation?.isActive("downloads") === true,
   updateFilters: () => listFilters?.update(),
   saveConnections: saveDownloadConnections,
+  getObserverEnabled: () =>
+    currentSnapshot.appSettings?.featureOverrides?.[
+      DOWNLOAD_OBSERVER_FEATURE
+    ] === true,
+  saveObserverEnabled: async (enabled) => {
+    const latest = await loadSettings();
+    currentSnapshot.appSettings = await saveSettings({
+      ...latest,
+      featureOverrides: {
+        ...latest.featureOverrides,
+        [DOWNLOAD_OBSERVER_FEATURE]: enabled,
+      },
+    });
+  },
   onError: (error) => showPackageStatus(error.message, true),
 });
 
@@ -128,6 +146,9 @@ async function renderActiveSection() {
 }
 
 function handleStorageChange(changes, areaName) {
+  if (areaName === "session" && DOWNLOAD_INTAKE_KEY in changes) {
+    downloadsSection.refreshIntake();
+  }
   if (
     areaName === "session" &&
     Object.keys(changes).some((key) => key.startsWith(DOWNLOAD_JOB_PREFIX))

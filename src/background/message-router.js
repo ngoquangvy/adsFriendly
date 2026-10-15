@@ -72,6 +72,8 @@ import {
   normalizeNavigationAttributionFacts,
 } from "../navigation/background/attribution.js";
 import { openExtensionManagedTab } from "../navigation/background/managed-tabs.js";
+import { DOWNLOAD_INTAKE_MESSAGES } from "../downloads/intake-contract.js";
+import { routeDownloadIntakeMessage } from "./downloads/intake-messages.js";
 
 const NAVIGATION_DIAGNOSTICS_MESSAGES = new Set([
   "START_NAVIGATION_DIAGNOSTICS",
@@ -81,6 +83,8 @@ const NAVIGATION_DIAGNOSTICS_MESSAGES = new Set([
 ]);
 
 const MESSAGE_CAPABILITIES = Object.freeze({
+  [DOWNLOAD_INTAKE_MESSAGES.GET]: CAPABILITIES.CORE_MAINTENANCE,
+  [DOWNLOAD_INTAKE_MESSAGES.CLEAR]: CAPABILITIES.CORE_MAINTENANCE,
   TRUSTED_CLICK: CAPABILITIES.NAVIGATION_INTENT,
   SYNC_LEARNING: CAPABILITIES.LEARNING_FEEDBACK,
   NEGATIVE_LEARNING: CAPABILITIES.LEARNING_FEEDBACK,
@@ -150,7 +154,7 @@ const MESSAGE_CAPABILITIES = Object.freeze({
   GET_MEDIA_DOWNLOAD_JOBS: CAPABILITIES.MEDIA_DOWNLOAD,
 });
 
-export function registerMessageRouter(policy) {
+export function registerMessageRouter(policy, { downloadIntake } = {}) {
   const onMessage = (message, sender, sendResponse) => {
     if (!policy.can(CAPABILITIES.CORE_MESSAGING)) {
       sendResponse({ status: "disabled" });
@@ -160,6 +164,20 @@ export function registerMessageRouter(policy) {
     if (capability && !policy.can(capability)) {
       sendResponse({ status: "capability_disabled" });
       return false;
+    }
+    if (downloadIntake) {
+      const result = routeDownloadIntakeMessage(
+        message,
+        sender,
+        downloadIntake,
+        chrome,
+      );
+      if (result !== null) {
+        Promise.resolve(result)
+          .then(sendResponse)
+          .catch(() => sendResponse({ status: "error" }));
+        return true;
+      }
     }
     route(message, sender)
       .then((r) => sendResponse(r || { status: "ok" }))

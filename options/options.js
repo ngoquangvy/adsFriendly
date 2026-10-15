@@ -114,6 +114,7 @@ var AdsFriendlyOptions = (() => {
     MEDIA_CATALOG: "media.catalog",
     MEDIA_DOWNLOAD: "media.download",
     MEDIA_NATIVE_DOWNLOAD: "media.native_download",
+    BROWSER_DOWNLOAD_OBSERVE: "downloads.browser_observe",
     VIDEO_OBSERVE: "video.observe",
     VIDEO_RESTORE_STATE: "video.restore_state",
     VIDEO_USER_ACTION: "video.user_action",
@@ -129,6 +130,16 @@ var AdsFriendlyOptions = (() => {
     [PROTECTION_MODES.AUTO]: 2
   });
   var CAPABILITY_CATALOG = Object.freeze({
+    [C2.BROWSER_DOWNLOAD_OBSERVE]: capability(
+      C2.BROWSER_DOWNLOAD_OBSERVE,
+      "safe",
+      T.PASSIVE,
+      {
+        availableWhenDisabled: true,
+        browserPermissions: ["downloads"],
+        productIds: [P2.MEDIA_TOOLS]
+      }
+    ),
     [C2.CORE_MESSAGING]: capability(C2.CORE_MESSAGING, "safe", T.CORE, {
       availableWhenDisabled: true,
       productIds: [P2.AD_PROTECTION, P2.MEDIA_TOOLS]
@@ -223,6 +234,13 @@ var AdsFriendlyOptions = (() => {
     })
   });
   var FEATURE_CATALOG = Object.freeze([
+    feature(
+      "background.browser-download-observer",
+      "background",
+      C2.BROWSER_DOWNLOAD_OBSERVE,
+      [],
+      { enabledByDefault: false }
+    ),
     feature("background.message-router", "background", C2.CORE_MESSAGING, [
       C2.CORE_MAINTENANCE,
       C2.NAVIGATION_INTENT,
@@ -353,11 +371,12 @@ var AdsFriendlyOptions = (() => {
       requiredComponents: Object.freeze([...requiredComponents])
     });
   }
-  function feature(id, context, startCapability, extraCapabilities = []) {
+  function feature(id, context, startCapability, extraCapabilities = [], { enabledByDefault = true } = {}) {
     return Object.freeze({
       id,
       context,
       startCapability,
+      enabledByDefault,
       capabilities: Object.freeze([startCapability, ...extraCapabilities])
     });
   }
@@ -1069,6 +1088,166 @@ var AdsFriendlyOptions = (() => {
     };
   }
 
+  // src/downloads/intake-contract.js
+  var DOWNLOAD_OBSERVER_FEATURE = "background.browser-download-observer";
+  var DOWNLOAD_INTAKE_KEY = "browserDownloadIntake.v1";
+  var DOWNLOAD_INTAKE_MESSAGES = Object.freeze({
+    GET: "GET_BROWSER_DOWNLOAD_INTAKE",
+    CLEAR: "CLEAR_BROWSER_DOWNLOAD_INTAKE"
+  });
+  var INTAKE_MAX_AGE_MS = 60 * 60 * 1e3;
+
+  // src/downloads/intake-policy.js
+  var INTAKE_REASON_LABELS = Object.freeze({
+    request_not_verified: "HTTP file \xB7 request method and browser session not verified",
+    authorization_not_verified: "Signed/session URL \xB7 replay not verified",
+    url_credentials: "URL credentials \xB7 keep in Chrome",
+    unsupported_source: "Browser-local or unsupported source \xB7 keep in Chrome",
+    browser_safety_check: "Chrome safety status not clear \xB7 keep in Chrome",
+    not_active: "Already finished or interrupted \xB7 keep in Chrome",
+    browser_paused: "Paused in Chrome",
+    not_direct_file: "Not a direct file \xB7 use the media workflow if applicable"
+  });
+
+  // src/options/downloads/intake-panel.js
+  function createDownloadIntakePanel({
+    document: document2,
+    chrome: chrome2,
+    isActive,
+    getEnabled = () => false,
+    saveEnabled
+  }) {
+    const $2 = (id) => document2.getElementById(id);
+    const toggle = $2("browser-download-observe");
+    if (!toggle)
+      return {
+        bind() {
+        },
+        render: async () => {
+        },
+        scheduleRefresh() {
+        },
+        stop() {
+        }
+      };
+    let disposed2 = false, revision = 0, timer = null, bound = false, busy = false;
+    const status = $2("browser-download-intake-status");
+    function showError(error) {
+      if (!disposed2)
+        status.textContent = error?.message || "Browser download observation unavailable.";
+    }
+    async function render() {
+      if (disposed2 || !isActive()) return;
+      const request = ++revision;
+      toggle.checked = getEnabled();
+      try {
+        const snapshot = await chrome2.runtime.sendMessage({
+          type: DOWNLOAD_INTAKE_MESSAGES.GET
+        });
+        if (disposed2 || !isActive() || request !== revision) return;
+        const labels = {
+          off: "Off \xB7 downloads continue in Chrome",
+          starting: "Starting browser download observation\u2026",
+          observing: "Observation only \xB7 downloads stay in Chrome",
+          permission_required: "Downloads permission required \xB7 downloads stay in Chrome"
+        };
+        status.textContent = (labels[snapshot?.status] || "Observer unavailable \xB7 reload the extension") + (snapshot?.storageFailed ? " \xB7 Session storage unavailable" : "");
+        const list = $2("browser-download-observations");
+        list.replaceChildren();
+        const items = Array.isArray(snapshot?.items) ? snapshot.items : [];
+        $2("browser-download-intake-clear").disabled = !items.length;
+        if (!items.length) {
+          const empty = document2.createElement("p");
+          empty.className = "empty-msg";
+          empty.textContent = "No new browser downloads observed. Existing Chrome history is not scanned.";
+          list.append(empty);
+        }
+        for (const item of items) {
+          const row = document2.createElement("article");
+          row.className = "browser-download-observation";
+          const title = document2.createElement("strong");
+          title.textContent = item.filename || "Unnamed file";
+          const details = document2.createElement("div");
+          details.textContent = [
+            item.host || "Browser-local source",
+            item.totalBytes === null ? "Size unavailable" : formatBytes(item.totalBytes),
+            item.state
+          ].filter(Boolean).join(" \xB7 ");
+          const reason = document2.createElement("small");
+          reason.textContent = INTAKE_REASON_LABELS[item.assessment?.reason] || "Request not verified \xB7 keep in Chrome";
+          row.append(title, details, reason);
+          list.append(row);
+        }
+      } catch (error) {
+        if (request === revision && isActive()) showError(error);
+      }
+    }
+    function scheduleRefresh() {
+      if (disposed2 || !isActive() || timer) return;
+      timer = setTimeout(() => {
+        timer = null;
+        void render();
+      }, 250);
+    }
+    async function change() {
+      if (disposed2 || busy) return;
+      busy = true;
+      toggle.disabled = true;
+      const wanted = toggle.checked;
+      try {
+        if (wanted && !await chrome2.permissions.request({ permissions: ["downloads"] })) {
+          toggle.checked = getEnabled();
+          status.textContent = "Permission not granted \xB7 downloads continue in Chrome";
+          return;
+        }
+        if (disposed2) return;
+        await saveEnabled(wanted);
+        await render();
+      } catch (error) {
+        toggle.checked = getEnabled();
+        showError(error);
+      } finally {
+        busy = false;
+        toggle.disabled = false;
+      }
+    }
+    async function clear() {
+      try {
+        const result = await chrome2.runtime.sendMessage({
+          type: DOWNLOAD_INTAKE_MESSAGES.CLEAR
+        });
+        if (result?.status !== "cleared")
+          throw Error("Could not clear observation metadata.");
+        await render();
+      } catch (error) {
+        showError(error);
+      }
+    }
+    const refresh = () => {
+      void render();
+    };
+    function bind() {
+      if (disposed2 || bound) return;
+      bound = true;
+      toggle.addEventListener("change", change);
+      $2("browser-download-intake-refresh").addEventListener("click", refresh);
+      $2("browser-download-intake-clear").addEventListener("click", clear);
+      chrome2.permissions?.onAdded?.addListener(scheduleRefresh);
+      chrome2.permissions?.onRemoved?.addListener(scheduleRefresh);
+    }
+    function stop() {
+      disposed2 = true;
+      ++revision;
+      clearTimeout(timer);
+      toggle.removeEventListener("change", change);
+      $2("browser-download-intake-refresh").removeEventListener("click", refresh);
+      $2("browser-download-intake-clear").removeEventListener("click", clear);
+      chrome2.permissions?.onAdded?.removeListener(scheduleRefresh);
+      chrome2.permissions?.onRemoved?.removeListener(scheduleRefresh);
+    }
+    return { bind, render, scheduleRefresh, stop };
+  }
+
   // src/options/downloads-section.js
   function createDownloadsSection({
     document: document2,
@@ -1077,7 +1256,9 @@ var AdsFriendlyOptions = (() => {
     isActive,
     updateFilters,
     saveConnections,
-    onError
+    onError,
+    getObserverEnabled,
+    saveObserverEnabled
   }) {
     const $2 = (id) => document2.getElementById(id);
     const confirm2 = (message) => window2.confirm(message);
@@ -1085,6 +1266,13 @@ var AdsFriendlyOptions = (() => {
     let downloadRenderRevision = 0;
     let downloadRefreshTimer = null;
     const bindings = [];
+    const intakePanel = createDownloadIntakePanel({
+      document: document2,
+      chrome: chrome2,
+      isActive,
+      getEnabled: getObserverEnabled,
+      saveEnabled: saveObserverEnabled
+    });
     const historyList = createDownloadHistoryList({
       document: document2,
       window: window2,
@@ -1092,6 +1280,7 @@ var AdsFriendlyOptions = (() => {
     });
     function bind() {
       if (disposed2 || bindings.length) return;
+      intakePanel.bind();
       for (const [id, event, action] of [
         ["btn-download-refresh", "click", renderDownloads],
         ["btn-download-clear", "click", clearDownloadHistory],
@@ -1214,11 +1403,13 @@ var AdsFriendlyOptions = (() => {
       disposed2 = true;
       ++downloadRenderRevision;
       clearTimeout(downloadRefreshTimer);
+      intakePanel.stop();
       for (const unbind of bindings.splice(0)) unbind();
     }
     return {
       bind,
-      render: renderDownloads,
+      render: () => Promise.all([renderDownloads(), intakePanel.render()]),
+      refreshIntake: intakePanel.scheduleRefresh,
       scheduleRefresh: scheduleDownloadRefresh,
       updateViewport: historyList.updateViewport,
       stop
@@ -1754,6 +1945,17 @@ var AdsFriendlyOptions = (() => {
     isActive: () => settingsNavigation?.isActive("downloads") === true,
     updateFilters: () => listFilters?.update(),
     saveConnections: saveDownloadConnections,
+    getObserverEnabled: () => currentSnapshot.appSettings?.featureOverrides?.[DOWNLOAD_OBSERVER_FEATURE] === true,
+    saveObserverEnabled: async (enabled) => {
+      const latest = await loadSettings();
+      currentSnapshot.appSettings = await saveSettings({
+        ...latest,
+        featureOverrides: {
+          ...latest.featureOverrides,
+          [DOWNLOAD_OBSERVER_FEATURE]: enabled
+        }
+      });
+    },
     onError: (error) => showPackageStatus(error.message, true)
   });
   initialize().catch((error) => showPackageStatus(error.message, true));
@@ -1830,6 +2032,9 @@ var AdsFriendlyOptions = (() => {
     handledElementLink = elementLink;
   }
   function handleStorageChange(changes, areaName) {
+    if (areaName === "session" && DOWNLOAD_INTAKE_KEY in changes) {
+      downloadsSection.refreshIntake();
+    }
     if (areaName === "session" && Object.keys(changes).some((key) => key.startsWith(DOWNLOAD_JOB_PREFIX))) {
       downloadsSection.scheduleRefresh();
       return;

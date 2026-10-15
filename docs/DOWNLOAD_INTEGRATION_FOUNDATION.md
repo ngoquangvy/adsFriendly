@@ -1,8 +1,9 @@
 # Download integration: foundation checkpoint
 
-This checkpoint is a refactor of existing media downloads, not automatic Chrome
-download interception. No downloads permission, Chrome cancellation, file-type
-takeover setting or generic-file job contract has been introduced yet.
+This document records the initial refactor of existing media downloads.
+The subsequent observation-only checkpoint adds an optional Downloads permission;
+see BROWSER_DOWNLOAD_INTAKE.md. Automatic Chrome cancellation/takeover and the
+generic-file job contract have not been introduced.
 
 ## Helper responsibilities
 
@@ -51,10 +52,15 @@ current publishing preference. They do not depend on installed browser data.
 Local HTTP/FFmpeg fixtures exercise real bytes and remuxing; DOM mocks do not
 prove live Chrome behavior or acceptance of a current YouTube CDN token.
 
-## Next checkpoint
+## Observation checkpoint (implemented separately)
 
-Add a separately registered, opt-in Chrome-download observer and pure takeover
-policy. Keep its intake model distinct from media candidates. Build the generic
+The opt-in observer and conservative policy are now described in
+[BROWSER_DOWNLOAD_INTAKE.md](./BROWSER_DOWNLOAD_INTAKE.md). This changes no existing
+media adapter or browser download ownership.
+
+## Remaining checkpoints
+
+Keep browser intake distinct from media candidates. Build the generic
 file executor on the neutral HTTP core, with an explicit filename policy.
 Do not reuse the media MP4 fallback or treat all browser downloads as replayable.
 POST/session-bound/one-shot/unsupported sources must remain browser-owned until
