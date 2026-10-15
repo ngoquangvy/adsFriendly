@@ -13,8 +13,14 @@ protection policy, download adapter or package/training schema is changed.
   mobile selector and a session-only last-page preference. No Chrome business IO.
 - `src/options/list-filters.js`: search and status filtering of existing rows;
   filtering never changes the original delete index, job ID or expanded state.
-- `src/options/index.js`: existing save/import/export/rule/download/diagnostic
-  actions, page rendering and subscriptions.
+- `src/options/index.js`: Settings orchestration, save/import/export/rule/diagnostic
+  actions and storage subscription.
+- `src/options/downloads-section.js`: Downloads page lifecycle, coalesced refresh,
+  existing job actions and user confirmations. Its explicit dependencies make it
+  testable without the rest of Settings. Hidden/disposed pages ignore late reads.
+- `src/options/downloads/history-list.js`: stable keyed rows, error expansion,
+  compact completion presentation and the 15-visible-item viewport. No Chrome IO;
+  job actions are injected by the Downloads controller.
 - `options/settings-shell.css`: responsive shell and shared presentation.
 
 Exactly one page is visible. Desktop uses a sticky sidebar; narrow screens use

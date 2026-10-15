@@ -162,6 +162,12 @@ remain separate even when both reference the same media ID.
 
 ## Media Sessions and Timeline
 
+The provider-neutral HTTP extraction and the boundary for future Chrome download
+integration are documented in
+[DOWNLOAD_INTEGRATION_FOUNDATION.md](./DOWNLOAD_INTEGRATION_FOUNDATION.md).
+Browser download intake must not be added to the navigation guard or forced
+through a media-only candidate contract.
+
 The Chrome Settings navigation and page lifecycle are documented in
 [SETTINGS_INTERFACE.md](./SETTINGS_INTERFACE.md). Its section registry and
 filters are presentation-only; existing background policies and storage schemas
