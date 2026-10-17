@@ -1629,15 +1629,21 @@
   var IOS_BANNER_CANDIDATE_SELECTOR = [
     '[class*="banner" i]',
     '[id*="banner" i]',
-    ...["ad", "ads", "adv", "advert", "sponsored"].flatMap((token) => [
-      `[class~="${token}" i]`,
-      `[class^="${token}-" i]`,
-      `[class*="-${token}-" i]`,
-      `[class$="-${token}" i]`,
-      `[class*="_${token}" i]`,
-      `[id^="${token}-" i]`,
-      `[id^="${token}_" i]`
-    ])
+    ...["ad", "ads", "adv", "advert", "advertisement", "sponsored"].flatMap(
+      (token) => [
+        `[class~="${token}" i]`,
+        `[class^="${token}-" i]`,
+        `[class*="-${token}-" i]`,
+        `[class$="-${token}" i]`,
+        `[class*="_${token}" i]`,
+        `[id="${token}" i]`,
+        `[id^="${token}-" i]`,
+        `[id^="${token}_" i]`,
+        `[id*="-${token}-" i]`,
+        `[id$="-${token}" i]`,
+        `[id*="_${token}" i]`
+      ]
+    )
   ].join(",");
   var IOS_BUILTIN_DOM_SELECTORS = Object.freeze([
     "ins.adsbygoogle",
@@ -1650,6 +1656,9 @@
     const publisher = host === "animevietsub.sale" || host.endsWith(".animevietsub.sale");
     return IOS_BUILTIN_DOM_SELECTORS.concat(
       publisher ? [
+        // Hide the verified ad owner, not just its creative. Otherwise the
+        // full-screen backdrop/close control remains above the real page.
+        'div[id^="_preload-ads-"]',
         ".header-ads-pc > a",
         ".pc_catfix_adv > a",
         'a[href*="/animevietsubapp-topbanner"]',

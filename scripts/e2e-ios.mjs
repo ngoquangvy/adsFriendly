@@ -775,6 +775,94 @@ try {
     true,
   );
 
+  // Full-page ad owners can be appended after thousands of normal nodes. Hiding
+  // just their image must not leave a dimming/click-catching layer and close X.
+  await session.send("Page.navigate", {
+    url: "http://127.0.0.1:" + server.address().port + "/late-ad-overlay",
+  });
+  await new Promise((resolve) => setTimeout(resolve, 650));
+  await session.evaluate(`
+    testChange('blacklist',['||127.0.0.1^']);
+    const filler=document.createDocumentFragment();for(let i=0;i<2600;i++) filler.appendChild(document.createElement('span'));document.body.appendChild(filler);
+    window.lateOverlay=document.createElement('div');lateOverlay.id='_preload-ads-1';lateOverlay.style.cssText='display:flex;position:fixed;inset:0;width:100vw;height:100vh;z-index:99984;background:rgba(0,0,0,.5)';
+    lateOverlay.innerHTML='<div style="margin:auto"><a class="ads-banner" id="url-_preload-ads-1" href="https://unknown-sponsor.test/campaign"><img width="300" height="80"></a><div class="popup-icon-close">X</div></div>';
+    lateOverlay.querySelector('img').src='data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="300" height="80"><rect width="300" height="80" fill="gold"/></svg>');
+    document.body.appendChild(lateOverlay);
+    window.loginDialog=document.createElement('div');loginDialog.id='ad-login-shell';loginDialog.style.cssText='position:fixed;inset:0';loginDialog.innerHTML='<form><input type="password"><button>Sign in</button></form>';document.body.appendChild(loginDialog);
+    AF_scanBanners();
+  `);
+  await new Promise((resolve) => setTimeout(resolve, 450));
+  assert.equal(
+    await session.evaluate("getComputedStyle(lateOverlay).display"),
+    "none",
+    "The whole late ad overlay, not only its image/link, must be hidden beyond the old 1500-node limit",
+  );
+  assert.notEqual(
+    await session.evaluate("getComputedStyle(loginDialog).display"),
+    "none",
+    "Ad-like naming cannot authorize hiding a real sign-in dialog",
+  );
+  await session.evaluate(
+    "lateOverlay.style.setProperty('display','flex','important')",
+  );
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  assert.equal(
+    await session.evaluate("getComputedStyle(lateOverlay).display"),
+    "none",
+  );
+  await session.evaluate(
+    `new Promise(resolve => messageListeners.forEach(fn=>fn({action:'set_banner_visibility',visibility:'show'},{},resolve)))`,
+  );
+  assert.equal(
+    await session.evaluate("getComputedStyle(lateOverlay).display"),
+    "flex",
+  );
+  await session.evaluate(
+    `new Promise(resolve => messageListeners.forEach(fn=>fn({action:'set_banner_visibility',visibility:'hide'},{},resolve)))`,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  assert.equal(
+    await session.evaluate("getComputedStyle(lateOverlay).display"),
+    "none",
+  );
+  await session.evaluate(`
+    window.replacedOverlay=lateOverlay.cloneNode(true);replacedOverlay.id='_preload-ads-2';replacedOverlay.style.display='flex';document.body.appendChild(replacedOverlay);
+  `);
+  await new Promise((resolve) => setTimeout(resolve, 450));
+  assert.equal(
+    await session.evaluate("getComputedStyle(replacedOverlay).display"),
+    "none",
+    "A late replacement overlay must be caught by the observer without a manual rescan",
+  );
+  // Route the local fixture through the same verified publisher profile. This
+  // also exercises Default, where Block-only heuristic removal is unavailable.
+  await session.evaluate(`
+    const publisherSelectors=AFShared.iosBuiltinDomSelectors('animevietsub.sale');
+    AFShared.iosBuiltinDomSelectors=()=>publisherSelectors;
+    testChange('blacklist',[]);
+    window.keptOverlay=lateOverlay.cloneNode(true);keptOverlay.id='_preload-ads-kept';keptOverlay.style.display='flex';keptOverlay.querySelector('a').id='kept-overlay-link';document.body.appendChild(keptOverlay);
+    testChange('userElementExceptions',{'127.0.0.1':[{selector:'#kept-overlay-link',layout:'compact',fingerprint:{tag:'a',id:'kept-overlay-link'}}]});
+    AF_DOM.schedule(document);
+  `);
+  await new Promise((resolve) => setTimeout(resolve, 450));
+  assert.equal(
+    await session.evaluate("getComputedStyle(lateOverlay).display"),
+    "none",
+    "Verified publisher ad owners are hidden in Default as well as Block",
+  );
+  assert.notEqual(
+    await session.evaluate("getComputedStyle(keptOverlay).display"),
+    "none",
+    "A publisher owner rule must still respect a remembered Keep on its creative",
+  );
+  await session.evaluate("testChange('whitelist',['127.0.0.1'])");
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  assert.equal(
+    await session.evaluate("getComputedStyle(lateOverlay).display"),
+    "flex",
+    "Allow must restore the complete overlay's original display, not leave a dead wrapper",
+  );
+
   // A prior dismissal in Default must not become an invisible Keep on Block.
   await session.send("Page.navigate", {
     url: "http://127.0.0.1:" + server.address().port + "/default-to-block",

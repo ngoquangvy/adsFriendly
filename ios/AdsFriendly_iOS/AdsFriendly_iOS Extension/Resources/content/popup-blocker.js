@@ -253,7 +253,7 @@
     if (message.action === "protection_probe") {
       AF_CONFIG.ready.then(function() {
         sendResponse({ready: !!window.AF_DOM, enabled: isProtectionEnabled(),
-          host: window.location.hostname, version: "1.2.1", dom: window.AF_DOM?.state()});
+          host: window.location.hostname, version: "1.2.2", dom: window.AF_DOM?.state()});
       });
       return true;
     }

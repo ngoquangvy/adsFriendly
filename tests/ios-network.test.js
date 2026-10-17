@@ -147,6 +147,7 @@ test("Block removes explicit linked-image grids and iframe slots without a known
 });
 test("publisher cosmetic rules are narrowly scoped and never block the shared image CDN", () => {
   const publisher = iosBuiltinDomSelectors("animevietsub.sale");
+  assert.ok(publisher.includes('div[id^="_preload-ads-"]'));
   assert.ok(
     publisher.some((selector) =>
       selector.includes("animevietsubapp-right-banner"),

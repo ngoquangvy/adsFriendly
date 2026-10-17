@@ -1,4 +1,29 @@
-# iOS 1.2.1: Safari URL blocking, banner recovery and DNS v1
+# iOS 1.2.2: Safari URL blocking, banner recovery and DNS v1
+
+## Late overlay owner regression (1.2.2)
+
+The user's 1.2.1 screenshot confirms Block, active URL filtering and connected
+page protection, with 13 hidden areas but a surviving 3Bet creative. A nonzero
+hidden-element count does not prove that every advertising surface was removed.
+
+Live DOM inspection found the publisher's `_preload-ads-1` fixed full-viewport
+ad owner at node 2572 of 2586, beyond the positioned-element scan's first-1500
+budget. Existing URL cosmetic rules matched its creative but not the backdrop
+and close-control owner. The targeted candidate query also lacked ad tokens
+in the middle of IDs such as `_preload-ads-1`.
+
+The publisher profile now targets its verified `div[id^="_preload-ads-"]`
+owners, and the generic targeted query discovers middle/suffix ad ID tokens
+without an unbounded computed-style sweep of every page element. Discovery
+alone still does not authorize automatic hiding; protection, policy, content,
+form-safety and remembered Keep checks remain in place.
+
+A sanitized browser regression first failed on 1.2.1 with the owner's display
+still `flex`, then passed with the complete owner hidden beyond 2600 filler
+nodes. Checks cover replacement insertion, display rewrites, Show/Hide, Default,
+Block, Allow, nested Keep and a real sign-in dialog. This reproduces the verified
+overlay hole, not the exact rotating 3Bet creative on the physical iPhone;
+that variant remains a required device acceptance check.
 
 ## Banner coverage regression (1.2.1)
 
