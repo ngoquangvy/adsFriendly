@@ -31,6 +31,16 @@ export function createHiddenElements({ limit = 500 } = {}) {
       for (const [element, saved] of hidden) {
         if (element.isConnected === false) hidden.delete(element);
         else if (!keep(element, saved.metadata)) this.restore(element);
+        else if (
+          element.style.getPropertyValue("display") !== "none" ||
+          element.style.getPropertyPriority("display") !== "important"
+        ) {
+          // Keep the site's latest desired display for Undo, but enforce the
+          // still-active rule when an ad script writes a new inline style.
+          saved.value = element.style.getPropertyValue("display");
+          saved.priority = element.style.getPropertyPriority("display");
+          element.style.setProperty("display", "none", "important");
+        }
       }
     },
     get size() {

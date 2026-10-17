@@ -2,13 +2,14 @@
   "manifest_version": 3,
   "default_locale": "en",
   "name": "AdsFriendly",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Trinh chan popup va banner quang cao thong minh cho Safari",
   "permissions": [
     "activeTab",
     "tabs",
     "webNavigation",
-    "storage"
+    "storage",
+    "declarativeNetRequest"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -17,6 +18,7 @@
     "scripts": [
       "utils/shared.js",
       "background/settings-package.js",
+      "background/network.js",
       "background/whitelist.js",
       "background/telemetry.js",
       "background/neutralize.js",
@@ -48,6 +50,9 @@
       "match_origin_as_fallback": true
     }
   ],
+  "declarative_net_request": {
+    "rule_resources": [{"id": "advertising", "enabled": false, "path": "packages/advertising-rules.json"}]
+  },
   "action": {
     "default_popup": "popup.html",
     "default_title": "AdsFriendly"

@@ -1,5 +1,6 @@
 import { build } from "esbuild";
-import { readFile, readdir } from "node:fs/promises";
+import { readFile, readdir, writeFile } from "node:fs/promises";
+import { iosNetworkRules } from "../src/ios/network-rules.js";
 import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 const resources = new URL(
@@ -7,6 +8,14 @@ const resources = new URL(
   import.meta.url,
 );
 const checkOnly = process.argv.includes("--check");
+const networkPath = new URL("packages/advertising-rules.json", resources);
+const networkJSON = JSON.stringify(iosNetworkRules(), null, 2) + "\n";
+if (checkOnly) {
+  if (
+    (await readFile(networkPath, "utf8")).replace(/\r\n/g, "\n") !== networkJSON
+  )
+    throw new Error("Stale iOS URL rules. Run pnpm ios:build.");
+} else await writeFile(networkPath, networkJSON);
 const result = await build({
   entryPoints: [
     fileURLToPath(new URL("../src/ios/shared.js", import.meta.url)),
@@ -27,6 +36,7 @@ const manifest = JSON.parse(
   await readFile(new URL("manifest.json", resources), "utf8"),
 );
 const references = [
+  ...manifest.declarative_net_request.rule_resources.map((rule) => rule.path),
   ...manifest.background.scripts,
   ...manifest.content_scripts.flatMap((s) => [...s.js, ...(s.css || [])]),
   manifest.action.default_popup,

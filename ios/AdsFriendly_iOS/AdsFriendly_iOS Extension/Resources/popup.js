@@ -1,10 +1,11 @@
 var popupApi = typeof browser !== "undefined" ? browser : chrome;
 var activeHostname = "";
+var activeTabId = null;
 var currentState = null;
 var POLICY_HELP = {
   default: "Default: block obvious ads and ask when uncertain.",
   allow: "Allow: do not hide banners or block tabs opened by this site.",
-  block: "Block untrusted new tabs from this site. Saved Hide/Keep banner choices still apply."
+  block: "Block ad URLs, untrusted new tabs and banners with confirmed ad-resource evidence. Keep exceptions still apply."
 };
 
 function hostFromUrl(url) {
@@ -33,6 +34,14 @@ function send(message, callback) {
 
 function render(state) {
   currentState = state;
+  var content = state.content || {};
+  document.getElementById("content-status").textContent = content.ready && content.host === activeHostname
+    ? "Page protection " + (content.enabled ? "connected · " : "off · ") + content.version
+    : "Page not connected — reload and check website access";
+  var network = state.network || {state: "unavailable"};
+  document.getElementById("network-status").textContent = network.state === "active"
+    ? "Safari URL filter active" : network.state === "disabled" ? "URL filter off"
+    : "URL filter unavailable — check extension permissions";
   document.getElementById("site-host").textContent = activeHostname || "Safari page";
   document.getElementById("site-count").textContent = state.siteBlockedCount || 0;
   document.getElementById("total-count").textContent = state.blockedCount || 0;
@@ -54,7 +63,7 @@ function render(state) {
 }
 
 function loadState(feedback) {
-  send({ action: "get_popup_state", hostname: activeHostname }, function(state) {
+  send({ action: "get_popup_state", hostname: activeHostname, tabId: activeTabId }, function(state) {
     if (state.error) { showError(state.error); return; }
     render(state);
     showHint(feedback || POLICY_HELP[state.policy || "default"]);
@@ -91,6 +100,7 @@ document.getElementById("import-package").addEventListener("click", function() {
 
 popupApi.tabs.query({ active: true, lastFocusedWindow: true }, function(tabs) {
   var tab = tabs && tabs[0];
+  activeTabId = tab && tab.id;
   activeHostname = hostFromUrl(tab && tab.url);
   loadState();
 });

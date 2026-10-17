@@ -33,10 +33,11 @@
       (AF_CONFIG.elementExceptions[window.location.hostname] || []).some(
         (rule) => {
           try {
+            var matched = element.closest(rule.selector);
             return (
-              element.matches(rule.selector) &&
+              !!matched &&
               AFShared.matchesElementException(rule, {
-                ...context,
+                ...candidate(matched, rule.selector),
                 selector: rule.selector,
               })
             );
@@ -47,8 +48,8 @@
       ) ||
       (AF_CONFIG.allowedDomSelectors[window.location.hostname] || []).some(
         (rule) =>
-          rule.selector === selector &&
-          AFShared.ruleMatchesResponsiveLayout(rule, getResponsiveLayout()),
+          AFShared.ruleMatchesResponsiveLayout(rule, getResponsiveLayout()) &&
+          (function() { try { return !!element.closest(rule.selector); } catch (_) { return false; } })(),
       )
     );
   }
@@ -80,6 +81,14 @@
   }
   function reconcile() {
     hidden.reconcile(function (element, saved) {
+      if (saved.source === "builtin") return applicable(element, {selector: saved.selector});
+      if (saved.source === "automatic") {
+        if (getCurrentSitePolicy() !== "block" || !safe(element) ||
+          !AFShared.iosFeatureEnabled(AF_CONFIG.appSettings, "content.dom-static-blocker") ||
+          saved.layout !== getResponsiveLayout() || exception(element, saved.selector)) return false;
+        var features = AFShared.extractDomFeatures(element);
+        return AFShared.shouldAutoHideIosBanner({...features, visible: true});
+      }
       return rules().some(
         (rule) =>
           applicable(element, rule) &&
@@ -90,7 +99,8 @@
   function apply(root) {
     if (!AFShared.iosFeatureEnabled(AF_CONFIG.appSettings, "content.dom-static-blocker") || getCurrentSitePolicy() === "allow") return;
     var count = 0;
-    rules().forEach(function (rule) {
+    var builtins = AFShared.IOS_BUILTIN_DOM_SELECTORS.map(selector => ({selector, source: "builtin"}));
+    builtins.concat(rules()).forEach(function (rule) {
       var selector = typeof rule === "string" ? rule : rule?.selector;
       if (!AFShared.safeDomSelector(selector)) return;
       try {
@@ -103,7 +113,7 @@
           if (
             !hidden.has(element) &&
             applicable(element, rule) &&
-            hidden.hide(element, { selector })
+            hidden.hide(element, { selector, source: rule.source || "saved" })
           )
             count++;
         });
@@ -144,23 +154,34 @@
     hide: function (element, selector) {
       return safe(element) && hidden.hide(element, { selector });
     },
+    hideAutomatic: function(element, selector) {
+      if (!safe(element) || getCurrentSitePolicy() !== "block" ||
+        !AFShared.iosFeatureEnabled(AF_CONFIG.appSettings, "content.dom-static-blocker") ||
+        exception(element, selector)) return false;
+      return hidden.hide(element, {selector, source: "automatic", layout: getResponsiveLayout()});
+    },
     restore: (element) => hidden.restore(element),
     schedule,
   };
   AF_CONFIG.whenReady(function () {
     schedule(document);
-    var target = document.documentElement;
+    // At document_start <html> may not exist yet. Observe Document itself so
+    // protection isn't silently left with no observer for the rest of the page.
+    var target = document;
     if (target)
       new MutationObserver(function (changes) {
         changes.forEach(function (change) {
           if (change.target.closest?.("[data-afs-ui]")) return;
+          if (change.attributeName === "style" && hidden.has(change.target) &&
+            change.target.style.getPropertyValue("display") === "none" &&
+            change.target.style.getPropertyPriority("display") === "important") return;
           schedule(change.target);
         });
       }).observe(target, {
         childList: true,
         subtree: true,
         attributes: true,
-        attributeFilter: ["class", "id", "href", "src"],
+        attributeFilter: ["style", "class", "id", "href", "src", "srcset"],
       });
     api.storage.onChanged.addListener(function (changes, area) {
       if (area === "local" && ["appSettings", "whitelist", "blacklist", "userCustomRules", "userElementExceptions", "afsAllowedDomSelectors"].some(key => key in changes)) schedule(document);
@@ -175,5 +196,8 @@
     document.addEventListener("visibilitychange", function () {
       if (!document.hidden) schedule(document);
     });
+    document.addEventListener("load", function(event) {
+      if (["IMG", "IFRAME", "VIDEO"].includes(event.target?.tagName)) schedule(event.target.parentElement || event.target);
+    }, true);
   });
 })();

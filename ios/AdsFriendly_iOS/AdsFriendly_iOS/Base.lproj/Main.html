@@ -1,17 +1,42 @@
 <!DOCTYPE html>
-<html>
+<html lang="vi">
 <head>
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'">
 
-    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
 
     <link rel="stylesheet" href="../Style.css">
+    <title>AdsFriendly</title>
 </head>
 <body>
-    <img src="../Icon.png" width="128" height="128" alt="AdsFriendly_iOS Icon">
-    <p>Enable AdsFriendly in iPhone Settings → Apps → Safari → Extensions, then allow access to the websites you want to protect.</p>
-    <p>In Safari, open AdsFriendly from the page menu. Tap Import Settings Package to select a desktop export from Files, preview it, or undo an import.</p>
-    <p>Popup requests use Allow / Block. Remembered blocks show Open once without changing your choice. Suspected banners use Hide / Keep.</p>
+    <main>
+      <header><span class="brand">A</span><div><h1>AdsFriendly</h1><p>1.2.0 · Bảo vệ theo từng lớp</p></div></header>
+      <section>
+        <h2>Safari</h2>
+        <p>Bật AdsFriendly trong Cài đặt → Ứng dụng → Safari → Tiện ích và cấp quyền trên website.</p>
+        <p>Trong popup AdsFriendly, kiểm tra “Safari URL filter active”. Block sẽ chặn URL quảng cáo, tab đáng ngờ và tự ẩn banner có bằng chứng rõ. Nội dung chưa chắc chắn mới được hỏi Hide / Keep.</p>
+        <p>Package Chrome: mở AdsFriendly trong Safari → Import Settings Package. Allow và ngoại lệ Keep vẫn được tôn trọng.</p>
+      </section>
+      <section>
+        <h2>DNS cho các ứng dụng khác</h2>
+        <p>Chặn domain quảng cáo qua DNS-over-HTTPS. Không cần VPN hoặc chứng chỉ giải mã HTTPS. DNS không lọc đường dẫn URL; không bảo đảm chặn mọi quảng cáo hay mọi app.</p>
+        <label for="dns-endpoint">Máy chủ DNS-over-HTTPS</label>
+        <input id="dns-endpoint" type="url" value="https://dns.adguard-dns.com/dns-query" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <p class="hint">Mặc định: AdGuard DNS public. Có thể nhập endpoint của máy chủ riêng. Block/Allow trong Safari không tự đồng bộ sang nhà cung cấp DNS.</p>
+        <label class="consent"><input id="dns-consent" type="checkbox"><span>Tôi hiểu domain truy vấn sẽ gửi tới máy chủ DNS đã chọn và việc chặn có thể ảnh hưởng app dùng chung domain.</span></label>
+        <button id="export-dns" type="button" disabled>Tạo profile DNS</button>
+        <button id="dns-guide" class="secondary" type="button">Hướng dẫn AdGuard DNS</button>
+        <p id="dns-status" role="status" aria-live="polite">Chưa xác nhận cấu hình DNS hệ thống. Tạo/xuất profile không có nghĩa DNS đã bật.</p>
+        <details><summary>Cài đặt và gỡ DNS</summary>
+          <ol><li>Tạo profile rồi lưu vào Tệp hoặc gửi cho chính bạn qua Mail.</li>
+            <li>Mở file .mobileconfig trên iPhone, vào Cài đặt → Đã tải về hồ sơ hoặc Cài đặt chung → VPN &amp; Quản lý thiết bị, xem kỹ rồi cài.</li>
+            <li>Nếu mở từ Tệp không chuyển sang cài đặt, mở file đính kèm từ Mail; hoặc dùng trang hướng dẫn nhà cung cấp trong Safari.</li>
+            <li>Nếu app khác gặp lỗi, gỡ profile AdsFriendly DNS tại VPN &amp; Quản lý thiết bị. Công tắc Safari không tắt hoặc gỡ profile DNS.</li></ol>
+          <p>App không thể xác nhận trạng thái profile đã cài. VPN, DNS riêng của app hoặc kết nối trực tiếp IP có thể bỏ qua cấu hình này. Không chọn endpoint chưa tin cậy.</p>
+        </details>
+      </section>
+    </main>
+    <script src="../DNS.js"></script>
 </body>
 </html>

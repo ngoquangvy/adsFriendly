@@ -38,6 +38,15 @@ jobs:
         run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
       - name: Show Xcode version
         run: xcodebuild -version
+      - name: Native DNS profile tests
+        working-directory: ios/AdsFriendly_iOS
+        run: |
+          set -euo pipefail
+          DEVICE_ID="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(v["udid"] for group in d["devices"].values() for v in group if "iPhone" in v["name"]))')"
+          xcodebuild test -project AdsFriendly_iOS.xcodeproj \
+            -scheme AdsFriendly_iOS -configuration Debug \
+            -destination "platform=iOS Simulator,id=$DEVICE_ID" \
+            -only-testing:AdsFriendly_iOSTests CODE_SIGNING_ALLOWED=NO
       - name: Build unsigned IPA for Sideloadly
         working-directory: ios/AdsFriendly_iOS
         run: |
@@ -48,7 +57,7 @@ jobs:
             -configuration Debug \
             -derivedDataPath build/DerivedData \
             CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
-            MARKETING_VERSION=1.1.0 \
+            MARKETING_VERSION=1.2.0 \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
@@ -59,6 +68,8 @@ jobs:
           test -f "$EXT_PATH/utils/shared.js"
           test -f "$EXT_PATH/packages/import.html"
           test -f "$EXT_PATH/packages/default-settings-package.json"
+          test -f "$EXT_PATH/packages/advertising-rules.json"
+          test -f "$APP_PATH/DNS.js"
           mkdir -p build/Payload
           cp -R "$APP_PATH" build/Payload/
           cd build

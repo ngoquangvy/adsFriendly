@@ -15,6 +15,15 @@ import {
   matchesElementException,
 } from "../dom/element-exceptions.js";
 import * as navigation from "./navigation.js";
+import {
+  IOS_BUILTIN_DOM_SELECTORS,
+  shouldAutoHideIosBanner,
+} from "./automatic-dom.js";
+import {
+  isKnownAdUrl,
+  iosSiteAllowRules,
+  iosNetworkRules,
+} from "./network-rules.js";
 import { createHiddenElements } from "./dom-state.js";
 import { createReviewQueue, createBannerReviewGate } from "./review-queue.js";
 import {
@@ -61,11 +70,15 @@ export function iosFeatureEnabled(settings, featureId) {
 export function callApi(object, method, ...args) {
   return new Promise((resolve, reject) => {
     try {
-      object[method](...args, (result) => {
+      const pending = object[method](...args, (result) => {
         const error = extensionApi?.runtime?.lastError;
         if (error) reject(new Error(error.message));
         else resolve(result);
       });
+      // Safari APIs may return promises even when callers use Chrome-style
+      // callbacks. Accept either completion path without executing twice.
+      if (pending && typeof pending.then === "function")
+        pending.then(resolve, reject);
     } catch (error) {
       reject(error);
     }
@@ -230,6 +243,11 @@ if (typeof window !== "undefined") {
   window.AFShared = {
     ...schema,
     ...navigation,
+    IOS_BUILTIN_DOM_SELECTORS,
+    shouldAutoHideIosBanner,
+    isKnownAdUrl,
+    iosSiteAllowRules,
+    iosNetworkRules,
     safeDomSelector,
     iosFeatureEnabled,
     createHiddenElements,

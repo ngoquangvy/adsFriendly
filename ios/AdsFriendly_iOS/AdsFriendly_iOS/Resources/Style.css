@@ -1,29 +1,126 @@
-* {
-    -webkit-user-select: none;
-    -webkit-user-drag: none;
-    cursor: default;
-}
-
 :root {
-    color-scheme: light dark;
-
-    --spacing: 20px;
+  color-scheme: light dark;
+  font:
+    16px/1.5 -apple-system,
+    BlinkMacSystemFont,
+    sans-serif;
+  background: #0b1220;
+  color: #e2e8f0;
 }
-
-html {
-    height: 100%;
+* {
+  box-sizing: border-box;
 }
-
 body {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-direction: column;
-
-    gap: var(--spacing);
-    margin: 0 calc(var(--spacing) * 2);
-    height: 100%;
-
-    font: -apple-system-short-body;
-    text-align: center;
+  margin: 0;
+  padding: 24px 16px calc(24px + env(safe-area-inset-bottom));
+}
+main {
+  max-width: 600px;
+  margin: auto;
+}
+header {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 22px;
+}
+header p {
+  margin: 0;
+  color: #94a3b8;
+}
+.brand {
+  background: #2563eb;
+  color: white;
+  font-weight: 800;
+  font-size: 26px;
+  padding: 8px 18px;
+  border-radius: 16px;
+}
+h1 {
+  font-size: 25px;
+  margin: 0;
+}
+h2 {
+  font-size: 19px;
+  margin: 0 0 10px;
+}
+section {
+  padding: 18px;
+  margin: 16px 0;
+  border: 1px solid #293449;
+  border-radius: 16px;
+  background: #142033;
+}
+p {
+  margin: 10px 0;
+}
+label {
+  display: block;
+  margin: 14px 0 6px;
+}
+input[type="url"] {
+  width: 100%;
+  min-height: 46px;
+  padding: 10px;
+  border: 1px solid #475569;
+  border-radius: 9px;
+  background: #0b1220;
+  color: #e2e8f0;
+  font:
+    14px -apple-system,
+    sans-serif;
+}
+.hint {
+  font-size: 13px;
+  color: #a7b6cb;
+}
+.consent {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  font-size: 14px;
+}
+.consent input {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+button {
+  display: block;
+  width: 100%;
+  min-height: 46px;
+  margin: 12px 0;
+  border: 0;
+  border-radius: 10px;
+  background: #2563eb;
+  color: white;
+  font:
+    600 15px -apple-system,
+    sans-serif;
+}
+button:disabled {
+  opacity: 0.45;
+}
+.secondary {
+  background: #26364e;
+}
+#dns-status {
+  font-size: 14px;
+  color: #93c5fd;
+}
+.error {
+  color: #fca5a5 !important;
+}
+details {
+  font-size: 14px;
+  margin-top: 14px;
+}
+summary {
+  cursor: pointer;
+}
+ol {
+  padding-left: 22px;
+}
+li {
+  margin: 10px 0;
 }

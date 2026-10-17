@@ -249,7 +249,14 @@
     true,
   );
 
-  api.runtime.onMessage.addListener(function (message) {
+  api.runtime.onMessage.addListener(function (message, sender, sendResponse) {
+    if (message.action === "protection_probe") {
+      AF_CONFIG.ready.then(function() {
+        sendResponse({ready: !!window.AF_DOM, enabled: isProtectionEnabled(),
+          host: window.location.hostname, version: "1.2.0"});
+      });
+      return true;
+    }
     if (message.action === "popup_blocked") {
       log("Background da chan tab:", message.url);
       notifyBlocked(

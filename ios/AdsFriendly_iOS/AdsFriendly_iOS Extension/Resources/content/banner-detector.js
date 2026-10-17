@@ -240,10 +240,22 @@
   function hideBanner(el, reason) {
     if (!isProtectionEnabled() || getCurrentSitePolicy() === "allow" || AF_DOM.isHidden(el)) return;
     if (reviewedBanners.has(el) || isProtectedNavigation(el) || isLoginForm(el)) return;
-    if (!AFShared.isReviewTarget(el)) return;
     var selector = buildBannerSelector(el);
     if (!AFShared.safeDomSelector(selector)) return;
     if (isAllowedCandidate(selector, el)) return;
+    // Block is an actual blocking policy, not a request to keep asking. Only
+    // strong resource/domain evidence can auto-hide; review limits never limit it.
+    if (getCurrentSitePolicy() === "block" &&
+      AFShared.shouldAutoHideIosBanner(AFShared.extractDomFeatures(el)) &&
+      AF_DOM.hideAutomatic(el, selector)) {
+      if (typeof afsRecordTelemetry === "function") afsRecordTelemetry({
+        unit: "dom_element", label: "ad", label_source: "confirmed_rule",
+        ad_type: "banner", reason: "block_policy_known_ad_resource",
+        action: "hide", outcome: "hidden_element", evidence: {count: 1}
+      });
+      return;
+    }
+    if (!AFShared.isReviewTarget(el)) return;
     if (typeof notifyBannerCandidate !== "function") return;
     var accepted = notifyBannerCandidate(el, reason, {
       selector: selector,

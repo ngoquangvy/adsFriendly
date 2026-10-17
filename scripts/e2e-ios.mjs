@@ -17,7 +17,22 @@ const chromePath =
     : "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
 const profile = await mkdtemp(path.join(tmpdir(), "adsfriendly-ios-e2e-"));
 let browserProcess, session;
-const server = createServer((request, response) => {
+const appResources = new URL(
+  "../ios/AdsFriendly_iOS/AdsFriendly_iOS/",
+  import.meta.url,
+);
+const appRoutes = {
+  "/native-app": ["Base.lproj/Main.html", "text/html; charset=utf-8"],
+  "/Style.css": ["Resources/Style.css", "text/css"],
+  "/DNS.js": ["Resources/DNS.js", "text/javascript"],
+};
+const server = createServer(async (request, response) => {
+  if (appRoutes[request.url]) {
+    const [file, type] = appRoutes[request.url];
+    response.writeHead(200, { "content-type": type });
+    response.end(await readFile(new URL(file, appResources)));
+    return;
+  }
   response.writeHead(200, { "content-type": "text/html" });
   response.end(`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">
     <style>div{display:flex;height:50px;width:240px}body{margin:0}</style>
@@ -571,6 +586,77 @@ try {
     identifier: earlyPopup.identifier,
   });
 
+  // Block must actually remove known ads even after the review budget is used.
+  await session.send("Page.navigate", {
+    url: "http://127.0.0.1:" + server.address().port + "/ios-block",
+  });
+  await new Promise((resolve) => setTimeout(resolve, 650));
+  await session.evaluate(`
+    testChange('blacklist', ['||127.0.0.1^']);
+    window.blockBanner = document.createElement('div'); blockBanner.id = 'ad-strong-slot';
+    blockBanner.style.cssText = 'width:300px;height:70px';
+    blockBanner.innerHTML = '<a href="https://pagead2.googlesyndication.com/pagead/ad"><img style="width:300px;height:70px"></a>';
+    document.body.appendChild(blockBanner);
+    window.builtinBanner = document.createElement('ins'); builtinBanner.className = 'adsbygoogle';
+    builtinBanner.style.cssText = 'display:block;width:300px;height:70px'; builtinBanner.textContent = 'Advertisement';
+    document.body.appendChild(builtinBanner);
+    window.keptBanner = blockBanner.cloneNode(true); keptBanner.id = 'ad-kept-slot'; keptBanner.style.display='block';
+    document.body.appendChild(keptBanner);
+    testChange('userElementExceptions', {'127.0.0.1': [{selector:'#ad-kept-slot', layout:'compact', fingerprint:{tag:'div',id:'ad-kept-slot'}}]});
+    AF_scanBanners();
+  `);
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  assert.equal(
+    await session.evaluate("getComputedStyle(blockBanner).display"),
+    "none",
+  );
+  assert.equal(
+    await session.evaluate("getComputedStyle(builtinBanner).display"),
+    "none",
+  );
+  assert.notEqual(
+    await session.evaluate("getComputedStyle(keptBanner).display"),
+    "none",
+  );
+  assert.notEqual(
+    await session.evaluate(
+      "getComputedStyle(keptBanner.querySelector('a')).display",
+    ),
+    "none",
+    "Keep on a banner must also protect its ad-resource children",
+  );
+  assert.equal(
+    await session.evaluate(
+      "document.getElementById('adsfriendly-popup-container') === null",
+    ),
+    true,
+    "Confirmed ads in Block must be removed without another review",
+  );
+  await session.evaluate(
+    "blockBanner.style.setProperty('display','grid','important')",
+  );
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  assert.equal(
+    await session.evaluate("getComputedStyle(blockBanner).display"),
+    "none",
+    "Ad scripts cannot undo an active block by writing display again: " +
+      (await session.evaluate(
+        "JSON.stringify({tracked:AF_DOM.isHidden(blockBanner), policy:getCurrentSitePolicy(), features:AFShared.extractDomFeatures(blockBanner), allowed:AF_DOM.isAllowed(blockBanner, '#ad-strong-slot')})",
+      )),
+  );
+  await session.evaluate(
+    "testChange('whitelist',['127.0.0.1']); testChange('blacklist',[])",
+  );
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  assert.equal(
+    await session.evaluate("getComputedStyle(blockBanner).display"),
+    "grid",
+  );
+  assert.equal(
+    await session.evaluate("getComputedStyle(builtinBanner).display"),
+    "block",
+  );
+
   // Exercise the Chrome toast module itself, independently of Safari mocks.
   await session.send("Page.navigate", {
     url: "http://127.0.0.1:" + server.address().port + "/chrome-review",
@@ -763,6 +849,52 @@ try {
     "0",
   );
   await session.evaluate("testStopCollector()");
+  await session.send("Page.addScriptToEvaluateOnNewDocument", {
+    source:
+      "window.nativeDNSMessages=[];window.webkit={messageHandlers:{controller:{postMessage:message=>nativeDNSMessages.push(message)}}}",
+  });
+  await session.send("Page.navigate", {
+    url: "http://127.0.0.1:" + server.address().port + "/native-app",
+  });
+  await new Promise((resolve) => setTimeout(resolve, 650));
+  for (const width of [320, 390, 768]) {
+    await session.send("Emulation.setDeviceMetricsOverride", {
+      width,
+      height: 844,
+      deviceScaleFactor: 1,
+      mobile: true,
+    });
+    assert.equal(
+      await session.evaluate(
+        "document.documentElement.scrollWidth <= innerWidth",
+      ),
+      true,
+      "Native DNS page must not overflow horizontally",
+    );
+  }
+  assert.equal(
+    await session.evaluate("document.getElementById('export-dns').disabled"),
+    true,
+  );
+  await session.evaluate(
+    "document.getElementById('dns-consent').checked=true;document.getElementById('dns-consent').dispatchEvent(new Event('change'));document.getElementById('export-dns').click()",
+  );
+  assert.equal(await session.evaluate("nativeDNSMessages.length"), 1);
+  assert.equal(
+    await session.evaluate("nativeDNSMessages[0].action"),
+    "exportDNSProfile",
+  );
+  assert.match(
+    await session.evaluate("document.getElementById('dns-status').textContent"),
+    /chưa thay đổi/,
+  );
+  await session.evaluate(
+    "handleDNSResult({kind:'ready',message:'Export cancelled. No DNS settings were changed.'})",
+  );
+  assert.equal(
+    await session.evaluate("document.getElementById('export-dns').disabled"),
+    false,
+  );
   console.log(
     "Chrome/iOS review browser checks passed: visible-content gates, automatic exact-region marker, stale-target cancellation, correct target fingerprint, storage verification vs quota errors, Show after quota failure, saved choices, dedupe and 320–980px layout.",
   );

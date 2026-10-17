@@ -43,6 +43,17 @@ test("restore preserves a newer site style and forgets detached nodes", () => {
   state.reconcile(() => true);
   assert.equal(state.size, 0);
 });
+
+test("active rules re-hide rewritten display and restore the site's newest style on disable", () => {
+  const state = createHiddenElements(),
+    node = element();
+  state.hide(node, { selector: ".ad" });
+  node.style.setProperty("display", "grid", "important");
+  state.reconcile(() => true);
+  assert.equal(node.style.getPropertyValue("display"), "none");
+  state.reconcile(() => false);
+  assert.equal(node.style.getPropertyValue("display"), "grid");
+});
 test("desktop viewport and mobile viewport rules stay separate", () => {
   assert.equal(getResponsiveLayout(980), "wide");
   assert.equal(

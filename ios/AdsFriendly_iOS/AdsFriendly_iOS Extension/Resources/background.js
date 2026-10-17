@@ -16,6 +16,17 @@ function callbackTask(operation) {
     operation((error, value) => (error ? reject(error) : resolve(value))),
   );
 }
+async function probeContent(tabId) {
+  if (!Number.isInteger(tabId)) return {ready: false};
+  var timeout;
+  try {
+    return await Promise.race([
+      AFShared.callApi(bgApi.tabs, "sendMessage", tabId, {action: "protection_probe"}, {frameId: 0}),
+      new Promise(resolve => { timeout = setTimeout(() => resolve({ready: false}), 750); }),
+    ]) || {ready: false};
+  } catch (_) { return {ready: false}; }
+  finally { clearTimeout(timeout); }
+}
 function extensionPage(sender) {
   var prefix = bgApi.runtime.getURL("");
   return (
@@ -133,6 +144,8 @@ bgApi.runtime.onMessage.addListener(function (request, sender, sendResponse) {
       return {};
     }
     if (request.action === "get_popup_state") {
+      if (window.AFNetworkReady) await window.AFNetworkReady;
+      if (window.bgRefreshNetworkRules) await bgRefreshNetworkRules();
       var snapshot = await new Promise((resolve) =>
         bgGetRuntimeSnapshot(resolve),
       );
@@ -145,6 +158,8 @@ bgApi.runtime.onMessage.addListener(function (request, sender, sendResponse) {
         blockedCount: snapshot.blockedCount || 0,
         siteBlockedCount: snapshot.afsBlockedByHost[hostname]?.total || 0,
         packageState: snapshot.settingsPackageState || null,
+        network: window.bgGetNetworkState ? bgGetNetworkState() : {state: "unavailable"},
+        content: extensionPage(sender) ? await probeContent(request.tabId) : {ready: false},
       };
     }
     if (request.action === "set_site_policy") {

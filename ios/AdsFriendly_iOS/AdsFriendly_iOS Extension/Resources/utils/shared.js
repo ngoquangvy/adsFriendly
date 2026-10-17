@@ -1036,6 +1036,12 @@
     if (typeof selector !== "string" || !selector.trim()) return false;
     return !NON_ACTIONABLE_SELECTORS.has(selector.trim().toLowerCase());
   }
+  function isExplicitFullscreenAdOverlay(features = {}) {
+    const zIndex = Number.parseInt(features.style?.zIndex, 10);
+    return Boolean(
+      features.visible && features.fixedOrSticky && features.rect?.areaRatio >= 0.6 && Number.isFinite(zIndex) && zIndex >= 1e3 && (features.signals?.idHasAdToken || features.signals?.classHasAdToken || features.signals?.idLooksAdSlot) && features.descendants?.externalAdLinkCount > 0
+    );
+  }
   function buildDynamicAdIdSelector(element) {
     if (!element?.tagName || !element.id) return null;
     const match = element.id.match(
@@ -1518,6 +1524,270 @@
     };
   }
 
+  // src/ios/network-rules.js
+  var IOS_AD_HOSTS = Object.freeze([
+    "doubleclick.net",
+    "googlesyndication.com",
+    "googleadservices.com",
+    "adservice.google.com",
+    "adnxs.com",
+    "criteo.com",
+    "criteo.net",
+    "taboola.com",
+    "outbrain.com",
+    "mgid.com",
+    "popads.net",
+    "popcash.net",
+    "propellerads.com"
+  ]);
+  var IOS_AD_PATH = "^https?://[^/]+/(?:pagead|gampad|adsystem)/";
+  var escape = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  function hostRegex(host) {
+    return "^https?://(?:[a-z0-9-]+\\.)*" + escape(host) + "(?::[0-9]+)?/";
+  }
+  function isKnownAdUrl(value) {
+    try {
+      const url = new URL(value);
+      return /^https?:$/.test(url.protocol) && (IOS_AD_HOSTS.some(
+        (host) => url.hostname === host || url.hostname.endsWith("." + host)
+      ) || new RegExp(IOS_AD_PATH, "i").test(url.href));
+    } catch {
+      return false;
+    }
+  }
+  function iosNetworkRules() {
+    const resources = [
+      "sub_frame",
+      "script",
+      "image",
+      "stylesheet",
+      "font",
+      "xmlhttprequest",
+      "ping",
+      "media",
+      "websocket",
+      "other"
+    ];
+    return [
+      ...IOS_AD_HOSTS.map((host, index) => ({
+        id: index + 1,
+        priority: 1,
+        action: { type: "block" },
+        condition: { regexFilter: hostRegex(host), resourceTypes: resources }
+      })),
+      {
+        id: 100,
+        priority: 1,
+        action: { type: "block" },
+        condition: {
+          regexFilter: IOS_AD_PATH,
+          resourceTypes: [
+            "sub_frame",
+            "script",
+            "image",
+            "xmlhttprequest",
+            "ping"
+          ]
+        }
+      }
+    ];
+  }
+  function iosSiteAllowRules(whitelist = [], blacklist = []) {
+    const normalize = (value) => {
+      try {
+        const raw = String(value || "").replace(/^\|\|/, "").replace(/\^$/, "");
+        const url = new URL(raw.includes("://") ? raw : "https://" + raw);
+        return /^[a-z0-9.-]+$/i.test(url.hostname) && !url.username && !url.password ? url.hostname.toLowerCase() : "";
+      } catch {
+        return "";
+      }
+    };
+    const blocked = blacklist.map(normalize).filter(Boolean);
+    const allowed = [...new Set(whitelist.map(normalize).filter(Boolean))].filter(
+      (host) => !blocked.some((block) => host === block || host.endsWith("." + block))
+    ).slice(0, 250).map((host, index) => ({
+      id: 2e4 + index,
+      priority: 100,
+      action: { type: "allowAllRequests" },
+      condition: {
+        regexFilter: hostRegex(host),
+        resourceTypes: ["main_frame"]
+      }
+    }));
+    const resets = blocked.filter(
+      (host) => allowed.some(
+        (rule) => new RegExp(rule.condition.regexFilter).test("https://" + host + "/")
+      )
+    ).slice(0, 250).map((host, index) => ({
+      id: 21e3 + index,
+      priority: 200,
+      action: { type: "allow" },
+      condition: {
+        regexFilter: hostRegex(host),
+        resourceTypes: ["main_frame"]
+      }
+    }));
+    return allowed.concat(resets);
+  }
+
+  // src/shared/decision.js
+  var DECISION_ACTIONS = Object.freeze({
+    ALLOW: "allow",
+    BLOCK: "block",
+    TOAST: "toast",
+    OBSERVE: "observe"
+  });
+  function createDecision(action, options = {}) {
+    return {
+      action,
+      confidence: clampConfidence2(options.confidence ?? 0),
+      reasons: Array.isArray(options.reasons) ? options.reasons : [],
+      target: options.target || null,
+      metadata: options.metadata || {}
+    };
+  }
+  function clampConfidence2(value) {
+    if (!Number.isFinite(value)) return 0;
+    return Math.max(0, Math.min(1, value));
+  }
+
+  // src/dom/decision.js
+  function decideDomCandidate(features) {
+    const reasons = [];
+    let score = 0;
+    if (!features.visible) {
+      return createDecision(DECISION_ACTIONS.OBSERVE, {
+        confidence: 0,
+        reasons: ["not_visible"]
+      });
+    }
+    if (features.inProtectedArea) {
+      return createDecision(DECISION_ACTIONS.OBSERVE, {
+        confidence: 0.1,
+        reasons: ["protected_area"]
+      });
+    }
+    if (isExplicitFullscreenAdOverlay(features)) {
+      return createDecision(DECISION_ACTIONS.BLOCK, {
+        confidence: 0.99,
+        reasons: ["explicit_fullscreen_ad_overlay"]
+      });
+    }
+    if (features.signals.classHasAdToken) {
+      score += 0.35;
+      reasons.push("class_ad_token");
+    }
+    if (features.signals.idHasAdToken) {
+      score += 0.35;
+      reasons.push("id_ad_token");
+    }
+    if (features.signals.idLooksAdSlot) {
+      score += 0.24;
+      reasons.push("ad_slot_id");
+    }
+    if (features.signals.classHasAdToken && features.signals.idHasAdToken) {
+      score += 0.08;
+      reasons.push("class_and_id_ad_tokens");
+    }
+    if (features.signals.hrefLooksAdLike) {
+      score += 0.25;
+      reasons.push("ad_like_href");
+    }
+    if (features.signals.hrefHostLooksCommercial) {
+      score += 0.18;
+      reasons.push("commercial_or_tracking_host");
+    }
+    if (features.linkExternal) {
+      score += 0.12;
+      reasons.push("external_link");
+    }
+    if (features.linkExternal && (features.signals.classHasAdToken || features.signals.idHasAdToken)) {
+      score += 0.2;
+      reasons.push("external_link_with_ad_token");
+    }
+    if (features.fixedOrSticky) {
+      score += 0.15;
+      reasons.push("fixed_or_sticky");
+    }
+    if (features.rect.areaRatio > 0.08 && features.rect.areaRatio < 0.45) {
+      score += 0.12;
+      reasons.push("banner_sized_area");
+    }
+    if (features.compactBannerShape) {
+      score += 0.12;
+      reasons.push("compact_banner_shape");
+    }
+    if (features.billboardShape) {
+      score += 0.12;
+      reasons.push("billboard_ad_shape");
+    }
+    if (features.tallSidebarShape) {
+      score += 0.12;
+      reasons.push("sidebar_ad_shape");
+    }
+    if (features.tag === "iframe" && (features.signals.idHasAdToken || features.signals.idLooksAdSlot)) {
+      score += 0.18;
+      reasons.push("iframe_with_ad_slot_id");
+    }
+    if (features.signals.srcIsImageCdn && features.signals.classHasAdToken) {
+      score += 0.12;
+      reasons.push("cdn_image_with_ad_class");
+    }
+    if (features.descendants.externalAdLinkCount > 0) {
+      score += 0.22;
+      reasons.push("descendant_external_ad_link");
+    }
+    if (features.descendants.imageCdnCount > 0 && (features.signals.classHasAdToken || features.signals.idHasAdToken)) {
+      score += 0.12;
+      reasons.push("descendant_cdn_media_with_ad_token");
+    }
+    if (features.descendants.iframeCount > 0 && (features.signals.classHasAdToken || features.signals.idHasAdToken)) {
+      score += 0.12;
+      reasons.push("descendant_iframe_with_ad_token");
+    }
+    if (features.inNavigationArea && features.navAdLinkRatio >= 0.8) {
+      score += 0.2;
+      reasons.push("ad_heavy_navigation_area");
+    }
+    if (features.textLength > 500) {
+      score -= 0.25;
+      reasons.push("large_text_content");
+    }
+    const confidence = Math.max(0, Math.min(1, score));
+    if (confidence >= 0.78) {
+      return createDecision(DECISION_ACTIONS.BLOCK, { confidence, reasons });
+    }
+    if (confidence >= 0.55) {
+      return createDecision(DECISION_ACTIONS.TOAST, { confidence, reasons });
+    }
+    return createDecision(DECISION_ACTIONS.OBSERVE, { confidence, reasons });
+  }
+
+  // src/ios/automatic-dom.js
+  var IOS_BUILTIN_DOM_SELECTORS = Object.freeze([
+    "ins.adsbygoogle",
+    'iframe[src*="//googleads.g.doubleclick.net/"]',
+    '[id^="google_ads_iframe_"]',
+    '[data-ad-client^="ca-pub-"]'
+  ]);
+  function shouldAutoHideIosBanner(features = {}) {
+    if (features.inProtectedArea || !features.visible) return false;
+    const media = ["img", "iframe", "video"].includes(features.tag) || (features.descendants?.imageCount || 0) + (features.descendants?.iframeCount || 0) > 0;
+    if (!media) return false;
+    const knownHost = (host) => IOS_AD_HOSTS.some((ad) => host === ad || host.endsWith("." + ad));
+    if (isKnownAdUrl(features.src) || isKnownAdUrl(features.href) || [
+      ...features.descendants?.hrefHosts || [],
+      ...features.descendants?.srcHosts || []
+    ].some(knownHost))
+      return true;
+    const explicit = /(^|[\s_-])(?:ad|ads|adv|advert|advertisement|sponsored)(?=$|[\s_-])/i.test(
+      (features.id || "") + " " + (features.className || "")
+    );
+    if (!explicit || !(features.linkExternal || features.descendants?.externalLinkCount > 0) || !features.signals || !features.rect)
+      return false;
+    return decideDomCandidate(features).confidence >= 0.9;
+  }
+
   // src/ios/dom-state.js
   function createHiddenElements({ limit = 500 } = {}) {
     const hidden = /* @__PURE__ */ new Map();
@@ -1548,6 +1818,11 @@
         for (const [element, saved] of hidden) {
           if (element.isConnected === false) hidden.delete(element);
           else if (!keep(element, saved.metadata)) this.restore(element);
+          else if (element.style.getPropertyValue("display") !== "none" || element.style.getPropertyPriority("display") !== "important") {
+            saved.value = element.style.getPropertyValue("display");
+            saved.priority = element.style.getPropertyPriority("display");
+            element.style.setProperty("display", "none", "important");
+          }
         }
       },
       get size() {
@@ -1798,11 +2073,13 @@
   function callApi(object, method, ...args) {
     return new Promise((resolve, reject) => {
       try {
-        object[method](...args, (result) => {
+        const pending = object[method](...args, (result) => {
           const error = extensionApi?.runtime?.lastError;
           if (error) reject(new Error(error.message));
           else resolve(result);
         });
+        if (pending && typeof pending.then === "function")
+          pending.then(resolve, reject);
       } catch (error) {
         reject(error);
       }
@@ -1960,6 +2237,11 @@
     window.AFShared = {
       ...schema_exports,
       ...navigation_exports,
+      IOS_BUILTIN_DOM_SELECTORS,
+      shouldAutoHideIosBanner,
+      isKnownAdUrl,
+      iosSiteAllowRules,
+      iosNetworkRules,
       safeDomSelector,
       iosFeatureEnabled,
       createHiddenElements,
