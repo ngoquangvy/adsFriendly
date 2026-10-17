@@ -1,4 +1,35 @@
-# iOS 1.2: Safari URL blocking and DNS v1
+# iOS 1.2.1: Safari URL blocking, banner recovery and DNS v1
+
+## Banner coverage regression (1.2.1)
+
+Inspected https://animevietsub.sale/ on 2026-10-17. Its inline header grid
+uses `header-ads-pc` / `Adv ad-center-header`; the floating placement uses
+`pc_catfix_adv`. Creatives use a shared Googleusercontent image CDN and
+outbound hosts outside the starter network list. Candidate discovery missed
+several of these class tokens; the former 0.9 score plus mandatory external
+link excluded otherwise explicit image grids and iframe-only ad slots.
+
+Block now discovers complete ad/ads/adv slot tokens and removes small,
+explicit media slots supported by outbound-link or iframe evidence. It does
+not hide an external image merely for being external or called "banner".
+Dismissed reviews cannot override a later Block choice. Ancestor wrappers
+respect Keep on a descendant, while sibling ads can still be hidden.
+Narrow publisher-scoped cosmetic rules cover the observed header, sidebar,
+catfish and popup campaign links. The CDN itself is never globally blocked.
+These are placement rules, not a promise of complete or permanent site coverage.
+
+Automatic blocking stays quiet. A manual Hide offers a compact Show action
+that saves the existing Keep exception. Safari's toolbar popup additionally
+offers Hide/Show banners for the current top-frame document; this is a
+temporary DOM override, resets on navigation/reload, does not change saved
+choices and cannot restore resources already blocked by URL/DNS filtering.
+No new tabs are opened. Hidden slot geometry is retained for reconciliation
+so the website cannot undo a block by rewriting display styles.
+
+Tests include a sanitized fixture of the observed placement structure with
+unknown hosts, plus normal heroes/posters/navigation, nested Keep, iframe
+slots, Default-to-Block after dismissal, style rewrites, manual Show recovery
+and the toolbar controls. Real Safari/iPhone playback still requires device QA.
 
 ## Regression findings
 

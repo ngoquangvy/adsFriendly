@@ -7,7 +7,10 @@ import {
   iosSiteAllowRules,
   isKnownAdUrl,
 } from "../src/ios/network-rules.js";
-import { shouldAutoHideIosBanner } from "../src/ios/automatic-dom.js";
+import {
+  shouldAutoHideIosBanner,
+  iosBuiltinDomSelectors,
+} from "../src/ios/automatic-dom.js";
 const resources = new URL(
   "../ios/AdsFriendly_iOS/AdsFriendly_iOS Extension/Resources/",
   import.meta.url,
@@ -91,6 +94,72 @@ test("automatic banner removal requires media plus known ad evidence, not a gene
       linkExternal: true,
     }),
     false,
+  );
+});
+test("Block removes explicit linked-image grids and iframe slots without a known ad domain", () => {
+  const grid = {
+    visible: true,
+    tag: "div",
+    className: "header-ads-pc",
+    textLength: 0,
+    rect: { width: 360, height: 210, areaRatio: 0.23 },
+    descendants: {
+      imageCount: 6,
+      iframeCount: 0,
+      linkCount: 6,
+      externalLinkCount: 6,
+      externalAdLinkCount: 0,
+      imageCdnCount: 6,
+    },
+    signals: { classHasAdToken: true },
+  };
+  assert.equal(shouldAutoHideIosBanner(grid), true);
+  assert.equal(
+    shouldAutoHideIosBanner({ ...grid, className: "hero-banner" }),
+    false,
+  );
+  assert.equal(shouldAutoHideIosBanner({ ...grid, textLength: 1500 }), false);
+  assert.equal(
+    shouldAutoHideIosBanner({ ...grid, inProtectedArea: true }),
+    false,
+  );
+  assert.equal(
+    shouldAutoHideIosBanner({
+      ...grid,
+      tag: "iframe",
+      className: "ads-slot",
+      descendants: {},
+      rect: { width: 300, height: 250 },
+    }),
+    true,
+  );
+  assert.equal(
+    shouldAutoHideIosBanner({
+      ...grid,
+      tag: "a",
+      className: "",
+      linkExternal: true,
+      ancestry: [{ tag: "div", className: "header-ads-pc", childCount: 6 }],
+      descendants: { imageCount: 1, linkCount: 0 },
+    }),
+    true,
+  );
+});
+test("publisher cosmetic rules are narrowly scoped and never block the shared image CDN", () => {
+  const publisher = iosBuiltinDomSelectors("animevietsub.sale");
+  assert.ok(
+    publisher.some((selector) =>
+      selector.includes("animevietsubapp-right-banner"),
+    ),
+  );
+  assert.deepEqual(iosBuiltinDomSelectors("www.animevietsub.sale."), publisher);
+  assert.ok(
+    !iosBuiltinDomSelectors("animevietsub.sale.evil.test").some((selector) =>
+      selector.includes("animevietsubapp"),
+    ),
+  );
+  assert.ok(
+    publisher.every((selector) => !selector.includes("googleusercontent")),
   );
 });
 test("DNR controller honors off/Allow, preserves unrelated IDs and exposes missing/failed APIs", async () => {

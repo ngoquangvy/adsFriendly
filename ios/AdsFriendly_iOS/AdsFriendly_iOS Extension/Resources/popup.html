@@ -30,6 +30,11 @@
     <button data-policy="allow" aria-pressed="false">Allow</button>
     <button data-policy="block" aria-pressed="false">Block</button>
   </section>
+  <section class="banner-controls" aria-label="Banner visibility on this page">
+    <span id="banner-state" role="status">Banners on this page</span>
+    <div><button id="hide-banners" type="button" disabled>Hide banners</button><button id="show-banners" type="button" disabled>Show banners</button></div>
+    <small>This page only. Saved choices and URL filtering stay unchanged.</small>
+  </section>
   <section class="package-import">
     <span id="network-status" role="status">Checking URL filtering…</span>
     <span id="content-status" role="status">Checking page protection…</span>

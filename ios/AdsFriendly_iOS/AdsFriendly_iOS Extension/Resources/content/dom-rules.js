@@ -1,5 +1,6 @@
 (function () {
   var hidden = AFShared.createHiddenElements();
+  var shownOnPage = false;
   var pending = new Set(),
     timer = null,
     full = false;
@@ -23,24 +24,15 @@
     };
   }
   function exception(element, selector) {
-    var context;
-    try {
-      context = candidate(element, selector);
-    } catch (_) {
-      return false;
-    }
+    if (shownOnPage) return true;
     return (
       (AF_CONFIG.elementExceptions[window.location.hostname] || []).some(
         (rule) => {
           try {
-            var matched = element.closest(rule.selector);
-            return (
-              !!matched &&
-              AFShared.matchesElementException(rule, {
-                ...candidate(matched, rule.selector),
-                selector: rule.selector,
-              })
-            );
+            var ancestor = element.closest(rule.selector);
+            var matches = ancestor ? [ancestor] : Array.from(element.querySelectorAll(rule.selector));
+            return matches.some(matched => AFShared.matchesElementException(rule,
+              candidate(matched, rule.selector)));
           } catch (_) {
             return false;
           }
@@ -49,7 +41,7 @@
       (AF_CONFIG.allowedDomSelectors[window.location.hostname] || []).some(
         (rule) =>
           AFShared.ruleMatchesResponsiveLayout(rule, getResponsiveLayout()) &&
-          (function() { try { return !!element.closest(rule.selector); } catch (_) { return false; } })(),
+          (function() { try { return !!element.closest(rule.selector) || !!element.querySelector(rule.selector); } catch (_) { return false; } })(),
       )
     );
   }
@@ -87,7 +79,7 @@
           !AFShared.iosFeatureEnabled(AF_CONFIG.appSettings, "content.dom-static-blocker") ||
           saved.layout !== getResponsiveLayout() || exception(element, saved.selector)) return false;
         var features = AFShared.extractDomFeatures(element);
-        return AFShared.shouldAutoHideIosBanner({...features, visible: true});
+        return AFShared.shouldAutoHideIosBanner({...features, visible: true, rect: saved.rect || features.rect});
       }
       return rules().some(
         (rule) =>
@@ -99,7 +91,7 @@
   function apply(root) {
     if (!AFShared.iosFeatureEnabled(AF_CONFIG.appSettings, "content.dom-static-blocker") || getCurrentSitePolicy() === "allow") return;
     var count = 0;
-    var builtins = AFShared.IOS_BUILTIN_DOM_SELECTORS.map(selector => ({selector, source: "builtin"}));
+    var builtins = AFShared.iosBuiltinDomSelectors(window.location.hostname).map(selector => ({selector, source: "builtin"}));
     builtins.concat(rules()).forEach(function (rule) {
       var selector = typeof rule === "string" ? rule : rule?.selector;
       if (!AFShared.safeDomSelector(selector)) return;
@@ -158,7 +150,19 @@
       if (!safe(element) || getCurrentSitePolicy() !== "block" ||
         !AFShared.iosFeatureEnabled(AF_CONFIG.appSettings, "content.dom-static-blocker") ||
         exception(element, selector)) return false;
-      return hidden.hide(element, {selector, source: "automatic", layout: getResponsiveLayout()});
+      return hidden.hide(element, {selector, source: "automatic", layout: getResponsiveLayout(),
+        rect: AFShared.extractDomFeatures(element).rect});
+    },
+    state: () => ({hiddenCount: hidden.size, shownOnPage}),
+    setVisibility: function(visibility) {
+      shownOnPage = visibility === "show";
+      if (shownOnPage) hidden.reconcile(() => false);
+      else {
+        apply(document);
+        if (window.AF_scanBanners) AF_scanBanners();
+      }
+      schedule(document);
+      return this.state();
     },
     restore: (element) => hidden.restore(element),
     schedule,

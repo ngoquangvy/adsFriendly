@@ -27,6 +27,22 @@ const appRoutes = {
   "/DNS.js": ["Resources/DNS.js", "text/javascript"],
 };
 const server = createServer(async (request, response) => {
+  const toolbarFiles = {
+    "/toolbar-popup": "popup.html",
+    "/popup.js": "popup.js",
+    "/popup.css": "popup.css",
+  };
+  if (toolbarFiles[request.url]) {
+    response.writeHead(200, {
+      "content-type": request.url.endsWith(".js")
+        ? "text/javascript"
+        : request.url.endsWith(".css")
+          ? "text/css"
+          : "text/html",
+    });
+    response.end(await readFile(new URL(toolbarFiles[request.url], resources)));
+    return;
+  }
   if (appRoutes[request.url]) {
     const [file, type] = appRoutes[request.url];
     response.writeHead(200, { "content-type": type });
@@ -465,6 +481,11 @@ try {
     await session.evaluate("getComputedStyle(testOther).display"),
     "none",
   );
+  assert.match(
+    await session.evaluate("testShadows.at(-1).textContent"),
+    /Area hiddenShow/,
+  );
+  await session.evaluate("testShadows.at(-1).querySelector('.close').click()");
   await session.evaluate(`
     testNow += 70000;
     for (let i = 0; i < 30; i++) {
@@ -656,6 +677,197 @@ try {
     await session.evaluate("getComputedStyle(builtinBanner).display"),
     "block",
   );
+
+  // Sanitized structure observed on animevietsub.sale: dedicated ad grids with
+  // shared-CDN images and unknown outbound hosts. Never block the whole CDN.
+  await session.send("Page.navigate", {
+    url:
+      "http://127.0.0.1:" +
+      server.address().port +
+      "/publisher-banner-regression",
+  });
+  await new Promise((resolve) => setTimeout(resolve, 650));
+  await session.evaluate(`
+    testChange('blacklist', ['||127.0.0.1^']);
+    window.fixtureImage = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="350" height="70"><rect width="350" height="70" fill="gold"/></svg>');
+    window.fixtureLink = function(host, id='') {const a=document.createElement('a');a.href='https://'+host+'/placement';a.id=id;a.style.cssText='display:block;width:350px;height:70px';a.innerHTML='<img src="'+fixtureImage+'" style="width:350px;height:70px">';return a;};
+    window.fixtureVisible = function(el) {for(let n=el;n;n=n.parentElement) if(getComputedStyle(n).display==='none') return false;return true;};
+    window.siteGrid=document.createElement('div');siteGrid.className='header-ads-pc';siteGrid.style.cssText='display:grid;width:350px;height:auto';
+    for(let i=0;i<6;i++) siteGrid.appendChild(fixtureLink('unknown-sponsor-'+i+'.test'));
+    document.body.appendChild(siteGrid);
+    window.siteFooter=document.createElement('div');siteFooter.className='pc_catfix_adv';siteFooter.style.cssText='width:350px;height:70px';siteFooter.appendChild(fixtureLink('different-sponsor.test'));document.body.appendChild(siteFooter);
+    window.normalHero=document.createElement('div');normalHero.className='hero-banner';normalHero.style.cssText='width:350px;height:70px';normalHero.appendChild(fixtureLink('news.example'));document.body.appendChild(normalHero);
+    window.normalPoster=fixtureLink('127.0.0.1');document.body.appendChild(normalPoster);
+    window.protectedNav=document.createElement('nav');protectedNav.appendChild(fixtureLink('ad.doubleclick.net'));document.body.appendChild(protectedNav);
+    window.keptGrid=siteGrid.cloneNode(true);keptGrid.querySelector('a').id='kept-creative';document.body.appendChild(keptGrid);
+    testChange('userElementExceptions', {'127.0.0.1':[{selector:'#kept-creative',layout:'compact',fingerprint:{tag:'a',id:'kept-creative'}}]});
+    window.unknownFrame=document.createElement('iframe');unknownFrame.className='ads-slot';unknownFrame.style.cssText='width:300px;height:250px';document.body.appendChild(unknownFrame);
+    AF_scanBanners();
+  `);
+  await new Promise((resolve) => setTimeout(resolve, 450));
+  assert.equal(
+    await session.evaluate(
+      "[...siteGrid.querySelectorAll('a'),siteFooter,unknownFrame].every(el=>!fixtureVisible(el))",
+    ),
+    true,
+    "Unknown ad grids, footer creatives and iframe-only slots must be removed in Block",
+  );
+  assert.equal(
+    await session.evaluate(
+      "[normalHero,normalPoster,protectedNav,keptGrid.querySelector('#kept-creative')].every(fixtureVisible)",
+    ),
+    true,
+    "Normal heroes, posters, navigation and a kept creative inside an ad grid stay visible",
+  );
+  assert.equal(
+    await session.evaluate(
+      "[...keptGrid.querySelectorAll('a')].slice(1).every(el=>!fixtureVisible(el))",
+    ),
+    true,
+    "Keeping one creative must not exempt its sibling ads",
+  );
+  assert.equal(
+    await session.evaluate(
+      "document.getElementById('adsfriendly-popup-container')===null",
+    ),
+    true,
+    "Automatic ad removal must not restart noisy Hide/Keep popups",
+  );
+  await session.evaluate(
+    "siteFooter.style.setProperty('display','block','important')",
+  );
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  assert.equal(
+    await session.evaluate("fixtureVisible(siteFooter)"),
+    false,
+    "Slot evidence survives hiding and site display rewrites",
+  );
+  const shown = await session.evaluate(
+    `new Promise(resolve => messageListeners.forEach(fn=>fn({action:'set_banner_visibility',visibility:'show'},{},resolve)))`,
+  );
+  assert.equal(shown.dom.shownOnPage, true);
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  assert.equal(
+    await session.evaluate(
+      "[...siteGrid.querySelectorAll('a'),siteFooter,unknownFrame].every(fixtureVisible)",
+    ),
+    true,
+    "Show from the Safari popup restores actual tracked areas without changing saved choices",
+  );
+  await session.evaluate(
+    "AF_scanBanners();document.body.classList.add('unrelated-animation')",
+  );
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  assert.equal(
+    await session.evaluate("fixtureVisible(siteFooter)"),
+    true,
+    "Show lasts through subsequent scans on this page",
+  );
+  await session.evaluate(
+    `new Promise(resolve => messageListeners.forEach(fn=>fn({action:'set_banner_visibility',visibility:'hide'},{},resolve)))`,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  assert.equal(await session.evaluate("fixtureVisible(siteFooter)"), false);
+  assert.equal(
+    await session.evaluate(
+      "fixtureVisible(keptGrid.querySelector('#kept-creative'))",
+    ),
+    true,
+  );
+
+  // A prior dismissal in Default must not become an invisible Keep on Block.
+  await session.send("Page.navigate", {
+    url: "http://127.0.0.1:" + server.address().port + "/default-to-block",
+  });
+  await new Promise((resolve) => setTimeout(resolve, 650));
+  await session.evaluate(`(async () => {
+    window.transitionAd=document.createElement('div');transitionAd.className='ad-banner';transitionAd.style.cssText='width:300px;height:70px';
+    transitionAd.innerHTML='<a href="https://unknown-sponsor.test/placement"><img style="width:300px;height:70px"></a>';
+    transitionAd.querySelector('img').src='data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="300" height="70"><rect width="300" height="70" fill="gold"/></svg>');
+    document.body.appendChild(transitionAd);
+    await transitionAd.querySelector('img').decode();AF_scanBanners();
+  })()`);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.match(
+    await session.evaluate("testShadows.at(-1).textContent"),
+    /Marked area/,
+  );
+  await session.evaluate(
+    "testShadows.at(-1).querySelector('.close').click();testChange('blacklist',['||127.0.0.1^']);AF_scanBanners()",
+  );
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  assert.equal(
+    await session.evaluate("getComputedStyle(transitionAd).display"),
+    "none",
+    "Dismissed reviews must still obey a later Block policy",
+  );
+
+  // Successful manual Hide has a compact immediate Show recovery.
+  await session.send("Page.navigate", {
+    url: "http://127.0.0.1:" + server.address().port + "/manual-hide-show",
+  });
+  await new Promise((resolve) => setTimeout(resolve, 650));
+  await session.evaluate(`
+    window.manualArea=document.createElement('div');manualArea.id='ad-manual-area';manualArea.style.cssText='width:300px;height:70px';manualArea.textContent='Advertisement';document.body.appendChild(manualArea);AF_scanBanners();
+    testShadows.at(-1).querySelector('button').click();
+  `);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.match(
+    await session.evaluate("testShadows.at(-1).textContent"),
+    /Area hiddenShow/,
+  );
+  await session.evaluate("testShadows.at(-1).querySelector('button').click()");
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(await session.evaluate("testMessages.at(-1).decision"), "show");
+  assert.notEqual(
+    await session.evaluate("getComputedStyle(manualArea).display"),
+    "none",
+  );
+
+  const toolbarSeed = await session.send(
+    "Page.addScriptToEvaluateOnNewDocument",
+    {
+      source: `
+    window.toolbarState={policy:'block',appSettings:{enabled:true},content:{ready:true,enabled:true,host:'127.0.0.1',version:'1.2.1',dom:{hiddenCount:6,shownOnPage:false}}};
+    chrome.tabs={query(q,cb){cb([{id:7,url:location.origin+'/article'}]);}};
+    chrome.runtime.sendMessage=function(m,cb){testMessages.push(m);if(m.action==='set_banner_visibility') toolbarState.content.dom=m.visibility==='show'?{hiddenCount:0,shownOnPage:true}:{hiddenCount:6,shownOnPage:false};cb(m.action==='get_popup_state'?toolbarState:{ready:true});};
+  `,
+    },
+  );
+  await session.send("Page.navigate", {
+    url: "http://127.0.0.1:" + server.address().port + "/toolbar-popup",
+  });
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  assert.equal(
+    await session.evaluate("document.getElementById('show-banners').disabled"),
+    false,
+  );
+  await session.evaluate("document.getElementById('show-banners').click()");
+  assert.equal(
+    await session.evaluate(
+      "document.getElementById('banner-state').textContent",
+    ),
+    "Banners shown on this page",
+  );
+  assert.equal(
+    await session.evaluate("document.getElementById('hide-banners').disabled"),
+    false,
+  );
+  await session.evaluate("document.getElementById('hide-banners').click()");
+  assert.equal(
+    await session.evaluate(
+      "document.getElementById('banner-state').textContent",
+    ),
+    "6 banner areas hidden",
+  );
+  assert.equal(
+    await session.evaluate("document.documentElement.scrollWidth<=innerWidth"),
+    true,
+    "Toolbar controls fit the phone viewport",
+  );
+  await session.send("Page.removeScriptToEvaluateOnNewDocument", {
+    identifier: toolbarSeed.identifier,
+  });
 
   // Exercise the Chrome toast module itself, independently of Safari mocks.
   await session.send("Page.navigate", {

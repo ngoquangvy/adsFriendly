@@ -17,6 +17,8 @@ import {
 import * as navigation from "./navigation.js";
 import {
   IOS_BUILTIN_DOM_SELECTORS,
+  IOS_BANNER_CANDIDATE_SELECTOR,
+  iosBuiltinDomSelectors,
   shouldAutoHideIosBanner,
 } from "./automatic-dom.js";
 import {
@@ -244,6 +246,8 @@ if (typeof window !== "undefined") {
     ...schema,
     ...navigation,
     IOS_BUILTIN_DOM_SELECTORS,
+    IOS_BANNER_CANDIDATE_SELECTOR,
+    iosBuiltinDomSelectors,
     shouldAutoHideIosBanner,
     isKnownAdUrl,
     iosSiteAllowRules,

@@ -64,10 +64,19 @@ async function background() {
       onUpdated: event,
       onRemoved: event,
       get(id, callback) {
-        callback({ id, url: tabUrls.get(id) || "https://source.example/article" });
+        callback({
+          id,
+          url: tabUrls.get(id) || "https://source.example/article",
+        });
       },
-      update(id, value, callback) { tabUrls.set(id, value.url); callback({ id, ...value }); },
-      remove(id, callback) { removed.push(id); callback(); },
+      update(id, value, callback) {
+        tabUrls.set(id, value.url);
+        callback({ id, ...value });
+      },
+      remove(id, callback) {
+        removed.push(id);
+        callback();
+      },
       query(query, callback) {
         callback([]);
       },
@@ -125,7 +134,9 @@ async function background() {
     created,
     relays,
     context,
-    api, removed, tabUrls,
+    api,
+    removed,
+    tabUrls,
     sender,
     extension,
     send: (message, origin = sender) =>
@@ -170,6 +181,30 @@ test("Open once does not change the remembered block and validates URL schemes",
   );
   assert.equal(bg.created.length, 1);
   assert.deepEqual(bg.data().blacklist, ["||ads.example^"]);
+});
+test("banner visibility controls are extension-only and cannot target a changed tab", async () => {
+  const bg = await background();
+  const request = {
+    action: "set_banner_visibility",
+    visibility: "show",
+    tabId: 1,
+    hostname: "source.example",
+  };
+  assert.ok((await bg.send(request)).error);
+  assert.ok(
+    (await bg.send({ ...request, hostname: "different.test" }, bg.extension))
+      .error,
+  );
+  assert.equal(bg.relays.length, 0);
+  bg.api.tabs.sendMessage = (...args) => {
+    const callback = args.pop();
+    bg.relays.push(args);
+    callback({ ready: true, dom: { hiddenCount: 0, shownOnPage: true } });
+  };
+  assert.equal((await bg.send(request, bg.extension)).dom.shownOnPage, true);
+  assert.equal(bg.relays[0][2].frameId, 0);
+  assert.equal(bg.created.length, 0);
+  assert.equal(bg.data().whitelist, undefined);
 });
 test("DOM decisions use root exceptions and separate compact/wide rules", async () => {
   const bg = await background();
@@ -221,22 +256,25 @@ test("parallel counter updates are serialized", async () => {
 test("neutralization reports only successful blocks and never closes a changed tab", async () => {
   const bg = await background();
   bg.context.neutralizeTab(9, 1, "https://ads.example/", true);
-  await new Promise(resolve => setTimeout(resolve, 20));
+  await new Promise((resolve) => setTimeout(resolve, 20));
   await bg.context.AFShared.serialMutation(async () => {});
   assert.deepEqual(bg.removed, [9]);
   assert.equal(bg.data().blockedCount, 1);
   assert.equal(bg.relays[0][1].remembered, true);
   bg.api.tabs.update = (id, value, callback) => {
-    bg.tabUrls.set(id, "https://user-navigation.example/"); callback({});
+    bg.tabUrls.set(id, "https://user-navigation.example/");
+    callback({});
   };
   bg.context.neutralizeTab(10, 1, "https://ads.example/", false);
-  await new Promise(resolve => setTimeout(resolve, 20));
+  await new Promise((resolve) => setTimeout(resolve, 20));
   assert.deepEqual(bg.removed, [9]);
   bg.api.tabs.update = (id, value, callback) => {
-    bg.api.runtime.lastError = { message: "Missing permission" }; callback(); bg.api.runtime.lastError = null;
+    bg.api.runtime.lastError = { message: "Missing permission" };
+    callback();
+    bg.api.runtime.lastError = null;
   };
   bg.context.neutralizeTab(11, 1, "https://ads.example/", false);
-  await new Promise(resolve => setTimeout(resolve, 20));
+  await new Promise((resolve) => setTimeout(resolve, 20));
   await bg.context.AFShared.serialMutation(async () => {});
   assert.equal(bg.data().blockedCount, 2);
   assert.equal(bg.data().afsDiagnostics.at(-1).reason, "neutralize_failed");

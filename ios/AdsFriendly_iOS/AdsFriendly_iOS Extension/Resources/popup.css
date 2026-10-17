@@ -33,6 +33,11 @@ header { display: flex; align-items: center; gap: 10px; }
 .package-import button { min-height: 36px; border: 1px solid #334155; border-radius: 9px; background: rgba(96,165,250,.1); color: #bfdbfe; font: inherit; font-size: 11px; font-weight: 700; }
 .package-import button:disabled { opacity: .55; }
 .package-import span { color: #64748b; font-size: 9px; line-height: 1.35; }
+.banner-controls { margin-top: 12px; display: grid; gap: 6px; font-size: 11px; }
+.banner-controls div { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.banner-controls button { min-height: 44px; border: 1px solid #334155; border-radius: 9px; background: #172033; color: #bfdbfe; font: inherit; font-weight: 600; }
+.banner-controls button:disabled { opacity: .45; cursor: default; }
+.banner-controls small { color: #94a3b8; font-size: 9px; line-height: 1.4; }
 #hint, #error { min-height: 28px; margin: 10px 2px 0; color: #94a3b8; font-size: 10px; line-height: 1.4; }
 #error { color: #fca5a5; }
 button, .switch { cursor: pointer; }

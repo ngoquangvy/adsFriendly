@@ -253,7 +253,13 @@
     if (message.action === "protection_probe") {
       AF_CONFIG.ready.then(function() {
         sendResponse({ready: !!window.AF_DOM, enabled: isProtectionEnabled(),
-          host: window.location.hostname, version: "1.2.0"});
+          host: window.location.hostname, version: "1.2.1", dom: window.AF_DOM?.state()});
+      });
+      return true;
+    }
+    if (message.action === "set_banner_visibility" && ["hide", "show"].includes(message.visibility)) {
+      AF_CONFIG.ready.then(function() {
+        sendResponse({ready: !!window.AF_DOM, dom: window.AF_DOM?.setVisibility(message.visibility)});
       });
       return true;
     }

@@ -1036,12 +1036,6 @@
     if (typeof selector !== "string" || !selector.trim()) return false;
     return !NON_ACTIONABLE_SELECTORS.has(selector.trim().toLowerCase());
   }
-  function isExplicitFullscreenAdOverlay(features = {}) {
-    const zIndex = Number.parseInt(features.style?.zIndex, 10);
-    return Boolean(
-      features.visible && features.fixedOrSticky && features.rect?.areaRatio >= 0.6 && Number.isFinite(zIndex) && zIndex >= 1e3 && (features.signals?.idHasAdToken || features.signals?.classHasAdToken || features.signals?.idLooksAdSlot) && features.descendants?.externalAdLinkCount > 0
-    );
-  }
   function buildDynamicAdIdSelector(element) {
     if (!element?.tagName || !element.id) return null;
     const match = element.id.match(
@@ -1630,162 +1624,65 @@
     return allowed.concat(resets);
   }
 
-  // src/shared/decision.js
-  var DECISION_ACTIONS = Object.freeze({
-    ALLOW: "allow",
-    BLOCK: "block",
-    TOAST: "toast",
-    OBSERVE: "observe"
-  });
-  function createDecision(action, options = {}) {
-    return {
-      action,
-      confidence: clampConfidence2(options.confidence ?? 0),
-      reasons: Array.isArray(options.reasons) ? options.reasons : [],
-      target: options.target || null,
-      metadata: options.metadata || {}
-    };
-  }
-  function clampConfidence2(value) {
-    if (!Number.isFinite(value)) return 0;
-    return Math.max(0, Math.min(1, value));
-  }
-
-  // src/dom/decision.js
-  function decideDomCandidate(features) {
-    const reasons = [];
-    let score = 0;
-    if (!features.visible) {
-      return createDecision(DECISION_ACTIONS.OBSERVE, {
-        confidence: 0,
-        reasons: ["not_visible"]
-      });
-    }
-    if (features.inProtectedArea) {
-      return createDecision(DECISION_ACTIONS.OBSERVE, {
-        confidence: 0.1,
-        reasons: ["protected_area"]
-      });
-    }
-    if (isExplicitFullscreenAdOverlay(features)) {
-      return createDecision(DECISION_ACTIONS.BLOCK, {
-        confidence: 0.99,
-        reasons: ["explicit_fullscreen_ad_overlay"]
-      });
-    }
-    if (features.signals.classHasAdToken) {
-      score += 0.35;
-      reasons.push("class_ad_token");
-    }
-    if (features.signals.idHasAdToken) {
-      score += 0.35;
-      reasons.push("id_ad_token");
-    }
-    if (features.signals.idLooksAdSlot) {
-      score += 0.24;
-      reasons.push("ad_slot_id");
-    }
-    if (features.signals.classHasAdToken && features.signals.idHasAdToken) {
-      score += 0.08;
-      reasons.push("class_and_id_ad_tokens");
-    }
-    if (features.signals.hrefLooksAdLike) {
-      score += 0.25;
-      reasons.push("ad_like_href");
-    }
-    if (features.signals.hrefHostLooksCommercial) {
-      score += 0.18;
-      reasons.push("commercial_or_tracking_host");
-    }
-    if (features.linkExternal) {
-      score += 0.12;
-      reasons.push("external_link");
-    }
-    if (features.linkExternal && (features.signals.classHasAdToken || features.signals.idHasAdToken)) {
-      score += 0.2;
-      reasons.push("external_link_with_ad_token");
-    }
-    if (features.fixedOrSticky) {
-      score += 0.15;
-      reasons.push("fixed_or_sticky");
-    }
-    if (features.rect.areaRatio > 0.08 && features.rect.areaRatio < 0.45) {
-      score += 0.12;
-      reasons.push("banner_sized_area");
-    }
-    if (features.compactBannerShape) {
-      score += 0.12;
-      reasons.push("compact_banner_shape");
-    }
-    if (features.billboardShape) {
-      score += 0.12;
-      reasons.push("billboard_ad_shape");
-    }
-    if (features.tallSidebarShape) {
-      score += 0.12;
-      reasons.push("sidebar_ad_shape");
-    }
-    if (features.tag === "iframe" && (features.signals.idHasAdToken || features.signals.idLooksAdSlot)) {
-      score += 0.18;
-      reasons.push("iframe_with_ad_slot_id");
-    }
-    if (features.signals.srcIsImageCdn && features.signals.classHasAdToken) {
-      score += 0.12;
-      reasons.push("cdn_image_with_ad_class");
-    }
-    if (features.descendants.externalAdLinkCount > 0) {
-      score += 0.22;
-      reasons.push("descendant_external_ad_link");
-    }
-    if (features.descendants.imageCdnCount > 0 && (features.signals.classHasAdToken || features.signals.idHasAdToken)) {
-      score += 0.12;
-      reasons.push("descendant_cdn_media_with_ad_token");
-    }
-    if (features.descendants.iframeCount > 0 && (features.signals.classHasAdToken || features.signals.idHasAdToken)) {
-      score += 0.12;
-      reasons.push("descendant_iframe_with_ad_token");
-    }
-    if (features.inNavigationArea && features.navAdLinkRatio >= 0.8) {
-      score += 0.2;
-      reasons.push("ad_heavy_navigation_area");
-    }
-    if (features.textLength > 500) {
-      score -= 0.25;
-      reasons.push("large_text_content");
-    }
-    const confidence = Math.max(0, Math.min(1, score));
-    if (confidence >= 0.78) {
-      return createDecision(DECISION_ACTIONS.BLOCK, { confidence, reasons });
-    }
-    if (confidence >= 0.55) {
-      return createDecision(DECISION_ACTIONS.TOAST, { confidence, reasons });
-    }
-    return createDecision(DECISION_ACTIONS.OBSERVE, { confidence, reasons });
-  }
-
   // src/ios/automatic-dom.js
+  var AD_MARKER = /(^|[\s_-])(?:ad|ads|adv|advert|advertisement|sponsored)(?=$|[\s_-])/i;
+  var IOS_BANNER_CANDIDATE_SELECTOR = [
+    '[class*="banner" i]',
+    '[id*="banner" i]',
+    ...["ad", "ads", "adv", "advert", "sponsored"].flatMap((token) => [
+      `[class~="${token}" i]`,
+      `[class^="${token}-" i]`,
+      `[class*="-${token}-" i]`,
+      `[class$="-${token}" i]`,
+      `[class*="_${token}" i]`,
+      `[id^="${token}-" i]`,
+      `[id^="${token}_" i]`
+    ])
+  ].join(",");
   var IOS_BUILTIN_DOM_SELECTORS = Object.freeze([
     "ins.adsbygoogle",
     'iframe[src*="//googleads.g.doubleclick.net/"]',
     '[id^="google_ads_iframe_"]',
     '[data-ad-client^="ca-pub-"]'
   ]);
+  function iosBuiltinDomSelectors(hostname = "") {
+    const host = String(hostname).toLowerCase().replace(/\.$/, "");
+    const publisher = host === "animevietsub.sale" || host.endsWith(".animevietsub.sale");
+    return IOS_BUILTIN_DOM_SELECTORS.concat(
+      publisher ? [
+        ".header-ads-pc > a",
+        ".pc_catfix_adv > a",
+        'a[href*="/animevietsubapp-topbanner"]',
+        'a[href*="/animevietsubapp-right-banner"]',
+        'a[href*="/animevietsubapp-catfish"]',
+        'a[href*="/cpd/animevietsubcatfish"]',
+        'a[href*="/animevietsubapp-popup"]'
+      ] : []
+    );
+  }
   function shouldAutoHideIosBanner(features = {}) {
     if (features.inProtectedArea || !features.visible) return false;
     const media = ["img", "iframe", "video"].includes(features.tag) || (features.descendants?.imageCount || 0) + (features.descendants?.iframeCount || 0) > 0;
     if (!media) return false;
+    if ((features.textLength || 0) > 240 || (features.descendants?.linkCount || 0) > 12)
+      return false;
     const knownHost = (host) => IOS_AD_HOSTS.some((ad) => host === ad || host.endsWith("." + ad));
     if (isKnownAdUrl(features.src) || isKnownAdUrl(features.href) || [
       ...features.descendants?.hrefHosts || [],
       ...features.descendants?.srcHosts || []
     ].some(knownHost))
       return true;
-    const explicit = /(^|[\s_-])(?:ad|ads|adv|advert|advertisement|sponsored)(?=$|[\s_-])/i.test(
+    const explicit = AD_MARKER.test(
       (features.id || "") + " " + (features.className || "")
     );
-    if (!explicit || !(features.linkExternal || features.descendants?.externalLinkCount > 0) || !features.signals || !features.rect)
-      return false;
-    return decideDomCandidate(features).confidence >= 0.9;
+    const inheritedSlot = ["a", "img", "iframe"].includes(features.tag) && features.ancestry?.slice(0, 3).some(
+      (parent) => !["html", "body", "main", "header", "nav", "form"].includes(
+        parent.tag
+      ) && parent.childCount <= 12 && AD_MARKER.test((parent.id || "") + " " + (parent.className || ""))
+    );
+    const creative = features.rect?.width >= 120 && features.rect?.height >= 24;
+    const linkedOrFramed = features.linkExternal || features.descendants?.externalLinkCount > 0 || features.tag === "iframe" || features.descendants?.iframeCount > 0;
+    return !!((explicit || inheritedSlot) && creative && linkedOrFramed);
   }
 
   // src/ios/dom-state.js
@@ -2238,6 +2135,8 @@
       ...schema_exports,
       ...navigation_exports,
       IOS_BUILTIN_DOM_SELECTORS,
+      IOS_BANNER_CANDIDATE_SELECTOR,
+      iosBuiltinDomSelectors,
       shouldAutoHideIosBanner,
       isKnownAdUrl,
       iosSiteAllowRules,

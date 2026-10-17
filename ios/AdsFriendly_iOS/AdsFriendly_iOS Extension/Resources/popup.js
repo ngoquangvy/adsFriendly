@@ -5,7 +5,7 @@ var currentState = null;
 var POLICY_HELP = {
   default: "Default: block obvious ads and ask when uncertain.",
   allow: "Allow: do not hide banners or block tabs opened by this site.",
-  block: "Block ad URLs, untrusted new tabs and banners with confirmed ad-resource evidence. Keep exceptions still apply."
+  block: "Block ad URLs, untrusted new tabs and identified banner slots. Keep exceptions still apply."
 };
 
 function hostFromUrl(url) {
@@ -47,6 +47,12 @@ function render(state) {
   document.getElementById("total-count").textContent = state.blockedCount || 0;
   document.getElementById("protection-toggle").checked = state.appSettings && state.appSettings.enabled !== false;
   var enabled = !state.appSettings || state.appSettings.enabled !== false;
+  var connected = content.ready && content.host === activeHostname;
+  var dom = content.dom || {};
+  document.getElementById("banner-state").textContent = dom.shownOnPage
+    ? "Banners shown on this page" : (dom.hiddenCount || 0) + " banner areas hidden";
+  document.getElementById("hide-banners").disabled = !connected || !enabled || state.policy === "allow" || !dom.shownOnPage;
+  document.getElementById("show-banners").disabled = !connected || !enabled || dom.shownOnPage || !dom.hiddenCount;
   var status = document.getElementById("site-status");
   var dot = document.getElementById("status-dot");
   dot.className = "status-dot";
@@ -95,6 +101,18 @@ document.getElementById("import-package").addEventListener("click", function() {
   popupApi.tabs.create({ url: popupApi.runtime.getURL("packages/import.html"), active: true }, function() {
     if (popupApi.runtime.lastError) { showError(popupApi.runtime.lastError.message); return; }
     window.close();
+  });
+});
+
+["hide", "show"].forEach(function(visibility) {
+  document.getElementById(visibility + "-banners").addEventListener("click", function() {
+    showError("");
+    document.getElementById("hide-banners").disabled = true;
+    document.getElementById("show-banners").disabled = true;
+    send({action:"set_banner_visibility", visibility, tabId:activeTabId, hostname:activeHostname}, function(response) {
+      if (response.error) { showError(response.error); loadState(); return; }
+      loadState(visibility === "show" ? "Shown for this page only; URL filtering is still on." : "Banner hiding resumed. Keep exceptions are respected.");
+    });
   });
 });
 

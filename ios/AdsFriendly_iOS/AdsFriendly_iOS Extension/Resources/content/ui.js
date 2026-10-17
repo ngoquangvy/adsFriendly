@@ -238,7 +238,18 @@
       },
       message: "Marked area?",
       actions: [
-        { label: "Hide", run: handlers.hide },
+        { label: "Hide", run: async function() {
+          await handlers.hide();
+          var hiddenIdentity = AFShared.reviewTargetIdentity(element);
+          // A manual Hide always has an immediate, remembered Show recovery.
+          // Automatic blocking stays quiet; toolbar controls remain available.
+          enqueue({key:key + ":undo", element, remembered:true, message:"Area hidden",
+            actions:[{label:"Show", description:"Show and remember this area", run:async function() {
+              if (!element.isConnected || AFShared.reviewTargetIdentity(element) !== hiddenIdentity)
+                throw new Error("This area changed. Reload before choosing Show.");
+              await handlers.show();
+            }}]});
+        } },
         {
           label: "Keep",
           description: "Keep / show this banner",

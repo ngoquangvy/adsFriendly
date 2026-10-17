@@ -44,6 +44,7 @@ bgApi.runtime.onMessage.addListener(function (request, sender, sendResponse) {
     "get_popup_rules",
     "flush_telemetry",
     "get_popup_state",
+    "set_banner_visibility",
     "set_site_policy",
     "set_app_settings",
     "reset_blocked_count",
@@ -83,6 +84,7 @@ bgApi.runtime.onMessage.addListener(function (request, sender, sendResponse) {
         "set_site_policy",
         "set_app_settings",
         "reset_blocked_count",
+        "set_banner_visibility",
       ].includes(request.action) &&
       !extensionPage(sender)
     )
@@ -139,6 +141,17 @@ bgApi.runtime.onMessage.addListener(function (request, sender, sendResponse) {
       return { status: "saved" };
     }
     if (request.action === "get_popup_rules") return bgGetPopupRules();
+    if (request.action === "set_banner_visibility") {
+      if (!Number.isInteger(request.tabId) || !["hide", "show"].includes(request.visibility))
+        throw new Error("Choose Hide or Show on the current page.");
+      var page = await AFShared.callApi(bgApi.tabs, "get", request.tabId);
+      if (!AFShared.httpUrl(page.url) || new URL(page.url).hostname !== AFSettingsPackage.normalizeHost(request.hostname))
+        throw new Error("The page changed. Reopen the Safari popup.");
+      var result = await AFShared.callApi(bgApi.tabs, "sendMessage", request.tabId,
+        {action: "set_banner_visibility", visibility: request.visibility}, {frameId: 0});
+      if (!result?.ready) throw new Error("Reload the page and check extension website access.");
+      return result;
+    }
     if (request.action === "flush_telemetry") {
       bgFlushTelemetry();
       return {};

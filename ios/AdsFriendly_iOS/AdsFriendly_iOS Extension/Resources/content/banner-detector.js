@@ -2,7 +2,8 @@
   if (window.top !== window) return;
   var hiddenBanners = { has: function(element) { return AF_DOM.isHidden(element); } };
   var reviewedBanners = new WeakSet();
-  var bannerSignals = '[class*="banner" i], [id*="banner" i], [class*="advert" i], [id*="advert" i], [class~="ad" i], [id^="ad-" i]';
+  var bannerSignals = AFShared.IOS_BANNER_CANDIDATE_SELECTOR;
+  var reviewSignals = '[class*="banner" i], [id*="banner" i], [class*="advert" i], [id*="advert" i], [class~="ad" i], [id^="ad-" i]';
 
   function buildBannerSelector(el) {
     return AFShared.buildDomSelector(el) || "";
@@ -239,22 +240,24 @@
 
   function hideBanner(el, reason) {
     if (!isProtectionEnabled() || getCurrentSitePolicy() === "allow" || AF_DOM.isHidden(el)) return;
-    if (reviewedBanners.has(el) || isProtectedNavigation(el) || isLoginForm(el)) return;
+    if (isProtectedNavigation(el) || isLoginForm(el)) return;
     var selector = buildBannerSelector(el);
     if (!AFShared.safeDomSelector(selector)) return;
     if (isAllowedCandidate(selector, el)) return;
     // Block is an actual blocking policy, not a request to keep asking. Only
-    // strong resource/domain evidence can auto-hide; review limits never limit it.
+    // verified resources or explicit media-slot evidence can auto-hide;
+    // dismissing an earlier review must not disable a later Block policy.
     if (getCurrentSitePolicy() === "block" &&
       AFShared.shouldAutoHideIosBanner(AFShared.extractDomFeatures(el)) &&
       AF_DOM.hideAutomatic(el, selector)) {
       if (typeof afsRecordTelemetry === "function") afsRecordTelemetry({
         unit: "dom_element", label: "ad", label_source: "confirmed_rule",
-        ad_type: "banner", reason: "block_policy_known_ad_resource",
+        ad_type: "banner", reason: "block_policy_ad_resource_or_slot",
         action: "hide", outcome: "hidden_element", evidence: {count: 1}
       });
       return;
     }
+    if (reviewedBanners.has(el)) return;
     if (!AFShared.isReviewTarget(el)) return;
     if (typeof notifyBannerCandidate !== "function") return;
     var accepted = notifyBannerCandidate(el, reason, {
@@ -289,19 +292,22 @@
     var links = document.querySelectorAll('a[href]');
     for (var i = 0; i < links.length && i < 500; i++) {
       var link = links[i];
-      if (hiddenBanners.has(link) || reviewedBanners.has(link)) continue;
+      if (hiddenBanners.has(link)) continue;
       if (isProtectedNavigation(link) || !hasBannerCreativeGeometry(link)) continue;
-      if (!linkLooksLikeAd(link)) continue;
+      if (!linkLooksLikeAd(link) && !(getCurrentSitePolicy() === "block" &&
+        AFShared.shouldAutoHideIosBanner(AFShared.extractDomFeatures(link)))) continue;
       hideBanner(link, "linked banner creative");
     }
     var signaled = [];
     try {
-      signaled = document.querySelectorAll(bannerSignals);
+      signaled = document.querySelectorAll(getCurrentSitePolicy() === "block" ? bannerSignals : reviewSignals);
     } catch(e) {}
     for (var j = 0; j < signaled.length && j < 300; j++) {
       var candidate = signaled[j];
-      if (hiddenBanners.has(candidate) || reviewedBanners.has(candidate)) continue;
+      if (hiddenBanners.has(candidate)) continue;
       if (isProtectedNavigation(candidate) || !hasBannerCreativeGeometry(candidate)) continue;
+      if (getCurrentSitePolicy() === "block" && !candidate.matches(reviewSignals) &&
+        !AFShared.shouldAutoHideIosBanner(AFShared.extractDomFeatures(candidate))) continue;
       if (isLikelyAdContainer(candidate)) hideBanner(candidate, "inline banner signal");
     }
   }
@@ -319,7 +325,7 @@
 
     for (var i = 0; i < allEls.length && i < 1500; i++) {
       var el = allEls[i];
-      if (hiddenBanners.has(el) || reviewedBanners.has(el)) continue;
+      if (hiddenBanners.has(el)) continue;
       if (!isPositionedBanner(el)) continue;
       if (el.offsetWidth === 0 && el.offsetHeight === 0) continue;
       if (el.style.display === 'none') continue;
@@ -363,7 +369,7 @@
     // Phase 4: Mobile ads are commonly a single linked image without a close button.
     for (var i = 0; i < positioned.length; i++) {
       var creative = positioned[i];
-      if (hiddenBanners.has(creative) || reviewedBanners.has(creative)) continue;
+      if (hiddenBanners.has(creative)) continue;
       if (isProtectedNavigation(creative) || hasCloseButton(creative)) continue;
       if (hasBannerCreativeGeometry(creative) && isLikelyAdContainer(creative)) {
         hideBanner(creative, "ad creative");
