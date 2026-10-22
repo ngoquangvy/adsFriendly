@@ -1238,6 +1238,8 @@ var AdsFriendlyOptions = (() => {
     "mp3",
     "m4a",
     "ogg",
+    "oga",
+    "opus",
     "flac",
     "wav",
     "jpg",
@@ -2513,6 +2515,36 @@ var AdsFriendlyOptions = (() => {
     "ti\u1EBFng trung qu\u1ED1c": "Chinese",
     "ti\u1EBFng nh\u1EADt": "Japanese",
     "ti\u1EBFng h\xE0n": "Korean"
+  });
+
+  // src/media/content-type.js
+  var MEDIA_TYPES = Object.freeze([
+    "audio",
+    "video",
+    "audio_video",
+    "unknown"
+  ]);
+  var AUDIO_EXTENSIONS = Object.freeze([
+    "mp3",
+    "m4a",
+    "ogg",
+    "oga",
+    "opus",
+    "flac",
+    "wav"
+  ]);
+  var AUDIO_MIMES = Object.freeze({
+    "audio/mpeg": "mp3",
+    "audio/mp3": "mp3",
+    "audio/mp4": "m4a",
+    "audio/ogg": "ogg",
+    "audio/opus": "opus",
+    "audio/flac": "flac",
+    "audio/x-flac": "flac",
+    "audio/wav": "wav",
+    "audio/wave": "wav",
+    "audio/x-wav": "wav",
+    "audio/webm": "webm"
   });
 
   // src/media/download-options.js

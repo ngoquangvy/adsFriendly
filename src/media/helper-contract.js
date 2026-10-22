@@ -51,6 +51,7 @@ export const MEDIA_HELPER_EVENTS = Object.freeze({
 export const MEDIA_HELPER_CAPABILITIES = Object.freeze({
   FILE_HTTP_DOWNLOAD: FILE_HTTP_CAPABILITY,
   DIRECT_HTTP_DOWNLOAD: "download.direct_http",
+  DIRECT_AUDIO_DOWNLOAD: "download.direct_audio",
   HLS_VOD_DOWNLOAD: "download.hls_vod",
   HLS_PARALLEL_ACQUISITION: "download.hls_parallel_acquisition",
   HLS_DECRYPTED_MANIFEST: "download.hls_decrypted_manifest",
@@ -180,6 +181,9 @@ export function normalizeHelperDownloadPayload(value = {}) {
     candidate: {
       id: requiredString(candidate.id, "candidate.id"),
       kind,
+      mediaType: ["audio", "video", "audio_video"].includes(candidate.mediaType)
+        ? candidate.mediaType
+        : "unknown",
       pageUrl: requiredHttpUrl(candidate.pageUrl, "candidate.pageUrl"),
       sourceUrl: ["direct", "adaptive"].includes(kind) ? sourceUrl : null,
       manifestUrl: ["hls", "dash"].includes(kind) ? sourceUrl : null,

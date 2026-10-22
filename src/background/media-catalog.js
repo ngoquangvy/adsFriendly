@@ -5,8 +5,41 @@ import {
 } from "../media/storage-keys.js";
 import { EVENTS, createRegisteredEvent } from "../runtime/event-catalog.js";
 import { isLikelyMediaSegment } from "../media/detection.js";
+import { createSourceDiagnosticRecorder } from "../media/source-diagnostics.js";
 
 const catalog = createMediaCatalog();
+const sourceDiagnostics = createSourceDiagnosticRecorder();
+const diagnosticScopes = new Map();
+export async function recordMediaSourceDiagnostic(tabId, payload, frameId) {
+  if (!active) return { status: "catalog_disabled" };
+  // Verify the real tab, not a page-controlled flag. Coalesce/cache the lookup
+  // so repeated segment failures cannot create one tabs.get per resource.
+  let scope = diagnosticScopes.get(tabId);
+  if (!scope || Date.now() - scope.at > 60000) {
+    scope = {
+      at: Date.now(),
+      allowed: chrome.tabs
+        .get(tabId)
+        .then((tab) => tab.incognito !== true)
+        .catch(() => false),
+    };
+    diagnosticScopes.set(tabId, scope);
+    while (diagnosticScopes.size > 20)
+      diagnosticScopes.delete(diagnosticScopes.keys().next().value);
+  }
+  if (
+    !(await scope.allowed) ||
+    !active ||
+    diagnosticScopes.get(tabId) !== scope
+  )
+    return { status: "ignored" };
+  try {
+    sourceDiagnostics.record(tabId, payload, frameId);
+    return { status: "recorded" };
+  } catch {
+    return { status: "ignored" };
+  }
+}
 const PLAYBACK_CHECKPOINT_INTERVAL_MS = 10_000;
 const playbackCheckpointTimers = new Map();
 const preferredMedia = new Map();
@@ -33,6 +66,8 @@ export async function startBackgroundMediaCatalog() {
     for (const timer of playbackCheckpointTimers.values()) clearTimeout(timer);
     playbackCheckpointTimers.clear();
     catalog.clearAll();
+    sourceDiagnostics.clearAll();
+    diagnosticScopes.clear();
     preferredMedia.clear();
     chrome.tabs.onRemoved.removeListener(onRemoved);
     chrome.tabs.onUpdated.removeListener(onUpdated);
@@ -98,6 +133,7 @@ export async function listDiscoveredMedia(tabId, pageUrl = null) {
     status: "ok",
     items: catalog.list(tabId, pageUrl),
     preferredMediaId: preferredMedia.get(tabId) || null,
+    sourceDiagnostics: sourceDiagnostics.list(tabId),
   };
 }
 
@@ -260,6 +296,8 @@ async function clearTab(tabId) {
   if (timer) clearTimeout(timer);
   playbackCheckpointTimers.delete(tabId);
   catalog.clear(tabId);
+  sourceDiagnostics.clear(tabId);
+  diagnosticScopes.delete(tabId);
   preferredMedia.delete(tabId);
   if (chrome.storage.session)
     await chrome.storage.session.remove(mediaCatalogSessionKey(tabId));

@@ -27,6 +27,7 @@ import {
 import { addDomTrainingSample } from "../storage/training-store.js";
 import {
   listDiscoveredMedia,
+  recordMediaSourceDiagnostic,
   preferDiscoveredMedia,
   listMediaPlaybackSessions,
   recordBlobSourceTrace,
@@ -119,6 +120,7 @@ const MESSAGE_CAPABILITIES = Object.freeze({
   GET_STORAGE_HEALTH: CAPABILITIES.CORE_MAINTENANCE,
   RECORD_DOM_SAMPLE: CAPABILITIES.LEARNING_FEEDBACK,
   MEDIA_DISCOVERED: CAPABILITIES.MEDIA_CATALOG,
+  MEDIA_SOURCE_DIAGNOSTIC: CAPABILITIES.MEDIA_CATALOG,
   MEDIA_PROBED: CAPABILITIES.MEDIA_CATALOG,
   MEDIA_PROBE_DIAGNOSTIC: CAPABILITIES.MEDIA_CATALOG,
   MEDIA_BLOB_TRACED: CAPABILITIES.MEDIA_CATALOG,
@@ -274,6 +276,15 @@ async function route(message, sender) {
   if (message.type === "RECORD_DOM_SAMPLE") {
     await addDomTrainingSample(message.sample);
     return { status: "saved" };
+  }
+  if (message.type === "MEDIA_SOURCE_DIAGNOSTIC") {
+    if (!Number.isInteger(sender?.tab?.id) || sender.tab.incognito)
+      return { status: "ignored" };
+    return recordMediaSourceDiagnostic(
+      sender.tab.id,
+      message.event?.payload,
+      sender.frameId,
+    );
   }
   if (message.type === "MEDIA_DISCOVERED") {
     const tabId = sender?.tab?.id;

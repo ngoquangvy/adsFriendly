@@ -8,6 +8,7 @@ import {
 import { formatBytes } from "../download-job-view.js";
 import { hasYouTubeProviderPendingTracks } from "../adaptive-track-policy.js";
 import { createDownloadHistoryCard } from "./download-history.js";
+import { formatDirectAudioEstimate } from "../audio-view.js";
 
 export function createMediaDownloadControl(
   item,
@@ -208,8 +209,18 @@ export function createMediaDownloadControl(
       audioTrackId: audioSelect.value || null,
       audioOnly: profileSelect.value === "audio-ogg",
     });
-    estimateLabel.textContent = formatDownloadEstimate(estimate);
-    estimateLabel.title = formatDownloadEstimateTitle(estimate);
+    const directAudio =
+      downloadItem.kind === "direct" && downloadItem.mediaType === "audio";
+    estimateLabel.textContent = directAudio
+      ? formatDirectAudioEstimate({
+          ...downloadItem,
+          duration: estimate.duration,
+          contentLength: downloadItem.contentLength ?? item.contentLength,
+        })
+      : formatDownloadEstimate(estimate);
+    estimateLabel.title = directAudio
+      ? "Observed total file size; average bitrate is estimated from size and duration, including container overhead."
+      : formatDownloadEstimateTitle(estimate);
   };
   const syncDownloadButton = () => {
     const presentation = downloadButtonPresentation(
@@ -582,21 +593,21 @@ export function downloadButtonPresentation(availability, helper, item) {
     return {
       disabled: false,
       label: "Set up",
-      title: "Enable the optional Media Helper connection to download video.",
+      title: "Enable the optional Media Helper connection to download media.",
     };
   }
   if (helper.status === "not_installed") {
     return {
       disabled: false,
       label: "Install",
-      title: "Media Helper is required for video downloads.",
+      title: "Media Helper is required for media downloads.",
     };
   }
   if (helper.status === "ready" && !helperCanDownload(item, helper)) {
     return {
       disabled: true,
       label: "Helper update",
-      title: `The installed Media Helper does not support ${item.kind.toUpperCase()} downloads yet.`,
+      title: `The installed Media Helper does not support ${item.mediaType === "audio" && item.kind === "direct" ? "direct audio" : item.kind.toUpperCase()} downloads yet.`,
     };
   }
   if (helper.status !== "ready") {
@@ -614,7 +625,11 @@ export function downloadButtonPresentation(availability, helper, item) {
 }
 
 function helperCanDownload(item, helper) {
-  if (item.kind === "direct") return helper.canDownloadDirect === true;
+  if (item.kind === "direct")
+    return (
+      helper.canDownloadDirect === true &&
+      (item.mediaType !== "audio" || helper.canDownloadDirectAudio === true)
+    );
   if (item.kind === "hls")
     return (
       helper.canDownloadHls === true &&

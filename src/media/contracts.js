@@ -1,3 +1,5 @@
+import { MEDIA_TYPES, identifyMediaType } from "./content-type.js";
+
 export const MEDIA_KINDS = Object.freeze({
   DIRECT: "direct",
   HLS: "hls",
@@ -87,6 +89,7 @@ export function normalizeMediaCandidate(value = {}) {
     sourceUrl: optionalString(value.sourceUrl),
     manifestUrl: optionalString(value.manifestUrl),
     kind: enumValue(value.kind, Object.values(MEDIA_KINDS), "kind"),
+    ...normalizeContentType(value),
     title: optionalString(value.title),
     mimeType: optionalString(value.mimeType),
     provider: optionalString(value.provider),
@@ -161,6 +164,19 @@ export function normalizeMediaCandidate(value = {}) {
   return candidate;
 }
 
+function normalizeContentType(value) {
+  const inferred = identifyMediaType(value);
+  if (!value.mediaType) return inferred;
+  return {
+    mediaType: enumValue(value.mediaType, MEDIA_TYPES, "mediaType"),
+    mediaTypeEvidence: ["mime", "element", "extension"].includes(
+      value.mediaTypeEvidence,
+    )
+      ? value.mediaTypeEvidence
+      : "unknown",
+  };
+}
+
 function normalizePlaybackState(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   return {
@@ -174,6 +190,7 @@ function normalizePlaybackState(value) {
 
 export function normalizeMediaPlaybackObservation(value = {}) {
   return {
+    ...(value.mediaType === "audio" ? { mediaType: "audio" } : {}),
     sessionId: requiredString(value.sessionId, "sessionId").slice(0, 160),
     pageUrl: requiredString(value.pageUrl, "pageUrl"),
     mediaId: optionalString(value.mediaId)?.slice(0, 200) || null,

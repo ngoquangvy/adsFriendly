@@ -62,6 +62,7 @@ export function createMediaSessionTimeline({
 
 function timelinePoint(observation) {
   return {
+    ...(observation.mediaType === "audio" ? { mediaType: "audio" } : {}),
     mediaId: observation.mediaId,
     state: observation.state,
     trigger: observation.trigger,

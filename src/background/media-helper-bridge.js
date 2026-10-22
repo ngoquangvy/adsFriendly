@@ -102,6 +102,8 @@ async function probeMediaHelperStatus(timeoutMs) {
       capabilities,
       canDownloadDirect:
         capabilities[MEDIA_HELPER_CAPABILITIES.DIRECT_HTTP_DOWNLOAD] === true,
+      canDownloadDirectAudio:
+        capabilities[MEDIA_HELPER_CAPABILITIES.DIRECT_AUDIO_DOWNLOAD] === true,
       canDownloadHls:
         capabilities[MEDIA_HELPER_CAPABILITIES.HLS_VOD_DOWNLOAD] === true,
       canAcquireHlsInParallel:
@@ -258,6 +260,14 @@ export async function startMediaHelperDownload(
     throw new Error("Native Messaging permission is required.");
   }
   const job = normalizeMediaDownloadJob(rawJob);
+  if (
+    job.candidate.kind === "direct" &&
+    job.candidate.mediaType === "audio" &&
+    (await getMediaHelperStatus()).canDownloadDirectAudio !== true
+  )
+    throw new Error(
+      "Update Media Helper to download direct audio with verified container naming.",
+    );
   const previousConnection = activePorts.get(job.id);
   if (previousConnection && !previousConnection.terminal)
     throw new Error("Download job is already active.");
@@ -984,7 +994,11 @@ async function updateJobState(jobId, changes) {
   else if (next.status !== "downloading") {
     downloadEta.forget(jobId);
     if (next.progress)
-      next.progress = { ...next.progress, etaSeconds: null, etaUpdatedAt: null };
+      next.progress = {
+        ...next.progress,
+        etaSeconds: null,
+        etaUpdatedAt: null,
+      };
   }
   await persistJobState(next);
   if (["completed", "failed", "cancelled", "paused"].includes(next.status))
@@ -1070,6 +1084,7 @@ function helperStatus(status, details = {}) {
     status,
     installed: status === MEDIA_HELPER_STATES.READY,
     canDownloadDirect: false,
+    canDownloadDirectAudio: false,
     canDownloadHls: false,
     canAcquireHlsInParallel: false,
     canDownloadDecryptedHls: false,

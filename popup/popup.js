@@ -111,6 +111,43 @@ var AdsFriendlyPopup = (() => {
     return null;
   }
 
+  // src/media/content-type.js
+  var MEDIA_TYPES = Object.freeze([
+    "audio",
+    "video",
+    "audio_video",
+    "unknown"
+  ]);
+  var AUDIO_EXTENSIONS = Object.freeze([
+    "mp3",
+    "m4a",
+    "ogg",
+    "oga",
+    "opus",
+    "flac",
+    "wav"
+  ]);
+  var AUDIO_MIMES = Object.freeze({
+    "audio/mpeg": "mp3",
+    "audio/mp3": "mp3",
+    "audio/mp4": "m4a",
+    "audio/ogg": "ogg",
+    "audio/opus": "opus",
+    "audio/flac": "flac",
+    "audio/x-flac": "flac",
+    "audio/wav": "wav",
+    "audio/wave": "wav",
+    "audio/x-wav": "wav",
+    "audio/webm": "webm"
+  });
+  function sourceMime(value) {
+    const mime = String(value || "").split(";", 1)[0].trim().toLowerCase();
+    return /^[a-z0-9.+-]+\/[a-z0-9.+-]+$/.test(mime) ? mime : "";
+  }
+  function audioContainer(mime) {
+    return AUDIO_MIMES[sourceMime(mime)] || null;
+  }
+
   // src/media/download-options.js
   var MEDIA_OUTPUT_CONTAINERS = Object.freeze({
     SOURCE: "source",
@@ -254,7 +291,7 @@ var AdsFriendlyPopup = (() => {
       "audio/webm": "webm",
       "audio/ogg": "ogg"
     }[mime];
-    if (byMime) return byMime;
+    if (byMime || audioContainer(mime)) return byMime || audioContainer(mime);
     try {
       const path = new URL(candidate.sourceUrl).pathname;
       const extension = path.match(/\.([a-z0-9]{2,6})$/i)?.[1]?.toLowerCase();
@@ -1000,6 +1037,29 @@ var AdsFriendlyPopup = (() => {
     return card;
   }
 
+  // src/media/audio-view.js
+  function directAudioMetadata(item = {}) {
+    const duration = Number.isFinite(item.duration) && item.duration > 0 ? item.duration : null;
+    const bytes = Number.isSafeInteger(item.contentLength) && item.contentLength > 0 ? item.contentLength : null;
+    return {
+      duration,
+      bytes,
+      averageKbps: duration && bytes ? Math.round(bytes * 8 / duration / 1e3) : null
+    };
+  }
+  function formatDirectAudioEstimate(item) {
+    const { bytes, averageKbps } = directAudioMetadata(item);
+    return [
+      averageKbps ? `~${averageKbps} kbps avg` : null,
+      bytes ? formatBytes(bytes) : "Size unavailable"
+    ].filter(Boolean).join(" \xB7 ");
+  }
+  function formatDirectAudioDetails(item) {
+    const { duration } = directAudioMetadata(item);
+    const time = duration ? `${Math.floor(duration / 60)}:${String(Math.floor(duration % 60)).padStart(2, "0")}` : null;
+    return ["Direct audio", time].filter(Boolean).join(" \xB7 ");
+  }
+
   // src/media/ui/download-control.js
   function createMediaDownloadControl(item, downloadItem, tab, helper, {
     settings: settings2 = null,
@@ -1165,8 +1225,13 @@ var AdsFriendlyPopup = (() => {
         audioTrackId: audioSelect.value || null,
         audioOnly: profileSelect.value === "audio-ogg"
       });
-      estimateLabel.textContent = formatDownloadEstimate(estimate);
-      estimateLabel.title = formatDownloadEstimateTitle(estimate);
+      const directAudio = downloadItem.kind === "direct" && downloadItem.mediaType === "audio";
+      estimateLabel.textContent = directAudio ? formatDirectAudioEstimate({
+        ...downloadItem,
+        duration: estimate.duration,
+        contentLength: downloadItem.contentLength ?? item.contentLength
+      }) : formatDownloadEstimate(estimate);
+      estimateLabel.title = directAudio ? "Observed total file size; average bitrate is estimated from size and duration, including container overhead." : formatDownloadEstimateTitle(estimate);
     };
     const syncDownloadButton = () => {
       const presentation2 = downloadButtonPresentation(
@@ -1457,21 +1522,21 @@ var AdsFriendlyPopup = (() => {
       return {
         disabled: false,
         label: "Set up",
-        title: "Enable the optional Media Helper connection to download video."
+        title: "Enable the optional Media Helper connection to download media."
       };
     }
     if (helper.status === "not_installed") {
       return {
         disabled: false,
         label: "Install",
-        title: "Media Helper is required for video downloads."
+        title: "Media Helper is required for media downloads."
       };
     }
     if (helper.status === "ready" && !helperCanDownload(item, helper)) {
       return {
         disabled: true,
         label: "Helper update",
-        title: `The installed Media Helper does not support ${item.kind.toUpperCase()} downloads yet.`
+        title: `The installed Media Helper does not support ${item.mediaType === "audio" && item.kind === "direct" ? "direct audio" : item.kind.toUpperCase()} downloads yet.`
       };
     }
     if (helper.status !== "ready") {
@@ -1488,7 +1553,8 @@ var AdsFriendlyPopup = (() => {
     };
   }
   function helperCanDownload(item, helper) {
-    if (item.kind === "direct") return helper.canDownloadDirect === true;
+    if (item.kind === "direct")
+      return helper.canDownloadDirect === true && (item.mediaType !== "audio" || helper.canDownloadDirectAudio === true);
     if (item.kind === "hls")
       return helper.canDownloadHls === true && (item.probeSource !== "decrypted_blob" || helper.canDownloadDecryptedHls === true);
     if (item.kind === "adaptive")
@@ -1546,6 +1612,8 @@ var AdsFriendlyPopup = (() => {
     "mp3",
     "m4a",
     "ogg",
+    "oga",
+    "opus",
     "flac",
     "wav",
     "jpg",
@@ -1621,6 +1689,91 @@ var AdsFriendlyPopup = (() => {
     window2.addEventListener("unload", stop);
     void refresh();
     return stop;
+  }
+
+  // src/media/source-diagnostics.js
+  var SOURCE_DIAGNOSTIC_CODES = Object.freeze([
+    "source_missing",
+    "source_unclassified",
+    "audio_mime_unsupported",
+    "audio_response_conflict",
+    "media_segment",
+    "blob_source_unresolved",
+    "size_unavailable",
+    "audio_format_unknown",
+    "response_rejected"
+  ]);
+  function normalizeSourceDiagnostic(value = {}) {
+    if (!SOURCE_DIAGNOSTIC_CODES.includes(value.code))
+      throw Error("Unknown source diagnostic.");
+    return {
+      code: value.code,
+      input: ["dom", "network", "size_probe"].includes(value.input) ? value.input : "dom",
+      host: /^[a-z0-9.-]{1,253}$/i.test(value.host || "") ? value.host.toLowerCase() : "",
+      mime: sourceMime(value.mime).slice(0, 100),
+      extension: /^[a-z0-9]{1,8}$/.test(value.extension || "") ? value.extension : "",
+      httpStatus: Number.isInteger(value.httpStatus) && value.httpStatus >= 100 && value.httpStatus <= 599 ? value.httpStatus : null
+    };
+  }
+
+  // src/popup/media-source-diagnostics.js
+  function createMediaSourceDiagnostics({ document: document2, clipboard }) {
+    const panel = document2.getElementById("media-source-diagnostics");
+    let rows = [], signature = "";
+    if (!panel) return () => {
+    };
+    const button = panel.querySelector("button");
+    button.onclick = async () => {
+      try {
+        await clipboard.writeText(
+          JSON.stringify(
+            {
+              version: 1,
+              scope: "Memory only \xB7 current tab \xB7 expires after 15 minutes of inactivity",
+              items: rows
+            },
+            null,
+            2
+          )
+        );
+        button.textContent = "Copied";
+      } catch {
+        button.textContent = "Copy failed \xB7 retry";
+      }
+    };
+    return (items = []) => {
+      rows = items.slice(-50).flatMap((item) => {
+        try {
+          return [
+            {
+              ...normalizeSourceDiagnostic(item),
+              frameId: Number.isInteger(item.frameId) ? item.frameId : -1,
+              count: Number.isInteger(item.count) ? Math.max(1, Math.min(9999, item.count)) : 1,
+              firstSeenAt: Number.isSafeInteger(item.firstSeenAt) ? item.firstSeenAt : null,
+              lastSeenAt: Number.isSafeInteger(item.lastSeenAt) ? item.lastSeenAt : null
+            }
+          ];
+        } catch {
+          return [];
+        }
+      });
+      panel.hidden = !rows.length;
+      const next = JSON.stringify(rows);
+      if (next === signature) return;
+      signature = next;
+      panel.querySelector("summary").textContent = `Source diagnostics \xB7 ${rows.length}`;
+      panel.querySelector("pre").textContent = rows.map(
+        (row) => [
+          row.code,
+          row.host,
+          row.mime || row.extension,
+          row.httpStatus,
+          `frame ${row.frameId}`,
+          `\xD7${row.count}`
+        ].filter(Boolean).join(" \xB7 ")
+      ).join("\n");
+      button.textContent = "Copy diagnostics";
+    };
   }
 
   // src/runtime/ecosystem-catalog.js
@@ -2591,6 +2744,7 @@ var AdsFriendlyPopup = (() => {
         status: helper.status,
         helperVersion: helper.helperVersion,
         canDownloadDirect: helper.canDownloadDirect,
+        canDownloadDirectAudio: helper.canDownloadDirectAudio,
         canDownloadHls: helper.canDownloadHls,
         canDownloadDecryptedHls: helper.canDownloadDecryptedHls,
         canSelectContainer: helper.canSelectContainer,
@@ -3078,7 +3232,8 @@ var AdsFriendlyPopup = (() => {
       return resolvedBlobDetails(item);
     if (item.kind === "blob")
       return item.resolutionDiagnostic?.message || (isYouTubeUrl(item.pageUrl) ? "Network observation \xB7 Blob found \xB7 webRequest/page hook/resource timing source missing" : null) || (item.relatedCount > 1 ? `${item.relatedCount} Blob signals \xB7 tracing source buffers` : item.blobTrace?.appendCount ? `${item.blobTrace.appendCount} buffers observed \xB7 matching source` : "Blob signal \xB7 tracing source buffers");
-    if (item.kind === "direct") return "Direct video file";
+    if (item.kind === "direct")
+      return item.mediaType === "audio" ? formatDirectAudioDetails(item) : "Direct video file";
     if (item.kind === "adaptive") return adaptiveDetails(item);
     if (item.kind === "dash") return dashDetails(item);
     if (item.kind !== "hls") return "Media source found";
@@ -3444,6 +3599,8 @@ ${blobTitleKey(item.title)}`;
       streamType: item.streamType,
       duration: item.duration,
       contentLength: item.contentLength,
+      mediaType: item.mediaType,
+      mediaTypeEvidence: item.mediaTypeEvidence,
       resolution: item.resolution,
       bandwidth: item.bandwidth,
       averageBandwidth: item.averageBandwidth,
@@ -3697,6 +3854,10 @@ ${blobTitleKey(item.title)}`;
   var pageDecisionsButton = document.getElementById("page-decisions-btn");
   var pageDecisionsCount = document.getElementById("page-decisions-count");
   startBrowserFileOffers({ document, chrome, window });
+  var renderSourceDiagnostics = createMediaSourceDiagnostics({
+    document,
+    clipboard: navigator.clipboard
+  });
   var MODE_DESCRIPTIONS = Object.freeze({
     safe: "Verified rules; no predictive DOM actions",
     assist: "Detect and ask before hiding",
@@ -3896,25 +4057,28 @@ ${blobTitleKey(item.title)}`;
   async function renderMediaCatalog(tab) {
     const nextTabId = tab?.id ?? null;
     if (activeMediaTabId !== nextTabId) {
+      renderSourceDiagnostics();
       showAllMediaItems = false;
       mediaRenderSignature = null;
     }
     activeMediaTabId = nextTabId;
     if (!settings.enabled) {
+      renderSourceDiagnostics();
       commitMediaCatalog({
         status: "Protection is off; media observation is paused."
       });
       return;
     }
     if (settings.protectionMode === "safe") {
+      renderSourceDiagnostics();
       commitMediaCatalog({
-        status: "Switch to Assist or Auto, then reload the video page."
+        status: "Switch to Assist or Auto, then reload the media page."
       });
       return;
     }
     if (!tab) {
       commitMediaCatalog({
-        status: "Open an HTTP video page to test detection."
+        status: "Open an HTTP media page to test detection."
       });
       return;
     }
@@ -3925,10 +4089,11 @@ ${blobTitleKey(item.title)}`;
         pageUrl: tab.url
       });
       const items = Array.isArray(response?.items) ? response.items : [];
+      renderSourceDiagnostics(response?.sourceDiagnostics);
       if (!items.length) {
         commitMediaCatalog({
           tab,
-          status: response?.status === "capability_disabled" ? "Media observation is still starting. Reload the page once." : "No MP4, WebM, HLS, or DASH source detected yet."
+          status: response?.status === "capability_disabled" ? "Media observation is still starting. Reload the page once." : "No audio or video source detected yet."
         });
         return;
       }
@@ -3970,7 +4135,7 @@ ${blobTitleKey(item.title)}`;
         (a, b) => Number(b.id === preferredMediaId) - Number(a.id === preferredMediaId)
       );
     const visibleItems = showAllMediaItems ? allVisibleItems : allVisibleItems.slice(0, 1);
-    if (!visibleItems.length && hasMediaDownloadJobs && /Open an HTTP video page|No MP4, WebM, HLS, or DASH/i.test(status)) {
+    if (!visibleItems.length && hasMediaDownloadJobs && /Open an HTTP media page|No audio or video source/i.test(status)) {
       status = "No media on this tab \xB7 downloads remain available below.";
     }
     const downloadState = getMediaCatalogDownloadState(items);
@@ -4027,7 +4192,7 @@ ${blobTitleKey(item.title)}`;
     row.className = "media-item";
     const kind = document.createElement("span");
     kind.className = "media-kind";
-    kind.textContent = String(item.kind || "media").toUpperCase();
+    kind.textContent = item.mediaType === "audio" ? "AUDIO" : String(item.kind || "media").toUpperCase();
     const copy = document.createElement("div");
     copy.className = "media-copy";
     const name = document.createElement("span");
@@ -4396,7 +4561,7 @@ ${blobTitleKey(item.title)}`;
     }
     mediaJobList.hidden = visible.length === 0;
     mediaManagerLink.hidden = visible.length === 0;
-    if (visible.length && mediaCount.textContent === "0" && /Open an HTTP video page|No MP4, WebM, HLS, or DASH/i.test(
+    if (visible.length && mediaCount.textContent === "0" && /Open an HTTP media page|No audio or video source/i.test(
       mediaStatus.textContent
     )) {
       setText(

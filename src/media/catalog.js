@@ -7,6 +7,7 @@ import {
   normalizeMediaCandidate,
 } from "./contracts.js";
 import { isLikelyMediaSegment } from "./detection.js";
+import { mergeMediaType } from "./content-type.js";
 import { resolveHlsSources } from "./hls-resolver.js";
 import { isAcquirableAdaptiveTrack } from "./adaptive-track-policy.js";
 import { createMediaSessionTimeline } from "./session-timeline.js";
@@ -50,6 +51,8 @@ export function createMediaCatalog({ maximumPerTab = 50 } = {}) {
       const item = {
         ...(existing || {}),
         ...candidate,
+        ...mergeMediaType(existing, candidate),
+        mimeType: candidate.mimeType || existing?.mimeType || null,
         ...(preserveExistingProbe ? probeFields(existing) : {}),
         ...(adaptiveTracks || {}),
         acquisitionDiagnostic:

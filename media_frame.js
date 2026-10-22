@@ -1,4 +1,64 @@
 var AdsFriendlyMediaFrame = (() => {
+  // src/media/content-type.js
+  var MEDIA_TYPES = Object.freeze([
+    "audio",
+    "video",
+    "audio_video",
+    "unknown"
+  ]);
+  var AUDIO_EXTENSIONS = Object.freeze([
+    "mp3",
+    "m4a",
+    "ogg",
+    "oga",
+    "opus",
+    "flac",
+    "wav"
+  ]);
+  var AUDIO_MIMES = Object.freeze({
+    "audio/mpeg": "mp3",
+    "audio/mp3": "mp3",
+    "audio/mp4": "m4a",
+    "audio/ogg": "ogg",
+    "audio/opus": "opus",
+    "audio/flac": "flac",
+    "audio/x-flac": "flac",
+    "audio/wav": "wav",
+    "audio/wave": "wav",
+    "audio/x-wav": "wav",
+    "audio/webm": "webm"
+  });
+  function sourceExtension(url) {
+    try {
+      return new URL(url).pathname.match(/\.([a-z0-9]{1,8})$/i)?.[1]?.toLowerCase() || "";
+    } catch {
+      return "";
+    }
+  }
+  function sourceMime(value) {
+    const mime = String(value || "").split(";", 1)[0].trim().toLowerCase();
+    return /^[a-z0-9.+-]+\/[a-z0-9.+-]+$/.test(mime) ? mime : "";
+  }
+  function audioContainer(mime) {
+    return AUDIO_MIMES[sourceMime(mime)] || null;
+  }
+  function identifyMediaType({ sourceUrl, mimeType, elementType } = {}) {
+    const mime = sourceMime(mimeType), ext = sourceExtension(sourceUrl);
+    if (audioContainer(mime))
+      return { mediaType: "audio", mediaTypeEvidence: "mime" };
+    if (mime.startsWith("video/"))
+      return { mediaType: "video", mediaTypeEvidence: "mime" };
+    if (mime && !["application/octet-stream", "binary/octet-stream"].includes(mime))
+      return { mediaType: "unknown", mediaTypeEvidence: "unknown" };
+    if (elementType === "audio")
+      return { mediaType: "audio", mediaTypeEvidence: "element" };
+    if (AUDIO_EXTENSIONS.includes(ext))
+      return { mediaType: "audio", mediaTypeEvidence: "extension" };
+    if (/^(mp4|webm|m4v|mov)$/.test(ext))
+      return { mediaType: "video", mediaTypeEvidence: "extension" };
+    return { mediaType: "unknown", mediaTypeEvidence: "unknown" };
+  }
+
   // src/media/contracts.js
   var MEDIA_KINDS = Object.freeze({
     DIRECT: "direct",
@@ -79,6 +139,7 @@ var AdsFriendlyMediaFrame = (() => {
       sourceUrl: optionalString(value.sourceUrl),
       manifestUrl: optionalString(value.manifestUrl),
       kind: enumValue(value.kind, Object.values(MEDIA_KINDS), "kind"),
+      ...normalizeContentType(value),
       title: optionalString(value.title),
       mimeType: optionalString(value.mimeType),
       provider: optionalString(value.provider),
@@ -152,6 +213,16 @@ var AdsFriendlyMediaFrame = (() => {
     }
     return candidate;
   }
+  function normalizeContentType(value) {
+    const inferred = identifyMediaType(value);
+    if (!value.mediaType) return inferred;
+    return {
+      mediaType: enumValue(value.mediaType, MEDIA_TYPES, "mediaType"),
+      mediaTypeEvidence: ["mime", "element", "extension"].includes(
+        value.mediaTypeEvidence
+      ) ? value.mediaTypeEvidence : "unknown"
+    };
+  }
   function normalizePlaybackState(value) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
     return {
@@ -164,6 +235,7 @@ var AdsFriendlyMediaFrame = (() => {
   }
   function normalizeMediaPlaybackObservation(value = {}) {
     return {
+      ...value.mediaType === "audio" ? { mediaType: "audio" } : {},
       sessionId: requiredString(value.sessionId, "sessionId").slice(0, 160),
       pageUrl: requiredString(value.pageUrl, "pageUrl"),
       mediaId: optionalString(value.mediaId)?.slice(0, 200) || null,
@@ -631,7 +703,7 @@ var AdsFriendlyMediaFrame = (() => {
     "audio/aacp"
   ]);
   var SEGMENT_PATH_PATTERN = /\.(?:ts|m2ts|m4s|cmfv|cmfa|aac)$/i;
-  function classifyMediaSource(sourceUrl = "", mimeType = "") {
+  function classifyMediaSource(sourceUrl = "", mimeType = "", elementType = null) {
     const normalizedUrl = String(sourceUrl).trim().toLowerCase();
     const normalizedMime = String(mimeType).split(";")[0].trim().toLowerCase();
     const path = normalizedUrl.split(/[?#]/)[0];
@@ -641,6 +713,13 @@ var AdsFriendlyMediaFrame = (() => {
     if (path.endsWith(".mpd") || DASH_MIME_TYPES.has(normalizedMime))
       return MEDIA_KINDS.DASH;
     if (isLikelyMediaSegment(normalizedUrl, normalizedMime)) return null;
+    if (audioContainer(normalizedMime)) return MEDIA_KINDS.DIRECT;
+    if (AUDIO_EXTENSIONS.includes(sourceExtension(sourceUrl)) || elementType === "audio") {
+      const mime = sourceMime(mimeType);
+      if (!mime || ["application/octet-stream", "binary/octet-stream"].includes(mime))
+        return /^https?:/i.test(sourceUrl) ? MEDIA_KINDS.DIRECT : null;
+      return null;
+    }
     if (/\.(mp4|webm|m4v|mov)$/.test(path) || normalizedMime.startsWith("video/"))
       return MEDIA_KINDS.DIRECT;
     return null;
@@ -660,10 +739,11 @@ var AdsFriendlyMediaFrame = (() => {
     contentLength = null,
     resolution = null,
     playback = null,
-    detectedBy = MEDIA_DETECTION_SOURCES.DOM
+    detectedBy = MEDIA_DETECTION_SOURCES.DOM,
+    elementType = null
   }) {
     const absoluteSourceUrl = resolveSourceUrl(sourceUrl, pageUrl);
-    const kind = classifyMediaSource(absoluteSourceUrl, mimeType);
+    const kind = classifyMediaSource(absoluteSourceUrl, mimeType, elementType);
     if (!kind) return null;
     const isManifest = [MEDIA_KINDS.HLS, MEDIA_KINDS.DASH].includes(kind);
     return normalizeMediaCandidate({
@@ -672,6 +752,11 @@ var AdsFriendlyMediaFrame = (() => {
       sourceUrl: isManifest ? null : absoluteSourceUrl,
       manifestUrl: isManifest ? absoluteSourceUrl : null,
       kind,
+      ...identifyMediaType({
+        sourceUrl: absoluteSourceUrl,
+        mimeType,
+        elementType
+      }),
       title,
       mimeType,
       duration,
@@ -700,9 +785,62 @@ var AdsFriendlyMediaFrame = (() => {
     }
   }
 
+  // src/media/source-diagnostics.js
+  var SOURCE_DIAGNOSTIC_CODES = Object.freeze([
+    "source_missing",
+    "source_unclassified",
+    "audio_mime_unsupported",
+    "audio_response_conflict",
+    "media_segment",
+    "blob_source_unresolved",
+    "size_unavailable",
+    "audio_format_unknown",
+    "response_rejected"
+  ]);
+  function normalizeSourceDiagnostic(value = {}) {
+    if (!SOURCE_DIAGNOSTIC_CODES.includes(value.code))
+      throw Error("Unknown source diagnostic.");
+    return {
+      code: value.code,
+      input: ["dom", "network", "size_probe"].includes(value.input) ? value.input : "dom",
+      host: /^[a-z0-9.-]{1,253}$/i.test(value.host || "") ? value.host.toLowerCase() : "",
+      mime: sourceMime(value.mime).slice(0, 100),
+      extension: /^[a-z0-9]{1,8}$/.test(value.extension || "") ? value.extension : "",
+      httpStatus: Number.isInteger(value.httpStatus) && value.httpStatus >= 100 && value.httpStatus <= 599 ? value.httpStatus : null
+    };
+  }
+  function sourceDiagnostic({
+    sourceUrl,
+    mimeType,
+    elementType,
+    kind,
+    input = "dom"
+  }) {
+    const mime = sourceMime(mimeType), extension = sourceExtension(sourceUrl);
+    const audio = elementType === "audio" || mime.startsWith("audio/") || AUDIO_EXTENSIONS.includes(extension);
+    if (input !== "dom" && !audio) return null;
+    let code = !sourceUrl ? "source_missing" : kind === "blob" ? "blob_source_unresolved" : !kind ? "source_unclassified" : null;
+    if (kind === "direct" && audio && !audioContainer(mime) && !AUDIO_EXTENSIONS.includes(extension))
+      code = "audio_format_unknown";
+    if (!kind && audio && /\.(aac|m4s|cmfa)(?:[?#]|$)/i.test(sourceUrl || ""))
+      code = "media_segment";
+    else if (!kind && audio && mime.startsWith("audio/"))
+      code = "audio_mime_unsupported";
+    else if (!kind && audio && mime && !/octet-stream$/.test(mime))
+      code = "audio_response_conflict";
+    if (!code) return null;
+    let host = "";
+    try {
+      host = new URL(sourceUrl).hostname;
+    } catch {
+    }
+    return normalizeSourceDiagnostic({ code, input, host, mime, extension });
+  }
+
   // src/runtime/event-catalog.js
   var EVENTS = Object.freeze({
     MEDIA_DISCOVERED: "media.discovered",
+    MEDIA_SOURCE_DIAGNOSTIC: "media.source_diagnostic",
     MEDIA_PROBED: "media.probed",
     MEDIA_PROBE_DIAGNOSTIC: "media.probe_diagnostic",
     MEDIA_BLOB_TRACED: "media.blob_traced",
@@ -715,6 +853,12 @@ var AdsFriendlyMediaFrame = (() => {
   });
   var E = EVENTS;
   var EVENT_CATALOG = Object.freeze({
+    [E.MEDIA_SOURCE_DIAGNOSTIC]: event(
+      E.MEDIA_SOURCE_DIAGNOSTIC,
+      "media.observer",
+      ["media.diagnostics"],
+      normalizeSourceDiagnostic
+    ),
     [E.MEDIA_DISCOVERED]: event(
       E.MEDIA_DISCOVERED,
       "media.observer",
@@ -1089,6 +1233,7 @@ var AdsFriendlyMediaFrame = (() => {
         if (trigger === "timeupdate" && observedAt - session.lastObservedAt < TIMEUPDATE_INTERVAL_MS)
           return null;
         const observation = {
+          ...mediaElement.tagName?.toLowerCase() === "audio" ? { mediaType: "audio" } : {},
           sessionId: session.id,
           pageUrl,
           mediaId,
@@ -1166,6 +1311,7 @@ var AdsFriendlyMediaFrame = (() => {
     const probeTimers = /* @__PURE__ */ new Set();
     const requestedProbes = /* @__PURE__ */ new Set();
     const contextualProbeRetries = /* @__PURE__ */ new Set();
+    const sourceDiagnosticKeys = /* @__PURE__ */ new Set();
     const videoListeners = /* @__PURE__ */ new Map();
     const playbackTracker = createPlaybackObservationTracker();
     const videoVisibilityObserver = typeof IntersectionObserver === "function" ? new IntersectionObserver(
@@ -1185,6 +1331,13 @@ var AdsFriendlyMediaFrame = (() => {
         for (const node of mutation.addedNodes) {
           if (node.nodeType === Node.ELEMENT_NODE) scanElement(node);
         }
+      }
+      for (const [media, listener] of videoListeners) {
+        if (media.isConnected) continue;
+        for (const eventType of VIDEO_OBSERVATION_EVENTS)
+          media.removeEventListener(eventType, listener);
+        videoVisibilityObserver?.unobserve(media);
+        videoListeners.delete(media);
       }
     });
     mutationObserver.observe(document.documentElement, {
@@ -1378,6 +1531,7 @@ var AdsFriendlyMediaFrame = (() => {
       probeTimers.clear();
       requestedProbes.clear();
       contextualProbeRetries.clear();
+      sourceDiagnosticKeys.clear();
       for (const pendingRequest of aesKeyHandoffRequests.values()) {
         clearTimeout(pendingRequest.timeoutId);
         pendingRequest.resolve({ status: "stopped", keys: [] });
@@ -1538,10 +1692,12 @@ var AdsFriendlyMediaFrame = (() => {
     }
     function scanElement(element) {
       if (stopped || !element) return;
-      if (element.matches?.("video")) observeVideo(element);
-      if (element.matches?.("video, source")) reportElementSource(element);
-      element.querySelectorAll?.("video").forEach(observeVideo);
-      element.querySelectorAll?.("video, video source").forEach(reportElementSource);
+      if (element.matches?.("source") && !element.closest?.("video, audio"))
+        return;
+      if (element.matches?.("video, audio")) observeVideo(element);
+      if (element.matches?.("video, audio, source")) reportElementSource(element);
+      element.querySelectorAll?.("video, audio").forEach(observeVideo);
+      element.querySelectorAll?.("video, video source, audio, audio source").forEach(reportElementSource);
     }
     function observeVideo(video) {
       if (videoListeners.has(video)) return;
@@ -1556,14 +1712,17 @@ var AdsFriendlyMediaFrame = (() => {
       listener({ type: "initial" });
     }
     function reportElementSource(element, playbackTrigger = null) {
-      const sourceUrl = element.currentSrc || element.src || element.getAttribute?.("src");
+      const audio = element.matches?.("audio") ? element : element.closest?.("audio");
+      const mediaElement = element.matches?.("video, audio");
+      const sourceUrl = (audio && element.getAttribute?.("src") ? element.src : null) || element.currentSrc || element.src || element.getAttribute?.("src");
       const mimeType = element.currentType || element.type || element.getAttribute?.("type");
-      const duration = element.matches?.("video") && Number.isFinite(element.duration) ? element.duration : null;
+      const metadataCurrent = !audio || !element.currentSrc || element.currentSrc === sourceUrl;
+      const duration = mediaElement && metadataCurrent && Number.isFinite(element.duration) ? element.duration : null;
       const resolution = element.matches?.("video") ? {
         width: Number(element.videoWidth) || null,
         height: Number(element.videoHeight) || null
       } : null;
-      const playback = element.matches?.("video") ? {
+      const playback = mediaElement && metadataCurrent ? {
         playing: element.paused === false && element.ended !== true,
         visible: isVisibleVideo(element),
         muted: element.muted === true,
@@ -1576,9 +1735,10 @@ var AdsFriendlyMediaFrame = (() => {
         MEDIA_DETECTION_SOURCES.DOM,
         duration,
         resolution,
-        playback
+        playback,
+        audio ? "audio" : null
       );
-      if (element.matches?.("video")) {
+      if (mediaElement && metadataCurrent) {
         reportPlaybackObservation(
           element,
           candidate?.id || null,
@@ -1586,7 +1746,7 @@ var AdsFriendlyMediaFrame = (() => {
         );
       }
     }
-    function reportSource(sourceUrl, mimeType, detectedBy, duration = null, resolution = null, playback = null) {
+    function reportSource(sourceUrl, mimeType, detectedBy, duration = null, resolution = null, playback = null, elementType = null) {
       const candidate = createYouTubeCandidateFromObservedSource({
         pageUrl: location.href,
         sourceUrl,
@@ -1600,8 +1760,25 @@ var AdsFriendlyMediaFrame = (() => {
         duration,
         resolution,
         playback,
-        detectedBy
+        detectedBy,
+        elementType
       });
+      const diagnostic2 = sourceDiagnostic({
+        sourceUrl,
+        mimeType,
+        elementType,
+        kind: candidate?.kind,
+        input: detectedBy
+      });
+      if (diagnostic2 && sourceDiagnosticKeys.size < 50) {
+        const key = JSON.stringify(diagnostic2);
+        if (!sourceDiagnosticKeys.has(key)) {
+          sourceDiagnosticKeys.add(key);
+          reportEvent(
+            createRegisteredEvent(EVENTS.MEDIA_SOURCE_DIAGNOSTIC, diagnostic2)
+          );
+        }
+      }
       if (!candidate) return null;
       reportEvent(createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, candidate));
       return candidate;
@@ -1642,7 +1819,7 @@ var AdsFriendlyMediaFrame = (() => {
       if (reported.has(reportKey) || pending.has(reportKey)) return;
       pending.add(reportKey);
       chrome.runtime.sendMessage({
-        type: event2.type === EVENTS.MEDIA_PROBED ? "MEDIA_PROBED" : event2.type === EVENTS.MEDIA_PROBE_DIAGNOSTIC ? "MEDIA_PROBE_DIAGNOSTIC" : event2.type === EVENTS.MEDIA_BLOB_TRACED ? "MEDIA_BLOB_TRACED" : event2.type === EVENTS.MEDIA_EME_OBSERVED ? "MEDIA_EME_OBSERVED" : event2.type === EVENTS.MEDIA_PLAYBACK_OBSERVED ? "MEDIA_PLAYBACK_OBSERVED" : "MEDIA_DISCOVERED",
+        type: event2.type === EVENTS.MEDIA_SOURCE_DIAGNOSTIC ? "MEDIA_SOURCE_DIAGNOSTIC" : event2.type === EVENTS.MEDIA_PROBED ? "MEDIA_PROBED" : event2.type === EVENTS.MEDIA_PROBE_DIAGNOSTIC ? "MEDIA_PROBE_DIAGNOSTIC" : event2.type === EVENTS.MEDIA_BLOB_TRACED ? "MEDIA_BLOB_TRACED" : event2.type === EVENTS.MEDIA_EME_OBSERVED ? "MEDIA_EME_OBSERVED" : event2.type === EVENTS.MEDIA_PLAYBACK_OBSERVED ? "MEDIA_PLAYBACK_OBSERVED" : "MEDIA_DISCOVERED",
         event: event2
       }).then((response) => {
         pending.delete(reportKey);
@@ -1770,6 +1947,8 @@ var AdsFriendlyMediaFrame = (() => {
   }
   function createMediaObserverReportKey(event2) {
     const payload = event2?.payload || {};
+    if (event2?.type === EVENTS.MEDIA_SOURCE_DIAGNOSTIC)
+      return `${event2.type}:${JSON.stringify(payload)}`;
     const mediaId = payload.id || payload.mediaId || "unknown";
     if (event2?.type === EVENTS.MEDIA_DISCOVERED) {
       const playbackKey = payload.playback ? `:${payload.playback.playing ? "playing" : "paused"}:${payload.playback.visible ? "visible" : "hidden"}` : "";
@@ -1779,8 +1958,8 @@ var AdsFriendlyMediaFrame = (() => {
         const acquisition = payload.acquisitionDiagnostic;
         return `${event2.type}:${mediaId}:${payload.detectedBy || "unknown"}:video=${videoTracks || "none"}:audio=${audioTracks || "none"}:stage=${acquisition?.stage || "none"}:direct=${acquisition?.directVideoCount || 0}+${acquisition?.directAudioCount || 0}${playbackKey}`;
       }
-      const playbackDuration = payload.kind === "blob" && Number.isFinite(payload.duration) ? Math.round(payload.duration) : "unknown";
-      return `${event2.type}:${mediaId}:${payload.detectedBy || "unknown"}:${playbackDuration}:${payload.resolution?.width || 0}x${payload.resolution?.height || 0}${playbackKey}`;
+      const playbackDuration = (payload.kind === "blob" || payload.mediaType === "audio") && Number.isFinite(payload.duration) ? Math.round(payload.duration) : "unknown";
+      return `${event2.type}:${mediaId}:${payload.detectedBy || "unknown"}:${playbackDuration}:${payload.mediaType || "unknown"}:${payload.mediaTypeEvidence || "unknown"}:${payload.resolution?.width || 0}x${payload.resolution?.height || 0}${playbackKey}`;
     }
     if (event2?.type === EVENTS.MEDIA_BLOB_TRACED) {
       return [
@@ -2119,7 +2298,7 @@ var AdsFriendlyMediaFrame = (() => {
       "audio/webm": "webm",
       "audio/ogg": "ogg"
     }[mime];
-    if (byMime) return byMime;
+    if (byMime || audioContainer(mime)) return byMime || audioContainer(mime);
     try {
       const path = new URL(candidate.sourceUrl).pathname;
       const extension = path.match(/\.([a-z0-9]{2,6})$/i)?.[1]?.toLowerCase();
@@ -2879,6 +3058,115 @@ var AdsFriendlyMediaFrame = (() => {
     return Object.freeze({ input, output });
   }
 
+  // src/downloads/progress.js
+  function getDownloadProgress(value = {}) {
+    value ||= {};
+    const pairs = [
+      ["bytes", value.downloadedBytes, value.totalBytes],
+      ["time", value.processedSeconds, value.duration],
+      ["resources", value.completedResources, value.totalResources]
+    ];
+    for (const [basis, done, total] of pairs) {
+      const completed = finite(done), maximum = finite(total);
+      if (completed === null || !(maximum > 0)) continue;
+      return {
+        percent: Math.min(
+          100,
+          Math.max(0, Math.round(completed / maximum * 100))
+        ),
+        basis
+      };
+    }
+    return { percent: null, basis: null };
+  }
+  function finite(value) {
+    if (value === null || value === void 0 || value === "") return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  // src/downloads/eta.js
+  function formatDownloadEta(progress, now = Date.now()) {
+    const seconds = progress?.etaSeconds;
+    if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0 || !Number.isFinite(progress.etaUpdatedAt) || now - progress.etaUpdatedAt > 12e3)
+      return null;
+    if (seconds < 60) return `${Math.max(10, Math.ceil(seconds / 10) * 10)} s`;
+    if (seconds < 3600) return `${Math.ceil(seconds / 60)} min`;
+    const minutes = Math.ceil(seconds / 300) * 5;
+    return `${Math.floor(minutes / 60)} h${minutes % 60 ? ` ${minutes % 60} min` : ""}`;
+  }
+
+  // src/media/download-job-view.js
+  var ACTIVE_STATUSES = /* @__PURE__ */ new Set([
+    "starting",
+    "probing",
+    "downloading",
+    "finalizing"
+  ]);
+  function getMediaJobProgress(job = {}) {
+    const progress = job.progress || {};
+    const downloadedBytes = finiteOrNull2(progress.downloadedBytes);
+    const totalBytes = finiteOrNull2(progress.totalBytes ?? job.totalBytes);
+    const processedSeconds = finiteOrNull2(progress.processedSeconds);
+    const duration = finiteOrNull2(progress.duration);
+    const { percent } = getDownloadProgress({ ...progress, totalBytes });
+    return {
+      percent,
+      downloadedBytes,
+      totalBytes,
+      bytesPerSecond: finiteOrNull2(progress.bytesPerSecond),
+      processedSeconds,
+      duration,
+      resumedBytes: finiteOrNull2(progress.resumedBytes),
+      resumable: progress.resumable === true,
+      connections: normalizeConnections(job.connections)
+    };
+  }
+  function isMediaJobActive(job = {}) {
+    return [...ACTIVE_STATUSES, "pausing", "cancelling"].includes(job.status);
+  }
+  function formatMediaJobTransferSummary(job = {}) {
+    const progress = getMediaJobProgress(job);
+    return [
+      progress.percent !== null ? `${progress.percent}%` : null,
+      `${formatBytes(progress.bytesPerSecond || 0)}/s`,
+      job.status === "downloading" ? formatDownloadEta(job.progress) : null
+    ].filter(Boolean).join(" \xB7 ");
+  }
+  function formatBytes(bytes) {
+    const value = Math.max(0, Number(bytes) || 0);
+    if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(1)} GB`;
+    if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MB`;
+    return `${Math.round(value / 1024)} KB`;
+  }
+  function finiteOrNull2(value) {
+    if (value === null || value === void 0 || value === "") return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  }
+  function normalizeConnections(value) {
+    const connections = Number(value);
+    return Number.isInteger(connections) && connections > 0 ? connections : 8;
+  }
+
+  // src/media/audio-view.js
+  function directAudioMetadata(item = {}) {
+    const duration = Number.isFinite(item.duration) && item.duration > 0 ? item.duration : null;
+    const bytes = Number.isSafeInteger(item.contentLength) && item.contentLength > 0 ? item.contentLength : null;
+    return {
+      duration,
+      bytes,
+      averageKbps: duration && bytes ? Math.round(bytes * 8 / duration / 1e3) : null
+    };
+  }
+  function formatDirectAudioEstimate(item) {
+    const { bytes, averageKbps } = directAudioMetadata(item);
+    return [
+      averageKbps ? `~${averageKbps} kbps avg` : null,
+      bytes ? formatBytes(bytes) : "Size unavailable"
+    ].filter(Boolean).join(" \xB7 ");
+  }
+
   // src/media/catalog-view.js
   function selectVisibleMediaItems(items = [], maximum = 8) {
     const diagnosedItems = items.map((item) => ({
@@ -3356,97 +3644,6 @@ ${blobTitleKey(item.title)}`;
     }
   }
 
-  // src/downloads/progress.js
-  function getDownloadProgress(value = {}) {
-    value ||= {};
-    const pairs = [
-      ["bytes", value.downloadedBytes, value.totalBytes],
-      ["time", value.processedSeconds, value.duration],
-      ["resources", value.completedResources, value.totalResources]
-    ];
-    for (const [basis, done, total] of pairs) {
-      const completed = finite(done), maximum = finite(total);
-      if (completed === null || !(maximum > 0)) continue;
-      return {
-        percent: Math.min(
-          100,
-          Math.max(0, Math.round(completed / maximum * 100))
-        ),
-        basis
-      };
-    }
-    return { percent: null, basis: null };
-  }
-  function finite(value) {
-    if (value === null || value === void 0 || value === "") return null;
-    const number = Number(value);
-    return Number.isFinite(number) ? number : null;
-  }
-
-  // src/downloads/eta.js
-  function formatDownloadEta(progress, now = Date.now()) {
-    const seconds = progress?.etaSeconds;
-    if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0 || !Number.isFinite(progress.etaUpdatedAt) || now - progress.etaUpdatedAt > 12e3)
-      return null;
-    if (seconds < 60) return `${Math.max(10, Math.ceil(seconds / 10) * 10)} s`;
-    if (seconds < 3600) return `${Math.ceil(seconds / 60)} min`;
-    const minutes = Math.ceil(seconds / 300) * 5;
-    return `${Math.floor(minutes / 60)} h${minutes % 60 ? ` ${minutes % 60} min` : ""}`;
-  }
-
-  // src/media/download-job-view.js
-  var ACTIVE_STATUSES = /* @__PURE__ */ new Set([
-    "starting",
-    "probing",
-    "downloading",
-    "finalizing"
-  ]);
-  function getMediaJobProgress(job = {}) {
-    const progress = job.progress || {};
-    const downloadedBytes = finiteOrNull2(progress.downloadedBytes);
-    const totalBytes = finiteOrNull2(progress.totalBytes ?? job.totalBytes);
-    const processedSeconds = finiteOrNull2(progress.processedSeconds);
-    const duration = finiteOrNull2(progress.duration);
-    const { percent } = getDownloadProgress({ ...progress, totalBytes });
-    return {
-      percent,
-      downloadedBytes,
-      totalBytes,
-      bytesPerSecond: finiteOrNull2(progress.bytesPerSecond),
-      processedSeconds,
-      duration,
-      resumedBytes: finiteOrNull2(progress.resumedBytes),
-      resumable: progress.resumable === true,
-      connections: normalizeConnections(job.connections)
-    };
-  }
-  function isMediaJobActive(job = {}) {
-    return [...ACTIVE_STATUSES, "pausing", "cancelling"].includes(job.status);
-  }
-  function formatMediaJobTransferSummary(job = {}) {
-    const progress = getMediaJobProgress(job);
-    return [
-      progress.percent !== null ? `${progress.percent}%` : null,
-      `${formatBytes(progress.bytesPerSecond || 0)}/s`,
-      job.status === "downloading" ? formatDownloadEta(job.progress) : null
-    ].filter(Boolean).join(" \xB7 ");
-  }
-  function formatBytes(bytes) {
-    const value = Math.max(0, Number(bytes) || 0);
-    if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(1)} GB`;
-    if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MB`;
-    return `${Math.round(value / 1024)} KB`;
-  }
-  function finiteOrNull2(value) {
-    if (value === null || value === void 0 || value === "") return null;
-    const number = Number(value);
-    return Number.isFinite(number) ? number : null;
-  }
-  function normalizeConnections(value) {
-    const connections = Number(value);
-    return Number.isInteger(connections) && connections > 0 ? connections : 8;
-  }
-
   // src/media/ui/download-history.js
   function downloadHistoryView(job, exact = true) {
     if (!job) return null;
@@ -3678,8 +3875,13 @@ ${blobTitleKey(item.title)}`;
         audioTrackId: audioSelect.value || null,
         audioOnly: profileSelect.value === "audio-ogg"
       });
-      estimateLabel.textContent = formatDownloadEstimate(estimate);
-      estimateLabel.title = formatDownloadEstimateTitle(estimate);
+      const directAudio = downloadItem.kind === "direct" && downloadItem.mediaType === "audio";
+      estimateLabel.textContent = directAudio ? formatDirectAudioEstimate({
+        ...downloadItem,
+        duration: estimate.duration,
+        contentLength: downloadItem.contentLength ?? item.contentLength
+      }) : formatDownloadEstimate(estimate);
+      estimateLabel.title = directAudio ? "Observed total file size; average bitrate is estimated from size and duration, including container overhead." : formatDownloadEstimateTitle(estimate);
     };
     const syncDownloadButton = () => {
       const presentation2 = downloadButtonPresentation(
@@ -3970,21 +4172,21 @@ ${blobTitleKey(item.title)}`;
       return {
         disabled: false,
         label: "Set up",
-        title: "Enable the optional Media Helper connection to download video."
+        title: "Enable the optional Media Helper connection to download media."
       };
     }
     if (helper.status === "not_installed") {
       return {
         disabled: false,
         label: "Install",
-        title: "Media Helper is required for video downloads."
+        title: "Media Helper is required for media downloads."
       };
     }
     if (helper.status === "ready" && !helperCanDownload(item, helper)) {
       return {
         disabled: true,
         label: "Helper update",
-        title: `The installed Media Helper does not support ${item.kind.toUpperCase()} downloads yet.`
+        title: `The installed Media Helper does not support ${item.mediaType === "audio" && item.kind === "direct" ? "direct audio" : item.kind.toUpperCase()} downloads yet.`
       };
     }
     if (helper.status !== "ready") {
@@ -4001,7 +4203,8 @@ ${blobTitleKey(item.title)}`;
     };
   }
   function helperCanDownload(item, helper) {
-    if (item.kind === "direct") return helper.canDownloadDirect === true;
+    if (item.kind === "direct")
+      return helper.canDownloadDirect === true && (item.mediaType !== "audio" || helper.canDownloadDirectAudio === true);
     if (item.kind === "hls")
       return helper.canDownloadHls === true && (item.probeSource !== "decrypted_blob" || helper.canDownloadDecryptedHls === true);
     if (item.kind === "adaptive")

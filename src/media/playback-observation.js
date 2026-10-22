@@ -45,6 +45,9 @@ export function createPlaybackObservationTracker({
       )
         return null;
       const observation = {
+        ...(mediaElement.tagName?.toLowerCase() === "audio"
+          ? { mediaType: "audio" }
+          : {}),
         sessionId: session.id,
         pageUrl,
         mediaId,

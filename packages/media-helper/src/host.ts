@@ -35,7 +35,7 @@ import type { DownloadCandidate } from "./download-types.js";
 import { FILE_HELPER_REQUESTS } from "../../../src/downloads/file-contract.js";
 import { FileJobManager } from "./file-job-manager.js";
 
-const HELPER_VERSION = "0.25.1";
+const HELPER_VERSION = "0.26.0";
 const callerOrigin = process.argv[2] || null;
 const reader = new NativeMessageReader();
 const adapters = new DownloadAdapterRegistry([
@@ -239,6 +239,7 @@ async function inspectCapabilities() {
   return {
     [MEDIA_HELPER_CAPABILITIES.FILE_HTTP_DOWNLOAD]: true,
     [MEDIA_HELPER_CAPABILITIES.DIRECT_HTTP_DOWNLOAD]: true,
+    [MEDIA_HELPER_CAPABILITIES.DIRECT_AUDIO_DOWNLOAD]: true,
     [MEDIA_HELPER_CAPABILITIES.HLS_VOD_DOWNLOAD]: ffmpeg.available,
     [MEDIA_HELPER_CAPABILITIES.HLS_PARALLEL_ACQUISITION]: ffmpeg.available,
     [MEDIA_HELPER_CAPABILITIES.HLS_DECRYPTED_MANIFEST]: ffmpeg.available,

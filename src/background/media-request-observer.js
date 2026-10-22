@@ -1,4 +1,9 @@
-import { recordDiscoveredMedia, listDiscoveredMedia } from "./media-catalog.js";
+import {
+  recordDiscoveredMedia,
+  listDiscoveredMedia,
+  recordMediaSourceDiagnostic,
+} from "./media-catalog.js";
+import { sourceDiagnostic } from "../media/source-diagnostics.js";
 import {
   createMediaCandidateFromSource,
   classifyMediaSource,
@@ -23,7 +28,27 @@ const OBSERVED_RESOURCE_TYPES = Object.freeze([
 export function startBackgroundMediaRequestObserver() {
   const onHeadersReceived = (details) => {
     const observation = createMediaRequestObservation(details);
-    if (!observation) return;
+    if (!observation) {
+      if (details.tabId >= 0 && !details.incognito) {
+        const diagnostic = sourceDiagnostic({
+          sourceUrl: details.url,
+          mimeType: responseMimeType(details.responseHeaders),
+          input: "network",
+        });
+        if (diagnostic)
+          recordMediaSourceDiagnostic(
+            details.tabId,
+            {
+              ...diagnostic,
+              ...(details.statusCode >= 400
+                ? { code: "response_rejected", httpStatus: details.statusCode }
+                : {}),
+            },
+            details.frameId,
+          );
+      }
+      return;
+    }
     recordObservation(observation).catch((error) =>
       console.debug("[AdsFriendly Media] Request observation skipped", error),
     );
@@ -160,8 +185,26 @@ function probeMissingMediaSize({ tabId, candidate, frameId, frameUrl }) {
       scopeKey,
     })
     .then(async (probe) => {
-      if (probe.status !== "resolved" || !probe.contentLength) return;
       if (!(await isCurrentTabPage(tabId, candidate.pageUrl))) return;
+      if (probe.status !== "resolved" || !probe.contentLength) {
+        if (candidate.mediaType === "audio") {
+          const diagnostic = sourceDiagnostic({
+            sourceUrl: candidate.sourceUrl,
+            input: "dom",
+          });
+          recordMediaSourceDiagnostic(
+            tabId,
+            {
+              ...diagnostic,
+              code: "size_unavailable",
+              input: "size_probe",
+              httpStatus: probe.httpStatus,
+            },
+            frameId,
+          );
+        }
+        return;
+      }
       await recordDiscoveredMedia(
         tabId,
         createRegisteredEvent(

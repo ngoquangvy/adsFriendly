@@ -1,5 +1,6 @@
 import { createMediaDownloadControl as createSharedDownloadControl } from "../media/ui/download-control.js";
 import { startBrowserFileOffers } from "./browser-file-offers.js";
+import { createMediaSourceDiagnostics } from "./media-source-diagnostics.js";
 import { loadSettings, saveSettings } from "../runtime/settings-store.js";
 import {
   CAPABILITIES,
@@ -48,6 +49,10 @@ const mediaManagerLink = document.getElementById("media-manager-link");
 const pageDecisionsButton = document.getElementById("page-decisions-btn");
 const pageDecisionsCount = document.getElementById("page-decisions-count");
 startBrowserFileOffers({ document, chrome, window });
+const renderSourceDiagnostics = createMediaSourceDiagnostics({
+  document,
+  clipboard: navigator.clipboard,
+});
 
 const MODE_DESCRIPTIONS = Object.freeze({
   safe: "Verified rules; no predictive DOM actions",
@@ -282,25 +287,28 @@ async function updateMediaCatalog() {
 async function renderMediaCatalog(tab) {
   const nextTabId = tab?.id ?? null;
   if (activeMediaTabId !== nextTabId) {
+    renderSourceDiagnostics();
     showAllMediaItems = false;
     mediaRenderSignature = null;
   }
   activeMediaTabId = nextTabId;
   if (!settings.enabled) {
+    renderSourceDiagnostics();
     commitMediaCatalog({
       status: "Protection is off; media observation is paused.",
     });
     return;
   }
   if (settings.protectionMode === "safe") {
+    renderSourceDiagnostics();
     commitMediaCatalog({
-      status: "Switch to Assist or Auto, then reload the video page.",
+      status: "Switch to Assist or Auto, then reload the media page.",
     });
     return;
   }
   if (!tab) {
     commitMediaCatalog({
-      status: "Open an HTTP video page to test detection.",
+      status: "Open an HTTP media page to test detection.",
     });
     return;
   }
@@ -311,13 +319,14 @@ async function renderMediaCatalog(tab) {
       pageUrl: tab.url,
     });
     const items = Array.isArray(response?.items) ? response.items : [];
+    renderSourceDiagnostics(response?.sourceDiagnostics);
     if (!items.length) {
       commitMediaCatalog({
         tab,
         status:
           response?.status === "capability_disabled"
             ? "Media observation is still starting. Reload the page once."
-            : "No MP4, WebM, HLS, or DASH source detected yet.",
+            : "No audio or video source detected yet.",
       });
       return;
     }
@@ -367,7 +376,7 @@ function commitMediaCatalog({
   if (
     !visibleItems.length &&
     hasMediaDownloadJobs &&
-    /Open an HTTP video page|No MP4, WebM, HLS, or DASH/i.test(status)
+    /Open an HTTP media page|No audio or video source/i.test(status)
   ) {
     status = "No media on this tab · downloads remain available below.";
   }
@@ -433,7 +442,10 @@ function createMediaItem(item, tab, helper, itemsById) {
   row.className = "media-item";
   const kind = document.createElement("span");
   kind.className = "media-kind";
-  kind.textContent = String(item.kind || "media").toUpperCase();
+  kind.textContent =
+    item.mediaType === "audio"
+      ? "AUDIO"
+      : String(item.kind || "media").toUpperCase();
   const copy = document.createElement("div");
   copy.className = "media-copy";
   const name = document.createElement("span");
@@ -869,7 +881,7 @@ function renderMediaJobs(items) {
   if (
     visible.length &&
     mediaCount.textContent === "0" &&
-    /Open an HTTP video page|No MP4, WebM, HLS, or DASH/i.test(
+    /Open an HTTP media page|No audio or video source/i.test(
       mediaStatus.textContent,
     )
   ) {

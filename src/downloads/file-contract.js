@@ -39,6 +39,8 @@ export const FILE_EXTENSIONS = Object.freeze([
   "mp3",
   "m4a",
   "ogg",
+  "oga",
+  "opus",
   "flac",
   "wav",
   "jpg",

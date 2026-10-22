@@ -1,5 +1,6 @@
 import { isAcquirableAdaptiveTrack } from "./adaptive-track-policy.js";
 import { formatAudioLanguageLabel } from "./audio-language-label.js";
+import { audioContainer } from "./content-type.js";
 
 export const MEDIA_OUTPUT_CONTAINERS = Object.freeze({
   SOURCE: "source",
@@ -265,7 +266,7 @@ export function classifyDirectMediaContainer(candidate = {}) {
     "audio/webm": "webm",
     "audio/ogg": "ogg",
   }[mime];
-  if (byMime) return byMime;
+  if (byMime || audioContainer(mime)) return byMime || audioContainer(mime);
   try {
     const path = new URL(candidate.sourceUrl).pathname;
     const extension = path.match(/\.([a-z0-9]{2,6})$/i)?.[1]?.toLowerCase();
@@ -377,10 +378,10 @@ export function getMediaDownloadEstimate(
       ? directBytes
         ? "source_headers"
         : candidate.kind === "adaptive"
-        ? adaptiveBytes
-          ? "track_content_length"
-          : "track_bitrate"
-        : "manifest_bandwidth"
+          ? adaptiveBytes
+            ? "track_content_length"
+            : "track_bitrate"
+          : "manifest_bandwidth"
       : null,
   });
 }

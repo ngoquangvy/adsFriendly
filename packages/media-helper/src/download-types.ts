@@ -1,6 +1,7 @@
 export interface DownloadCandidate {
   id: string;
   kind: "direct" | "hls" | "dash" | "adaptive";
+  mediaType?: "audio" | "video" | "audio_video" | "unknown";
   pageUrl: string;
   sourceUrl: string | null;
   manifestUrl: string | null;

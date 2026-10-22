@@ -11,6 +11,7 @@ import {
 import { isExtensionContextInvalidated } from "../shared/extension-context.js";
 import { createYouTubeCandidateFromObservedSource } from "../media/youtube-track-profile.js";
 import { createPlaybackObservationTracker } from "../media/playback-observation.js";
+import { sourceDiagnostic } from "../media/source-diagnostics.js";
 
 const VIDEO_OBSERVATION_EVENTS = Object.freeze([
   "loadedmetadata",
@@ -35,6 +36,7 @@ export function startMediaObserver() {
   const probeTimers = new Set();
   const requestedProbes = new Set();
   const contextualProbeRetries = new Set();
+  const sourceDiagnosticKeys = new Set();
   const videoListeners = new Map();
   const playbackTracker = createPlaybackObservationTracker();
   const videoVisibilityObserver =
@@ -58,6 +60,13 @@ export function startMediaObserver() {
       for (const node of mutation.addedNodes) {
         if (node.nodeType === Node.ELEMENT_NODE) scanElement(node);
       }
+    }
+    for (const [media, listener] of videoListeners) {
+      if (media.isConnected) continue;
+      for (const eventType of VIDEO_OBSERVATION_EVENTS)
+        media.removeEventListener(eventType, listener);
+      videoVisibilityObserver?.unobserve(media);
+      videoListeners.delete(media);
     }
   });
   mutationObserver.observe(document.documentElement, {
@@ -315,6 +324,7 @@ export function startMediaObserver() {
     probeTimers.clear();
     requestedProbes.clear();
     contextualProbeRetries.clear();
+    sourceDiagnosticKeys.clear();
     for (const pendingRequest of aesKeyHandoffRequests.values()) {
       clearTimeout(pendingRequest.timeoutId);
       pendingRequest.resolve({ status: "stopped", keys: [] });
@@ -498,11 +508,13 @@ export function startMediaObserver() {
 
   function scanElement(element) {
     if (stopped || !element) return;
-    if (element.matches?.("video")) observeVideo(element);
-    if (element.matches?.("video, source")) reportElementSource(element);
-    element.querySelectorAll?.("video").forEach(observeVideo);
+    if (element.matches?.("source") && !element.closest?.("video, audio"))
+      return;
+    if (element.matches?.("video, audio")) observeVideo(element);
+    if (element.matches?.("video, audio, source")) reportElementSource(element);
+    element.querySelectorAll?.("video, audio").forEach(observeVideo);
     element
-      .querySelectorAll?.("video, video source")
+      .querySelectorAll?.("video, video source, audio, audio source")
       .forEach(reportElementSource);
   }
 
@@ -520,12 +532,22 @@ export function startMediaObserver() {
   }
 
   function reportElementSource(element, playbackTrigger = null) {
+    const audio = element.matches?.("audio")
+      ? element
+      : element.closest?.("audio");
+    const mediaElement = element.matches?.("video, audio");
     const sourceUrl =
-      element.currentSrc || element.src || element.getAttribute?.("src");
+      (audio && element.getAttribute?.("src") ? element.src : null) ||
+      element.currentSrc ||
+      element.src ||
+      element.getAttribute?.("src");
     const mimeType =
       element.currentType || element.type || element.getAttribute?.("type");
+    // A changed audio src may still carry the previous song's metadata.
+    const metadataCurrent =
+      !audio || !element.currentSrc || element.currentSrc === sourceUrl;
     const duration =
-      element.matches?.("video") && Number.isFinite(element.duration)
+      mediaElement && metadataCurrent && Number.isFinite(element.duration)
         ? element.duration
         : null;
     const resolution = element.matches?.("video")
@@ -534,17 +556,18 @@ export function startMediaObserver() {
           height: Number(element.videoHeight) || null,
         }
       : null;
-    const playback = element.matches?.("video")
-      ? {
-          playing: element.paused === false && element.ended !== true,
-          visible: isVisibleVideo(element),
-          muted: element.muted === true,
-          currentTime: Number.isFinite(element.currentTime)
-            ? element.currentTime
-            : null,
-          observedAt: Date.now(),
-        }
-      : null;
+    const playback =
+      mediaElement && metadataCurrent
+        ? {
+            playing: element.paused === false && element.ended !== true,
+            visible: isVisibleVideo(element),
+            muted: element.muted === true,
+            currentTime: Number.isFinite(element.currentTime)
+              ? element.currentTime
+              : null,
+            observedAt: Date.now(),
+          }
+        : null;
     const candidate = reportSource(
       sourceUrl,
       mimeType,
@@ -552,8 +575,9 @@ export function startMediaObserver() {
       duration,
       resolution,
       playback,
+      audio ? "audio" : null,
     );
-    if (element.matches?.("video")) {
+    if (mediaElement && metadataCurrent) {
       reportPlaybackObservation(
         element,
         candidate?.id || null,
@@ -569,6 +593,7 @@ export function startMediaObserver() {
     duration = null,
     resolution = null,
     playback = null,
+    elementType = null,
   ) {
     const candidate =
       createYouTubeCandidateFromObservedSource({
@@ -586,7 +611,24 @@ export function startMediaObserver() {
         resolution,
         playback,
         detectedBy,
+        elementType,
       });
+    const diagnostic = sourceDiagnostic({
+      sourceUrl,
+      mimeType,
+      elementType,
+      kind: candidate?.kind,
+      input: detectedBy,
+    });
+    if (diagnostic && sourceDiagnosticKeys.size < 50) {
+      const key = JSON.stringify(diagnostic);
+      if (!sourceDiagnosticKeys.has(key)) {
+        sourceDiagnosticKeys.add(key);
+        reportEvent(
+          createRegisteredEvent(EVENTS.MEDIA_SOURCE_DIAGNOSTIC, diagnostic),
+        );
+      }
+    }
     if (!candidate) return null;
     reportEvent(createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, candidate));
     return candidate;
@@ -638,17 +680,19 @@ export function startMediaObserver() {
     chrome.runtime
       .sendMessage({
         type:
-          event.type === EVENTS.MEDIA_PROBED
-            ? "MEDIA_PROBED"
-            : event.type === EVENTS.MEDIA_PROBE_DIAGNOSTIC
-              ? "MEDIA_PROBE_DIAGNOSTIC"
-              : event.type === EVENTS.MEDIA_BLOB_TRACED
-                ? "MEDIA_BLOB_TRACED"
-                : event.type === EVENTS.MEDIA_EME_OBSERVED
-                  ? "MEDIA_EME_OBSERVED"
-                  : event.type === EVENTS.MEDIA_PLAYBACK_OBSERVED
-                    ? "MEDIA_PLAYBACK_OBSERVED"
-                    : "MEDIA_DISCOVERED",
+          event.type === EVENTS.MEDIA_SOURCE_DIAGNOSTIC
+            ? "MEDIA_SOURCE_DIAGNOSTIC"
+            : event.type === EVENTS.MEDIA_PROBED
+              ? "MEDIA_PROBED"
+              : event.type === EVENTS.MEDIA_PROBE_DIAGNOSTIC
+                ? "MEDIA_PROBE_DIAGNOSTIC"
+                : event.type === EVENTS.MEDIA_BLOB_TRACED
+                  ? "MEDIA_BLOB_TRACED"
+                  : event.type === EVENTS.MEDIA_EME_OBSERVED
+                    ? "MEDIA_EME_OBSERVED"
+                    : event.type === EVENTS.MEDIA_PLAYBACK_OBSERVED
+                      ? "MEDIA_PLAYBACK_OBSERVED"
+                      : "MEDIA_DISCOVERED",
         event,
       })
       .then((response) => {
@@ -798,6 +842,8 @@ export function startMediaObserver() {
 
 export function createMediaObserverReportKey(event) {
   const payload = event?.payload || {};
+  if (event?.type === EVENTS.MEDIA_SOURCE_DIAGNOSTIC)
+    return `${event.type}:${JSON.stringify(payload)}`;
   const mediaId = payload.id || payload.mediaId || "unknown";
   if (event?.type === EVENTS.MEDIA_DISCOVERED) {
     const playbackKey = payload.playback
@@ -816,10 +862,11 @@ export function createMediaObserverReportKey(event) {
       return `${event.type}:${mediaId}:${payload.detectedBy || "unknown"}:video=${videoTracks || "none"}:audio=${audioTracks || "none"}:stage=${acquisition?.stage || "none"}:direct=${acquisition?.directVideoCount || 0}+${acquisition?.directAudioCount || 0}${playbackKey}`;
     }
     const playbackDuration =
-      payload.kind === "blob" && Number.isFinite(payload.duration)
+      (payload.kind === "blob" || payload.mediaType === "audio") &&
+      Number.isFinite(payload.duration)
         ? Math.round(payload.duration)
         : "unknown";
-    return `${event.type}:${mediaId}:${payload.detectedBy || "unknown"}:${playbackDuration}:${payload.resolution?.width || 0}x${payload.resolution?.height || 0}${playbackKey}`;
+    return `${event.type}:${mediaId}:${payload.detectedBy || "unknown"}:${playbackDuration}:${payload.mediaType || "unknown"}:${payload.mediaTypeEvidence || "unknown"}:${payload.resolution?.width || 0}x${payload.resolution?.height || 0}${playbackKey}`;
   }
   if (event?.type === EVENTS.MEDIA_BLOB_TRACED) {
     return [

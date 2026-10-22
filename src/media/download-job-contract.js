@@ -6,6 +6,7 @@ import {
   isWeakSampleAesSignal,
 } from "./protection-policy.js";
 import { normalizeAesKeyHandoffDiagnostic } from "./key-handoff-diagnostics.js";
+import { MEDIA_TYPES } from "./content-type.js";
 import {
   ADAPTIVE_TRACK_RESOLUTION,
   isAcquirableAdaptiveTrack,
@@ -30,6 +31,9 @@ export function normalizeMediaDownloadJob(value = {}) {
     id: requiredString(candidate.id, "candidate.id"),
     pageUrl: requiredHttpUrl(candidate.pageUrl, "candidate.pageUrl"),
     kind: candidate.kind,
+    mediaType: MEDIA_TYPES.includes(candidate.mediaType)
+      ? candidate.mediaType
+      : "unknown",
     title: optionalString(candidate.title),
     mimeType: optionalString(candidate.mimeType),
     drm: candidate.drm || "none",

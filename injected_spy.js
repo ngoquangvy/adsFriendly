@@ -25,6 +25,66 @@ var AdsFriendlyMainWorld = (() => {
     notifyContentScript({ type: "AD_MAP_DETECTED", url });
   }
 
+  // src/media/content-type.js
+  var MEDIA_TYPES = Object.freeze([
+    "audio",
+    "video",
+    "audio_video",
+    "unknown"
+  ]);
+  var AUDIO_EXTENSIONS = Object.freeze([
+    "mp3",
+    "m4a",
+    "ogg",
+    "oga",
+    "opus",
+    "flac",
+    "wav"
+  ]);
+  var AUDIO_MIMES = Object.freeze({
+    "audio/mpeg": "mp3",
+    "audio/mp3": "mp3",
+    "audio/mp4": "m4a",
+    "audio/ogg": "ogg",
+    "audio/opus": "opus",
+    "audio/flac": "flac",
+    "audio/x-flac": "flac",
+    "audio/wav": "wav",
+    "audio/wave": "wav",
+    "audio/x-wav": "wav",
+    "audio/webm": "webm"
+  });
+  function sourceExtension(url) {
+    try {
+      return new URL(url).pathname.match(/\.([a-z0-9]{1,8})$/i)?.[1]?.toLowerCase() || "";
+    } catch {
+      return "";
+    }
+  }
+  function sourceMime(value) {
+    const mime = String(value || "").split(";", 1)[0].trim().toLowerCase();
+    return /^[a-z0-9.+-]+\/[a-z0-9.+-]+$/.test(mime) ? mime : "";
+  }
+  function audioContainer(mime) {
+    return AUDIO_MIMES[sourceMime(mime)] || null;
+  }
+  function identifyMediaType({ sourceUrl, mimeType, elementType } = {}) {
+    const mime = sourceMime(mimeType), ext = sourceExtension(sourceUrl);
+    if (audioContainer(mime))
+      return { mediaType: "audio", mediaTypeEvidence: "mime" };
+    if (mime.startsWith("video/"))
+      return { mediaType: "video", mediaTypeEvidence: "mime" };
+    if (mime && !["application/octet-stream", "binary/octet-stream"].includes(mime))
+      return { mediaType: "unknown", mediaTypeEvidence: "unknown" };
+    if (elementType === "audio")
+      return { mediaType: "audio", mediaTypeEvidence: "element" };
+    if (AUDIO_EXTENSIONS.includes(ext))
+      return { mediaType: "audio", mediaTypeEvidence: "extension" };
+    if (/^(mp4|webm|m4v|mov)$/.test(ext))
+      return { mediaType: "video", mediaTypeEvidence: "extension" };
+    return { mediaType: "unknown", mediaTypeEvidence: "unknown" };
+  }
+
   // src/media/contracts.js
   var MEDIA_KINDS = Object.freeze({
     DIRECT: "direct",
@@ -105,6 +165,7 @@ var AdsFriendlyMainWorld = (() => {
       sourceUrl: optionalString(value.sourceUrl),
       manifestUrl: optionalString(value.manifestUrl),
       kind: enumValue(value.kind, Object.values(MEDIA_KINDS), "kind"),
+      ...normalizeContentType(value),
       title: optionalString(value.title),
       mimeType: optionalString(value.mimeType),
       provider: optionalString(value.provider),
@@ -178,6 +239,16 @@ var AdsFriendlyMainWorld = (() => {
     }
     return candidate;
   }
+  function normalizeContentType(value) {
+    const inferred = identifyMediaType(value);
+    if (!value.mediaType) return inferred;
+    return {
+      mediaType: enumValue(value.mediaType, MEDIA_TYPES, "mediaType"),
+      mediaTypeEvidence: ["mime", "element", "extension"].includes(
+        value.mediaTypeEvidence
+      ) ? value.mediaTypeEvidence : "unknown"
+    };
+  }
   function normalizePlaybackState(value) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
     return {
@@ -190,6 +261,7 @@ var AdsFriendlyMainWorld = (() => {
   }
   function normalizeMediaPlaybackObservation(value = {}) {
     return {
+      ...value.mediaType === "audio" ? { mediaType: "audio" } : {},
       sessionId: requiredString(value.sessionId, "sessionId").slice(0, 160),
       pageUrl: requiredString(value.pageUrl, "pageUrl"),
       mediaId: optionalString(value.mediaId)?.slice(0, 200) || null,
@@ -657,7 +729,7 @@ var AdsFriendlyMainWorld = (() => {
     "audio/aacp"
   ]);
   var SEGMENT_PATH_PATTERN = /\.(?:ts|m2ts|m4s|cmfv|cmfa|aac)$/i;
-  function classifyMediaSource(sourceUrl = "", mimeType = "") {
+  function classifyMediaSource(sourceUrl = "", mimeType = "", elementType = null) {
     const normalizedUrl = String(sourceUrl).trim().toLowerCase();
     const normalizedMime = String(mimeType).split(";")[0].trim().toLowerCase();
     const path = normalizedUrl.split(/[?#]/)[0];
@@ -667,6 +739,13 @@ var AdsFriendlyMainWorld = (() => {
     if (path.endsWith(".mpd") || DASH_MIME_TYPES.has(normalizedMime))
       return MEDIA_KINDS.DASH;
     if (isLikelyMediaSegment(normalizedUrl, normalizedMime)) return null;
+    if (audioContainer(normalizedMime)) return MEDIA_KINDS.DIRECT;
+    if (AUDIO_EXTENSIONS.includes(sourceExtension(sourceUrl)) || elementType === "audio") {
+      const mime = sourceMime(mimeType);
+      if (!mime || ["application/octet-stream", "binary/octet-stream"].includes(mime))
+        return /^https?:/i.test(sourceUrl) ? MEDIA_KINDS.DIRECT : null;
+      return null;
+    }
     if (/\.(mp4|webm|m4v|mov)$/.test(path) || normalizedMime.startsWith("video/"))
       return MEDIA_KINDS.DIRECT;
     return null;
@@ -686,10 +765,11 @@ var AdsFriendlyMainWorld = (() => {
     contentLength = null,
     resolution = null,
     playback = null,
-    detectedBy = MEDIA_DETECTION_SOURCES.DOM
+    detectedBy = MEDIA_DETECTION_SOURCES.DOM,
+    elementType = null
   }) {
     const absoluteSourceUrl = resolveSourceUrl(sourceUrl, pageUrl);
-    const kind = classifyMediaSource(absoluteSourceUrl, mimeType);
+    const kind = classifyMediaSource(absoluteSourceUrl, mimeType, elementType);
     if (!kind) return null;
     const isManifest = [MEDIA_KINDS.HLS, MEDIA_KINDS.DASH].includes(kind);
     return normalizeMediaCandidate({
@@ -698,6 +778,11 @@ var AdsFriendlyMainWorld = (() => {
       sourceUrl: isManifest ? null : absoluteSourceUrl,
       manifestUrl: isManifest ? absoluteSourceUrl : null,
       kind,
+      ...identifyMediaType({
+        sourceUrl: absoluteSourceUrl,
+        mimeType,
+        elementType
+      }),
       title,
       mimeType,
       duration,
@@ -1474,9 +1559,35 @@ ${body}`;
     }
   }
 
+  // src/media/source-diagnostics.js
+  var SOURCE_DIAGNOSTIC_CODES = Object.freeze([
+    "source_missing",
+    "source_unclassified",
+    "audio_mime_unsupported",
+    "audio_response_conflict",
+    "media_segment",
+    "blob_source_unresolved",
+    "size_unavailable",
+    "audio_format_unknown",
+    "response_rejected"
+  ]);
+  function normalizeSourceDiagnostic(value = {}) {
+    if (!SOURCE_DIAGNOSTIC_CODES.includes(value.code))
+      throw Error("Unknown source diagnostic.");
+    return {
+      code: value.code,
+      input: ["dom", "network", "size_probe"].includes(value.input) ? value.input : "dom",
+      host: /^[a-z0-9.-]{1,253}$/i.test(value.host || "") ? value.host.toLowerCase() : "",
+      mime: sourceMime(value.mime).slice(0, 100),
+      extension: /^[a-z0-9]{1,8}$/.test(value.extension || "") ? value.extension : "",
+      httpStatus: Number.isInteger(value.httpStatus) && value.httpStatus >= 100 && value.httpStatus <= 599 ? value.httpStatus : null
+    };
+  }
+
   // src/runtime/event-catalog.js
   var EVENTS = Object.freeze({
     MEDIA_DISCOVERED: "media.discovered",
+    MEDIA_SOURCE_DIAGNOSTIC: "media.source_diagnostic",
     MEDIA_PROBED: "media.probed",
     MEDIA_PROBE_DIAGNOSTIC: "media.probe_diagnostic",
     MEDIA_BLOB_TRACED: "media.blob_traced",
@@ -1489,6 +1600,12 @@ ${body}`;
   });
   var E = EVENTS;
   var EVENT_CATALOG = Object.freeze({
+    [E.MEDIA_SOURCE_DIAGNOSTIC]: event(
+      E.MEDIA_SOURCE_DIAGNOSTIC,
+      "media.observer",
+      ["media.diagnostics"],
+      normalizeSourceDiagnostic
+    ),
     [E.MEDIA_DISCOVERED]: event(
       E.MEDIA_DISCOVERED,
       "media.observer",

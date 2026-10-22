@@ -11,6 +11,7 @@ import {
   isAcquirableAdaptiveTrack,
 } from "./adaptive-track-policy.js";
 import { stableMediaId } from "./detection.js";
+import { formatDirectAudioDetails } from "./audio-view.js";
 
 export function createMediaCatalogViewSignature({
   tabId = null,
@@ -26,6 +27,7 @@ export function createMediaCatalogViewSignature({
           status: helper.status,
           helperVersion: helper.helperVersion,
           canDownloadDirect: helper.canDownloadDirect,
+          canDownloadDirectAudio: helper.canDownloadDirectAudio,
           canDownloadHls: helper.canDownloadHls,
           canDownloadDecryptedHls: helper.canDownloadDecryptedHls,
           canSelectContainer: helper.canSelectContainer,
@@ -624,7 +626,10 @@ export function formatMediaDetails(item) {
           ? `${item.blobTrace.appendCount} buffers observed · matching source`
           : "Blob signal · tracing source buffers")
     );
-  if (item.kind === "direct") return "Direct video file";
+  if (item.kind === "direct")
+    return item.mediaType === "audio"
+      ? formatDirectAudioDetails(item)
+      : "Direct video file";
   if (item.kind === "adaptive") return adaptiveDetails(item);
   if (item.kind === "dash") return dashDetails(item);
   if (item.kind !== "hls") return "Media source found";
@@ -1106,6 +1111,8 @@ function mediaRenderFacts(item) {
     streamType: item.streamType,
     duration: item.duration,
     contentLength: item.contentLength,
+    mediaType: item.mediaType,
+    mediaTypeEvidence: item.mediaTypeEvidence,
     resolution: item.resolution,
     bandwidth: item.bandwidth,
     averageBandwidth: item.averageBandwidth,

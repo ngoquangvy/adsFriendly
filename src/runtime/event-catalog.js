@@ -8,9 +8,11 @@ import {
   normalizeEmeObservation,
   normalizeVideoAdEvidence,
 } from "../media/contracts.js";
+import { normalizeSourceDiagnostic } from "../media/source-diagnostics.js";
 
 export const EVENTS = Object.freeze({
   MEDIA_DISCOVERED: "media.discovered",
+  MEDIA_SOURCE_DIAGNOSTIC: "media.source_diagnostic",
   MEDIA_PROBED: "media.probed",
   MEDIA_PROBE_DIAGNOSTIC: "media.probe_diagnostic",
   MEDIA_BLOB_TRACED: "media.blob_traced",
@@ -25,6 +27,12 @@ export const EVENTS = Object.freeze({
 const E = EVENTS;
 
 export const EVENT_CATALOG = Object.freeze({
+  [E.MEDIA_SOURCE_DIAGNOSTIC]: event(
+    E.MEDIA_SOURCE_DIAGNOSTIC,
+    "media.observer",
+    ["media.diagnostics"],
+    normalizeSourceDiagnostic,
+  ),
   [E.MEDIA_DISCOVERED]: event(
     E.MEDIA_DISCOVERED,
     "media.observer",

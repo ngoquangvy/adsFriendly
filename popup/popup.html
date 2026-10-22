@@ -658,7 +658,7 @@
         <span class="media-count" id="media-count">0</span>
       </div>
       <div class="media-status" id="media-status">
-        Open a video page in Assist mode to test detection.
+        Open a media page in Assist mode to test detection.
       </div>
       <button
         class="media-download media-helper-action"
@@ -669,6 +669,12 @@
         Allow helper connection
       </button>
       <div class="media-list" id="media-list" hidden></div>
+      <details id="media-source-diagnostics" class="media-status" hidden>
+        <summary>Source diagnostics</summary>
+        <p>Recent evidence gaps; may already be resolved. Temporary memory only · no source URL or token.</p>
+        <pre style="white-space: pre-wrap; overflow-wrap: anywhere; max-height: 140px; overflow-y: auto"></pre>
+        <button type="button" class="media-download">Copy diagnostics</button>
+      </details>
       <button class="media-more" id="media-more-button" type="button" hidden>
         Show more
       </button>

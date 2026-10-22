@@ -1,6 +1,11 @@
 import { basename, extname } from "node:path";
 import type { DownloadJob } from "./download-types.js";
 import { sanitizeFilename } from "./output-paths.js";
+import {
+  audioContainer,
+  AUDIO_EXTENSIONS,
+  sourceMime,
+} from "../../../src/media/content-type.js";
 
 // Media-only naming defaults must not be applied to future generic file jobs.
 export function chooseMediaFilename(
@@ -13,6 +18,43 @@ export function chooseMediaFilename(
 ) {
   const disposition = dispositionFilename(probe.contentDisposition);
   const urlName = decodeURIComponentSafe(basename(new URL(probe.url).pathname));
+  const audioExtension =
+    audioContainer(probe.contentType) || audioContainer(job.candidate.mimeType);
+  if (
+    job.candidate.mediaType === "audio" ||
+    audioExtension ||
+    AUDIO_EXTENSIONS.includes(extname(urlName).slice(1).toLowerCase())
+  ) {
+    const responseMime = sourceMime(probe.contentType);
+    if (
+      responseMime &&
+      !audioContainer(responseMime) &&
+      !["application/octet-stream", "binary/octet-stream"].includes(
+        responseMime,
+      )
+    )
+      throw Error(
+        "Audio source returned a non-audio response. No file was downloaded.",
+      );
+    const extension =
+      audioExtension ||
+      (AUDIO_EXTENSIONS.includes(extname(urlName).slice(1).toLowerCase())
+        ? extname(urlName).slice(1).toLowerCase()
+        : null);
+    if (!extension)
+      throw Error(
+        "Audio container is unknown. Keep this source in the browser; no video extension will be guessed.",
+      );
+    const suffix = `.${extension}`;
+    const raw = disposition || job.candidate.title || urlName || "audio";
+    const existing = extname(raw);
+    const stem =
+      AUDIO_EXTENSIONS.includes(existing.slice(1).toLowerCase()) ||
+      /^\.(webm|mp4)$/i.test(existing)
+        ? raw.slice(0, -existing.length)
+        : raw;
+    return `${sanitizeFilename(stem, "", "audio").slice(0, 180 - suffix.length)}${suffix}`;
+  }
   const extension = mediaExtension(
     urlName,
     job.candidate.mimeType || probe.contentType,

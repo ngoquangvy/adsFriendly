@@ -166,7 +166,7 @@ export function buildMediaDownloadSummary(candidate, value) {
         (item) => item.id === output.profileId,
       )?.label || output.profileId,
     qualityLabel:
-      output.profileId === "audio-ogg"
+      output.profileId === "audio-ogg" || candidate.mediaType === "audio"
         ? "Audio only"
         : quality?.label ||
           (candidate.kind === "adaptive"
