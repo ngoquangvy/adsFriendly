@@ -6,6 +6,7 @@ import {
 
 export const ACTIONS = Object.freeze({
   BROWSER_FILE_CHECK: "downloads.file.check",
+  BROWSER_FILE_AUTO_CHECK: "downloads.file.auto_check",
   BROWSER_FILE_ACCEPT: "downloads.file.accept",
   BROWSER_FILE_RETURN: "downloads.file.return",
   BROWSER_FILE_OPEN: "downloads.file.open",
@@ -33,6 +34,11 @@ const A = ACTIONS;
 const C = CAPABILITIES;
 
 export const ACTION_CATALOG = Object.freeze({
+  [A.BROWSER_FILE_AUTO_CHECK]: action(
+    A.BROWSER_FILE_AUTO_CHECK,
+    "background.browser-file-handoff",
+    C.BROWSER_FILE_AUTO_CHECK,
+  ),
   [A.BROWSER_FILE_CHECK]: action(
     A.BROWSER_FILE_CHECK,
     "background.browser-file-handoff",

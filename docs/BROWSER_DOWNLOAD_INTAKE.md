@@ -23,7 +23,7 @@ downloading: Check available, Ready to transfer, Helper check failed, Chrome
 only, Completed/Interrupted in Chrome, or the matching Helper lifecycle state.
 Signed/session URL hints remain visible even if a small file finishes in Chrome
 before the user opens Settings. A signed link is not silently omitted merely
-because handoff is unsupported. Unsupported filename types are labelled Chrome
+because handoff needs verification. Unsupported filename types are labelled Chrome
 only rather than offering a check the executor would reject anyway.
 
 The summary distinguishes observation off, permission required, startup,
@@ -48,7 +48,7 @@ For an eligible in-progress file:
    download. Helper independently verifies size, strong ETag, range support and
    an actual one-byte GET. A handshake or HEAD success alone is insufficient.
 3. **Transfer to Helper** asks for confirmation; the checked session expires in
-   30 seconds. Chrome is paused only after revalidating its identity and saving
+   30 seconds (10 seconds for signed/session links). Chrome is paused only after revalidating its identity and saving
    recovery metadata. Handoff proceeds only if Chrome reports a resumable pause.
 4. Helper downloads using the shared HTTP range core and the configured parallel
    connections (default 8). The Browser file transfers card shows size, progress,
@@ -61,8 +61,10 @@ For an eligible in-progress file:
 Current support deliberately requires a known size, strong ETag, proven GET,
 safe download state and ordinary credential-free HTTP(S) URL. Supported filename
 extensions are explicitly listed in `src/downloads/file-contract.js` (archives,
-documents, common images/audio/video). Executables, POST, signed/session-risk
-URLs, unknown validators, HTML/manifests and unsupported ranges stay in Chrome.
+documents, common images/audio/video). Signed/session URL hints require the same
+independent preflight, not an unconditional rejection or permission to transfer.
+Executables, POST, URL-embedded credentials, unknown validators, HTML/manifests
+and unsupported ranges stay in Chrome.
 Helper receives no cookies or browser authorization headers. Checking uses small
 metadata/range requests; transferring restarts the file in Helper, rather than
 adopting bytes already downloaded by Chrome. Generic partial files are removed
@@ -74,6 +76,47 @@ the separate file history is retained. The granted browser permission is
 not revoked automatically.
 
 ## Registered ownership
+
+### Optional immediate checks
+
+Enable **Observe new browser downloads** and the separate **Check new downloads
+with Helper automatically** switch in Settings > Downloads. Both are opt-in;
+the second requests Downloads + Native Messaging only from the user's activation.
+Importing a setting cannot grant permissions. Ad protection alone never requires
+the Helper, and enabling checks does not silently enable observation.
+
+`background.browser-file-auto-check` / `downloads.file_auto_check` are registered
+centrally. A bounded event subscriber processes only new sanitized observations,
+one preflight at a time, up to ten queued for fifteen seconds. It does not scan
+download history. Files under 8 MiB, unknown sizes, unsupported types and unsafe
+states stay with Chrome without background probes. Changing size/name metadata
+can make a previously ineligible new download checkable; completed files are never
+replayed. Each eligible download is automatically attempted once, not retried in
+a token-refresh loop. Full source URLs only live transiently inside the existing
+preflight/native session, never in subscriber events, storage or training data.
+
+Successful checks produce a numeric extension-action badge and a **File verified**
+section in the extension popup. **Review transfer** opens trusted Settings;
+only Settings can submit the existing explicit transfer confirmation. The popup
+has a separate read-only, exact-sender endpoint exposing basename/size/expiry,
+not URLs or confirmation IDs. No page-script bridge or Notifications permission
+is added. Chrome continues downloading throughout checking and review.
+
+After native preflight, Chrome identity/state/size are checked again. Completion,
+source changes, expiry, stopping observation, opt-out and revocation invalidate
+pending sessions. Automatic cleanup does not cancel a manually created check or
+an explicitly accepted transfer. If a signed URL later expires, the existing
+failure path returns ownership to Chrome; it does not refresh tokens or replay
+the original authenticated request. Some session-only sources remain unsupported.
+
+`browserFileChecks.v1` contains bounded status/reason markers only, used to refresh
+the badge and UIs; there is no raw URL cache or new training collection. Startup
+recomputes indicators so a stale badge cannot imply a surviving native session.
+
+The native end-to-end fixture enforces an HTTP query signature, automatically
+checks a 9 MiB file, requires acceptance before pause, verifies byte-exact output,
+and separately expires the signature after preflight to verify Chrome resume
+without cancellation. Browser ownership APIs in that fixture are mocked.
 
 - `downloads.browser_observe`: passive Media Tools capability, optional Downloads
   permission. Available independently of ad protection being on or off.

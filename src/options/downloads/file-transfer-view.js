@@ -92,11 +92,17 @@ export function createFileTransferView({
     const error = snapshot.checkErrors?.find(
       (entry) => entry.browserId === item.id,
     )?.error;
+    const autoBusy = snapshot.autoChecks?.items?.some(
+      (entry) =>
+        entry.browserId === item.id &&
+        ["queued", "checking"].includes(entry.status),
+    );
     const key = JSON.stringify([
       checked?.checkId,
       active?.id,
       item.assessment?.disposition,
       error,
+      autoBusy,
     ]);
     if (controls.dataset.key === key) return;
     controls.dataset.key = key;
@@ -104,6 +110,10 @@ export function createFileTransferView({
     if (active) {
       const text = document.createElement("small");
       text.textContent = "Managed below · Chrome retained as fallback";
+      controls.append(text);
+    } else if (autoBusy && !checked) {
+      const text = document.createElement("small");
+      text.textContent = "Checking… · Chrome continues";
       controls.append(text);
     } else if (
       item.assessment?.disposition === "needs_validation" &&

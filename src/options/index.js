@@ -6,6 +6,10 @@ import {
   DOWNLOAD_OBSERVER_FEATURE,
 } from "../downloads/intake-contract.js";
 import { FILE_TRANSFER_KEY } from "../downloads/file-contract.js";
+import {
+  FILE_AUTO_CHECK_FEATURE,
+  FILE_AUTO_CHECK_KEY,
+} from "../downloads/auto-check-policy.js";
 import { createSettingsListFilters } from "./list-filters.js";
 import {
   BUNDLED_SETTINGS_PACKAGE_PATH,
@@ -56,6 +60,19 @@ const downloadsSection = createDownloadsSection({
       featureOverrides: {
         ...latest.featureOverrides,
         [DOWNLOAD_OBSERVER_FEATURE]: enabled,
+      },
+    });
+  },
+  getAutoCheckEnabled: () =>
+    currentSnapshot.appSettings?.featureOverrides?.[FILE_AUTO_CHECK_FEATURE] ===
+    true,
+  saveAutoCheckEnabled: async (enabled) => {
+    const latest = await loadSettings();
+    currentSnapshot.appSettings = await saveSettings({
+      ...latest,
+      featureOverrides: {
+        ...latest.featureOverrides,
+        [FILE_AUTO_CHECK_FEATURE]: enabled,
       },
     });
   },
@@ -149,7 +166,8 @@ async function renderActiveSection() {
 function handleStorageChange(changes, areaName) {
   if (
     (areaName === "session" && DOWNLOAD_INTAKE_KEY in changes) ||
-    FILE_TRANSFER_KEY in changes
+    FILE_TRANSFER_KEY in changes ||
+    FILE_AUTO_CHECK_KEY in changes
   ) {
     downloadsSection.refreshIntake();
   }

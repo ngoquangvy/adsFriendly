@@ -1,4 +1,5 @@
 import { createMediaDownloadControl as createSharedDownloadControl } from "../media/ui/download-control.js";
+import { startBrowserFileOffers } from "./browser-file-offers.js";
 import { loadSettings, saveSettings } from "../runtime/settings-store.js";
 import {
   CAPABILITIES,
@@ -46,6 +47,7 @@ const mediaJobList = document.getElementById("media-job-list");
 const mediaManagerLink = document.getElementById("media-manager-link");
 const pageDecisionsButton = document.getElementById("page-decisions-btn");
 const pageDecisionsCount = document.getElementById("page-decisions-count");
+startBrowserFileOffers({ document, chrome, window });
 
 const MODE_DESCRIPTIONS = Object.freeze({
   safe: "Verified rules; no predictive DOM actions",

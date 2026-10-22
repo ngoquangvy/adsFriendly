@@ -16,6 +16,8 @@ export function createDownloadIntakePanel({
   isActive,
   getEnabled = () => false,
   saveEnabled,
+  getAutoCheckEnabled = () => false,
+  saveAutoCheckEnabled = async () => {},
 }) {
   const $ = (id) => document.getElementById(id);
   const toggle = $("browser-download-observe");
@@ -33,6 +35,7 @@ export function createDownloadIntakePanel({
     busy = false;
   const status = $("browser-download-intake-status");
   const copy = $("browser-download-intake-copy");
+  const autoToggle = $("browser-file-auto-check");
   let lastSnapshot = null;
   const files = createFileTransferView({
     document,
@@ -50,6 +53,7 @@ export function createDownloadIntakePanel({
     if (disposed || !isActive()) return;
     const request = ++revision;
     toggle.checked = getEnabled();
+    if (autoToggle) autoToggle.checked = getAutoCheckEnabled();
     try {
       const snapshot = await chrome.runtime.sendMessage({
         type: DOWNLOAD_INTAKE_MESSAGES.GET,
@@ -169,6 +173,30 @@ export function createDownloadIntakePanel({
       showError(error);
     }
   }
+  async function changeAutomaticChecks() {
+    if (disposed || !autoToggle || autoToggle.disabled) return;
+    const wanted = autoToggle.checked;
+    autoToggle.disabled = true;
+    try {
+      if (
+        wanted &&
+        !(await chrome.permissions.request({
+          permissions: ["downloads", "nativeMessaging"],
+        }))
+      )
+        throw Error("Helper permission not granted. Downloads stay in Chrome.");
+      if (disposed) return;
+      // Observation remains a separate explicit switch; importing this setting
+      // cannot grant permission or scan old Chrome history.
+      await saveAutoCheckEnabled(wanted);
+      await render();
+    } catch (error) {
+      autoToggle.checked = getAutoCheckEnabled();
+      showError(error);
+    } finally {
+      autoToggle.disabled = false;
+    }
+  }
   async function copyDiagnostics() {
     if (disposed || !lastSnapshot || !isActive()) return;
     try {
@@ -210,6 +238,7 @@ export function createDownloadIntakePanel({
     $("browser-download-intake-refresh").addEventListener("click", refresh);
     $("browser-download-intake-clear").addEventListener("click", clear);
     copy?.addEventListener("click", copyDiagnostics);
+    autoToggle?.addEventListener("change", changeAutomaticChecks);
     chrome.permissions?.onAdded?.addListener(scheduleRefresh);
     chrome.permissions?.onRemoved?.addListener(scheduleRefresh);
   }
@@ -222,6 +251,7 @@ export function createDownloadIntakePanel({
     $("browser-download-intake-refresh").removeEventListener("click", refresh);
     $("browser-download-intake-clear").removeEventListener("click", clear);
     copy?.removeEventListener("click", copyDiagnostics);
+    autoToggle?.removeEventListener("change", changeAutomaticChecks);
     chrome.permissions?.onAdded?.removeListener(scheduleRefresh);
     chrome.permissions?.onRemoved?.removeListener(scheduleRefresh);
   }

@@ -136,6 +136,7 @@
     MEDIA_NATIVE_DOWNLOAD: "media.native_download",
     BROWSER_DOWNLOAD_OBSERVE: "downloads.browser_observe",
     BROWSER_FILE_TRANSFER: "downloads.file_transfer",
+    BROWSER_FILE_AUTO_CHECK: "downloads.file_auto_check",
     VIDEO_OBSERVE: "video.observe",
     VIDEO_RESTORE_STATE: "video.restore_state",
     VIDEO_USER_ACTION: "video.user_action",
@@ -151,6 +152,17 @@
     [PROTECTION_MODES.AUTO]: 2
   });
   var CAPABILITY_CATALOG = Object.freeze({
+    [C2.BROWSER_FILE_AUTO_CHECK]: capability(
+      C2.BROWSER_FILE_AUTO_CHECK,
+      "safe",
+      T.PASSIVE,
+      {
+        availableWhenDisabled: true,
+        browserPermissions: ["downloads", "nativeMessaging"],
+        productIds: [P2.MEDIA_TOOLS],
+        requiredComponents: [R.BROWSER_EXTENSION, R.MEDIA_HELPER]
+      }
+    ),
     [C2.BROWSER_FILE_TRANSFER]: capability(
       C2.BROWSER_FILE_TRANSFER,
       "safe",
@@ -268,8 +280,16 @@
   var FEATURE_CATALOG = Object.freeze([
     feature("background.browser-file-handoff", "background", C2.CORE_MAINTENANCE, [
       C2.BROWSER_FILE_TRANSFER,
+      C2.BROWSER_FILE_AUTO_CHECK,
       C2.BROWSER_DOWNLOAD_OBSERVE
     ]),
+    feature(
+      "background.browser-file-auto-check",
+      "background",
+      C2.BROWSER_FILE_AUTO_CHECK,
+      [],
+      { enabledByDefault: false }
+    ),
     feature(
       "background.browser-download-observer",
       "background",

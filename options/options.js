@@ -116,6 +116,7 @@ var AdsFriendlyOptions = (() => {
     MEDIA_NATIVE_DOWNLOAD: "media.native_download",
     BROWSER_DOWNLOAD_OBSERVE: "downloads.browser_observe",
     BROWSER_FILE_TRANSFER: "downloads.file_transfer",
+    BROWSER_FILE_AUTO_CHECK: "downloads.file_auto_check",
     VIDEO_OBSERVE: "video.observe",
     VIDEO_RESTORE_STATE: "video.restore_state",
     VIDEO_USER_ACTION: "video.user_action",
@@ -131,6 +132,17 @@ var AdsFriendlyOptions = (() => {
     [PROTECTION_MODES.AUTO]: 2
   });
   var CAPABILITY_CATALOG = Object.freeze({
+    [C2.BROWSER_FILE_AUTO_CHECK]: capability(
+      C2.BROWSER_FILE_AUTO_CHECK,
+      "safe",
+      T.PASSIVE,
+      {
+        availableWhenDisabled: true,
+        browserPermissions: ["downloads", "nativeMessaging"],
+        productIds: [P2.MEDIA_TOOLS],
+        requiredComponents: [R.BROWSER_EXTENSION, R.MEDIA_HELPER]
+      }
+    ),
     [C2.BROWSER_FILE_TRANSFER]: capability(
       C2.BROWSER_FILE_TRANSFER,
       "safe",
@@ -248,8 +260,16 @@ var AdsFriendlyOptions = (() => {
   var FEATURE_CATALOG = Object.freeze([
     feature("background.browser-file-handoff", "background", C2.CORE_MAINTENANCE, [
       C2.BROWSER_FILE_TRANSFER,
+      C2.BROWSER_FILE_AUTO_CHECK,
       C2.BROWSER_DOWNLOAD_OBSERVE
     ]),
+    feature(
+      "background.browser-file-auto-check",
+      "background",
+      C2.BROWSER_FILE_AUTO_CHECK,
+      [],
+      { enabledByDefault: false }
+    ),
     feature(
       "background.browser-download-observer",
       "background",
@@ -1230,7 +1250,7 @@ var AdsFriendlyOptions = (() => {
   // src/downloads/intake-policy.js
   var INTAKE_REASON_LABELS = Object.freeze({
     request_not_verified: "HTTP file \xB7 request method and browser session not verified",
-    authorization_not_verified: "Signed/session URL \xB7 replay not verified",
+    authorization_not_verified: "Signed/session URL \xB7 requires Helper verification",
     url_credentials: "URL credentials \xB7 keep in Chrome",
     unsupported_source: "Browser-local or unsupported source \xB7 keep in Chrome",
     browser_safety_check: "Chrome safety status not clear \xB7 keep in Chrome",
@@ -1238,6 +1258,11 @@ var AdsFriendlyOptions = (() => {
     browser_paused: "Paused in Chrome",
     not_direct_file: "Not a direct file \xB7 use the media workflow if applicable"
   });
+
+  // src/downloads/auto-check-policy.js
+  var FILE_AUTO_CHECK_FEATURE = "background.browser-file-auto-check";
+  var FILE_AUTO_MIN_BYTES = 8 * 1024 * 1024;
+  var FILE_AUTO_CHECK_KEY = "browserFileChecks.v1";
 
   // src/downloads/intake-diagnostics.js
   function describeDownloadIntake(item, snapshot = {}) {
@@ -1257,10 +1282,7 @@ var AdsFriendlyOptions = (() => {
         tone: job.status === "needs_browser_attention" ? "warning" : "info"
       };
     const notes = [];
-    if (item.authorizationHints)
-      notes.push(
-        "Signed/session URL hints \xB7 Helper handoff is not supported yet."
-      );
+    const signedNote = item.authorizationHints ? "Signed/session URL \xB7 temporary link requires Helper verification." : "";
     if (item.state === "complete")
       notes.push("Already completed in Chrome; no Helper transfer was started.");
     if (item.state === "interrupted")
@@ -1273,17 +1295,31 @@ var AdsFriendlyOptions = (() => {
       return {
         code: item.authorizationHints ? "signed_url_browser_only" : item.state === "complete" ? "browser_completed" : item.state === "interrupted" ? "browser_interrupted" : unsupported ? "unsupported_file_type" : "browser_only",
         label: `Detected \xB7 ${item.state === "complete" ? "Completed in Chrome" : item.state === "interrupted" ? "Interrupted in Chrome" : "Chrome only"}`,
-        detail: notes.join(" "),
+        detail: [
+          signedNote,
+          ...notes,
+          snapshot.autoChecks?.enabled && item.totalBytes > 0 && item.totalBytes < FILE_AUTO_MIN_BYTES ? "Small file (under 8 MB) \xB7 automatic Helper check skipped." : null
+        ].filter(Boolean).join(" "),
         tone: "neutral"
       };
     if (item.assessment?.disposition !== "needs_validation")
       return {
         code: "browser_only",
         label: "Detected \xB7 Chrome only",
-        detail: INTAKE_REASON_LABELS[item.assessment?.reason] || "Transfer eligibility is unknown; keep in Chrome.",
+        detail: [signedNote, INTAKE_REASON_LABELS[item.assessment?.reason]].filter(Boolean).join(" ") || "Transfer eligibility is unknown; keep in Chrome.",
         tone: "neutral"
       };
-    if (snapshot.checkErrors?.some((row) => row.browserId === item.id))
+    const automatic = snapshot.autoChecks?.items?.find(
+      (row) => row.browserId === item.id
+    );
+    if (["queued", "checking"].includes(automatic?.status))
+      return {
+        code: "helper_checking",
+        label: "Detected \xB7 Checking with Helper",
+        detail: "Chrome is still downloading. Checking the same GET file, size, ETag and Range support; no transfer has started.",
+        tone: "info"
+      };
+    if (snapshot.checkErrors?.some((row) => row.browserId === item.id) || automatic?.status === "failed")
       return {
         code: "helper_check_failed",
         label: "Detected \xB7 Helper check failed",
@@ -1297,10 +1333,20 @@ var AdsFriendlyOptions = (() => {
         detail: "Same GET file verified \xB7 confirmation required. Chrome continues until you confirm.",
         tone: "ready"
       };
+    if (automatic?.status === "closed")
+      return {
+        code: "helper_check_closed",
+        label: "Detected \xB7 Check again",
+        detail: "The temporary checked session is no longer available. Chrome continues downloading; check again before transferring.",
+        tone: "neutral"
+      };
     return {
       code: "check_available",
       label: "Detected \xB7 Check available",
-      detail: "HTTP file \xB7 request method and browser session not verified. Check with Helper first; no automatic takeover.",
+      detail: [
+        signedNote,
+        automatic?.reason === "small_file" ? "Auto-check skipped: file under 8 MB. Chrome continues; a manual check is optional." : automatic?.reason === "permission_required" ? "Automatic check needs Helper permission; enable it in Settings." : "HTTP file \xB7 request method and browser session not verified. Check with Helper first; no automatic takeover."
+      ].filter(Boolean).join(" "),
       tone: "info"
     };
   }
@@ -1360,7 +1406,11 @@ var AdsFriendlyOptions = (() => {
           authorizationHints: item.authorizationHints === true,
           paused: item.paused === true,
           diagnostic: diagnostic.code,
-          reason: text(item.assessment?.reason, 64)
+          reason: text(item.assessment?.reason, 64),
+          autoCheck: text(
+            snapshot.autoChecks?.items?.find((row) => row.browserId === item.id)?.reason,
+            64
+          )
         };
       })
     };
@@ -1433,11 +1483,15 @@ var AdsFriendlyOptions = (() => {
       const error = snapshot.checkErrors?.find(
         (entry) => entry.browserId === item.id
       )?.error;
+      const autoBusy = snapshot.autoChecks?.items?.some(
+        (entry) => entry.browserId === item.id && ["queued", "checking"].includes(entry.status)
+      );
       const key = JSON.stringify([
         checked?.checkId,
         active?.id,
         item.assessment?.disposition,
-        error
+        error,
+        autoBusy
       ]);
       if (controls.dataset.key === key) return;
       controls.dataset.key = key;
@@ -1445,6 +1499,10 @@ var AdsFriendlyOptions = (() => {
       if (active) {
         const text = document2.createElement("small");
         text.textContent = "Managed below \xB7 Chrome retained as fallback";
+        controls.append(text);
+      } else if (autoBusy && !checked) {
+        const text = document2.createElement("small");
+        text.textContent = "Checking\u2026 \xB7 Chrome continues";
         controls.append(text);
       } else if (item.assessment?.disposition === "needs_validation" && FILE_EXTENSIONS.includes(
         String(item.filename || "").split(".").pop().toLowerCase()
@@ -1562,7 +1620,10 @@ var AdsFriendlyOptions = (() => {
     chrome: chrome2,
     isActive,
     getEnabled = () => false,
-    saveEnabled
+    saveEnabled,
+    getAutoCheckEnabled = () => false,
+    saveAutoCheckEnabled = async () => {
+    }
   }) {
     const $2 = (id) => document2.getElementById(id);
     const toggle = $2("browser-download-observe");
@@ -1580,6 +1641,7 @@ var AdsFriendlyOptions = (() => {
     let disposed2 = false, revision = 0, timer = null, bound = false, busy = false;
     const status = $2("browser-download-intake-status");
     const copy = $2("browser-download-intake-copy");
+    const autoToggle = $2("browser-file-auto-check");
     let lastSnapshot = null;
     const files = createFileTransferView({
       document: document2,
@@ -1596,6 +1658,7 @@ var AdsFriendlyOptions = (() => {
       if (disposed2 || !isActive()) return;
       const request = ++revision;
       toggle.checked = getEnabled();
+      if (autoToggle) autoToggle.checked = getAutoCheckEnabled();
       try {
         const snapshot = await chrome2.runtime.sendMessage({
           type: DOWNLOAD_INTAKE_MESSAGES.GET
@@ -1706,6 +1769,25 @@ var AdsFriendlyOptions = (() => {
         showError(error);
       }
     }
+    async function changeAutomaticChecks() {
+      if (disposed2 || !autoToggle || autoToggle.disabled) return;
+      const wanted = autoToggle.checked;
+      autoToggle.disabled = true;
+      try {
+        if (wanted && !await chrome2.permissions.request({
+          permissions: ["downloads", "nativeMessaging"]
+        }))
+          throw Error("Helper permission not granted. Downloads stay in Chrome.");
+        if (disposed2) return;
+        await saveAutoCheckEnabled(wanted);
+        await render();
+      } catch (error) {
+        autoToggle.checked = getAutoCheckEnabled();
+        showError(error);
+      } finally {
+        autoToggle.disabled = false;
+      }
+    }
     async function copyDiagnostics() {
       if (disposed2 || !lastSnapshot || !isActive()) return;
       try {
@@ -1746,6 +1828,7 @@ var AdsFriendlyOptions = (() => {
       $2("browser-download-intake-refresh").addEventListener("click", refresh);
       $2("browser-download-intake-clear").addEventListener("click", clear);
       copy?.addEventListener("click", copyDiagnostics);
+      autoToggle?.addEventListener("change", changeAutomaticChecks);
       chrome2.permissions?.onAdded?.addListener(scheduleRefresh);
       chrome2.permissions?.onRemoved?.addListener(scheduleRefresh);
     }
@@ -1758,6 +1841,7 @@ var AdsFriendlyOptions = (() => {
       $2("browser-download-intake-refresh").removeEventListener("click", refresh);
       $2("browser-download-intake-clear").removeEventListener("click", clear);
       copy?.removeEventListener("click", copyDiagnostics);
+      autoToggle?.removeEventListener("change", changeAutomaticChecks);
       chrome2.permissions?.onAdded?.removeListener(scheduleRefresh);
       chrome2.permissions?.onRemoved?.removeListener(scheduleRefresh);
     }
@@ -1774,7 +1858,9 @@ var AdsFriendlyOptions = (() => {
     saveConnections,
     onError,
     getObserverEnabled,
-    saveObserverEnabled
+    saveObserverEnabled,
+    getAutoCheckEnabled,
+    saveAutoCheckEnabled
   }) {
     const $2 = (id) => document2.getElementById(id);
     const confirm2 = (message) => window2.confirm(message);
@@ -1787,7 +1873,9 @@ var AdsFriendlyOptions = (() => {
       chrome: chrome2,
       isActive,
       getEnabled: getObserverEnabled,
-      saveEnabled: saveObserverEnabled
+      saveEnabled: saveObserverEnabled,
+      getAutoCheckEnabled,
+      saveAutoCheckEnabled
     });
     const historyList = createDownloadHistoryList({
       document: document2,
@@ -2472,6 +2560,17 @@ var AdsFriendlyOptions = (() => {
         }
       });
     },
+    getAutoCheckEnabled: () => currentSnapshot.appSettings?.featureOverrides?.[FILE_AUTO_CHECK_FEATURE] === true,
+    saveAutoCheckEnabled: async (enabled) => {
+      const latest = await loadSettings();
+      currentSnapshot.appSettings = await saveSettings({
+        ...latest,
+        featureOverrides: {
+          ...latest.featureOverrides,
+          [FILE_AUTO_CHECK_FEATURE]: enabled
+        }
+      });
+    },
     onError: (error) => showPackageStatus(error.message, true)
   });
   initialize().catch((error) => showPackageStatus(error.message, true));
@@ -2548,7 +2647,7 @@ var AdsFriendlyOptions = (() => {
     handledElementLink = elementLink;
   }
   function handleStorageChange(changes, areaName) {
-    if (areaName === "session" && DOWNLOAD_INTAKE_KEY in changes || FILE_TRANSFER_KEY in changes) {
+    if (areaName === "session" && DOWNLOAD_INTAKE_KEY in changes || FILE_TRANSFER_KEY in changes || FILE_AUTO_CHECK_KEY in changes) {
       downloadsSection.refreshIntake();
     }
     if (areaName === "session" && Object.keys(changes).some((key) => key.startsWith(DOWNLOAD_JOB_PREFIX))) {

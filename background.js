@@ -991,6 +991,7 @@ var AdsFriendlyBackground = (() => {
     MEDIA_NATIVE_DOWNLOAD: "media.native_download",
     BROWSER_DOWNLOAD_OBSERVE: "downloads.browser_observe",
     BROWSER_FILE_TRANSFER: "downloads.file_transfer",
+    BROWSER_FILE_AUTO_CHECK: "downloads.file_auto_check",
     VIDEO_OBSERVE: "video.observe",
     VIDEO_RESTORE_STATE: "video.restore_state",
     VIDEO_USER_ACTION: "video.user_action",
@@ -1006,6 +1007,17 @@ var AdsFriendlyBackground = (() => {
     [PROTECTION_MODES.AUTO]: 2
   });
   var CAPABILITY_CATALOG = Object.freeze({
+    [C2.BROWSER_FILE_AUTO_CHECK]: capability(
+      C2.BROWSER_FILE_AUTO_CHECK,
+      "safe",
+      T.PASSIVE,
+      {
+        availableWhenDisabled: true,
+        browserPermissions: ["downloads", "nativeMessaging"],
+        productIds: [P2.MEDIA_TOOLS],
+        requiredComponents: [R.BROWSER_EXTENSION, R.MEDIA_HELPER]
+      }
+    ),
     [C2.BROWSER_FILE_TRANSFER]: capability(
       C2.BROWSER_FILE_TRANSFER,
       "safe",
@@ -1123,8 +1135,16 @@ var AdsFriendlyBackground = (() => {
   var FEATURE_CATALOG = Object.freeze([
     feature("background.browser-file-handoff", "background", C2.CORE_MAINTENANCE, [
       C2.BROWSER_FILE_TRANSFER,
+      C2.BROWSER_FILE_AUTO_CHECK,
       C2.BROWSER_DOWNLOAD_OBSERVE
     ]),
+    feature(
+      "background.browser-file-auto-check",
+      "background",
+      C2.BROWSER_FILE_AUTO_CHECK,
+      [],
+      { enabledByDefault: false }
+    ),
     feature(
       "background.browser-download-observer",
       "background",
@@ -5822,6 +5842,7 @@ var AdsFriendlyBackground = (() => {
   // src/runtime/action-catalog.js
   var ACTIONS = Object.freeze({
     BROWSER_FILE_CHECK: "downloads.file.check",
+    BROWSER_FILE_AUTO_CHECK: "downloads.file.auto_check",
     BROWSER_FILE_ACCEPT: "downloads.file.accept",
     BROWSER_FILE_RETURN: "downloads.file.return",
     BROWSER_FILE_OPEN: "downloads.file.open",
@@ -5847,6 +5868,11 @@ var AdsFriendlyBackground = (() => {
   var A = ACTIONS;
   var C3 = CAPABILITIES;
   var ACTION_CATALOG = Object.freeze({
+    [A.BROWSER_FILE_AUTO_CHECK]: action(
+      A.BROWSER_FILE_AUTO_CHECK,
+      "background.browser-file-handoff",
+      C3.BROWSER_FILE_AUTO_CHECK
+    ),
     [A.BROWSER_FILE_CHECK]: action(
       A.BROWSER_FILE_CHECK,
       "background.browser-file-handoff",
@@ -11222,6 +11248,59 @@ ${body}`;
     return Number.isSafeInteger(value) && value >= 0 ? value : null;
   }
 
+  // src/downloads/intake-policy.js
+  function assessDownloadIntake(record) {
+    let reason;
+    if (record.credentialed) reason = "url_credentials";
+    else if (!["https:", "http:"].includes(record.protocol))
+      reason = "unsupported_source";
+    else if (record.danger !== "safe") reason = "browser_safety_check";
+    else if (record.state !== "in_progress") reason = "not_active";
+    else if (record.paused) reason = "browser_paused";
+    else if (/^(text\/html|application\/(vnd.apple.mpegurl|x-mpegurl|dash\+xml))$/i.test(
+      record.mime
+    ))
+      reason = "not_direct_file";
+    else if (record.authorizationHints) reason = "authorization_not_verified";
+    else reason = "request_not_verified";
+    return {
+      disposition: [
+        "request_not_verified",
+        "authorization_not_verified"
+      ].includes(reason) ? "needs_validation" : "browser_only",
+      reason,
+      canTakeOver: false
+    };
+  }
+  var INTAKE_REASON_LABELS = Object.freeze({
+    request_not_verified: "HTTP file \xB7 request method and browser session not verified",
+    authorization_not_verified: "Signed/session URL \xB7 requires Helper verification",
+    url_credentials: "URL credentials \xB7 keep in Chrome",
+    unsupported_source: "Browser-local or unsupported source \xB7 keep in Chrome",
+    browser_safety_check: "Chrome safety status not clear \xB7 keep in Chrome",
+    not_active: "Already finished or interrupted \xB7 keep in Chrome",
+    browser_paused: "Paused in Chrome",
+    not_direct_file: "Not a direct file \xB7 use the media workflow if applicable"
+  });
+
+  // src/downloads/auto-check-policy.js
+  var FILE_AUTO_MIN_BYTES = 8 * 1024 * 1024;
+  var FILE_OFFERS_MESSAGE = "GET_BROWSER_FILE_OFFERS";
+  var FILE_AUTO_CHECK_KEY = "browserFileChecks.v1";
+  function assessAutomaticFileCheck(row) {
+    if (assessDownloadIntake(row).disposition !== "needs_validation")
+      return { eligible: false, reason: "browser_only" };
+    if (!Number.isSafeInteger(row.totalBytes) || row.totalBytes <= 0)
+      return { eligible: false, reason: "size_unknown" };
+    if (row.totalBytes < FILE_AUTO_MIN_BYTES)
+      return { eligible: false, reason: "small_file" };
+    if (!FILE_EXTENSIONS.includes(
+      String(row.filename || "").split(".").pop().toLowerCase()
+    ))
+      return { eligible: false, reason: "unsupported_file_type" };
+    return { eligible: true, reason: "preflight_required" };
+  }
+
   // src/background/downloads/intake-messages.js
   var FILE_ACTIONS = Object.freeze({
     [FILE_MESSAGES.CHECK]: ACTIONS.BROWSER_FILE_CHECK,
@@ -11230,7 +11309,15 @@ ${body}`;
     [FILE_MESSAGES.OPEN]: ACTIONS.BROWSER_FILE_OPEN,
     [FILE_MESSAGES.REVEAL]: ACTIONS.BROWSER_FILE_REVEAL
   });
-  function routeDownloadIntakeMessage(message, sender, intake, chrome2, handoff) {
+  function routeDownloadIntakeMessage(message, sender, intake, chrome2, handoff, automaticFiles2) {
+    if (message?.type === FILE_OFFERS_MESSAGE) {
+      if (sender?.id !== chrome2.runtime.id || sender?.url?.split(/[?#]/)[0] !== chrome2.runtime.getURL("popup/popup.html"))
+        return { status: "ignored" };
+      return automaticFiles2?.snapshot().then((value) => ({ status: "ok", items: value.offers })) || {
+        status: "ok",
+        items: []
+      };
+    }
     if (!Object.values(DOWNLOAD_INTAKE_MESSAGES).includes(message?.type) && !FILE_ACTIONS[message?.type])
       return null;
     if (sender?.id !== chrome2.runtime.id || sender?.url?.split(/[?#]/)[0] !== chrome2.runtime.getURL("options/options.html"))
@@ -11242,7 +11329,9 @@ ${body}`;
         jobId: message.jobId
       }) || { status: "unavailable" };
     if (message.type === DOWNLOAD_INTAKE_MESSAGES.GET && handoff)
-      return handoff.snapshot().then((extra) => ({ ...intake.snapshot(), ...extra }));
+      return Promise.all([handoff.snapshot(), automaticFiles2?.snapshot()]).then(
+        ([extra, auto]) => ({ ...intake.snapshot(), ...extra, autoChecks: auto })
+      );
     return message.type === DOWNLOAD_INTAKE_MESSAGES.GET ? intake.snapshot() : intake.clear();
   }
 
@@ -11324,7 +11413,7 @@ ${body}`;
     RETRY_MEDIA_DOWNLOAD_JOB: CAPABILITIES.MEDIA_DOWNLOAD,
     GET_MEDIA_DOWNLOAD_JOBS: CAPABILITIES.MEDIA_DOWNLOAD
   });
-  function registerMessageRouter(policy, { downloadIntake: downloadIntake2, fileHandoff: fileHandoff2 } = {}) {
+  function registerMessageRouter(policy, { downloadIntake: downloadIntake2, fileHandoff: fileHandoff2, automaticFiles: automaticFiles2 } = {}) {
     const onMessage = (message, sender, sendResponse) => {
       if (!policy.can(CAPABILITIES.CORE_MESSAGING)) {
         sendResponse({ status: "disabled" });
@@ -11341,7 +11430,8 @@ ${body}`;
           sender,
           downloadIntake2,
           chrome,
-          fileHandoff2
+          fileHandoff2,
+          automaticFiles2
         );
         if (result2 !== null) {
           Promise.resolve(result2).then(sendResponse).catch(() => sendResponse({ status: "error" }));
@@ -13014,38 +13104,6 @@ ${body}`;
     }
   }
 
-  // src/downloads/intake-policy.js
-  function assessDownloadIntake(record) {
-    let reason;
-    if (record.credentialed) reason = "url_credentials";
-    else if (!["https:", "http:"].includes(record.protocol))
-      reason = "unsupported_source";
-    else if (record.danger !== "safe") reason = "browser_safety_check";
-    else if (record.state !== "in_progress") reason = "not_active";
-    else if (record.paused) reason = "browser_paused";
-    else if (record.authorizationHints) reason = "authorization_not_verified";
-    else if (/^(text\/html|application\/(vnd.apple.mpegurl|x-mpegurl|dash\+xml))$/i.test(
-      record.mime
-    ))
-      reason = "not_direct_file";
-    else reason = "request_not_verified";
-    return {
-      disposition: reason === "request_not_verified" ? "needs_validation" : "browser_only",
-      reason,
-      canTakeOver: false
-    };
-  }
-  var INTAKE_REASON_LABELS = Object.freeze({
-    request_not_verified: "HTTP file \xB7 request method and browser session not verified",
-    authorization_not_verified: "Signed/session URL \xB7 replay not verified",
-    url_credentials: "URL credentials \xB7 keep in Chrome",
-    unsupported_source: "Browser-local or unsupported source \xB7 keep in Chrome",
-    browser_safety_check: "Chrome safety status not clear \xB7 keep in Chrome",
-    not_active: "Already finished or interrupted \xB7 keep in Chrome",
-    browser_paused: "Paused in Chrome",
-    not_direct_file: "Not a direct file \xB7 use the media workflow if applicable"
-  });
-
   // src/background/downloads/intake-observer.js
   function createBrowserDownloadIntake({
     chrome: chrome2,
@@ -13058,6 +13116,15 @@ ${body}`;
     let status = "off", storageFailed = false, pending = [];
     let clearSequence = 0, featurePolicy = null;
     const records = /* @__PURE__ */ new Map();
+    const subscribers = /* @__PURE__ */ new Set();
+    function emit(event2) {
+      for (const listener of subscribers) {
+        try {
+          listener(event2);
+        } catch {
+        }
+      }
+    }
     function accept(event2) {
       if (!ready) {
         if (!settled || enabled) {
@@ -13131,6 +13198,11 @@ ${body}`;
         });
       } else if (event2.type === "erase") records.delete(event2.id);
       prune();
+      emit({
+        type: event2.type,
+        row: records.get(event2.row?.id ?? event2.id),
+        id: event2.row?.id ?? event2.id
+      });
     }
     function persist(remove = false) {
       clearTimeout(writeTimer);
@@ -13166,6 +13238,7 @@ ${body}`;
       status = nextStatus;
       pending = [];
       records.clear();
+      emit({ type: "reset" });
       detach();
       void persist(true);
     }
@@ -13250,11 +13323,16 @@ ${body}`;
     async function clear() {
       ++clearSequence;
       records.clear();
+      emit({ type: "reset" });
       pending = [];
       await persist(true);
       return { status: storageFailed ? "storage_error" : "cleared" };
     }
     return {
+      subscribe(listener) {
+        subscribers.add(listener);
+        return () => subscribers.delete(listener);
+      },
       bootstrap: attach,
       start,
       startFeature(policy) {
@@ -13608,6 +13686,18 @@ ${body}`;
   }) {
     const tickets = /* @__PURE__ */ new Map(), running = /* @__PURE__ */ new Map(), locks = /* @__PURE__ */ new Set(), sources = /* @__PURE__ */ new Map(), errors = /* @__PURE__ */ new Map();
     const checking = /* @__PURE__ */ new Map();
+    const automaticChecking = /* @__PURE__ */ new Set();
+    const subscribers = /* @__PURE__ */ new Set();
+    function notifyChecks() {
+      for (const listener of subscribers) {
+        try {
+          listener();
+        } catch {
+        }
+      }
+      void store.notify().catch(() => {
+      });
+    }
     let changesAttached = false;
     let broker2 = null, ready = Promise.resolve(), stopped = false, generation = 0;
     async function getItem(id) {
@@ -13635,9 +13725,10 @@ ${body}`;
       clearTimeout(ticket.timer);
       ticket.client.close();
       tickets.delete(id);
+      notifyChecks();
       if (sources.get(ticket.key) === id) sources.delete(ticket.key);
     }
-    async function check({ browserId }) {
+    async function check({ browserId, automatic = false }) {
       await ready;
       if (stopped || !Number.isInteger(browserId))
         throw Error("Invalid browser download.");
@@ -13649,9 +13740,11 @@ ${body}`;
       locks.add(browserId);
       const checkController = new AbortController();
       checking.set(browserId, checkController);
+      if (automatic) automaticChecking.add(browserId);
       disposeTicket(browserId);
       errors.delete(browserId);
       let reserved = null;
+      let preparedClient = null;
       try {
         const { item, row } = await verify(browserId);
         const proof = await evidence.forDownload(item);
@@ -13662,6 +13755,7 @@ ${body}`;
         if (row.totalBytes !== null && row.totalBytes !== proof.size)
           throw Error("Chrome file size changed; keep it in Chrome.");
         const jobId = crypto.randomUUID(), config = await settings();
+        checkController.signal.throwIfAborted();
         const client = await prepare(
           {
             jobId,
@@ -13675,12 +13769,20 @@ ${body}`;
           (progress) => store.progress(jobId, progress),
           checkController.signal
         );
+        preparedClient = client;
+        checkController.signal.throwIfAborted();
+        const fresh = await verify(browserId);
+        if (fresh.item.startTime !== item.startTime || await sourceKey(fresh.item.finalUrl || fresh.item.url) !== proof.key || fresh.row.totalBytes !== null && fresh.row.totalBytes !== proof.size)
+          throw Error(
+            "Chrome download completed or changed during the Helper check. Keep it in Chrome."
+          );
         if (epoch !== generation || stopped || intake.snapshot().status !== "observing") {
           client.close();
           throw Error("Browser observation was stopped.");
         }
         const ticket = {
           browserId,
+          automatic,
           jobId,
           key: proof.key,
           checkId: crypto.randomUUID(),
@@ -13688,18 +13790,23 @@ ${body}`;
           browserStartTime: item.startTime,
           filename: client.filename,
           totalBytes: proof.size,
-          expiresAt: Date.now() + 3e4,
+          expiresAt: Date.now() + (row.authorizationHints ? 1e4 : 3e4),
           timer: null
         };
-        ticket.timer = setTimeout(() => {
-          disposeTicket(browserId);
-          void store.notify().catch(() => {
-          });
-        }, 3e4);
+        ticket.timer = setTimeout(
+          () => {
+            disposeTicket(browserId);
+            void store.notify().catch(() => {
+            });
+          },
+          row.authorizationHints ? 1e4 : 3e4
+        );
         tickets.set(browserId, ticket);
+        notifyChecks();
         await store.notify();
         return { status: "ready_for_handoff" };
       } catch (error) {
+        preparedClient?.close();
         disposeTicket(browserId);
         if (reserved && sources.get(reserved) === browserId)
           sources.delete(reserved);
@@ -13708,6 +13815,7 @@ ${body}`;
         throw error;
       } finally {
         checking.delete(browserId);
+        automaticChecking.delete(browserId);
         locks.delete(browserId);
       }
     }
@@ -13769,6 +13877,7 @@ ${body}`;
         await store.put({ ...job, status: "downloading" });
         clearTimeout(ticket.timer);
         tickets.delete(browserId);
+        notifyChecks();
         running.set(browserId, { ticket, job, promise: null });
         const operation = finish(ticket, job);
         running.get(browserId).promise = operation;
@@ -13887,6 +13996,7 @@ ${body}`;
         policy,
         handlers: {
           [ACTIONS.BROWSER_FILE_CHECK]: check,
+          [ACTIONS.BROWSER_FILE_AUTO_CHECK]: (payload) => check({ ...payload, automatic: true }),
           [ACTIONS.BROWSER_FILE_ACCEPT]: accept,
           [ACTIONS.BROWSER_FILE_RETURN]: returnToChrome,
           [ACTIONS.BROWSER_FILE_OPEN]: (payload) => output({ ...payload, action: "open" }),
@@ -13930,18 +14040,29 @@ ${body}`;
     async function snapshot() {
       await ready;
       return {
-        checks: [...tickets.values()].map(
-          ({ browserId, checkId, expiresAt }) => ({
-            browserId,
-            checkId,
-            expiresAt
-          })
-        ),
+        checks: [...tickets.values()].filter(
+          (ticket) => ticket.expiresAt > Date.now() && ticket.client.isReady?.() !== false
+        ).map(({ browserId, checkId, expiresAt }) => ({
+          browserId,
+          checkId,
+          expiresAt
+        })),
         checkErrors: [...errors].slice(-50).map(([browserId, error]) => ({ browserId, error })),
         fileTransfers: store.list()
       };
     }
     return {
+      subscribeChecks(listener) {
+        subscribers.add(listener);
+        return () => subscribers.delete(listener);
+      },
+      discardCheck(id, automaticOnly = false) {
+        if (automaticOnly && !automaticChecking.has(id) && tickets.get(id)?.automatic !== true)
+          return;
+        if (locks.has(id) && !checking.has(id)) return;
+        checking.get(id)?.abort();
+        disposeTicket(id);
+      },
       startFeature,
       snapshot,
       returnAll,
@@ -13957,6 +14078,188 @@ ${body}`;
   }
   function safeMessage(error) {
     return String(error?.message || "File handoff failed.").replace(/https?:\/\/\S+/g, "[source]").slice(0, 600);
+  }
+
+  // src/background/downloads/auto-file-checks.js
+  function createAutomaticFileChecks({
+    chrome: chrome2,
+    intake,
+    handoff,
+    now = Date.now
+  }) {
+    const states = /* @__PURE__ */ new Map(), owned = /* @__PURE__ */ new Set(), queue = [];
+    let enabled = false, epoch = 0, startTime = 0, inFlight = false, timer = null;
+    let unsubscribe = null, uncheck = null, revision = 0;
+    async function snapshot() {
+      const observed = intake.snapshot(), checked = await handoff.snapshot();
+      const offers = !enabled ? [] : (checked.checks || []).flatMap((check) => {
+        const row = observed.items.find(
+          (item) => item.id === check.browserId
+        );
+        return row?.state === "in_progress" && !row.paused ? [
+          {
+            browserId: row.id,
+            filename: row.filename,
+            totalBytes: row.totalBytes,
+            expiresAt: check.expiresAt
+          }
+        ] : [];
+      });
+      return {
+        enabled,
+        status: enabled ? "on" : "off",
+        items: [...states.values()],
+        offers
+      };
+    }
+    function publish() {
+      if (timer) return;
+      const stamp = ++revision;
+      timer = setTimeout(async () => {
+        timer = null;
+        try {
+          const value = await snapshot();
+          if (stamp !== revision) return;
+          const count = enabled ? value.offers.length : 0;
+          for (const id of owned)
+            if (states.get(id)?.status === "ready" && !value.offers.some((row) => row.browserId === id)) {
+              owned.delete(id);
+              states.set(id, {
+                browserId: id,
+                status: "closed",
+                reason: "check_closed"
+              });
+            }
+          await chrome2.action?.setBadgeBackgroundColor?.({ color: "#15803d" });
+          await chrome2.action?.setBadgeText?.({
+            text: count ? String(count) : ""
+          });
+          await chrome2.storage.session.set({
+            [FILE_AUTO_CHECK_KEY]: {
+              revision: stamp,
+              enabled,
+              count,
+              items: value.items
+            }
+          });
+        } catch {
+        }
+      }, 250);
+    }
+    function put(browserId, status, reason) {
+      states.set(browserId, { browserId, status, reason });
+      while (states.size > 50) states.delete(states.keys().next().value);
+      publish();
+    }
+    async function drain() {
+      if (inFlight || !enabled || !queue.length) return;
+      inFlight = true;
+      const generation = epoch, next = queue.shift();
+      try {
+        const row = intake.snapshot().items.find((row2) => row2.id === next.id);
+        if (!row || now() - next.at > 15e3 || !assessAutomaticFileCheck(row).eligible) {
+          put(next.id, "skipped", "source_changed");
+          return;
+        }
+        const permitted = await chrome2.permissions.contains({
+          permissions: ["downloads", "nativeMessaging"]
+        });
+        if (!enabled || generation !== epoch) return;
+        if (!permitted) {
+          put(next.id, "skipped", "permission_required");
+          return;
+        }
+        if (!enabled || generation !== epoch) return;
+        owned.add(next.id);
+        put(next.id, "checking", "preflight_required");
+        const result2 = await handoff.execute(ACTIONS.BROWSER_FILE_AUTO_CHECK, {
+          browserId: next.id
+        });
+        if (!enabled || generation !== epoch) return;
+        const fresh = intake.snapshot().items.find((row2) => row2.id === next.id);
+        put(
+          next.id,
+          result2?.status === "ready_for_handoff" ? "ready" : fresh?.state !== "in_progress" ? "skipped" : "failed",
+          result2?.status === "ready_for_handoff" ? "verified" : fresh?.state !== "in_progress" ? "not_active" : "preflight_failed"
+        );
+        if (result2?.status !== "ready_for_handoff") owned.delete(next.id);
+      } catch {
+        owned.delete(next.id);
+        if (enabled && generation === epoch)
+          put(next.id, "failed", "preflight_failed");
+      } finally {
+        inFlight = false;
+        if (enabled) void drain();
+      }
+    }
+    function reset() {
+      ++epoch;
+      queue.length = 0;
+      for (const id of owned) handoff.discardCheck(id, true);
+      owned.clear();
+      states.clear();
+      publish();
+    }
+    function onRecord(event2) {
+      if (!enabled) return;
+      if (event2.type === "reset") {
+        reset();
+        return;
+      }
+      const row = event2.row;
+      if (!row || row.state !== "in_progress" || row.paused) {
+        if (owned.has(event2.id)) handoff.discardCheck(event2.id, true);
+        owned.delete(event2.id);
+        const index = queue.findIndex((row2) => row2.id === event2.id);
+        if (index >= 0) queue.splice(index, 1);
+        if (row || states.has(event2.id)) put(event2.id, "skipped", "not_active");
+        return;
+      }
+      if (row.observedAt < startTime - 1e3) return;
+      const prior = states.get(row.id);
+      if (prior && !["size_unknown", "unsupported_file_type", "browser_only"].includes(
+        prior.reason
+      ))
+        return;
+      const assessment = assessAutomaticFileCheck(row);
+      if (!assessment.eligible) {
+        put(row.id, "skipped", assessment.reason);
+        return;
+      }
+      if (queue.length >= 10) {
+        put(row.id, "skipped", "queue_full");
+        return;
+      }
+      put(row.id, "queued", "preflight_required");
+      queue.push({ id: row.id, at: now() });
+      void drain();
+    }
+    const removed = (change) => {
+      if (change.permissions?.some(
+        (name) => ["downloads", "nativeMessaging"].includes(name)
+      ))
+        reset();
+    };
+    return {
+      snapshot,
+      refreshIndicators: publish,
+      startFeature(policy) {
+        policy.require(CAPABILITIES.BROWSER_FILE_AUTO_CHECK);
+        enabled = true;
+        startTime = now();
+        unsubscribe = intake.subscribe(onRecord);
+        uncheck = handoff.subscribeChecks(publish);
+        chrome2.permissions?.onRemoved?.addListener(removed);
+        publish();
+        return () => {
+          enabled = false;
+          reset();
+          unsubscribe?.();
+          uncheck?.();
+          chrome2.permissions?.onRemoved?.removeListener(removed);
+        };
+      }
+    };
   }
 
   // src/background/index.js
@@ -13979,12 +14282,22 @@ ${body}`;
     intake: downloadIntake,
     evidence: requestEvidence
   });
+  var automaticFiles = createAutomaticFileChecks({
+    chrome,
+    intake: downloadIntake,
+    handoff: fileHandoff
+  });
   downloadIntake.bootstrap();
   var controller = createMainController({
     context: "background",
     initialSettings: DEFAULT_SETTINGS,
     implementations: {
-      "background.message-router": ({ policy }) => registerMessageRouter(policy, { downloadIntake, fileHandoff }),
+      "background.message-router": ({ policy }) => registerMessageRouter(policy, {
+        downloadIntake,
+        fileHandoff,
+        automaticFiles
+      }),
+      "background.browser-file-auto-check": ({ policy }) => automaticFiles.startFeature(policy),
       "background.browser-file-handoff": ({ policy }) => fileHandoff.startFeature(policy),
       "background.browser-download-observer": ({ policy }) => downloadIntake.startFeature(policy),
       "background.media-catalog": () => startBackgroundMediaCatalog(),
@@ -14023,7 +14336,11 @@ ${body}`;
     })
   ).then((settings) => controller.updateSettings(settings)).then(() => {
     downloadIntake.settleBootstrap();
-    controller.onChange(() => downloadIntake.settleBootstrap());
+    automaticFiles.refreshIndicators();
+    controller.onChange(() => {
+      downloadIntake.settleBootstrap();
+      automaticFiles.refreshIndicators();
+    });
   }).catch((error) => {
     downloadIntake.settleBootstrap();
     console.error("[AdsFriendly Background] MainController failed", error);

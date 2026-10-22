@@ -1,5 +1,6 @@
 import { FILE_EXTENSIONS } from "./file-contract.js";
 import { INTAKE_REASON_LABELS } from "./intake-policy.js";
+import { FILE_AUTO_MIN_BYTES } from "./auto-check-policy.js";
 
 // Read-only presentation of observation vs ownership. This does NOT authorize
 // a transfer or change the intake policy, even when the label says checkable.
@@ -23,10 +24,9 @@ export function describeDownloadIntake(item, snapshot = {}) {
       tone: job.status === "needs_browser_attention" ? "warning" : "info",
     };
   const notes = [];
-  if (item.authorizationHints)
-    notes.push(
-      "Signed/session URL hints · Helper handoff is not supported yet.",
-    );
+  const signedNote = item.authorizationHints
+    ? "Signed/session URL · temporary link requires Helper verification."
+    : "";
   if (item.state === "complete")
     notes.push("Already completed in Chrome; no Helper transfer was started.");
   if (item.state === "interrupted")
@@ -50,7 +50,17 @@ export function describeDownloadIntake(item, snapshot = {}) {
               ? "unsupported_file_type"
               : "browser_only",
       label: `Detected · ${item.state === "complete" ? "Completed in Chrome" : item.state === "interrupted" ? "Interrupted in Chrome" : "Chrome only"}`,
-      detail: notes.join(" "),
+      detail: [
+        signedNote,
+        ...notes,
+        snapshot.autoChecks?.enabled &&
+        item.totalBytes > 0 &&
+        item.totalBytes < FILE_AUTO_MIN_BYTES
+          ? "Small file (under 8 MB) · automatic Helper check skipped."
+          : null,
+      ]
+        .filter(Boolean)
+        .join(" "),
       tone: "neutral",
     };
   if (item.assessment?.disposition !== "needs_validation")
@@ -58,11 +68,26 @@ export function describeDownloadIntake(item, snapshot = {}) {
       code: "browser_only",
       label: "Detected · Chrome only",
       detail:
-        INTAKE_REASON_LABELS[item.assessment?.reason] ||
-        "Transfer eligibility is unknown; keep in Chrome.",
+        [signedNote, INTAKE_REASON_LABELS[item.assessment?.reason]]
+          .filter(Boolean)
+          .join(" ") || "Transfer eligibility is unknown; keep in Chrome.",
       tone: "neutral",
     };
-  if (snapshot.checkErrors?.some((row) => row.browserId === item.id))
+  const automatic = snapshot.autoChecks?.items?.find(
+    (row) => row.browserId === item.id,
+  );
+  if (["queued", "checking"].includes(automatic?.status))
+    return {
+      code: "helper_checking",
+      label: "Detected · Checking with Helper",
+      detail:
+        "Chrome is still downloading. Checking the same GET file, size, ETag and Range support; no transfer has started.",
+      tone: "info",
+    };
+  if (
+    snapshot.checkErrors?.some((row) => row.browserId === item.id) ||
+    automatic?.status === "failed"
+  )
     return {
       code: "helper_check_failed",
       label: "Detected · Helper check failed",
@@ -78,11 +103,27 @@ export function describeDownloadIntake(item, snapshot = {}) {
         "Same GET file verified · confirmation required. Chrome continues until you confirm.",
       tone: "ready",
     };
+  if (automatic?.status === "closed")
+    return {
+      code: "helper_check_closed",
+      label: "Detected · Check again",
+      detail:
+        "The temporary checked session is no longer available. Chrome continues downloading; check again before transferring.",
+      tone: "neutral",
+    };
   return {
     code: "check_available",
     label: "Detected · Check available",
-    detail:
-      "HTTP file · request method and browser session not verified. Check with Helper first; no automatic takeover.",
+    detail: [
+      signedNote,
+      automatic?.reason === "small_file"
+        ? "Auto-check skipped: file under 8 MB. Chrome continues; a manual check is optional."
+        : automatic?.reason === "permission_required"
+          ? "Automatic check needs Helper permission; enable it in Settings."
+          : "HTTP file · request method and browser session not verified. Check with Helper first; no automatic takeover.",
+    ]
+      .filter(Boolean)
+      .join(" "),
     tone: "info",
   };
 }
@@ -156,6 +197,11 @@ export function buildDownloadIntakeDiagnosticReport(snapshot = {}) {
         paused: item.paused === true,
         diagnostic: diagnostic.code,
         reason: text(item.assessment?.reason, 64),
+        autoCheck: text(
+          snapshot.autoChecks?.items?.find((row) => row.browserId === item.id)
+            ?.reason,
+          64,
+        ),
       };
     }),
   };

@@ -27,6 +27,16 @@ export function createFileHandoff({
     sources = new Map(),
     errors = new Map();
   const checking = new Map();
+  const automaticChecking = new Set();
+  const subscribers = new Set();
+  function notifyChecks() {
+    for (const listener of subscribers) {
+      try {
+        listener();
+      } catch {}
+    }
+    void store.notify().catch(() => {});
+  }
   let changesAttached = false;
   let broker = null,
     ready = Promise.resolve(),
@@ -60,9 +70,10 @@ export function createFileHandoff({
     clearTimeout(ticket.timer);
     ticket.client.close();
     tickets.delete(id);
+    notifyChecks();
     if (sources.get(ticket.key) === id) sources.delete(ticket.key);
   }
-  async function check({ browserId }) {
+  async function check({ browserId, automatic = false }) {
     await ready;
     if (stopped || !Number.isInteger(browserId))
       throw Error("Invalid browser download.");
@@ -74,9 +85,11 @@ export function createFileHandoff({
     locks.add(browserId);
     const checkController = new AbortController();
     checking.set(browserId, checkController);
+    if (automatic) automaticChecking.add(browserId);
     disposeTicket(browserId);
     errors.delete(browserId);
     let reserved = null;
+    let preparedClient = null;
     try {
       const { item, row } = await verify(browserId);
       const proof = await evidence.forDownload(item);
@@ -88,6 +101,7 @@ export function createFileHandoff({
         throw Error("Chrome file size changed; keep it in Chrome.");
       const jobId = crypto.randomUUID(),
         config = await settings();
+      checkController.signal.throwIfAborted();
       const client = await prepare(
         {
           jobId,
@@ -101,6 +115,18 @@ export function createFileHandoff({
         (progress) => store.progress(jobId, progress),
         checkController.signal,
       );
+      preparedClient = client;
+      checkController.signal.throwIfAborted();
+      const fresh = await verify(browserId);
+      if (
+        fresh.item.startTime !== item.startTime ||
+        (await sourceKey(fresh.item.finalUrl || fresh.item.url)) !==
+          proof.key ||
+        (fresh.row.totalBytes !== null && fresh.row.totalBytes !== proof.size)
+      )
+        throw Error(
+          "Chrome download completed or changed during the Helper check. Keep it in Chrome.",
+        );
       if (
         epoch !== generation ||
         stopped ||
@@ -111,6 +137,7 @@ export function createFileHandoff({
       }
       const ticket = {
         browserId,
+        automatic,
         jobId,
         key: proof.key,
         checkId: crypto.randomUUID(),
@@ -118,17 +145,22 @@ export function createFileHandoff({
         browserStartTime: item.startTime,
         filename: client.filename,
         totalBytes: proof.size,
-        expiresAt: Date.now() + 30000,
+        expiresAt: Date.now() + (row.authorizationHints ? 10000 : 30000),
         timer: null,
       };
-      ticket.timer = setTimeout(() => {
-        disposeTicket(browserId);
-        void store.notify().catch(() => {});
-      }, 30000);
+      ticket.timer = setTimeout(
+        () => {
+          disposeTicket(browserId);
+          void store.notify().catch(() => {});
+        },
+        row.authorizationHints ? 10000 : 30000,
+      );
       tickets.set(browserId, ticket);
+      notifyChecks();
       await store.notify();
       return { status: "ready_for_handoff" };
     } catch (error) {
+      preparedClient?.close();
       disposeTicket(browserId);
       if (reserved && sources.get(reserved) === browserId)
         sources.delete(reserved);
@@ -137,6 +169,7 @@ export function createFileHandoff({
       throw error;
     } finally {
       checking.delete(browserId);
+      automaticChecking.delete(browserId);
       locks.delete(browserId);
     }
   }
@@ -213,6 +246,7 @@ export function createFileHandoff({
       await store.put({ ...job, status: "downloading" });
       clearTimeout(ticket.timer);
       tickets.delete(browserId);
+      notifyChecks();
       running.set(browserId, { ticket, job, promise: null });
       const operation = finish(ticket, job);
       running.get(browserId).promise = operation;
@@ -349,6 +383,8 @@ export function createFileHandoff({
       policy,
       handlers: {
         [A.BROWSER_FILE_CHECK]: check,
+        [A.BROWSER_FILE_AUTO_CHECK]: (payload) =>
+          check({ ...payload, automatic: true }),
         [A.BROWSER_FILE_ACCEPT]: accept,
         [A.BROWSER_FILE_RETURN]: returnToChrome,
         [A.BROWSER_FILE_OPEN]: (payload) =>
@@ -401,13 +437,17 @@ export function createFileHandoff({
   async function snapshot() {
     await ready;
     return {
-      checks: [...tickets.values()].map(
-        ({ browserId, checkId, expiresAt }) => ({
+      checks: [...tickets.values()]
+        .filter(
+          (ticket) =>
+            ticket.expiresAt > Date.now() &&
+            ticket.client.isReady?.() !== false,
+        )
+        .map(({ browserId, checkId, expiresAt }) => ({
           browserId,
           checkId,
           expiresAt,
-        }),
-      ),
+        })),
       checkErrors: [...errors]
         .slice(-50)
         .map(([browserId, error]) => ({ browserId, error })),
@@ -415,6 +455,21 @@ export function createFileHandoff({
     };
   }
   return {
+    subscribeChecks(listener) {
+      subscribers.add(listener);
+      return () => subscribers.delete(listener);
+    },
+    discardCheck(id, automaticOnly = false) {
+      if (
+        automaticOnly &&
+        !automaticChecking.has(id) &&
+        tickets.get(id)?.automatic !== true
+      )
+        return;
+      if (locks.has(id) && !checking.has(id)) return; // Do not cancel an explicit acceptance.
+      checking.get(id)?.abort();
+      disposeTicket(id);
+    },
     startFeature,
     snapshot,
     returnAll,

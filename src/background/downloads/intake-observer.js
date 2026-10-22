@@ -30,6 +30,14 @@ export function createBrowserDownloadIntake({
   let clearSequence = 0,
     featurePolicy = null;
   const records = new Map();
+  const subscribers = new Set();
+  function emit(event) {
+    for (const listener of subscribers) {
+      try {
+        listener(event);
+      } catch {}
+    }
+  }
 
   function accept(event) {
     if (!ready) {
@@ -110,6 +118,11 @@ export function createBrowserDownloadIntake({
       });
     } else if (event.type === "erase") records.delete(event.id);
     prune();
+    emit({
+      type: event.type,
+      row: records.get(event.row?.id ?? event.id),
+      id: event.row?.id ?? event.id,
+    });
   }
   function persist(remove = false) {
     clearTimeout(writeTimer);
@@ -146,6 +159,7 @@ export function createBrowserDownloadIntake({
     status = nextStatus;
     pending = [];
     records.clear();
+    emit({ type: "reset" });
     detach();
     void persist(true);
   }
@@ -233,11 +247,16 @@ export function createBrowserDownloadIntake({
   async function clear() {
     ++clearSequence;
     records.clear();
+    emit({ type: "reset" });
     pending = [];
     await persist(true);
     return { status: storageFailed ? "storage_error" : "cleared" };
   }
   return {
+    subscribe(listener) {
+      subscribers.add(listener);
+      return () => subscribers.delete(listener);
+    },
     bootstrap: attach,
     start,
     startFeature(policy) {

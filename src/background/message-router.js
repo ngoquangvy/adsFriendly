@@ -156,7 +156,7 @@ const MESSAGE_CAPABILITIES = Object.freeze({
 
 export function registerMessageRouter(
   policy,
-  { downloadIntake, fileHandoff } = {},
+  { downloadIntake, fileHandoff, automaticFiles } = {},
 ) {
   const onMessage = (message, sender, sendResponse) => {
     if (!policy.can(CAPABILITIES.CORE_MESSAGING)) {
@@ -175,6 +175,7 @@ export function registerMessageRouter(
         downloadIntake,
         chrome,
         fileHandoff,
+        automaticFiles,
       );
       if (result !== null) {
         Promise.resolve(result)

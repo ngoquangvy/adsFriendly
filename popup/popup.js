@@ -1506,6 +1506,123 @@ var AdsFriendlyPopup = (() => {
     return "Unavailable";
   }
 
+  // src/downloads/file-contract.js
+  var FILE_HELPER_REQUESTS = Object.freeze({
+    FILE_PREPARE: "file.prepare",
+    FILE_START: "file.start",
+    FILE_CANCEL: "file.cancel"
+  });
+  var FILE_HELPER_EVENTS = Object.freeze({
+    FILE_PREPARED: "file.prepared",
+    FILE_STARTED: "file.started",
+    FILE_PROGRESS: "file.progress",
+    FILE_COMPLETED: "file.completed",
+    FILE_CANCELLED: "file.cancelled",
+    FILE_FAILED: "file.failed"
+  });
+  var FILE_MESSAGES = Object.freeze({
+    CHECK: "CHECK_BROWSER_FILE",
+    ACCEPT: "ACCEPT_BROWSER_FILE",
+    RETURN: "RETURN_BROWSER_FILE",
+    OPEN: "OPEN_BROWSER_FILE",
+    REVEAL: "REVEAL_BROWSER_FILE"
+  });
+  var FILE_EXTENSIONS = Object.freeze([
+    "zip",
+    "7z",
+    "rar",
+    "gz",
+    "tar",
+    "pdf",
+    "txt",
+    "csv",
+    "json",
+    "xml",
+    "epub",
+    "mp4",
+    "mkv",
+    "webm",
+    "mov",
+    "mp3",
+    "m4a",
+    "ogg",
+    "flac",
+    "wav",
+    "jpg",
+    "jpeg",
+    "png",
+    "gif",
+    "webp"
+  ]);
+
+  // src/downloads/intake-policy.js
+  var INTAKE_REASON_LABELS = Object.freeze({
+    request_not_verified: "HTTP file \xB7 request method and browser session not verified",
+    authorization_not_verified: "Signed/session URL \xB7 requires Helper verification",
+    url_credentials: "URL credentials \xB7 keep in Chrome",
+    unsupported_source: "Browser-local or unsupported source \xB7 keep in Chrome",
+    browser_safety_check: "Chrome safety status not clear \xB7 keep in Chrome",
+    not_active: "Already finished or interrupted \xB7 keep in Chrome",
+    browser_paused: "Paused in Chrome",
+    not_direct_file: "Not a direct file \xB7 use the media workflow if applicable"
+  });
+
+  // src/downloads/auto-check-policy.js
+  var FILE_AUTO_MIN_BYTES = 8 * 1024 * 1024;
+  var FILE_OFFERS_MESSAGE = "GET_BROWSER_FILE_OFFERS";
+  var FILE_AUTO_CHECK_KEY = "browserFileChecks.v1";
+
+  // src/popup/browser-file-offers.js
+  function startBrowserFileOffers({ document: document2, chrome: chrome2, window: window2 }) {
+    const section = document2.getElementById("browser-file-offers");
+    if (!section) return () => {
+    };
+    let stopped = false, revision = 0;
+    async function refresh() {
+      const stamp = ++revision;
+      try {
+        const result = await chrome2.runtime.sendMessage({
+          type: FILE_OFFERS_MESSAGE
+        });
+        if (stopped || stamp !== revision) return;
+        const items = Array.isArray(result?.items) ? result.items.slice(0, 3) : [];
+        section.hidden = !items.length;
+        const list = section.querySelector(".browser-file-offer-list");
+        list.replaceChildren();
+        for (const item of items) {
+          const row = document2.createElement("div");
+          row.className = "media-details";
+          row.textContent = item.filename;
+          row.title = item.filename;
+          list.append(row);
+        }
+      } catch {
+        if (!stopped) section.hidden = true;
+      }
+    }
+    const changed = (changes, area) => {
+      if (area === "session" && FILE_AUTO_CHECK_KEY in changes) void refresh();
+    };
+    const review = () => {
+      void chrome2.tabs.create({
+        url: chrome2.runtime.getURL("options/options.html#downloads")
+      });
+    };
+    const button = section.querySelector("button");
+    button.addEventListener("click", review);
+    chrome2.storage.onChanged.addListener(changed);
+    const stop = () => {
+      stopped = true;
+      ++revision;
+      button.removeEventListener("click", review);
+      chrome2.storage.onChanged.removeListener(changed);
+      window2.removeEventListener("unload", stop);
+    };
+    window2.addEventListener("unload", stop);
+    void refresh();
+    return stop;
+  }
+
   // src/runtime/ecosystem-catalog.js
   var PRODUCT_IDS = Object.freeze({
     AD_PROTECTION: "ad-protection",
@@ -1623,6 +1740,7 @@ var AdsFriendlyPopup = (() => {
     MEDIA_NATIVE_DOWNLOAD: "media.native_download",
     BROWSER_DOWNLOAD_OBSERVE: "downloads.browser_observe",
     BROWSER_FILE_TRANSFER: "downloads.file_transfer",
+    BROWSER_FILE_AUTO_CHECK: "downloads.file_auto_check",
     VIDEO_OBSERVE: "video.observe",
     VIDEO_RESTORE_STATE: "video.restore_state",
     VIDEO_USER_ACTION: "video.user_action",
@@ -1638,6 +1756,17 @@ var AdsFriendlyPopup = (() => {
     [PROTECTION_MODES.AUTO]: 2
   });
   var CAPABILITY_CATALOG = Object.freeze({
+    [C2.BROWSER_FILE_AUTO_CHECK]: capability(
+      C2.BROWSER_FILE_AUTO_CHECK,
+      "safe",
+      T.PASSIVE,
+      {
+        availableWhenDisabled: true,
+        browserPermissions: ["downloads", "nativeMessaging"],
+        productIds: [P2.MEDIA_TOOLS],
+        requiredComponents: [R.BROWSER_EXTENSION, R.MEDIA_HELPER]
+      }
+    ),
     [C2.BROWSER_FILE_TRANSFER]: capability(
       C2.BROWSER_FILE_TRANSFER,
       "safe",
@@ -1755,8 +1884,16 @@ var AdsFriendlyPopup = (() => {
   var FEATURE_CATALOG = Object.freeze([
     feature("background.browser-file-handoff", "background", C2.CORE_MAINTENANCE, [
       C2.BROWSER_FILE_TRANSFER,
+      C2.BROWSER_FILE_AUTO_CHECK,
       C2.BROWSER_DOWNLOAD_OBSERVE
     ]),
+    feature(
+      "background.browser-file-auto-check",
+      "background",
+      C2.BROWSER_FILE_AUTO_CHECK,
+      [],
+      { enabledByDefault: false }
+    ),
     feature(
       "background.browser-download-observer",
       "background",
@@ -3559,6 +3696,7 @@ ${blobTitleKey(item.title)}`;
   var mediaManagerLink = document.getElementById("media-manager-link");
   var pageDecisionsButton = document.getElementById("page-decisions-btn");
   var pageDecisionsCount = document.getElementById("page-decisions-count");
+  startBrowserFileOffers({ document, chrome, window });
   var MODE_DESCRIPTIONS = Object.freeze({
     safe: "Verified rules; no predictive DOM actions",
     assist: "Detect and ask before hiding",

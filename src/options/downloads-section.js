@@ -15,6 +15,8 @@ export function createDownloadsSection({
   onError,
   getObserverEnabled,
   saveObserverEnabled,
+  getAutoCheckEnabled,
+  saveAutoCheckEnabled,
 }) {
   const $ = (id) => document.getElementById(id);
   const confirm = (message) => window.confirm(message);
@@ -28,6 +30,8 @@ export function createDownloadsSection({
     isActive,
     getEnabled: getObserverEnabled,
     saveEnabled: saveObserverEnabled,
+    getAutoCheckEnabled,
+    saveAutoCheckEnabled,
   });
   const historyList = createDownloadHistoryList({
     document,

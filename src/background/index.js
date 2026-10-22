@@ -15,6 +15,7 @@ import { startMediaManifestHandoffStore } from "./media-manifest-handoff.js";
 import { createBrowserDownloadIntake } from "./downloads/intake-observer.js";
 import { createDownloadRequestEvidence } from "./downloads/request-evidence.js";
 import { createFileHandoff } from "./downloads/file-handoff.js";
+import { createAutomaticFileChecks } from "./downloads/auto-file-checks.js";
 
 const requestEvidence = createDownloadRequestEvidence({ chrome });
 requestEvidence.bootstrap();
@@ -34,6 +35,11 @@ fileHandoff = createFileHandoff({
   intake: downloadIntake,
   evidence: requestEvidence,
 });
+const automaticFiles = createAutomaticFileChecks({
+  chrome,
+  intake: downloadIntake,
+  handoff: fileHandoff,
+});
 downloadIntake.bootstrap();
 
 const controller = createMainController({
@@ -41,7 +47,13 @@ const controller = createMainController({
   initialSettings: DEFAULT_SETTINGS,
   implementations: {
     "background.message-router": ({ policy }) =>
-      registerMessageRouter(policy, { downloadIntake, fileHandoff }),
+      registerMessageRouter(policy, {
+        downloadIntake,
+        fileHandoff,
+        automaticFiles,
+      }),
+    "background.browser-file-auto-check": ({ policy }) =>
+      automaticFiles.startFeature(policy),
     "background.browser-file-handoff": ({ policy }) =>
       fileHandoff.startFeature(policy),
     "background.browser-download-observer": ({ policy }) =>
@@ -93,7 +105,11 @@ controller
   .then((settings) => controller.updateSettings(settings))
   .then(() => {
     downloadIntake.settleBootstrap();
-    controller.onChange(() => downloadIntake.settleBootstrap());
+    automaticFiles.refreshIndicators();
+    controller.onChange(() => {
+      downloadIntake.settleBootstrap();
+      automaticFiles.refreshIndicators();
+    });
   })
   .catch((error) => {
     downloadIntake.settleBootstrap();
