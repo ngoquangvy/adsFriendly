@@ -1,4 +1,7 @@
-import { FILE_MESSAGES as M } from "../../downloads/file-contract.js";
+import {
+  FILE_MESSAGES as M,
+  FILE_EXTENSIONS,
+} from "../../downloads/file-contract.js";
 import {
   formatBytes,
   getMediaJobProgress,
@@ -102,7 +105,15 @@ export function createFileTransferView({
       const text = document.createElement("small");
       text.textContent = "Managed below · Chrome retained as fallback";
       controls.append(text);
-    } else if (item.assessment?.disposition === "needs_validation") {
+    } else if (
+      item.assessment?.disposition === "needs_validation" &&
+      FILE_EXTENSIONS.includes(
+        String(item.filename || "")
+          .split(".")
+          .pop()
+          .toLowerCase(),
+      )
+    ) {
       controls.append(
         checked
           ? action(

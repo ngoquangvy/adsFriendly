@@ -538,6 +538,19 @@ a {
 .file-transfer-title {
   font-weight: 600;
 }
+.browser-download-detection {
+  display: block;
+  width: fit-content;
+  margin: 0.35rem 0;
+  padding: 0.2rem 0.45rem;
+  border-radius: 0.3rem;
+  background: #243247;
+  color: #cbd5e1;
+  font-size: 0.75rem;
+}
+.browser-download-detection[data-tone="ready"] { color: #86efac; background: #163526; }
+.browser-download-detection[data-tone="info"] { color: #93c5fd; background: #17324e; }
+.browser-download-detection[data-tone="warning"] { color: #fde68a; background: #403319; }
 .download-progress-track.is-indeterminate .download-progress-bar {
   background: repeating-linear-gradient(135deg, transparent 0 7px, rgba(148, 163, 184, 0.25) 7px 14px);
   transition: none;

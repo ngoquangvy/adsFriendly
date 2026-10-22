@@ -1,5 +1,9 @@
 import { DOWNLOAD_INTAKE_MESSAGES } from "../../downloads/intake-contract.js";
-import { INTAKE_REASON_LABELS } from "../../downloads/intake-policy.js";
+import {
+  describeDownloadIntake,
+  describeDownloadObserver,
+  buildDownloadIntakeDiagnosticReport,
+} from "../../downloads/intake-diagnostics.js";
 import { formatBytes } from "../../media/download-job-view.js";
 import { createFileTransferView } from "./file-transfer-view.js";
 
@@ -28,6 +32,8 @@ export function createDownloadIntakePanel({
     bound = false,
     busy = false;
   const status = $("browser-download-intake-status");
+  const copy = $("browser-download-intake-copy");
+  let lastSnapshot = null;
   const files = createFileTransferView({
     document,
     window,
@@ -49,18 +55,10 @@ export function createDownloadIntakePanel({
         type: DOWNLOAD_INTAKE_MESSAGES.GET,
       });
       if (disposed || !isActive() || request !== revision) return;
-      const labels = {
-        off: "Off · downloads continue in Chrome",
-        starting: "Starting browser download observation…",
-        observing:
-          "Downloads stay in Chrome unless you check and confirm a Helper transfer",
-        permission_required:
-          "Downloads permission required · downloads stay in Chrome",
-      };
-      status.textContent =
-        (labels[snapshot?.status] ||
-          "Observer unavailable · reload the extension") +
-        (snapshot?.storageFailed ? " · Session storage unavailable" : "");
+      lastSnapshot = snapshot || { status: "unavailable" };
+      if (copy) copy.disabled = false;
+      const observer = describeDownloadObserver(lastSnapshot);
+      status.textContent = observer.label;
       const list = $("browser-download-observations");
       const existing = new Map(
         [...list.querySelectorAll(".browser-download-observation")].map(
@@ -73,8 +71,7 @@ export function createDownloadIntakePanel({
       if (!items.length) {
         const empty = document.createElement("p");
         empty.className = "empty-msg";
-        empty.textContent =
-          "No new browser downloads observed. Existing Chrome history is not scanned.";
+        empty.textContent = observer.empty;
         list.append(empty);
       }
       for (const [index, item] of items.entries()) {
@@ -85,6 +82,9 @@ export function createDownloadIntakePanel({
           row.dataset.browserId = item.id;
           row.append(
             document.createElement("strong"),
+            Object.assign(document.createElement("span"), {
+              className: "browser-download-detection",
+            }),
             document.createElement("div"),
             document.createElement("small"),
           );
@@ -102,14 +102,12 @@ export function createDownloadIntakePanel({
           .filter(Boolean)
           .join(" · ");
         const reason = row.querySelector("small");
-        const checked = snapshot.checks?.some(
-          (check) => check.browserId === item.id,
-        );
-        reason.textContent =
-          (checked && item.assessment?.disposition === "needs_validation"
-            ? "Checked with Helper · same GET file verified · confirmation required"
-            : INTAKE_REASON_LABELS[item.assessment?.reason]) ||
-          "Request not verified · keep in Chrome";
+        const diagnostic = describeDownloadIntake(item, snapshot);
+        row.dataset.detection = diagnostic.code;
+        const detection = row.querySelector(".browser-download-detection");
+        detection.textContent = diagnostic.label;
+        detection.dataset.tone = diagnostic.tone;
+        reason.textContent = diagnostic.detail;
         files.observation(row, item, snapshot);
         if (list.children[index] !== row)
           list.insertBefore(row, list.children[index] || null);
@@ -118,7 +116,11 @@ export function createDownloadIntakePanel({
       for (const row of existing.values()) row.remove();
       files.render(snapshot);
     } catch (error) {
-      if (request === revision && isActive()) showError(error);
+      if (request === revision && isActive()) {
+        lastSnapshot = null;
+        if (copy) copy.disabled = true;
+        showError(error);
+      }
     }
   }
   function scheduleRefresh() {
@@ -167,6 +169,37 @@ export function createDownloadIntakePanel({
       showError(error);
     }
   }
+  async function copyDiagnostics() {
+    if (disposed || !lastSnapshot || !isActive()) return;
+    try {
+      const report = JSON.stringify(
+        buildDownloadIntakeDiagnosticReport(lastSnapshot),
+        null,
+        2,
+      );
+      if (window.navigator.clipboard?.writeText)
+        await window.navigator.clipboard.writeText(report);
+      else {
+        const field = document.createElement("textarea");
+        field.value = report;
+        field.style.position = "fixed";
+        field.style.opacity = "0";
+        document.body.append(field);
+        try {
+          field.select();
+          if (!document.execCommand("copy"))
+            throw Error("Could not copy diagnostics.");
+        } finally {
+          field.remove();
+        }
+      }
+      if (!disposed)
+        status.textContent =
+          "Diagnostics copied · includes filenames and hosts, not source URLs or tokens.";
+    } catch (error) {
+      showError(error);
+    }
+  }
   const refresh = () => {
     void render();
   };
@@ -176,6 +209,7 @@ export function createDownloadIntakePanel({
     toggle.addEventListener("change", change);
     $("browser-download-intake-refresh").addEventListener("click", refresh);
     $("browser-download-intake-clear").addEventListener("click", clear);
+    copy?.addEventListener("click", copyDiagnostics);
     chrome.permissions?.onAdded?.addListener(scheduleRefresh);
     chrome.permissions?.onRemoved?.addListener(scheduleRefresh);
   }
@@ -187,6 +221,7 @@ export function createDownloadIntakePanel({
     toggle.removeEventListener("change", change);
     $("browser-download-intake-refresh").removeEventListener("click", refresh);
     $("browser-download-intake-clear").removeEventListener("click", clear);
+    copy?.removeEventListener("click", copyDiagnostics);
     chrome.permissions?.onAdded?.removeListener(scheduleRefresh);
     chrome.permissions?.onRemoved?.removeListener(scheduleRefresh);
   }

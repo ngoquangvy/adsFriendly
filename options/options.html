@@ -756,7 +756,8 @@
               <p class="section-description">
                 Optional Downloads permission. Session-only metadata: up to 50
                 entries with a one-hour visibility window. No old history scan,
-                signed URLs or private-tab records.
+                source URLs or private-tab records. Signed-link downloads are
+                shown as detected even when Helper transfer is unsupported.
               </p>
               <div class="download-manager-actions">
                 <button
@@ -773,13 +774,16 @@
                 >
                   Clear observations
                 </button>
+                <button type="button" class="btn-secondary" id="browser-download-intake-copy" disabled>
+                  Copy diagnostics
+                </button>
               </div>
               <p
                 id="browser-download-intake-status"
                 class="package-status"
                 role="status"
               >
-                Off · downloads continue in Chrome
+                Observation off · downloads are not being recorded
               </p>
               <div
                 id="browser-download-observations"

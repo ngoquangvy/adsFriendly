@@ -16,6 +16,30 @@ Old Chrome download history is not scanned. File handoff requires **Media Helper
 The UI shows filename, destination host, total size when Chrome reports it,
 browser state and a reason the source is not yet eligible for handoff.
 
+### Detection is not ownership
+
+Each observation now has an explicit **Detected** status, separate from who is
+downloading: Check available, Ready to transfer, Helper check failed, Chrome
+only, Completed/Interrupted in Chrome, or the matching Helper lifecycle state.
+Signed/session URL hints remain visible even if a small file finishes in Chrome
+before the user opens Settings. A signed link is not silently omitted merely
+because handoff is unsupported. Unsupported filename types are labelled Chrome
+only rather than offering a check the executor would reject anyway.
+
+The summary distinguishes observation off, permission required, startup,
+unavailable and an active observer with zero records. Zero records means no event
+in the current observation window, **not proof that a particular click was
+missed**: earlier downloads, private tabs and extension-created downloads remain
+outside its scope. This presentation does not change intake policy or enable
+automatic takeover.
+
+**Copy diagnostics** copies an allowlisted JSON report locally: observer state,
+storage-health flag, up to 50 basenames/hosts/sizes/browser states and diagnostic
+codes. It contains no original/final URLs, query values, output paths, cookies,
+native check IDs or free-form Helper errors. It adds no persistent log, network
+request, training sample or history scan. A failed refresh disables copying an
+old snapshot as if it were current.
+
 For an eligible in-progress file:
 
 1. **Check with Helper** requests optional Native Messaging permission directly
