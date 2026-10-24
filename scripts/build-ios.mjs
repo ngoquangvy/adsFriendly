@@ -2,6 +2,7 @@ import { build } from "esbuild";
 import { readFile, readdir } from "node:fs/promises";
 import vm from "node:vm";
 import { fileURLToPath } from "node:url";
+import "./mobile-config.mjs";
 const resources = new URL(
   "../ios/AdsFriendly_iOS/AdsFriendly_iOS Extension/Resources/",
   import.meta.url,

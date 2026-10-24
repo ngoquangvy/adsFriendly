@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "profile": "protection",
+  "modules": [
+    {
+      "id": "protection",
+      "productId": "ad-protection",
+      "title": "Protection",
+      "capabilities": [
+        "protection.settings"
+      ]
+    }
+  ],
+  "backends": {
+    "ios-safari": {
+      "directDownload": false,
+      "sourceOpen": false,
+      "youtubeResolve": false,
+      "reason": "Media module is not included in this build."
+    },
+    "ios-app": {
+      "directDownload": false,
+      "sourceOpen": false,
+      "youtubeResolve": false,
+      "reason": "Media module is not included in this build."
+    },
+    "android-app": {
+      "directDownload": false,
+      "sourceOpen": false,
+      "youtubeResolve": false,
+      "reason": "Media module is not included in this build."
+    }
+  },
+  "directFormats": []
+}

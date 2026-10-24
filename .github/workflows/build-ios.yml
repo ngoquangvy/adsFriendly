@@ -32,6 +32,7 @@ jobs:
           pnpm ios:check
           pnpm ios:settings:check
           pnpm test:ios
+          plutil -lint ios/AdsFriendly_iOS/AdsFriendly_iOS.xcodeproj/project.pbxproj
       - name: Browser smoke checks
         run: pnpm test:ios:browser
       - name: Select Xcode
@@ -48,13 +49,14 @@ jobs:
             -configuration Debug \
             -derivedDataPath build/DerivedData \
             CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
-            MARKETING_VERSION=1.1.0 \
+            MARKETING_VERSION=1.2.0 \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
             build
           APP_PATH="build/DerivedData/Build/Products/Debug-iphoneos/AdsFriendly_iOS.app"
           test -d "$APP_PATH"
+          test -f "$APP_PATH/mobile-modules.json"
           EXT_PATH="$APP_PATH/PlugIns/AdsFriendly_iOS Extension.appex"
           test -f "$EXT_PATH/utils/shared.js"
           test -f "$EXT_PATH/packages/import.html"
@@ -63,6 +65,17 @@ jobs:
           cp -R "$APP_PATH" build/Payload/
           cd build
           zip -r AdsFriendly_iOS.ipa Payload/
+      - name: Compile protection-only composition
+        working-directory: ios/AdsFriendly_iOS
+        run: |
+          set -euo pipefail
+          AF_MOBILE_PROFILE=protection node ../../scripts/mobile-config.mjs
+          xcodebuild -project AdsFriendly_iOS.xcodeproj \
+            -scheme AdsFriendly_iOS -sdk iphoneos -configuration Debug \
+            -derivedDataPath build/ProtectionOnly \
+            SWIFT_ACTIVE_COMPILATION_CONDITIONS='DEBUG AF_PROTECTION_ONLY' \
+            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO build
+          node ../../scripts/mobile-config.mjs
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:

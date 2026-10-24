@@ -80,6 +80,8 @@ Chrome save, not another settings-saving step.
 
 Safari iframe fallback matching for about:blank depends on browser support.
 Direct injection can be denied by site CSP; diagnostics report this limitation.
-Desktop-only media/video features are preserved in imported settings but are
-not implemented by this iOS app. This is not a background cloud-sync service;
+Desktop-only media/video features are preserved in imported settings. The optional
+native Media Tools module adds direct HTTPS file downloads in the containing app;
+it does not implement desktop Helper/YouTube/HLS features or modify Safari blocking.
+See [mobile acceptance gates](../docs/MOBILE_MODULES.md). This is not a background cloud-sync service;
 export/import transfers the shared package explicitly.

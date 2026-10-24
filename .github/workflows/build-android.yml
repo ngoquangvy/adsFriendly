@@ -1,0 +1,48 @@
+name: Build Android
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, 'product/**']
+    paths: ['android/**', 'src/mobile/**', 'src/runtime/ecosystem-catalog.js', 'scripts/mobile-config.mjs', '.github/workflows/build-android.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Check shared module configuration
+        run: node scripts/mobile-config.mjs --check
+      - name: Build and lint both module compositions
+        working-directory: android
+        run: sh gradlew :app:assembleFullDebug :app:assembleProtectionDebug :app:lintFullDebug :app:lintProtectionDebug --no-daemon
+      - name: Verify media is absent from core APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=android/app/build/outputs/apk/protection/debug/app-protection-debug.apk
+          ANALYZER=$(find "$ANDROID_HOME/cmdline-tools" -path '*/bin/apkanalyzer' | head -1)
+          test -n "$ANALYZER"
+          "$ANALYZER" manifest print "$APK" > android/app/build/core-manifest.txt
+          ! grep -E 'android.permission.INTERNET|android.intent.action.SEND' android/app/build/core-manifest.txt
+          "$ANALYZER" dex packages "$APK" > android/app/build/core-dex.txt
+          ! grep -F 'com.adsfriendly.mobile.media' android/app/build/core-dex.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AdsFriendly-Android-debug
+          path: android/app/build/outputs/apk/*/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14

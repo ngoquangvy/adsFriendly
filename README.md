@@ -32,3 +32,10 @@ The Chrome extension manifest loads the generated root files:
 - `injected_spy.js`
 
 Source modules live in `src/`. Architecture notes are in `docs/ARCHITECTURE.md`.
+
+## Mobile
+
+The existing iOS Safari extension remains independent of optional native Media
+Tools. Android is a standalone share-to-download app. The initial native backend
+supports direct HTTPS audio/video files, not desktop YouTube/HLS feature parity.
+See [mobile modules and build/acceptance steps](docs/MOBILE_MODULES.md).
