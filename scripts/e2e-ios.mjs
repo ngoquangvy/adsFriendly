@@ -1319,6 +1319,10 @@ try {
     testRootTarget.style.opacity = '0';
   `);
   await new Promise((resolve) => setTimeout(resolve, 250));
+  await waitForPageCondition(
+    "document.getElementById('adsfriendly-review-target')===null",
+    "A hidden review target must release its marker",
+  );
   assert.equal(
     await session.evaluate(
       "document.getElementById('adsfriendly-review-target') === null",
@@ -1349,6 +1353,10 @@ try {
     });
   `);
   await new Promise((resolve) => setTimeout(resolve, 100));
+  await waitForPageCondition(
+    "/Marked A/.test(document.querySelector('.adsfriendly-dom-message')?.textContent||'')",
+    "The link collector must present its reviewed target",
+  );
   assert.match(
     await session.evaluate(
       "document.querySelector('.adsfriendly-dom-message').textContent",
@@ -1360,6 +1368,10 @@ try {
     "document.querySelector('.adsfriendly-dom-hide').click()",
   );
   await new Promise((resolve) => setTimeout(resolve, 50));
+  await waitForPageCondition(
+    "testRootRequests.some(m=>m.type==='UPSERT_CUSTOM_RULES') && /hidden · saved/.test(document.querySelector('.adsfriendly-dom-message')?.textContent||'')",
+    "A saved collector hide must finish before verification",
+  );
   assert.equal(
     await session.evaluate(
       "testRootRequests.find(m=>m.type==='UPSERT_CUSTOM_RULES').rules[0].fingerprint.tag",
@@ -1387,10 +1399,18 @@ try {
     next.style.cssText = ''; document.body.appendChild(next); window.testNextLink = next;
   `);
   await new Promise((resolve) => setTimeout(resolve, 100));
+  await waitForPageCondition(
+    "document.querySelector('.adsfriendly-dom-hide') && getComputedStyle(testNextLink).visibility!=='hidden'",
+    "The replacement link must be available for review",
+  );
   await session.evaluate(
     "document.querySelector('.adsfriendly-dom-hide').click()",
   );
   await new Promise((resolve) => setTimeout(resolve, 50));
+  await waitForPageCondition(
+    "document.querySelector('.adsfriendly-dom-message')?.textContent==='Hidden once · storage full'",
+    "A failed save must report the local-only hide",
+  );
   assert.equal(
     await session.evaluate(
       "document.querySelector('.adsfriendly-dom-message').textContent",
@@ -1401,6 +1421,10 @@ try {
     "document.querySelector('.adsfriendly-dom-allow').click()",
   );
   await new Promise((resolve) => setTimeout(resolve, 50));
+  await waitForPageCondition(
+    "getComputedStyle(testNextLink).visibility==='visible'",
+    "Show must restore the unsaved local region",
+  );
   assert.equal(
     await session.evaluate("getComputedStyle(testNextLink).visibility"),
     "visible",
