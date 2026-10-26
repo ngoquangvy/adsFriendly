@@ -507,11 +507,26 @@
   function processElement(el) {
     if (!el.isConnected || hiddenBanners.has(el) || isProtectedNavigation(el))
       return;
-    var hinted =
-      el.matches(
-        getCurrentSitePolicy() === "block" ? bannerSignals : reviewSignals,
-      ) || el.matches("a[href]");
-    if (!hinted && !isPositionedBanner(el)) return;
+    var hinted = el.matches(
+      getCurrentSitePolicy() === "block" ? bannerSignals : reviewSignals,
+    );
+    var positioned = isPositionedBanner(el);
+    if (!hinted && !positioned) {
+      // Ordinary navigation links are common on long pages. Reject them
+      // before rich feature extraction (including sibling summaries).
+      if (!el.matches("a[href]") || !hasBannerCreativeGeometry(el)) return;
+      var href =
+        typeof el.href === "string" ? el.href : el.getAttribute("href") || "";
+      var external = false;
+      try {
+        external = new URL(href, location.href).hostname !== location.hostname;
+      } catch (_) {}
+      if (
+        !linkLooksLikeAd(el) &&
+        !(getCurrentSitePolicy() === "block" && external)
+      )
+        return;
+    }
     var inspection = inspectBanner(el);
     if (inspection.evidence.candidate)
       hideBanner(
@@ -568,6 +583,24 @@
     var nodes = document.querySelectorAll("body *");
     scanRun = { nodes, index: 0, policy: getCurrentSitePolicy() };
     scanStatus = { running: true, visited: 0, total: nodes.length, errors: 0 };
+    // Prioritize obvious overlays/slots regardless of their DOM index. The
+    // complete sweep still visits everything beyond this short priority pass.
+    var priority = document.querySelectorAll(
+      bannerSignals + ', [style*="position" i]',
+    );
+    var priorityStart = performance.now();
+    for (
+      var i = 0;
+      i < priority.length && performance.now() - priorityStart < 8;
+      i++
+    ) {
+      try {
+        processElement(priority[i]);
+      } catch (error) {
+        scanStatus.errors++;
+        log("Priority banner candidate failed:", String(error));
+      }
+    }
     scanChunk();
   }
   function startPeriodicScan() {

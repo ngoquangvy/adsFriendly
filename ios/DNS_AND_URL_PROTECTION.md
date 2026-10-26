@@ -23,6 +23,12 @@ The full DOM is scanned in coalesced slices (up to 120 nodes / 8ms per slice,
 yielding 16ms between slices), not permanently truncated at 1500. Newly inserted
 or replaced nodes trigger a later sweep. A finite scan completes before a
 coalesced retry, avoiding restarting at the head on each mutation. Automatic
+slots/positioned hints also receive a short priority pass, so an obvious overlay
+at the DOM tail need not wait for the full sweep. Ordinary non-banner navigation
+links are rejected before expensive feature/sibling extraction. The long-page
+browser fixture is additionally exercised with 4x CPU throttling in CI. Asynchronous
+assertions wait for the required DOM condition with a finite deadline and scan
+diagnostics, rather than assuming that every machine finishes in 450ms. Automatic
 metadata is re-evaluated when policy, layout, evidence or site styles change.
 Ad-owner selection includes the backdrop and close controls where supported by
 the same evidence, not only the nested image. No page close/toggle button is

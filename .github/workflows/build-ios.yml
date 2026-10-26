@@ -33,6 +33,8 @@ jobs:
           pnpm ios:settings:check
           pnpm test:ios
       - name: Browser smoke checks
+        env:
+          AF_IOS_CPU_THROTTLE: "4"
         run: pnpm test:ios:browser
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer

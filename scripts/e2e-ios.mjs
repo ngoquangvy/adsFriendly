@@ -99,6 +99,17 @@ class CDP {
     return result.result.value;
   }
 }
+async function waitForPageCondition(expression, label, timeoutMs = 8000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await session.evaluate(expression)) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  const diagnostic = await session.evaluate(
+    "JSON.stringify({policy:getCurrentSitePolicy(),visibility:document.visibilityState,scan:typeof AF_bannerScanStatus==='function'?AF_bannerScanStatus():null})",
+  );
+  throw new Error(label + ": " + diagnostic);
+}
 try {
   let logs = "";
   browserProcess = spawn(
@@ -246,6 +257,10 @@ try {
   );
   await session.evaluate("testChange('appSettings', {enabled:false})");
   await new Promise((resolve) => setTimeout(resolve, 350));
+  await waitForPageCondition(
+    "getComputedStyle(document.querySelector('.desktop-ad')).display==='flex'",
+    "Protection off restores saved desktop region",
+  );
   assert.equal(
     await session.evaluate(
       "getComputedStyle(document.querySelector('.desktop-ad')).display",
@@ -918,6 +933,10 @@ try {
     url: "http://127.0.0.1:" + server.address().port + "/late-ad-overlay",
   });
   await new Promise((resolve) => setTimeout(resolve, 650));
+  if (process.env.AF_IOS_CPU_THROTTLE)
+    await session.send("Emulation.setCPUThrottlingRate", {
+      rate: Number(process.env.AF_IOS_CPU_THROTTLE),
+    });
   await session.evaluate(`
     testChange('blacklist',['||127.0.0.1^']);
     const filler=document.createDocumentFragment();for(let i=0;i<2600;i++) filler.appendChild(document.createElement('span'));document.body.appendChild(filler);
@@ -929,6 +948,10 @@ try {
     AF_scanBanners();
   `);
   await new Promise((resolve) => setTimeout(resolve, 450));
+  await waitForPageCondition(
+    "getComputedStyle(lateOverlay).display==='none'",
+    "Late overlay must finish hiding",
+  );
   assert.equal(
     await session.evaluate("getComputedStyle(lateOverlay).display"),
     "none",
@@ -943,6 +966,10 @@ try {
     "lateOverlay.style.setProperty('display','flex','important')",
   );
   await new Promise((resolve) => setTimeout(resolve, 350));
+  await waitForPageCondition(
+    "getComputedStyle(lateOverlay).display==='none'",
+    "An active rule re-hides a rewritten overlay",
+  );
   assert.equal(
     await session.evaluate("getComputedStyle(lateOverlay).display"),
     "none",
@@ -958,6 +985,10 @@ try {
     `new Promise(resolve => messageListeners.forEach(fn=>fn({action:'set_banner_visibility',visibility:'hide'},{},resolve)))`,
   );
   await new Promise((resolve) => setTimeout(resolve, 350));
+  await waitForPageCondition(
+    "getComputedStyle(lateOverlay).display==='none'",
+    "Hide resumes strict overlay removal",
+  );
   assert.equal(
     await session.evaluate("getComputedStyle(lateOverlay).display"),
     "none",
@@ -1020,6 +1051,8 @@ try {
     "Switching Block to Default restores strict-only decisions rather than leaving the site broken",
   );
 
+  if (process.env.AF_IOS_CPU_THROTTLE)
+    await session.send("Emulation.setCPUThrottlingRate", { rate: 1 });
   // Route the local fixture through the same verified publisher profile. This
   // also exercises Default, where Block-only heuristic removal is unavailable.
   await session.evaluate(`
