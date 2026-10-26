@@ -206,6 +206,37 @@ test("banner visibility controls are extension-only and cannot target a changed 
   assert.equal(bg.created.length, 0);
   assert.equal(bg.data().whitelist, undefined);
 });
+test("individual DOM reviews require the extension and validate target, choice and current page", async () => {
+  const bg = await background();
+  const request = {
+    action: "review_dom_area",
+    tabId: 1,
+    hostname: "source.example",
+    id: "doc-area-1",
+    choice: "keep",
+  };
+  assert.ok((await bg.send(request)).error);
+  assert.ok(
+    (await bg.send({ ...request, choice: "delete" }, bg.extension)).error,
+  );
+  assert.ok(
+    (await bg.send({ ...request, id: "x".repeat(121) }, bg.extension)).error,
+  );
+  assert.ok(
+    (await bg.send({ ...request, hostname: "other.example" }, bg.extension))
+      .error,
+  );
+  assert.equal(bg.relays.length, 0);
+  bg.api.tabs.sendMessage = (...args) => {
+    const cb = args.pop();
+    bg.relays.push(args);
+    cb({ ready: true, dom: { hiddenCount: 0 } });
+  };
+  assert.equal((await bg.send(request, bg.extension)).ready, true);
+  assert.equal(bg.relays[0][1].id, "doc-area-1");
+  assert.equal(bg.relays[0][2].frameId, 0);
+  assert.equal(bg.created.length, 0);
+});
 test("DOM decisions use root exceptions and separate compact/wide rules", async () => {
   const bg = await background();
   const base = {

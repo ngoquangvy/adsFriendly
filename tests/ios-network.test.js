@@ -96,7 +96,11 @@ test("automatic banner removal requires media plus known ad evidence, not a gene
     false,
   );
 });
+function autoHideBlock(features) {
+  return shouldAutoHideIosBanner(features, { policy: "block" });
+}
 test("Block removes explicit linked-image grids and iframe slots without a known ad domain", () => {
+  const shouldAutoHideIosBanner = (features) => autoHideBlock(features);
   const grid = {
     visible: true,
     tag: "div",

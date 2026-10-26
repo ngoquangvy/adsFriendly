@@ -51,7 +51,7 @@ export function iosBuiltinDomSelectors(hostname = "") {
       : [],
   );
 }
-export function shouldAutoHideIosBanner(features = {}) {
+function isConfirmedIosBanner(features = {}) {
   if (features.inProtectedArea || !features.visible) return false;
   const media =
     ["img", "iframe", "video"].includes(features.tag) ||
@@ -99,4 +99,46 @@ export function shouldAutoHideIosBanner(features = {}) {
     features.tag === "iframe" ||
     features.descendants?.iframeCount > 0;
   return !!((explicit || inheritedSlot) && creative && linkedOrFramed);
+}
+
+// The site policy is independent of the review UI budget. Candidate discovery
+// supplies evidence; Block must not silently become Default a second time here.
+export function shouldAutoHideIosBanner(features = {}, context = {}) {
+  const policy = context.policy || "default";
+  const evidence = context.evidence || {};
+  if (
+    context.enabled === false ||
+    policy === "allow" ||
+    features.inProtectedArea ||
+    evidence.protectedContent ||
+    ["html", "head", "body", "main", "nav", "header", "form"].includes(
+      features.tag,
+    )
+  )
+    return false;
+  if (evidence.invisibleOverlay)
+    return policy === "block" && evidence.candidate === true;
+  if (!features.visible) return false;
+  if (policy === "block")
+    return evidence.candidate === true || isConfirmedIosBanner(features);
+  // Default keeps known-resource filtering and only auto-removes uncertain
+  // placements when independent close-control and advertising signals agree.
+  const media =
+    ["img", "iframe", "video"].includes(features.tag) ||
+    (features.descendants?.imageCount || 0) +
+      (features.descendants?.iframeCount || 0) >
+      0;
+  const known =
+    [features.src, features.href].some(isKnownAdUrl) ||
+    [
+      ...(features.descendants?.hrefHosts || []),
+      ...(features.descendants?.srcHosts || []),
+    ].some((host) =>
+      IOS_AD_HOSTS.some((ad) => host === ad || host.endsWith("." + ad)),
+    );
+  return !!(
+    (media && known && (features.textLength || 0) <= 240) ||
+    (evidence.closeButton &&
+      (evidence.directAdLink || (evidence.adContent && evidence.geometry)))
+  );
 }

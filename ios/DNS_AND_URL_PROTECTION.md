@@ -1,4 +1,51 @@
-# iOS 1.2.2: Safari URL blocking, banner recovery and DNS v1
+# iOS 1.3.0: distinct site policies and individual area recovery
+
+## Restore the Block baseline (1.3.0)
+
+The ba63595 iOS detector automatically removed discovered banner candidates in
+Block, including unknown outbound image banners, text/CSS slots, large closeable
+overlays and invisible click catchers. Later refactors narrowed this to a
+media/known-signal subset and capped positioned scanning at 1500 nodes. The 1.2.x
+patches restored individual patterns, not the original general policy coverage.
+
+1.3.0 separates policy from candidate discovery and from review budgets:
+
+- Allow bypasses DOM/banner intervention on the website.
+- Default retains known-ad filtering and corroborated close/ad evidence, while
+  uncertain candidates use the quiet review UI.
+- Block automatically removes discovered banner-like external links, explicit
+  slots, closeable large overlays and pointer-catching invisible layers. An
+  external image can be a false positive by design in Block; Keep or Default is
+  the correction. Protected navigation, forms, page shells, player controls and
+  saved Keep exceptions remain protected in every policy.
+
+The full DOM is scanned in coalesced slices (up to 120 nodes / 8ms per slice,
+yielding 16ms between slices), not permanently truncated at 1500. Newly inserted
+or replaced nodes trigger a later sweep. A finite scan completes before a
+coalesced retry, avoiding restarting at the head on each mutation. Automatic
+metadata is re-evaluated when policy, layout, evidence or site styles change.
+Ad-owner selection includes the backdrop and close controls where supported by
+the same evidence, not only the nested image. No page close/toggle button is
+programmatically clicked. The review popup budget never limits automatic hides.
+
+Safari popup > Review individual areas exposes up to 20 current regions:
+Show once is document-local; Keep writes the existing root-compatible,
+layout-scoped exception; Hide again writes the reverse decision. Saved Keep
+targets can be reviewed again after reload. Labels contain bounded element/host
+identities and dimensions, not URL queries or copied HTML. All UI labels are text.
+Opaque document-scoped tokens reject stale/replaced targets; only extension pages
+may request actions and the background validates the current tab hostname.
+Storage errors remain errors, with Show once available as a separate recovery.
+More regions appear as the first set is reviewed. No unsolicited popup train or
+new permission is added. The all-page Show/Hide control remains temporary.
+
+Validation includes three-policy unit tests; browser fixtures for the DOM/link
+tail, text/CSS ads, transparent traps, passive layers, protected forms/navigation,
+owner restoration, Keep across fresh documents, reversal, stale tokens, quota
+failure, XSS-resistant labels and 320–768px review controls. Native XCTest also
+loads the packaged JS in WKWebView using a simulated request (no live network),
+checks a 2600-node fixture, and verifies Block -> Default -> Allow. This validates
+WebKit but is not a claim of complete coverage on every live Safari website.
 
 ## Late overlay owner regression (1.2.2)
 

@@ -1669,7 +1669,7 @@
       ] : []
     );
   }
-  function shouldAutoHideIosBanner(features = {}) {
+  function isConfirmedIosBanner(features = {}) {
     if (features.inProtectedArea || !features.visible) return false;
     const media = ["img", "iframe", "video"].includes(features.tag) || (features.descendants?.imageCount || 0) + (features.descendants?.iframeCount || 0) > 0;
     if (!media) return false;
@@ -1693,12 +1693,37 @@
     const linkedOrFramed = features.linkExternal || features.descendants?.externalLinkCount > 0 || features.tag === "iframe" || features.descendants?.iframeCount > 0;
     return !!((explicit || inheritedSlot) && creative && linkedOrFramed);
   }
+  function shouldAutoHideIosBanner(features = {}, context = {}) {
+    const policy = context.policy || "default";
+    const evidence = context.evidence || {};
+    if (context.enabled === false || policy === "allow" || features.inProtectedArea || evidence.protectedContent || ["html", "head", "body", "main", "nav", "header", "form"].includes(
+      features.tag
+    ))
+      return false;
+    if (evidence.invisibleOverlay)
+      return policy === "block" && evidence.candidate === true;
+    if (!features.visible) return false;
+    if (policy === "block")
+      return evidence.candidate === true || isConfirmedIosBanner(features);
+    const media = ["img", "iframe", "video"].includes(features.tag) || (features.descendants?.imageCount || 0) + (features.descendants?.iframeCount || 0) > 0;
+    const known = [features.src, features.href].some(isKnownAdUrl) || [
+      ...features.descendants?.hrefHosts || [],
+      ...features.descendants?.srcHosts || []
+    ].some(
+      (host) => IOS_AD_HOSTS.some((ad) => host === ad || host.endsWith("." + ad))
+    );
+    return !!(media && known && (features.textLength || 0) <= 240 || evidence.closeButton && (evidence.directAdLink || evidence.adContent && evidence.geometry));
+  }
 
   // src/ios/dom-state.js
   function createHiddenElements({ limit = 500 } = {}) {
     const hidden = /* @__PURE__ */ new Map();
     return {
       has: (element) => hidden.has(element),
+      entries: () => [...hidden].map(([element, saved]) => ({
+        element,
+        metadata: saved.metadata
+      })),
       hide(element, metadata) {
         if (hidden.has(element) || hidden.size >= limit) return false;
         hidden.set(element, {

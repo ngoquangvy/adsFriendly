@@ -251,15 +251,41 @@
 
   api.runtime.onMessage.addListener(function (message, sender, sendResponse) {
     if (message.action === "protection_probe") {
-      AF_CONFIG.ready.then(function() {
-        sendResponse({ready: !!window.AF_DOM, enabled: isProtectionEnabled(),
-          host: window.location.hostname, version: "1.2.2", dom: window.AF_DOM?.state()});
+      AF_CONFIG.ready.then(function () {
+        sendResponse({
+          ready: !!window.AF_DOM,
+          enabled: isProtectionEnabled(),
+          host: window.location.hostname,
+          version: "1.3.0",
+          dom: window.AF_DOM?.state(),
+        });
       });
       return true;
     }
-    if (message.action === "set_banner_visibility" && ["hide", "show"].includes(message.visibility)) {
-      AF_CONFIG.ready.then(function() {
-        sendResponse({ready: !!window.AF_DOM, dom: window.AF_DOM?.setVisibility(message.visibility)});
+    if (
+      message.action === "set_banner_visibility" &&
+      ["hide", "show"].includes(message.visibility)
+    ) {
+      AF_CONFIG.ready.then(function () {
+        sendResponse({
+          ready: !!window.AF_DOM,
+          dom: window.AF_DOM?.setVisibility(message.visibility),
+        });
+      });
+      return true;
+    }
+    if (message.action === "review_dom_area") {
+      AF_CONFIG.ready.then(async function () {
+        try {
+          sendResponse({
+            ready: true,
+            dom: await AF_DOM.changeArea(message.id, message.choice),
+          });
+        } catch (error) {
+          sendResponse({
+            error: error.message || "Could not change this area.",
+          });
+        }
       });
       return true;
     }

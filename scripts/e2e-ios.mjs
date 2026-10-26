@@ -714,10 +714,15 @@ try {
   );
   assert.equal(
     await session.evaluate(
-      "[normalHero,normalPoster,protectedNav,keptGrid.querySelector('#kept-creative')].every(fixtureVisible)",
+      "[normalPoster,protectedNav,keptGrid.querySelector('#kept-creative')].every(fixtureVisible)",
     ),
     true,
-    "Normal heroes, posters, navigation and a kept creative inside an ad grid stay visible",
+    "Internal posters, navigation and a kept creative inside an ad grid stay visible",
+  );
+  assert.equal(
+    await session.evaluate("fixtureVisible(normalHero)"),
+    false,
+    "Block deliberately includes unknown externally linked image banners; Default/Keep are the recovery",
   );
   assert.equal(
     await session.evaluate(
@@ -775,6 +780,138 @@ try {
     true,
   );
 
+  // Individual corrections must not require showing every ad or weakening Block.
+  const reviewStorageMock = `
+    const originalReviewSend=chrome.runtime.sendMessage;
+    chrome.runtime.sendMessage=function(m,cb){
+      if(m.action!=='save_dom_decision'||testFailSave) return originalReviewSend(m,cb);
+      testMessages.push(m);
+      const custom={...testData.userCustomRules},exceptions={...testData.userElementExceptions};
+      const matches=r=>r.selector===m.selector&&r.layout===m.layout;
+      custom[m.hostname]=(custom[m.hostname]||[]).filter(r=>!matches(r));
+      exceptions[m.hostname]=(exceptions[m.hostname]||[]).filter(r=>!matches(r));
+      const exception=AFShared.createElementException({selector:m.selector,features:m.features},{layout:m.layout});
+      if(m.decision==='show') exceptions[m.hostname].push(exception);
+      else custom[m.hostname].push({selector:m.selector,layout:m.layout,fingerprint:exception.fingerprint});
+      testChange('userCustomRules',custom);testChange('userElementExceptions',exceptions);cb({status:'saved'});
+    };
+    window.reviewCommand=(id,choice)=>new Promise(resolve=>messageListeners.forEach(fn=>fn({action:'review_dom_area',id,choice},{},resolve)));
+  `;
+  await session.evaluate(reviewStorageMock);
+  const heroArea = await session.evaluate(
+    "AF_DOM.state().areas.find(area=>area.label.includes('hero-banner'))",
+  );
+  assert.ok(
+    heroArea,
+    "A strictly blocked region must be discoverable in individual-area review",
+  );
+  const beforeOnce = await session.evaluate(
+    "JSON.stringify([testData.userCustomRules,testData.userElementExceptions])",
+  );
+  assert.equal(
+    (
+      await session.evaluate(
+        `reviewCommand(${JSON.stringify(heroArea.id)},'show_once')`,
+      )
+    ).ready,
+    true,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  assert.equal(
+    await session.evaluate(
+      "fixtureVisible(normalHero) && !fixtureVisible(siteFooter)",
+    ),
+    true,
+    "Show once restores only the selected region while other ads stay blocked",
+  );
+  assert.equal(
+    await session.evaluate(
+      "JSON.stringify([testData.userCustomRules,testData.userElementExceptions])",
+    ),
+    beforeOnce,
+  );
+  let shownHero = await session.evaluate(
+    "AF_DOM.state().areas.find(area=>area.label.includes('hero-banner'))",
+  );
+  await session.evaluate(
+    `reviewCommand(${JSON.stringify(shownHero.id)},'hide')`,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  assert.equal(await session.evaluate("fixtureVisible(normalHero)"), false);
+  let hiddenHero = await session.evaluate(
+    "AF_DOM.state().areas.find(area=>area.label.includes('hero-banner'))",
+  );
+  await session.evaluate("testFailSave=true");
+  assert.match(
+    (
+      await session.evaluate(
+        `reviewCommand(${JSON.stringify(hiddenHero.id)},'keep')`,
+      )
+    ).error,
+    /Storage full/,
+  );
+  assert.equal(
+    await session.evaluate("fixtureVisible(normalHero)"),
+    false,
+    "A failed Keep must not claim success or silently unhide the target",
+  );
+  await session.evaluate("testFailSave=false");
+  await session.evaluate(
+    `reviewCommand(${JSON.stringify(hiddenHero.id)},'keep')`,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  assert.equal(await session.evaluate("fixtureVisible(normalHero)"), true);
+  const keptData = await session.evaluate("testData");
+  const restoredRules = await session.send(
+    "Page.addScriptToEvaluateOnNewDocument",
+    {
+      source:
+        `Object.entries(${JSON.stringify(keptData)}).forEach(([k,v])=>testChange(k,v));` +
+        reviewStorageMock,
+    },
+  );
+  await session.send("Page.navigate", {
+    url: "http://127.0.0.1:" + server.address().port + "/remembered-area",
+  });
+  await new Promise((resolve) => setTimeout(resolve, 650));
+  await session.evaluate(`
+    window.revisitedHero=document.createElement('div');revisitedHero.className='hero-banner';revisitedHero.style.cssText='width:350px;height:70px';
+    revisitedHero.innerHTML='<a href="https://news.example/placement" style="display:block;width:350px;height:70px"><img style="width:350px;height:70px"></a>';
+    revisitedHero.querySelector('img').src='data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="350" height="70"><rect width="350" height="70" fill="gold"/></svg>');
+    document.body.appendChild(revisitedHero);AF_scanBanners();
+  `);
+  await new Promise((resolve) => setTimeout(resolve, 450));
+  assert.notEqual(
+    await session.evaluate("getComputedStyle(revisitedHero).display"),
+    "none",
+    "Keep survives a fresh document in Block",
+  );
+  assert.match(
+    (
+      await session.evaluate(
+        `reviewCommand(${JSON.stringify(hiddenHero.id)},'show_once')`,
+      )
+    ).error,
+    /changed/,
+    "An old document token cannot affect a new page",
+  );
+  const keptHero = await session.evaluate(
+    "AF_DOM.state().areas.find(area=>area.label.includes('hero-banner'))",
+  );
+  assert.equal(keptHero.state, "kept");
+  await session.evaluate(
+    `reviewCommand(${JSON.stringify(keptHero.id)},'hide')`,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  assert.equal(
+    await session.evaluate("getComputedStyle(revisitedHero).display"),
+    "none",
+    "Hide again reverses a remembered Keep",
+  );
+  await session.send("Page.removeScriptToEvaluateOnNewDocument", {
+    identifier: restoredRules.identifier,
+  });
+
   // Full-page ad owners can be appended after thousands of normal nodes. Hiding
   // just their image must not leave a dimming/click-catching layer and close X.
   await session.send("Page.navigate", {
@@ -829,11 +966,60 @@ try {
     window.replacedOverlay=lateOverlay.cloneNode(true);replacedOverlay.id='_preload-ads-2';replacedOverlay.style.display='flex';document.body.appendChild(replacedOverlay);
   `);
   await new Promise((resolve) => setTimeout(resolve, 450));
+  for (
+    let attempt = 0;
+    attempt < 100 &&
+    (await session.evaluate(
+      "getComputedStyle(replacedOverlay).display !== 'none'",
+    ));
+    attempt++
+  )
+    await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(
     await session.evaluate("getComputedStyle(replacedOverlay).display"),
     "none",
     "A late replacement overlay must be caught by the observer without a manual rescan",
   );
+  await session.evaluate(`
+    const ordinaryLinks=document.createDocumentFragment();for(let i=0;i<650;i++){const a=document.createElement('a');a.href='/internal/'+i;a.textContent='Internal link';ordinaryLinks.appendChild(a);}document.body.appendChild(ordinaryLinks);
+    const svgContainer=document.createElement('div');svgContainer.className='banner';svgContainer.innerHTML='<svg width="100" height="70"><a href="/internal/svg"><rect width="100" height="70"/></a></svg>';document.body.appendChild(svgContainer);
+    window.unknownLinkedBanner=document.createElement('a');unknownLinkedBanner.href='https://new-sponsor.test/placement';unknownLinkedBanner.style.cssText='display:block;width:300px;height:70px;background:gold';document.body.appendChild(unknownLinkedBanner);
+    window.cssAd=document.createElement('div');cssAd.className='ad-slot';cssAd.style.cssText='width:300px;height:70px;background:gold';cssAd.textContent='Advertisement';document.body.appendChild(cssAd);
+    window.invisibleTrap=document.createElement('div');invisibleTrap.id='neutral-click-layer';invisibleTrap.style.cssText='position:fixed;inset:0;width:100vw;height:100vh;opacity:0;pointer-events:auto;z-index:99990';document.body.appendChild(invisibleTrap);
+    window.passiveLayer=document.createElement('div');passiveLayer.style.cssText='position:fixed;inset:0;opacity:0;pointer-events:none';document.body.appendChild(passiveLayer);
+    AF_scanBanners();
+  `);
+  for (
+    let attempt = 0;
+    attempt < 120 &&
+    (await session.evaluate(
+      "[unknownLinkedBanner,cssAd,invisibleTrap].some(el=>getComputedStyle(el).display !== 'none')",
+    ));
+    attempt++
+  )
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(
+    await session.evaluate(
+      "[unknownLinkedBanner,cssAd,invisibleTrap].every(el=>getComputedStyle(el).display==='none')",
+    ),
+    true,
+    "Block must cover the DOM/link tail, CSS-only ad slots and invisible click-catching overlays without a domain-specific rule",
+  );
+  assert.notEqual(
+    await session.evaluate("getComputedStyle(passiveLayer).display"),
+    "none",
+    "A passive transparent layer must not be mistaken for a click catcher",
+  );
+  await session.evaluate("testChange('blacklist',[])");
+  await new Promise((resolve) => setTimeout(resolve, 450));
+  assert.equal(
+    await session.evaluate(
+      "[unknownLinkedBanner,cssAd,invisibleTrap].every(el=>getComputedStyle(el).display!=='none')",
+    ),
+    true,
+    "Switching Block to Default restores strict-only decisions rather than leaving the site broken",
+  );
+
   // Route the local fixture through the same verified publisher profile. This
   // also exercises Default, where Block-only heuristic removal is unavailable.
   await session.evaluate(`
@@ -953,6 +1139,49 @@ try {
     true,
     "Toolbar controls fit the phone viewport",
   );
+  await session.evaluate(`
+    toolbarState.content.dom.areas=[{id:'fixture-area',label:'Overlay · <img src=x onerror=alert(1)>',state:'hidden'}];
+    loadState();document.getElementById('area-review').open=true;
+  `);
+  assert.equal(
+    await session.evaluate(
+      "document.querySelectorAll('#area-list button').length",
+    ),
+    2,
+  );
+  assert.equal(
+    await session.evaluate("document.querySelector('#area-list img')===null"),
+    true,
+    "Website-derived labels must render as text, not HTML",
+  );
+  await session.evaluate("document.querySelector('#area-list button').click()");
+  assert.equal(
+    await session.evaluate(
+      "testMessages.find(m=>m.action==='review_dom_area').choice",
+    ),
+    "show_once",
+  );
+  assert.equal(
+    await session.evaluate(
+      "testMessages.find(m=>m.action==='review_dom_area').id",
+    ),
+    "fixture-area",
+  );
+  for (const width of [320, 390, 768]) {
+    await session.send("Emulation.setDeviceMetricsOverride", {
+      width,
+      height: 844,
+      deviceScaleFactor: 1,
+      mobile: width < 768,
+    });
+    assert.equal(
+      await session.evaluate(
+        "document.documentElement.scrollWidth<=innerWidth",
+      ),
+      true,
+      "Individual area controls must fit a phone",
+    );
+  }
   await session.send("Page.removeScriptToEvaluateOnNewDocument", {
     identifier: toolbarSeed.identifier,
   });

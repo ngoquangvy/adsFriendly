@@ -17,15 +17,28 @@ function callbackTask(operation) {
   );
 }
 async function probeContent(tabId) {
-  if (!Number.isInteger(tabId)) return {ready: false};
+  if (!Number.isInteger(tabId)) return { ready: false };
   var timeout;
   try {
-    return await Promise.race([
-      AFShared.callApi(bgApi.tabs, "sendMessage", tabId, {action: "protection_probe"}, {frameId: 0}),
-      new Promise(resolve => { timeout = setTimeout(() => resolve({ready: false}), 750); }),
-    ]) || {ready: false};
-  } catch (_) { return {ready: false}; }
-  finally { clearTimeout(timeout); }
+    return (
+      (await Promise.race([
+        AFShared.callApi(
+          bgApi.tabs,
+          "sendMessage",
+          tabId,
+          { action: "protection_probe" },
+          { frameId: 0 },
+        ),
+        new Promise((resolve) => {
+          timeout = setTimeout(() => resolve({ ready: false }), 750);
+        }),
+      ])) || { ready: false }
+    );
+  } catch (_) {
+    return { ready: false };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 function extensionPage(sender) {
   var prefix = bgApi.runtime.getURL("");
@@ -45,6 +58,7 @@ bgApi.runtime.onMessage.addListener(function (request, sender, sendResponse) {
     "flush_telemetry",
     "get_popup_state",
     "set_banner_visibility",
+    "review_dom_area",
     "set_site_policy",
     "set_app_settings",
     "reset_blocked_count",
@@ -85,6 +99,7 @@ bgApi.runtime.onMessage.addListener(function (request, sender, sendResponse) {
         "set_app_settings",
         "reset_blocked_count",
         "set_banner_visibility",
+        "review_dom_area",
       ].includes(request.action) &&
       !extensionPage(sender)
     )
@@ -141,15 +156,42 @@ bgApi.runtime.onMessage.addListener(function (request, sender, sendResponse) {
       return { status: "saved" };
     }
     if (request.action === "get_popup_rules") return bgGetPopupRules();
-    if (request.action === "set_banner_visibility") {
-      if (!Number.isInteger(request.tabId) || !["hide", "show"].includes(request.visibility))
-        throw new Error("Choose Hide or Show on the current page.");
+    if (
+      request.action === "set_banner_visibility" ||
+      request.action === "review_dom_area"
+    ) {
+      if (
+        !Number.isInteger(request.tabId) ||
+        (request.action === "set_banner_visibility"
+          ? !["hide", "show"].includes(request.visibility)
+          : !["show_once", "keep", "hide"].includes(request.choice) ||
+            typeof request.id !== "string" ||
+            request.id.length > 120)
+      )
+        throw new Error("Choose a valid action on the current page.");
       var page = await AFShared.callApi(bgApi.tabs, "get", request.tabId);
-      if (!AFShared.httpUrl(page.url) || new URL(page.url).hostname !== AFSettingsPackage.normalizeHost(request.hostname))
+      if (
+        !AFShared.httpUrl(page.url) ||
+        new URL(page.url).hostname !==
+          AFSettingsPackage.normalizeHost(request.hostname)
+      )
         throw new Error("The page changed. Reopen the Safari popup.");
-      var result = await AFShared.callApi(bgApi.tabs, "sendMessage", request.tabId,
-        {action: "set_banner_visibility", visibility: request.visibility}, {frameId: 0});
-      if (!result?.ready) throw new Error("Reload the page and check extension website access.");
+      var result = await AFShared.callApi(
+        bgApi.tabs,
+        "sendMessage",
+        request.tabId,
+        request.action === "set_banner_visibility"
+          ? { action: "set_banner_visibility", visibility: request.visibility }
+          : {
+              action: "review_dom_area",
+              id: request.id,
+              choice: request.choice,
+            },
+        { frameId: 0 },
+      );
+      if (result?.error) throw new Error(result.error);
+      if (!result?.ready)
+        throw new Error("Reload the page and check extension website access.");
       return result;
     }
     if (request.action === "flush_telemetry") {
@@ -171,8 +213,12 @@ bgApi.runtime.onMessage.addListener(function (request, sender, sendResponse) {
         blockedCount: snapshot.blockedCount || 0,
         siteBlockedCount: snapshot.afsBlockedByHost[hostname]?.total || 0,
         packageState: snapshot.settingsPackageState || null,
-        network: window.bgGetNetworkState ? bgGetNetworkState() : {state: "unavailable"},
-        content: extensionPage(sender) ? await probeContent(request.tabId) : {ready: false},
+        network: window.bgGetNetworkState
+          ? bgGetNetworkState()
+          : { state: "unavailable" },
+        content: extensionPage(sender)
+          ? await probeContent(request.tabId)
+          : { ready: false },
       };
     }
     if (request.action === "set_site_policy") {
@@ -284,7 +330,11 @@ bgApi.runtime.onMessage.addListener(function (request, sender, sendResponse) {
         };
         await storage.set(updates);
         var saved = await storage.get(Object.keys(updates));
-        if (!Object.keys(updates).every(key => AFShared.storageValuesEqual(saved[key], updates[key])))
+        if (
+          !Object.keys(updates).every((key) =>
+            AFShared.storageValuesEqual(saved[key], updates[key]),
+          )
+        )
           throw new Error("Storage verification failed for this DOM choice.");
       });
       return { status: "saved", decision: request.decision };

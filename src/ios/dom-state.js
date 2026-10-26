@@ -3,6 +3,11 @@ export function createHiddenElements({ limit = 500 } = {}) {
   const hidden = new Map();
   return {
     has: (element) => hidden.has(element),
+    entries: () =>
+      [...hidden].map(([element, saved]) => ({
+        element,
+        metadata: saved.metadata,
+      })),
     hide(element, metadata) {
       if (hidden.has(element) || hidden.size >= limit) return false;
       hidden.set(element, {
