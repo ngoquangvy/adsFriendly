@@ -21,7 +21,46 @@ class ViewController: UIViewController, WKNavigationDelegate, WKScriptMessageHan
         self.webView.configuration.userContentController.add(self, name: "controller")
 
         self.webView.loadFileURL(Bundle.main.url(forResource: "Main", withExtension: "html")!, allowingReadAccessTo: Bundle.main.resourceURL!)
+
+        // Optional native media composition leaves the DNS/Safari bridge independent.
+        webView.autoresizingMask = []
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        var bottom = view.safeAreaLayoutGuide.bottomAnchor
+        #if !AF_PROTECTION_ONLY
+        if let catalog = try? MobileModuleCatalog.load(), catalog.includes("media") {
+            let button = UIButton(type: .system)
+            button.setTitle("Media Tools · Downloads", for: .normal)
+            button.accessibilityIdentifier = "media-downloads"
+            button.titleLabel?.font = .preferredFont(forTextStyle: .headline)
+            button.backgroundColor = .secondarySystemBackground
+            button.layer.cornerRadius = 12
+            button.addTarget(self, action: #selector(openMedia), for: .touchUpInside)
+            button.translatesAutoresizingMaskIntoConstraints = false
+            view.addSubview(button)
+            NSLayoutConstraint.activate([
+                button.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 16),
+                button.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
+                button.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -8),
+                button.heightAnchor.constraint(greaterThanOrEqualToConstant: 48)
+            ])
+            bottom = button.topAnchor
+        }
+        #endif
+        NSLayoutConstraint.activate([
+            webView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            webView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
+            webView.bottomAnchor.constraint(equalTo: bottom, constant: -8)
+        ])
     }
+
+    #if !AF_PROTECTION_ONLY
+    @objc private func openMedia() {
+        guard presentedViewController == nil,
+              let catalog = try? MobileModuleCatalog.load(), catalog.includes("media") else { return }
+        present(UINavigationController(rootViewController: MobileDownloadsViewController(catalog: catalog)), animated: true)
+    }
+    #endif
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         // Override point for customization.

@@ -32,6 +32,7 @@ jobs:
           pnpm ios:check
           pnpm ios:settings:check
           pnpm test:ios
+          plutil -lint ios/AdsFriendly_iOS/AdsFriendly_iOS.xcodeproj/project.pbxproj
       - name: Browser smoke checks
         env:
           AF_IOS_CPU_THROTTLE: "4"
@@ -40,7 +41,7 @@ jobs:
         run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
       - name: Show Xcode version
         run: xcodebuild -version
-      - name: Native iOS tests (DNS and WebKit protection)
+      - name: Native iOS tests (media, DNS and WebKit protection)
         timeout-minutes: 12
         working-directory: ios/AdsFriendly_iOS
         run: |
@@ -60,7 +61,7 @@ jobs:
             -configuration Debug \
             -derivedDataPath build/DerivedData \
             CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
-            MARKETING_VERSION=1.3.0 \
+            MARKETING_VERSION=1.4.0 \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
@@ -73,10 +74,31 @@ jobs:
           test -f "$EXT_PATH/packages/default-settings-package.json"
           test -f "$EXT_PATH/packages/advertising-rules.json"
           test -f "$APP_PATH/DNS.js"
+          test -f "$APP_PATH/mobile-modules.json"
+          python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); assert c["profile"] == "full"; assert "media" in [m["id"] for m in c["modules"]]' "$APP_PATH/mobile-modules.json"
           mkdir -p build/Payload
           cp -R "$APP_PATH" build/Payload/
           cd build
           zip -r AdsFriendly_iOS.ipa Payload/
+      - name: Compile without media and verify composition
+        working-directory: ios/AdsFriendly_iOS
+        run: |
+          set -euo pipefail
+          trap 'node ../../scripts/mobile-config.mjs' EXIT
+          AF_MOBILE_PROFILE=protection node ../../scripts/mobile-config.mjs
+          xcodebuild -project AdsFriendly_iOS.xcodeproj \
+            -scheme AdsFriendly_iOS -sdk iphoneos -configuration Debug \
+            -derivedDataPath build/ProtectionOnly \
+            SWIFT_ACTIVE_COMPILATION_CONDITIONS='DEBUG AF_PROTECTION_ONLY' \
+            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO build
+          CORE_APP="build/ProtectionOnly/Build/Products/Debug-iphoneos/AdsFriendly_iOS.app"
+          python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); assert c["profile"] == "protection"; assert [m["id"] for m in c["modules"]] == ["protection"]; assert not c["directFormats"]' "$CORE_APP/mobile-modules.json"
+          for binary in "$CORE_APP/AdsFriendly_iOS" "$CORE_APP"/*.dylib; do
+            if test -f "$binary"; then nm "$binary" >> build/protection-symbols.txt; fi
+          done
+          if grep -E 'MobileDownloadStore|MobileSourceProbe|MobileDownloadsViewController' build/protection-symbols.txt; then
+            echo "Unexpected media implementation in protection-only app"; exit 1
+          fi
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:

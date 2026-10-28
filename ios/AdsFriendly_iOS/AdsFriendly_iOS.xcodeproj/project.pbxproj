@@ -7,6 +7,11 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		AF1000000000000000000011 /* MobileModuleCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF1000000000000000000001; };
+		AF1000000000000000000012 /* MobileSourceProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF1000000000000000000002; };
+		AF1000000000000000000013 /* MobileDownloadStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF1000000000000000000003; };
+		AF1000000000000000000014 /* MobileDownloadsViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF1000000000000000000004; };
+		AF1000000000000000000015 /* mobile-modules.json in Resources */ = {isa = PBXBuildFile; fileRef = AF1000000000000000000005; };
     AFD000012FD18DFE00001364 /* DNS.js in Resources */ = {isa = PBXBuildFile; fileRef = AFD000022FD18DFE00001364 /* DNS.js */; };
 		C1980DC92FD18DFE00001364 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1980DC82FD18DFE00001364 /* AppDelegate.swift */; };
 		C1980DCD2FD18DFE00001364 /* Main.html in Resources */ = {isa = PBXBuildFile; fileRef = C1980DCB2FD18DFE00001364 /* Main.html */; };
@@ -75,6 +80,11 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		AF1000000000000000000001 /* MobileModuleCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileModuleCatalog.swift; sourceTree = "<group>"; };
+		AF1000000000000000000002 /* MobileSourceProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileSourceProbe.swift; sourceTree = "<group>"; };
+		AF1000000000000000000003 /* MobileDownloadStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileDownloadStore.swift; sourceTree = "<group>"; };
+		AF1000000000000000000004 /* MobileDownloadsViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileDownloadsViewController.swift; sourceTree = "<group>"; };
+		AF1000000000000000000005 /* mobile-modules.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "mobile-modules.json"; sourceTree = "<group>"; };
     AFD000022FD18DFE00001364 /* DNS.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = DNS.js; sourceTree = "<group>"; };
 		C1980DC52FD18DFE00001364 /* AdsFriendly_iOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AdsFriendly_iOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C1980DC82FD18DFE00001364 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
@@ -141,6 +151,12 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		AF1000000000000000000006 /* Modules */ = {
+			isa = PBXGroup;
+			children = (AF1000000000000000000001, AF1000000000000000000002, AF1000000000000000000003, AF1000000000000000000004, );
+			path = Modules;
+			sourceTree = "<group>";
+		};
 		C1980DBC2FD18DFE00001364 = {
 			isa = PBXGroup;
 			children = (
@@ -167,6 +183,7 @@
 			isa = PBXGroup;
 			children = (
 				C1980DC82FD18DFE00001364 /* AppDelegate.swift */,
+				AF1000000000000000000006 /* Modules */,
 				C1980DD22FD18DFE00001364 /* SceneDelegate.swift */,
 				C1980DD42FD18DFE00001364 /* ViewController.swift */,
 				C1980DD62FD18DFE00001364 /* LaunchScreen.storyboard */,
@@ -182,6 +199,7 @@
 			isa = PBXGroup;
 			children = (
 				C1980DCB2FD18DFE00001364 /* Main.html */,
+				AF1000000000000000000005 /* mobile-modules.json */,
 				C1980DCE2FD18DFE00001364 /* Icon.png */,
 				C1980DD02FD18DFE00001364 /* Style.css */,
                 AFD000022FD18DFE00001364 /* DNS.js */,
@@ -364,6 +382,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C1980DCF2FD18DFE00001364 /* Icon.png in Resources */,
+				AF1000000000000000000015 /* mobile-modules.json in Resources */,
 				C1980DDB2FD18DFE00001364 /* Main.storyboard in Resources */,
 				C1980DD82FD18DFE00001364 /* LaunchScreen.storyboard in Resources */,
 				C1980DCD2FD18DFE00001364 /* Main.html in Resources */,
@@ -415,6 +434,10 @@
 			buildActionMask = 2147483647;
 			files = (
 				C1980DD52FD18DFE00001364 /* ViewController.swift in Sources */,
+				AF1000000000000000000011 /* MobileModuleCatalog.swift in Sources */,
+				AF1000000000000000000012 /* MobileSourceProbe.swift in Sources */,
+				AF1000000000000000000013 /* MobileDownloadStore.swift in Sources */,
+				AF1000000000000000000014 /* MobileDownloadsViewController.swift in Sources */,
 				C1980DC92FD18DFE00001364 /* AppDelegate.swift in Sources */,
 				C1980DD32FD18DFE00001364 /* SceneDelegate.swift in Sources */,
 			);

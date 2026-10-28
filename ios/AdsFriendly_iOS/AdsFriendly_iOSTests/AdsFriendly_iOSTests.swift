@@ -10,6 +10,40 @@ import UIKit
 import WebKit
 @testable import AdsFriendly_iOS
 
+#if !AF_PROTECTION_ONLY
+// All probe integration requests stay inside this URLProtocol fixture.
+private final class MobileProbeFixtureProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        guard let url = request.url else { return }
+        guard request.value(forHTTPHeaderField: "Accept-Encoding") == "identity",
+              request.value(forHTTPHeaderField: "Cookie") == nil else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse)); return
+        }
+        var status = 200
+        var headers = ["Content-Type": "audio/mpeg", "Content-Length": "7"]
+        switch url.lastPathComponent {
+        case "fallback.mp3", "wrongrange.mp3":
+            if request.httpMethod == "HEAD" { status = 405 }
+            else if request.httpMethod == "GET", request.value(forHTTPHeaderField: "Range") == "bytes=0-0" {
+                status = 206
+                headers["Content-Range"] = url.lastPathComponent == "wrongrange.mp3" ? "bytes 1-1/7" : "bytes 0-0/7"
+                headers["Content-Length"] = "1"
+            } else { status = 400 }
+        case "html.mp3": headers["Content-Type"] = "text/html"
+        case "missing.mp3": status = 404
+        case "unknown.mp4": headers = ["Content-Type": "video/mp4"]
+        default: status = 404
+        }
+        guard let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers) else { return }
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+#endif
+
 final class AdsFriendly_iOSTests: XCTestCase {
 
     override func setUpWithError() throws {
@@ -27,6 +61,112 @@ final class AdsFriendly_iOSTests: XCTestCase {
         // Mark your test throws to produce an unexpected failure when your test encounters an uncaught error.
         // Mark your test async to allow awaiting for asynchronous code to complete. Check the results with assertions afterwards.
     }
+
+    #if !AF_PROTECTION_ONLY
+    func testMobileCatalogAndPublicSourceValidation() throws {
+        let catalog = try MobileModuleCatalog.load()
+        XCTAssertTrue(catalog.includes("media"))
+        XCTAssertEqual(catalog.fileExtension(mime: "audio/mpeg", fallback: ""), "mp3")
+        XCTAssertNil(catalog.fileExtension(mime: "text/html", fallback: "mp4"))
+        XCTAssertNil(catalog.fileExtension(mime: "application/vnd.apple.mpegurl", fallback: "mp4"))
+        for value in ["http://media.example/file.mp3", "https://user:pass@media.example/file.mp3",
+                      "https://127.0.0.1/file.mp3", "https://[::1]/file.mp3", "https://router.local/file.mp3",
+                      "https://router.local./file.mp3", "https://media.example:8443/file.mp3",
+                      "https://media.example/one.mp3 https://other.example/two.mp3", "https://media.example/\nfile.mp3"] {
+            XCTAssertThrowsError(try MobileSourceURL.parse(value), value)
+        }
+        let signed = try MobileSourceURL.parse(" https://media.example/play?token=abc%20def\n")
+        XCTAssertEqual(signed.query, "token=abc%20def")
+        XCTAssertTrue(MobileSourceURL.isYouTube(try MobileSourceURL.parse("https://youtu.be/abc")))
+        let noMedia = MobileModuleCatalog(schemaVersion: 1,
+            modules: [.init(id: "protection", title: "Protection", capabilities: [])], directFormats: [])
+        try noMedia.validate()
+        XCTAssertFalse(noMedia.includes("media"))
+        let broken = MobileModuleCatalog(schemaVersion: 2, modules: catalog.modules, directFormats: catalog.directFormats)
+        XCTAssertThrowsError(try broken.validate())
+    }
+
+    func testMobileResponseRejectsChangedPartialEmptyAndNonMediaFiles() throws {
+        let catalog = try MobileModuleCatalog.load()
+        let url = try XCTUnwrap(URL(string: "https://media.example/audio.mp3"))
+        func response(_ status: Int = 200, _ headers: [String: String] = ["Content-Type": "audio/mpeg", "Content-Length": "7"]) throws -> HTTPURLResponse {
+            try XCTUnwrap(HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers))
+        }
+        let valid = try response()
+        XCTAssertNoThrow(try MobileMediaResponse.validateFile(valid, expectedExtension: "mp3", checkedBytes: 7, actualBytes: 7, catalog: catalog))
+        for size in [Int64(0), 1, 8] {
+            XCTAssertThrowsError(try MobileMediaResponse.validateFile(valid, expectedExtension: "mp3", checkedBytes: 7, actualBytes: size, catalog: catalog))
+        }
+        XCTAssertThrowsError(try MobileMediaResponse.validateFile(valid, expectedExtension: "mp4", checkedBytes: 7, actualBytes: 7, catalog: catalog))
+        let changed = try response(200, ["Content-Type": "audio/mpeg", "Content-Length": "8"])
+        XCTAssertThrowsError(try MobileMediaResponse.validateFile(changed, expectedExtension: "mp3", checkedBytes: 7, actualBytes: 8, catalog: catalog))
+        for (status, headers) in [
+            (200, ["Content-Type": "text/html"]), (200, ["Content-Type": "audio/mpeg", "Content-Length": "0"]),
+            (200, ["Content-Type": "audio/mpeg", "Content-Encoding": "gzip"]), (403, ["Content-Type": "audio/mpeg"]),
+            (206, ["Content-Type": "audio/mpeg", "Content-Range": "bytes 0-0/7"])
+        ] {
+            XCTAssertThrowsError(try MobileMediaResponse.metadata(response(status, headers), catalog: catalog))
+        }
+        let partial = try response(206, ["Content-Type": "audio/mpeg", "Content-Range": "bytes 0-0/7", "Content-Length": "1"])
+        XCTAssertEqual(try MobileMediaResponse.metadata(partial, catalog: catalog, rangeProbe: true).1, 7)
+        let badRange = try response(206, ["Content-Type": "audio/mpeg", "Content-Range": "bytes 1-1/7"])
+        XCTAssertThrowsError(try MobileMediaResponse.metadata(badRange, catalog: catalog, rangeProbe: true))
+        let unknown = try response(200, ["Content-Type": "audio/mpeg"])
+        XCTAssertNil(try MobileMediaResponse.metadata(unknown, catalog: catalog).1)
+        XCTAssertNoThrow(try MobileMediaResponse.validateFile(unknown, expectedExtension: "mp3", checkedBytes: nil, actualBytes: 7, catalog: catalog))
+    }
+
+    @MainActor
+    func testMobileProbeUsesBoundedHeadFallbackAndCanBeReused() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MobileProbeFixtureProtocol.self]
+        let probe = MobileSourceProbe(catalog: try MobileModuleCatalog.load(), configuration: configuration)
+        func check(_ path: String) async -> Result<CheckedMobileSource, Error> {
+            await withCheckedContinuation { continuation in
+                probe.check("https://fixture.adsfriendly.test/" + path) { continuation.resume(returning: $0) }
+            }
+        }
+        let first = try await check("fallback.mp3").get()
+        XCTAssertEqual(first.fileExtension, "mp3")
+        XCTAssertEqual(first.bytes, 7)
+        XCTAssertGreaterThan(first.expiresAt, Date())
+        let second = try await check("fallback.mp3").get()
+        XCTAssertEqual(second.bytes, 7, "A reused probe must reset fallback state.")
+        for path in ["html.mp3", "missing.mp3", "wrongrange.mp3"] {
+            if case .success = await check(path) { XCTFail("Unsupported response accepted: " + path) }
+        }
+        let unknown = try await check("unknown.mp4").get()
+        XCTAssertNil(unknown.bytes)
+        probe.cancel()
+    }
+
+    @MainActor
+    func testMobileCompositionKeepsDNSOnboardingAccessible() throws {
+        let root = ViewController()
+        let web = WKWebView()
+        root.view = UIView(frame: CGRect(x: 0, y: 0, width: 320, height: 640))
+        root.view.addSubview(web)
+        root.webView = web
+        root.viewDidLoad()
+        root.view.layoutIfNeeded()
+        let entry = try XCTUnwrap(root.view.subviews.compactMap { $0 as? UIButton }.first { $0.accessibilityIdentifier == "media-downloads" })
+        XCTAssertGreaterThanOrEqual(entry.frame.height, 48)
+        XCTAssertLessThanOrEqual(web.frame.maxY, entry.frame.minY)
+        XCTAssertGreaterThan(web.frame.height, 200)
+        let media = MobileDownloadsViewController(catalog: try MobileModuleCatalog.load())
+        media.loadViewIfNeeded()
+        let all = descendants(media.view)
+        let download = try XCTUnwrap(all.compactMap { $0 as? UIButton }.first { $0.accessibilityIdentifier == "media-confirm" })
+        XCTAssertFalse(download.isEnabled, "Opening Media Tools must not start or authorize a download.")
+        let html = try String(contentsOf: XCTUnwrap(Bundle.main.url(forResource: "Main", withExtension: "html")), encoding: .utf8)
+        XCTAssertTrue(html.contains("export-dns"))
+    }
+
+    @MainActor
+    private func descendants(_ view: UIView) -> [UIView] {
+        view.subviews.flatMap { [$0] + descendants($0) }
+    }
+    #endif
 
     func testDNSProfileOnlyContainsRemovableEncryptedDNS() throws {
         let data = try DNSProfile.make(endpoint: DNSProfile.defaultEndpoint)
