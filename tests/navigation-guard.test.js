@@ -13,9 +13,14 @@ import {
   decideNewTabNavigation,
   isBrowserUiNewTab,
   isExplicitAddressBarNavigation,
+  isExplicitAddressBarCommitForUrl,
+  shouldEvaluateCommittedNavigation,
   shouldKeepTrackingNewTab,
 } from "../src/navigation/background/new-tab-policy.js";
 import { isExtensionContextInvalidated } from "../src/shared/extension-context.js";
+import { registerNavigationGuard } from "../src/navigation/background/guard.js";
+import { runtimeState } from "../src/background/state.js";
+import { CAPABILITIES } from "../src/runtime/feature-catalog.js";
 import { classifyNavigationIntent } from "../src/navigation/shared/intent-classifier.js";
 import {
   getPrefilledSearchNavigation,
@@ -26,6 +31,80 @@ import {
   createNavigationEnforcementPlan,
   getRegisteredNavigationSequences,
 } from "../src/navigation/background/navigation-sequences.js";
+
+test("Download Manager is not linked to a recent website click or sent to ad review", async (t) => {
+  const previousChrome = globalThis.chrome;
+  const previousClick = runtimeState.lastTrustedClick;
+  const hooks = {};
+  const reads = [];
+  const updates = [];
+  const event = (name) => ({
+    addListener: (fn) => {
+      hooks[name] = fn;
+    },
+    removeListener() {},
+  });
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  globalThis.chrome = {
+    tabs: {
+      query: async () => [],
+      get: async (id) => ({ id, url: "https://pornone.com/watch" }),
+      update: async (...args) => updates.push(args),
+      sendMessage: async () => {
+        throw new Error("No content script");
+      },
+      onCreated: event("created"),
+      onRemoved: event("removed"),
+    },
+    webNavigation: {
+      onCreatedNavigationTarget: event("target"),
+      onCommitted: event("committed"),
+    },
+    storage: {
+      local: {
+        get: async (key) => {
+          reads.push(key);
+          return {};
+        },
+        set: async () => {},
+      },
+    },
+    runtime: { getURL: (path) => `chrome-extension://test-extension/${path}` },
+  };
+  runtimeState.lastTrustedClick = {
+    timestamp: Date.now(),
+    tabId: 10,
+    sourceUrl: "https://pornone.com/watch",
+    intentUrl: "https://ad.example/",
+    intentReasons: [],
+  };
+  const stop = registerNavigationGuard({
+    can: (capability) => capability === CAPABILITIES.NAVIGATION_GUARD,
+  });
+  const flush = () => new Promise((resolve) => setImmediate(resolve));
+  try {
+    const url = chrome.runtime.getURL("options/options.html#downloads");
+    hooks.created({ id: 20, pendingUrl: url });
+    hooks.target({ sourceTabId: 10, tabId: 20, url });
+    hooks.committed({ tabId: 20, frameId: 0, url, transitionType: "link" });
+    await flush();
+    t.mock.timers.tick(500);
+    await flush();
+    assert.deepEqual(reads, []);
+    assert.deepEqual(updates, []);
+    // Exemption is destination-scoped, not a permanent bypass for this tab.
+    hooks.target({ sourceTabId: 10, tabId: 20, url: "https://ad.example/" });
+    await flush();
+    assert.ok(reads.length > 0);
+  } finally {
+    stop();
+    t.mock.timers.tick(500);
+    await flush();
+    t.mock.timers.reset();
+    globalThis.chrome = previousChrome;
+    runtimeState.lastTrustedClick = previousClick;
+  }
+});
 
 test("registers every supported navigation sequence explicitly", () => {
   assert.deepEqual(
@@ -62,9 +141,47 @@ test("recognizes a Chrome plus-button tab without trusting web-created blanks", 
 });
 
 test("address-bar searches are distinct from page link navigation", () => {
+  // A one-character query followed by Enter may be committed as a generated
+  // search rather than as a fully typed URL. History/bookmark selection is
+  // reported separately by Chrome as auto_bookmark.
   assert.equal(
     isExplicitAddressBarNavigation({ transitionType: "generated" }),
     true,
+  );
+  assert.equal(
+    isExplicitAddressBarNavigation({ transitionType: "auto_bookmark" }),
+    true,
+  );
+  assert.equal(
+    isExplicitAddressBarNavigation({ transitionType: "typed" }),
+    true,
+  );
+  assert.equal(
+    isExplicitAddressBarCommitForUrl(
+      "https://www.google.com/search?q=phim+viet+sub",
+      {
+        url: "https://www.google.com/search?q=phim+viet+sub",
+        transitionType: "generated",
+      },
+    ),
+    true,
+  );
+  assert.equal(
+    isExplicitAddressBarCommitForUrl("https://example-ad.test/", {
+      url: "https://example-ad.test/",
+      transitionType: "link",
+    }),
+    false,
+  );
+  assert.equal(
+    isExplicitAddressBarCommitForUrl(
+      "https://www.google.com/search?q=phim+viet+sub",
+      {
+        url: "https://www.google.com/search?q=other",
+        transitionType: "generated",
+      },
+    ),
+    false,
   );
   assert.equal(
     isExplicitAddressBarNavigation({
@@ -76,6 +193,25 @@ test("address-bar searches are distinct from page link navigation", () => {
   assert.equal(
     isExplicitAddressBarNavigation({ transitionType: "link" }),
     false,
+  );
+  assert.equal(
+    shouldEvaluateCommittedNavigation({ transitionType: "generated" }),
+    false,
+  );
+  assert.equal(
+    shouldEvaluateCommittedNavigation({ transitionType: "auto_bookmark" }),
+    false,
+  );
+  assert.equal(
+    shouldEvaluateCommittedNavigation({
+      transitionType: "link",
+      transitionQualifiers: ["from_address_bar"],
+    }),
+    false,
+  );
+  assert.equal(
+    shouldEvaluateCommittedNavigation({ transitionType: "link" }),
+    true,
   );
 });
 

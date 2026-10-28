@@ -1,0 +1,256 @@
+<!doctype html><meta charset="utf-8" /><title>
+  Player download regression fixture
+</title>
+<style>
+  body {
+    font: 14px system-ui;
+    background: #edf2f7;
+    margin: 40px;
+  }
+  video {
+    display: block;
+    background: #334155;
+  }
+  #main {
+    width: 640px;
+    height: 360px;
+  }
+  #preview {
+    width: 240px;
+    height: 140px;
+    margin-top: 20px;
+  }
+  output {
+    display: block;
+    margin-top: 20px;
+  }
+</style>
+<h1>Player download regression fixture</h1>
+<div data-player>
+  <video id="main" preload="none">
+    <source src="https://cdn.example/main.mp4" type="video/mp4" />
+  </video>
+</div>
+<video id="preview" src="https://cdn.example/preview.mp4" preload="none"></video
+><button id="switch">Switch main source</button
+><button id="adaptive">Use adaptive video</button
+><button id="unresolved">Unresolved source</button
+><button id="stop">Disable feature</button
+><button id="enable">Enable feature</button
+><button id="progress">Simulate progress without storage event</button
+><button id="completed">Simulate completed download</button
+><button id="missing">Simulate removed file</button
+><button id="restore-file">Simulate restored file</button
+><output id="receipt">No download requested</output>
+<!-- Allows scroll-to-edge position checks without changing player geometry. -->
+<div aria-hidden="true" style="height: 800px"></div>
+<script type="module">
+  import { createMediaCandidateFromSource } from "../src/media/detection.js";
+  import { startPlayerDownload } from "../src/content/player-download.js";
+  import { createRecentDownloadService } from "../src/background/recent-downloads.js";
+  import {
+    buildMediaDownloadIdentity,
+    buildMediaDownloadSummary,
+  } from "../src/media/download-identity.js";
+  import { normalizeMediaDownloadOutput } from "../src/media/download-options.js";
+  const store = { appSettings: { enabled: true, protectionMode: "assist" } };
+  let jobs = [];
+  let fileExists = true;
+  let created = 0;
+  const recent = createRecentDownloadService({
+    listJobs: async () => jobs,
+    checkFile: async () => ({
+      status: fileExists ? "available" : "missing",
+      size: 465964829,
+    }),
+  });
+  const candidates = ["main", "preview", "next"].map((name) => ({
+    ...createMediaCandidateFromSource({
+      pageUrl: location.href,
+      sourceUrl: `https://cdn.example/${name}.mp4`,
+      contentLength: 465964829,
+    }),
+    frameId: 0,
+    title: `${name} video`,
+  }));
+  window.chrome = {
+    storage: {
+      local: {
+        get: async () => store,
+        set: async (values) => Object.assign(store, values),
+      },
+      onChanged: { addListener() {}, removeListener() {} },
+    },
+    runtime: {
+      getURL: (path) => new URL(`/${path}`, location.href).href,
+      sendMessage: async (message) => {
+        if (message.type === "GET_PLAYER_MEDIA_CONTEXT")
+          return {
+            items: candidates,
+            frameId: 0,
+            tab: { id: 7, url: location.href },
+          };
+        if (message.type === "GET_MEDIA_HELPER_STATUS")
+          return {
+            status: "ready",
+            canDownloadDirect: true,
+            canDownloadAdaptive: true,
+            canSelectContainer: true,
+          };
+        if (message.type === "GET_MEDIA_DOWNLOAD_JOBS") return { items: jobs };
+        if (message.type === "GET_PLAYER_DOWNLOAD_CONTEXT") {
+          const candidate = candidates.find(
+            (item) => item.sourceUrl === message.sourceUrl,
+          );
+          return candidate
+            ? recent.lookup(candidate, message.output, {
+                verifyFile: message.verifyFile,
+              })
+            : { status: "unavailable" };
+        }
+        if (message.type === "CREATE_MEDIA_DOWNLOAD_JOB") {
+          const candidate = candidates.find(
+            (item) => item.id === message.mediaId,
+          );
+          const duplicate = await recent.duplicate(
+            candidate,
+            message.output,
+            message.repeatOf,
+          );
+          if (duplicate) return duplicate;
+          const output = normalizeMediaDownloadOutput(
+            message.output,
+            candidate,
+          );
+          jobs.unshift({
+            id: `fixture-${++created}`,
+            mediaId: candidate.id,
+            candidate,
+            output,
+            sourceTabId: 7,
+            title: candidate.title,
+            status: "downloading",
+            updatedAt: Date.now(),
+            progress: { bytesPerSecond: 1000000, totalBytes: 465964829 },
+            downloadIdentity: await buildMediaDownloadIdentity(
+              candidate,
+              output,
+            ),
+            downloadSummary: buildMediaDownloadSummary(candidate, output),
+            outputPath: "C:\\Downloads\\main.mp4",
+          });
+          document.getElementById("receipt").textContent = JSON.stringify({
+            created,
+            ...message,
+          });
+          return { status: "started" };
+        }
+        if (
+          [
+            "OPEN_MEDIA_DOWNLOAD_OUTPUT",
+            "REVEAL_MEDIA_DOWNLOAD_OUTPUT",
+            "OPEN_PLAYER_DOWNLOAD_MANAGER",
+          ].includes(message.type)
+        )
+          document.getElementById("receipt").textContent = JSON.stringify({
+            created,
+            ...message,
+          });
+        return { status: "opened" };
+      },
+    },
+  };
+  let stop = startPlayerDownload({ shadowMode: "open" });
+  document.getElementById("progress").onclick = () => {
+    if (jobs[0]) {
+      jobs[0].status = "downloading";
+      jobs[0].progress.bytesPerSecond = 1572864;
+    }
+  };
+  document.getElementById("completed").onclick = () => {
+    if (jobs[0]) {
+      jobs[0].status = "completed";
+      jobs[0].updatedAt = Date.now();
+      jobs[0].progress.bytesPerSecond = 0;
+    }
+  };
+  document.getElementById("missing").onclick = () => {
+    fileExists = false;
+    recent.clear();
+  };
+  document.getElementById("restore-file").onclick = () => {
+    fileExists = true;
+    recent.clear();
+  };
+  document.getElementById("switch").onclick = () =>
+    (document.getElementById("main").src = "https://cdn.example/next.mp4");
+  document.getElementById("unresolved").onclick = () =>
+    (document.getElementById("main").src =
+      "blob:https://video.example/unresolved");
+  document.getElementById("adaptive").onclick = () => {
+    candidates[0] = {
+      ...candidates[0],
+      id: "adaptive-main",
+      kind: "adaptive",
+      provider: "youtube",
+      title: "Adaptive main video",
+      duration: 100,
+      probeStatus: "ready",
+      streamType: "vod",
+      variants: [
+        {
+          id: "v720",
+          type: "video",
+          sourceUrl: "https://cdn.example/main.mp4",
+          mimeType: "video/mp4",
+          codecs: "avc1",
+          height: 720,
+          width: 1280,
+          resolution: { width: 1280, height: 720 },
+          contentLength: 10000000,
+          urlResolution: "resolved",
+        },
+        {
+          id: "v360",
+          type: "video",
+          sourceUrl: "https://cdn.example/360.mp4",
+          mimeType: "video/mp4",
+          codecs: "avc1",
+          height: 360,
+          width: 640,
+          resolution: { width: 640, height: 360 },
+          contentLength: 4000000,
+          urlResolution: "resolved",
+        },
+      ],
+      audioTracks: [
+        {
+          id: "a128",
+          type: "audio",
+          sourceUrl: "https://cdn.example/audio.m4a",
+          mimeType: "audio/mp4",
+          language: "vi",
+          audioRole: "original",
+          bandwidth: 128000,
+          urlResolution: "resolved",
+        },
+        {
+          id: "a256",
+          type: "audio",
+          sourceUrl: "https://cdn.example/audio-en.m4a",
+          mimeType: "audio/mp4",
+          language: "en",
+          audioRole: "dubbed",
+          bandwidth: 256000,
+          urlResolution: "resolved",
+        },
+      ],
+    };
+    document.getElementById("main").src = "https://cdn.example/main.mp4";
+  };
+  document.getElementById("stop").onclick = () => stop();
+  document.getElementById("enable").onclick = () => {
+    stop();
+    stop = startPlayerDownload({ shadowMode: "open" });
+  };
+</script>

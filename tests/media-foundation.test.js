@@ -1498,7 +1498,7 @@ test("download job view exposes speed, connections, and resumable actions", () =
     connections: 8,
     progress: { bytesPerSecond: null, resumable: false },
   };
-  assert.equal(formatMediaJobDetails(hls), "Speed 0 KB/s · 8 connections");
+  assert.equal(formatMediaJobDetails(hls), "Progress not yet available · Speed 0 KB/s · 8 connections");
   assert.deepEqual(getMediaJobPauseAvailability(hls), {
     supported: false,
     label: "Pause unavailable",
@@ -1613,6 +1613,84 @@ test("background request observation exposes a bounded catalog input", () => {
     }),
     null,
   );
+});
+
+test("direct media observation uses the representation total, not a 206 body length", () => {
+  const partial = createMediaRequestObservation({
+    tabId: 7,
+    url: "https://cdn.example/movie.mp4",
+    method: "GET",
+    statusCode: 206,
+    responseHeaders: [
+      { name: "Content-Type", value: "video/mp4" },
+      { name: "Content-Length", value: "11174661" },
+      {
+        name: "Content-Range",
+        value: "bytes 47087616-58262276/58262277",
+      },
+    ],
+  });
+  assert.equal(partial.kind, "direct");
+  assert.equal(partial.contentLength, 58262277);
+  const candidate = createMediaCandidateFromSource({
+    pageUrl: "https://video.example/watch",
+    sourceUrl: partial.url,
+    mimeType: partial.mimeType,
+    contentLength: partial.contentLength,
+  });
+  assert.equal(candidate.contentLength, 58262277);
+  const catalog = createMediaCatalog();
+  catalog.add(7, createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, candidate));
+  catalog.add(
+    7,
+    createRegisteredEvent(
+      EVENTS.MEDIA_DISCOVERED,
+      createMediaCandidateFromSource({
+        pageUrl: "https://video.example/watch",
+        sourceUrl: partial.url,
+        mimeType: partial.mimeType,
+      }),
+    ),
+  );
+  assert.equal(catalog.list(7)[0].contentLength, 58262277);
+
+  const full = createMediaRequestObservation({
+    tabId: 7,
+    url: "https://cdn.example/other.mp4",
+    method: "GET",
+    statusCode: 200,
+    responseHeaders: [
+      { name: "Content-Type", value: "video/mp4" },
+      { name: "Content-Length", value: "123456" },
+    ],
+  });
+  assert.equal(full.contentLength, 123456);
+
+  const unknown = createMediaRequestObservation({
+    tabId: 7,
+    url: "https://cdn.example/chunk.mp4",
+    method: "GET",
+    statusCode: 206,
+    responseHeaders: [
+      { name: "Content-Type", value: "video/mp4" },
+      { name: "Content-Length", value: "4096" },
+      { name: "Content-Range", value: "bytes 0-4095/*" },
+    ],
+  });
+  assert.equal(unknown.contentLength, null);
+
+  const encoded = createMediaRequestObservation({
+    tabId: 7,
+    url: "https://cdn.example/encoded.mp4",
+    method: "GET",
+    statusCode: 200,
+    responseHeaders: [
+      { name: "Content-Type", value: "video/mp4" },
+      { name: "Content-Length", value: "123456" },
+      { name: "Content-Encoding", value: "gzip" },
+    ],
+  });
+  assert.equal(encoded.contentLength, null);
 });
 
 test("temporary manifest capture is bounded and expires without entering the catalog", () => {
@@ -3890,6 +3968,17 @@ test("direct downloads require a valid HTTP source and normalize independently o
   });
 });
 
+test("direct download estimate uses an observed total file size as exact metadata", () => {
+  const estimate = getMediaDownloadEstimate({
+    kind: "direct",
+    contentLength: 58_262_277,
+    resolution: { width: 720, height: 406 },
+  });
+  assert.deepEqual(estimate.resolution, { width: 720, height: 406 });
+  assert.equal(estimate.estimatedBytes, 58_262_277);
+  assert.equal(estimate.basis, "source_headers");
+});
+
 test("download profiles classify direct sources and expose real adaptive containers", () => {
   assert.equal(
     classifyDirectMediaContainer({
@@ -4207,6 +4296,79 @@ test("media popup keeps rows stable when heartbeat order changes", () => {
     ]).map((item) => item.id),
     ["newer", "older"],
   );
+});
+
+test("media popup can expose every source and ranks active playback without inferring identity", () => {
+  const candidates = Array.from({ length: 11 }, (_, index) => ({
+    ...createMediaCandidateFromSource({
+      pageUrl: "https://video.example/watch",
+      sourceUrl: `https://cdn.example/clip-${index}.mp4`,
+      mimeType: "video/mp4",
+      contentLength: index === 4 ? 55_562_000 : null,
+    }),
+    id: `source-${index}`,
+    firstSeenAt: index + 1,
+  }));
+  candidates[0].playback = { playing: true, visible: true };
+
+  const visible = selectVisibleMediaItems(candidates, Number.POSITIVE_INFINITY);
+  assert.equal(visible.length, 11);
+  assert.equal(visible[0].id, "source-0");
+  assert.equal(
+    visible.find((item) => item.id === "source-4").contentLength,
+    55_562_000,
+  );
+  assert.equal(selectVisibleMediaItems(candidates).length, 8);
+});
+
+test("main direct video survives eight previews and receives its total size after preroll", () => {
+  const catalog = createMediaCatalog();
+  const pageUrl = "https://video.example/watch/279834761";
+  const main = createMediaCandidateFromSource({
+    pageUrl,
+    sourceUrl: "https://s1102.pornone.com/fixture/279834761_720x406_500k.mp4",
+    mimeType: "video/mp4",
+  });
+  catalog.add(7, { ...createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, main), timestamp: 1 });
+  for (let index = 0; index < 8; index++) {
+    const preview = createMediaCandidateFromSource({
+      pageUrl,
+      sourceUrl: `https://cdn.example/preview-${index}.mp4`,
+      mimeType: "video/mp4",
+      duration: 10,
+      contentLength: 300_000,
+    });
+    catalog.add(7, { ...createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, preview), timestamp: index + 2 });
+  }
+  assert.equal(selectVisibleMediaItems(catalog.list(7)).some(item => item.id === main.id), false);
+  assert.equal(selectVisibleMediaItems(catalog.list(7), Infinity).length, 9);
+
+  const observation = createMediaRequestObservation({
+    tabId: 7,
+    frameId: 0,
+    type: "media",
+    url: main.sourceUrl,
+    statusCode: 206,
+    responseHeaders: [
+      { name: "Content-Type", value: "video/mp4" },
+      { name: "Content-Length", value: "465964829" },
+      { name: "Content-Range", value: "bytes 0-465964828/465964829" },
+    ],
+  });
+  const playing = createMediaCandidateFromSource({
+    pageUrl,
+    sourceUrl: observation.url,
+    mimeType: observation.mimeType,
+    contentLength: observation.contentLength,
+    duration: 6_201,
+    playback: { playing: true, visible: true, observedAt: 100 },
+    detectedBy: "network",
+  });
+  catalog.add(7, createRegisteredEvent(EVENTS.MEDIA_DISCOVERED, playing));
+  const [preferred] = selectVisibleMediaItems(catalog.list(7));
+  assert.equal(preferred.id, main.id);
+  assert.equal(preferred.contentLength, 465_964_829);
+  assert.equal(getMediaDownloadEstimate(preferred).estimatedBytes, 465_964_829);
 });
 
 test("media popup groups duplicate unresolved blobs from one player", () => {

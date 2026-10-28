@@ -2,9 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { endianness, tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { endianness, homedir, tmpdir } from "node:os";
+import { basename, join, resolve, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import {
@@ -14,6 +14,44 @@ import {
 } from "../src/media/helper-contract.js";
 
 const execFileAsync = promisify(execFile);
+
+test("output.stat checks only a managed file, reports missing files, rejects arbitrary paths", async (t) => {
+  const root = resolve(homedir(), "Downloads");
+  await mkdir(root, { recursive: true });
+  const directory = await mkdtemp(join(root, ".adsfriendly-stat-test-"));
+  assert.match(relative(root, directory), /^\.adsfriendly-stat-test-[^\\/]+$/);
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, "fixture.mp4");
+  await writeFile(path, "test");
+  const inspect = async (outputPath) => {
+    const child = spawnHelper();
+    t.after(() => child.kill());
+    child.stdin.end(
+      frame({
+        type: MEDIA_HELPER_REQUESTS.OUTPUT_STAT,
+        requestId: "stat-1",
+        protocolVersion: MEDIA_HELPER_PROTOCOL_VERSION,
+        payload: { outputPath },
+      }),
+    );
+    const result = await readFrame(child.stdout);
+    child.kill();
+    return result;
+  };
+  const available = await inspect(path);
+  assert.equal(available.type, MEDIA_HELPER_EVENTS.OUTPUT_STAT);
+  assert.equal(available.payload.status, "available");
+  assert.equal(available.payload.size, 4);
+  assert.equal(
+    (await inspect(join(directory, "missing.mp4"))).payload.status,
+    "missing",
+  );
+  assert.equal(
+    (await inspect(join(homedir(), "outside.mp4"))).type,
+    MEDIA_HELPER_EVENTS.ERROR,
+  );
+  assert.equal((await inspect(root)).type, MEDIA_HELPER_EVENTS.ERROR);
+});
 
 test("built helper completes a framed Native Messaging handshake", async () => {
   const hostPath = fileURLToPath(
@@ -43,6 +81,7 @@ test("built helper completes a framed Native Messaging handshake", async () => {
   assert.equal(response.payload.callerOrigin, "chrome-extension://test/");
   assert.equal(typeof response.payload.capabilities, "object");
   assert.equal(response.payload.capabilities["output.open"], true);
+  assert.equal(response.payload.capabilities["download.direct_audio"], true);
   assert.equal(response.payload.capabilities["output.reveal"], true);
   assert.equal(
     response.payload.capabilities["download.hls_parallel_acquisition"],
@@ -454,6 +493,16 @@ test("built helper remuxes inline HLS with disguised segment extensions", async 
     (event) => event.type === MEDIA_HELPER_EVENTS.DOWNLOAD_STARTED,
   );
   assert.equal(started.payload.adapterId, "hls-ffmpeg");
+  const progress = await frames.next(
+    (event) =>
+      event.type === MEDIA_HELPER_EVENTS.DOWNLOAD_PROGRESS &&
+      event.payload.phase === "downloading" &&
+      event.payload.completedResources > 0,
+  );
+  assert.ok(progress.payload.totalResources > 0);
+  assert.ok(
+    progress.payload.completedResources <= progress.payload.totalResources,
+  );
   const completed = await frames.next(
     (event) =>
       event.requestId === "hls-download-1" &&
@@ -849,6 +898,10 @@ test("built helper resumes cached HLS segments after cancellation", async (t) =>
       ].includes(event.type),
   );
   assert.ok(resumed.payload.resumedBytes > 0);
+  assert.ok(resumed.payload.completedResources > 0);
+  assert.ok(
+    resumed.payload.totalResources >= resumed.payload.completedResources,
+  );
   assert.equal(
     completed.type,
     MEDIA_HELPER_EVENTS.DOWNLOAD_COMPLETED,
@@ -1262,6 +1315,160 @@ test("built helper downloads a selected muxed adaptive track without separate au
     [...new Set(probe.streams.map((stream) => stream.codec_type))].sort(),
     ["audio", "video"],
   );
+});
+
+test("direct audio keeps original bytes and playable audio containers without using FFmpeg for download", async (t) => {
+  assert.ok(
+    await executableAvailable("ffmpeg"),
+    "audio fixture generator required",
+  );
+  assert.ok(
+    await executableAvailable("ffprobe"),
+    "audio verification required",
+  );
+  const directory = await mkdtemp(join(tmpdir(), "adsfriendly-audio-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const output = join(directory, "output");
+  const formats = [
+    ["mp3", "libmp3lame", "audio/mpeg"],
+    ["m4a", "aac", "audio/mp4"],
+    ["ogg", "libvorbis", "audio/ogg"],
+    ["opus", "libopus", "audio/ogg"],
+    ["flac", "flac", "audio/flac"],
+    ["wav", "pcm_s16le", "audio/wav"],
+  ];
+  const files = new Map();
+  for (const [extension, codec, mime] of formats) {
+    const path = join(directory, `fixture.${extension}`);
+    await execFileAsync(
+      "ffmpeg",
+      [
+        "-v",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=440:sample_rate=48000",
+        "-t",
+        "1",
+        "-c:a",
+        codec,
+        path,
+      ],
+      { windowsHide: true },
+    );
+    files.set(`/${extension}`, { bytes: await readFile(path), mime });
+  }
+  const server = createServer((request, response) => {
+    const file = files.get(new URL(request.url, "http://local").pathname);
+    if (!file) return response.writeHead(404).end();
+    const range = request.headers.range?.match(/^bytes=(\d+)-(\d*)$/);
+    const start = range ? Number(range[1]) : 0,
+      end =
+        range && range[2]
+          ? Math.min(Number(range[2]), file.bytes.length - 1)
+          : file.bytes.length - 1;
+    response.writeHead(range ? 206 : 200, {
+      "Content-Type": file.mime,
+      "Content-Length": end - start + 1,
+      "Accept-Ranges": "bytes",
+      ETag: '"audio-v1"',
+      ...(range
+        ? { "Content-Range": `bytes ${start}-${end}/${file.bytes.length}` }
+        : {}),
+    });
+    response.end(
+      request.method === "HEAD"
+        ? undefined
+        : file.bytes.subarray(start, end + 1),
+    );
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+  const child = spawnHelper({ PATH: "" });
+  t.after(() => child.kill());
+  const reader = createFrameReader(child.stdout);
+  for (const [index, [extension, , mime]] of formats.entries()) {
+    const id = `audio-direct-${index}`;
+    const request = downloadRequest(
+      id,
+      `http://127.0.0.1:${server.address().port}/${extension}?sig=LOCAL`,
+      output,
+    );
+    request.payload.candidate.mimeType = mime;
+    request.payload.candidate.mediaType = "audio";
+    request.payload.candidate.title = `Audio ${extension}`;
+    child.stdin.write(frame(request));
+    const event = await reader.next(
+      (event) =>
+        event.requestId === id &&
+        [
+          MEDIA_HELPER_EVENTS.DOWNLOAD_COMPLETED,
+          MEDIA_HELPER_EVENTS.ERROR,
+        ].includes(event.type),
+    );
+    assert.equal(
+      event.type,
+      MEDIA_HELPER_EVENTS.DOWNLOAD_COMPLETED,
+      event.payload.message,
+    );
+    const bytes = await readFile(event.payload.outputPath);
+    assert.deepEqual(bytes, files.get(`/${extension}`).bytes);
+    assert.ok(!event.payload.outputPath.endsWith(".mp4"));
+    const probe = JSON.parse(
+      (
+        await execFileAsync(
+          "ffprobe",
+          [
+            "-v",
+            "error",
+            "-show_streams",
+            "-of",
+            "json",
+            event.payload.outputPath,
+          ],
+          { windowsHide: true },
+        )
+      ).stdout,
+    );
+    assert.equal(probe.streams.length, 1);
+    assert.equal(probe.streams[0].codec_type, "audio");
+  }
+  files.set("/html", {
+    bytes: Buffer.from("<html>login</html>"),
+    mime: "text/html",
+  });
+  files.set("/unknown", {
+    bytes: Buffer.from("unknown format"),
+    mime: "application/octet-stream",
+  });
+  for (const name of ["html", "unknown"]) {
+    const id = `audio-reject-${name}`;
+    const request = downloadRequest(
+      id,
+      `http://127.0.0.1:${server.address().port}/${name}`,
+      output,
+    );
+    request.payload.candidate.mediaType = "audio";
+    request.payload.candidate.mimeType = name === "html" ? "audio/mpeg" : null;
+    child.stdin.write(frame(request));
+    const event = await reader.next(
+      (event) =>
+        event.requestId === id &&
+        [
+          MEDIA_HELPER_EVENTS.DOWNLOAD_COMPLETED,
+          MEDIA_HELPER_EVENTS.ERROR,
+        ].includes(event.type),
+    );
+    assert.equal(event.type, MEDIA_HELPER_EVENTS.ERROR);
+    assert.match(
+      event.payload.message,
+      name === "html" ? /non-audio response/ : /container is unknown/,
+    );
+  }
 });
 
 function spawnHelper(extraEnv = {}) {
