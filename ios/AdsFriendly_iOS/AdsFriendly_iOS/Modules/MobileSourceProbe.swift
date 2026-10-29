@@ -6,6 +6,9 @@ struct CheckedMobileSource {
     let fileExtension: String
     let bytes: Int64?
     let expiresAt: Date
+    var filename: String? = nil
+    var acceptsRanges = false
+    var rangeValidator: String? = nil
 }
 
 // Header evidence is shared by preflight and final-file validation.
@@ -56,6 +59,11 @@ final class MobileSourceProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
     private var completion: ((Result<CheckedMobileSource, Error>) -> Void)?
     private var retried = false
     private var redirects = 0
+    private var verifyingRange = false
+    private var headBytes: Int64?
+    private var headFilename: String?
+    private var headValidator: String?
+    private var headSource: CheckedMobileSource?
     private var source: URL!
     private let configuration: URLSessionConfiguration
     init(catalog: MobileModuleCatalog, configuration: URLSessionConfiguration = .ephemeral) {
@@ -64,7 +72,7 @@ final class MobileSourceProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
     }
     func check(_ text: String, completion: @escaping (Result<CheckedMobileSource, Error>) -> Void) {
         cancel()
-        retried = false; redirects = 0
+        retried = false; redirects = 0; verifyingRange = false; headBytes = nil; headFilename = nil; headValidator = nil; headSource = nil
         do {
             try catalog.validate()
             guard catalog.includes("media") else { throw MobileSourceError.configuration }
@@ -83,6 +91,7 @@ final class MobileSourceProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
         } catch { completion(.failure(error)) }
     }
     private func begin(_ method: String) {
+        redirects = 0
         var request = URLRequest(url: source); request.httpMethod = method
         request.setValue("AdsFriendlyMobile/0.1", forHTTPHeaderField: "User-Agent")
         request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
@@ -98,13 +107,21 @@ final class MobileSourceProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
         completionHandler(.cancel)
         guard dataTask === task, session === self.session, completion != nil else { return }
         guard let response = response as? HTTPURLResponse else { finish(.failure(MobileSourceError.unsupported)); return }
+        if verifyingRange, response.statusCode >= 400, let head = headSource { finish(.success(head)); return }
         if [403, 405].contains(response.statusCode) && !retried {
             retried = true; begin("GET"); return
         }
         do {
             guard let url = response.url else { throw MobileSourceError.invalidURL }
-            let (ext, bytes) = try MobileMediaResponse.metadata(response, catalog: catalog, rangeProbe: retried)
-            finish(.success(CheckedMobileSource(url: url, fileExtension: ext, bytes: bytes, expiresAt: Date().addingTimeInterval(30))))
+            let (ext, bytes) = try MobileMediaResponse.metadata(response, catalog: catalog, rangeProbe: retried || verifyingRange)
+            if !retried && !verifyingRange, let bytes = bytes, bytes >= MobileRangeTransfer.minimumBytes,
+               response.value(forHTTPHeaderField: "Accept-Ranges")?.lowercased() == "bytes" || url.host?.hasSuffix(".googlevideo.com") == true {
+                headBytes = bytes; headFilename = MobileMediaName.sourceName(response, ext: ext); headValidator = MobileRangeTransfer.validator(response)
+                headSource = .init(url: url, fileExtension: ext, bytes: bytes, expiresAt: Date().addingTimeInterval(30), filename: headFilename, rangeValidator: headValidator)
+                verifyingRange = true; begin("GET"); return
+            }
+            if let expected = headBytes, let actual = bytes, expected != actual { throw MobileSourceError.unsupported }
+            finish(.success(CheckedMobileSource(url: url, fileExtension: ext, bytes: bytes ?? headBytes, expiresAt: Date().addingTimeInterval(30), filename: headFilename ?? MobileMediaName.sourceName(response, ext: ext), acceptsRanges: response.statusCode == 206, rangeValidator: MobileRangeTransfer.validator(response) ?? headValidator)))
         } catch { finish(.failure(error)) }
     }
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
@@ -116,6 +133,7 @@ final class MobileSourceProbe: NSObject, URLSessionDataDelegate, URLSessionTaskD
     }
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         guard task === self.task, completion != nil, let error = error as NSError?, error.code != NSURLErrorCancelled else { return }
+        if verifyingRange, let head = headSource { finish(.success(head)); return }
         finish(.failure(MobileSourceError.network))
     }
 }

@@ -57,12 +57,14 @@ struct YouTubeChoice {
     let tracks: [YouTubeTrack]
     let outputExtension: String
     let hasVideo: Bool
+    var sourceTitle: String? = nil
     var isIPhoneCompatible: Bool { hasVideo ? outputExtension == "mp4" : outputExtension == "m4a" }
 }
 struct YouTubeSources {
     let videoID: String
     let choices: [YouTubeChoice]
     let expiresAt: Date
+    var title: String? = nil
     var hasOriginalFormats: Bool { choices.contains { !$0.isIPhoneCompatible } }
     func choicesForDisplay(includeOriginals: Bool) -> [YouTubeChoice] {
         choices.filter { includeOriginals || $0.isIPhoneCompatible }
@@ -78,6 +80,7 @@ struct YouTubePreparedDownload {
     let outputExtension: String
     let hasVideo: Bool
     let expiresAt: Date
+    var sourceTitle: String? = nil
 }
 
 struct YouTubeAudioCandidate {
@@ -144,8 +147,7 @@ enum YouTubeSourceResolver {
             let known = (audio.bitrate ?? 0) > 0
             let bitrate = known ? " · \((audio.bitrate ?? 0) / 1000) kbps" : " · chưa biết bitrate"
             let format = ext == "m4a" ? "M4A / AAC" : "WebM / Opus"
-            let playback = ext == "m4a" ? (known ? " · AAC tốt nhất tìm được · phù hợp iPhone" : " · phù hợp iPhone") : " · cần trình phát hỗ trợ WebM"
-            choices.append(.init(id: "audio-\(ext)", label: "Audio · \(format)\(bitrate)\(playback)",
+            choices.append(.init(id: "audio-\(ext)", label: "Âm thanh · \(format)\(bitrate)",
                 tracks: [.init(role: "audio", url: audio.url, fileExtension: ext)], outputExtension: ext, hasVideo: false))
         }
         var resolutions = Set<Int>()
@@ -165,31 +167,45 @@ enum YouTubeSourceResolver {
                 tracks.append(.init(role: "audio", url: audio.url, fileExtension: "m4a"))
             }
             resolutions.insert(resolution)
-            choices.append(.init(id: "video-\(resolution)", label: "Video \(resolution)p · MP4 + audio AAC tốt nhất",
+            choices.append(.init(id: "video-\(resolution)", label: "Video \(resolution)p · MP4 + AAC",
                                  tracks: tracks, outputExtension: "mp4", hasVideo: true))
             if resolutions.count == 8 { break }
         }
         guard !choices.isEmpty else { throw YouTubeDownloadError.unavailable }
-        return .init(videoID: id, choices: choices, expiresAt: Date().addingTimeInterval(180))
+        // Streams populated this instance's video-info cache; reuse it for the
+        // title instead of another webpage/oEmbed lookup or concurrent cache writes.
+        let metadata = try? await video.metadata
+        try Task.checkCancellation()
+        let title = MobileMediaName.stem(metadata?.title, fallback: "YouTube \(id)")
+        choices = choices.map { var choice = $0; choice.sourceTitle = title; return choice }
+        return .init(videoID: id, choices: choices, expiresAt: Date().addingTimeInterval(180), title: title)
     }
 
     @MainActor
-    static func prepare(_ choice: YouTubeChoice, expiresAt: Date) async throws -> YouTubePreparedDownload {
+    static func prepare(_ choice: YouTubeChoice, expiresAt: Date, configuration: URLSessionConfiguration? = nil) async throws -> YouTubePreparedDownload {
         guard expiresAt > Date() else { throw YouTubeDownloadError.expired }
         let catalog = try MobileModuleCatalog.load()
-        var tracks: [YouTubePreparedTrack] = []
-        for track in choice.tracks {
+        guard (1...2).contains(choice.tracks.count) else { throw YouTubeDownloadError.sourceChanged }
+        @MainActor func check(_ track: YouTubeTrack) async throws -> YouTubePreparedTrack {
             try Task.checkCancellation()
             let url = try YouTubeLink.mediaURL(track.url)
-            let checked = try await YouTubeProbeAwaiter(catalog: catalog).check(url)
+            let checked = try await YouTubeProbeAwaiter(catalog: catalog, configuration: configuration).check(url)
             try Task.checkCancellation()
             _ = try YouTubeLink.mediaURL(checked.url)
             guard checked.fileExtension == track.fileExtension else { throw YouTubeDownloadError.sourceChanged }
-            tracks.append(.init(role: track.role, source: checked))
+            return .init(role: track.role, source: checked)
+        }
+        // At most two independent header probes; a failed/cancelled child cancels
+        // its sibling. Keep original track order for the download-store contract.
+        let tracks = try await withThrowingTaskGroup(of: (Int, YouTubePreparedTrack).self) { group in
+            for (index, track) in choice.tracks.enumerated() { group.addTask { (index, try await check(track)) } }
+            var values: [(Int, YouTubePreparedTrack)] = []
+            for try await value in group { values.append(value) }
+            return values.sorted { $0.0 < $1.0 }.map { $0.1 }
         }
         guard let deadline = tracks.map({ $0.source.expiresAt }).min(), deadline > Date() else { throw YouTubeDownloadError.expired }
         return .init(label: choice.label, tracks: tracks, outputExtension: choice.outputExtension,
-                     hasVideo: choice.hasVideo, expiresAt: deadline)
+                     hasVideo: choice.hasVideo, expiresAt: deadline, sourceTitle: choice.sourceTitle)
     }
 }
 
@@ -198,7 +214,7 @@ private final class YouTubeProbeAwaiter {
     private let probe: MobileSourceProbe
     private var continuation: CheckedContinuation<CheckedMobileSource, Error>?
     private var cancelled = false
-    init(catalog: MobileModuleCatalog) { probe = MobileSourceProbe(catalog: catalog) }
+    init(catalog: MobileModuleCatalog, configuration: URLSessionConfiguration? = nil) { probe = MobileSourceProbe(catalog: catalog, configuration: configuration?.copy() as? URLSessionConfiguration ?? .ephemeral) }
     func check(_ url: URL) async throws -> CheckedMobileSource {
         try await withTaskCancellationHandler(operation: {
             try await withCheckedThrowingContinuation { continuation in

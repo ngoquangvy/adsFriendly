@@ -2,12 +2,36 @@
 import XCTest
 import AVFoundation
 import AudioToolbox
+import UIKit
 @testable import AdsFriendly_iOS
 
 private final class YouTubePendingProtocol: URLProtocol {
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {} // Tasks stay pending; no request reaches the internet.
+    override func stopLoading() {}
+}
+
+private final class YouTubeProbeBarrierProtocol: URLProtocol {
+    private static let lock = NSLock()
+    private static var pending: [YouTubeProbeBarrierProtocol] = []
+    private static var count = 0
+    static var started: Int { lock.lock(); defer { lock.unlock() }; return count }
+    static func reset() { lock.lock(); pending = []; count = 0; lock.unlock() }
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        Self.lock.lock(); Self.count += 1; Self.pending.append(self)
+        let ready = Self.pending.count == 2 ? Self.pending : []
+        if !ready.isEmpty { Self.pending = [] }; Self.lock.unlock()
+        // Neither probe can complete until both started: sequential code fails.
+        for item in ready {
+            guard let url = item.request.url, let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil,
+                headerFields: ["Content-Type": url.query == "video" ? "video/mp4" : "audio/mp4", "Content-Length": "7"]) else { continue }
+            item.client?.urlProtocol(item, didReceive: response, cacheStoragePolicy: .notAllowed)
+            item.client?.urlProtocolDidFinishLoading(item)
+        }
+    }
     override func stopLoading() {}
 }
 
@@ -127,7 +151,7 @@ final class YouTubeTests: XCTestCase {
             if ext == "m4a" { try await assertNativeAudioDecodes(output) }
             let history = try String(contentsOf: directory.appendingPathComponent("history.json"), encoding: .utf8)
             XCTAssertFalse(history.contains("googlevideo")); XCTAssertFalse(history.contains("never-store-this"))
-            store.forget(id)
+            try store.forget(id)
             XCTAssertTrue(store.jobs.isEmpty)
             XCTAssertTrue(FileManager.default.fileExists(atPath: output.path), "Forgetting history must keep the exported source file.")
         }
@@ -191,6 +215,80 @@ final class YouTubeTests: XCTestCase {
     }
 
     @MainActor
+    func testParallelPreflightStartsBothTracksAndPreservesOrderAndTitle() async throws {
+        YouTubeProbeBarrierProtocol.reset()
+        let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [YouTubeProbeBarrierProtocol.self]
+        let choice = YouTubeChoice(id: "video", label: "MP4", tracks: [
+            .init(role: "video", url: URL(string: "https://r1.googlevideo.com/videoplayback?video")!, fileExtension: "mp4"),
+            .init(role: "audio", url: sourceURL, fileExtension: "m4a")], outputExtension: "mp4", hasVideo: true, sourceTitle: "Tiêu đề gốc")
+        let work = Task { @MainActor in try await YouTubeSourceResolver.prepare(choice, expiresAt: Date().addingTimeInterval(30), configuration: config) }
+        for _ in 0..<100 where YouTubeProbeBarrierProtocol.started < 2 { try await Task.sleep(nanoseconds: 20_000_000) }
+        if YouTubeProbeBarrierProtocol.started < 2 { work.cancel() }
+        XCTAssertEqual(YouTubeProbeBarrierProtocol.started, 2)
+        let prepared = try await work.value
+        XCTAssertEqual(prepared.tracks.map { $0.role }, ["video", "audio"]); XCTAssertEqual(prepared.sourceTitle, "Tiêu đề gốc")
+    }
+
+    @MainActor
+    func testSegmentedAACIsByteExactPlayableAndHistoryClearPreservesActiveJobs() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [YouTubePendingProtocol.self]
+        let store = YouTubeDownloadStore(directory: directory, configuration: config, observeApp: false, rangeMinimum: 3)
+        defer { store.invalidate(); try? FileManager.default.removeItem(at: directory) }
+        let data = try fixture("m4a")
+        try store.start(prepared(ext: "m4a", bytes: data.count, title: "Bài hát thử nghiệm", ranges: true))
+        let row = try XCTUnwrap(store.jobs.first), parts = try XCTUnwrap(row.tracks.first?.parts)
+        for index in [2, 0, 1] {
+            let part = parts[index], incoming = directory.appendingPathComponent("fragment-" + String(index))
+            try data.subdata(in: Int(part.offset)..<Int(part.offset + part.length)).write(to: incoming)
+            let response = try XCTUnwrap(HTTPURLResponse(url: sourceURL, statusCode: 206, httpVersion: nil, headerFields: [
+                "Content-Type": "audio/mp4", "Content-Length": String(part.length), "Content-Range": "bytes \(part.offset)-\(part.offset + part.length - 1)/\(data.count)"]))
+            store.receive(id: row.id, role: "audio", response: response, location: incoming, part: index)
+        }
+        try await wait { ["saved", "failed"].contains(store.jobs.first?.state ?? "") }
+        XCTAssertEqual(store.jobs.first?.state, "saved", store.jobs.first?.reason ?? "")
+        let output = try XCTUnwrap(store.output(row.id))
+        XCTAssertEqual(output.lastPathComponent, "Bài hát thử nghiệm.m4a"); XCTAssertEqual(try Data(contentsOf: output), data)
+        try await assertNativeAudioDecodes(output)
+        try store.start(prepared(ext: "m4a", bytes: data.count)); let active = try XCTUnwrap(store.jobs.first?.id)
+        try store.clearHistory(); XCTAssertEqual(store.jobs.map { $0.id }, [active])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: output.path))
+        store.cancel(active); try store.clearHistory(); XCTAssertTrue(store.jobs.isEmpty)
+    }
+
+    @MainActor
+    func testYouTubeFormFiltersAudioVideoAndRendersReadableTitleWithoutStartingDownload() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [YouTubePendingProtocol.self]
+        let store = YouTubeDownloadStore(directory: directory, configuration: config, observeApp: false)
+        defer { store.invalidate(); try? FileManager.default.removeItem(at: directory) }
+        let choices = [YouTubeChoice(id: "aac", label: "Âm thanh · M4A / AAC · 128 kbps", tracks: [], outputExtension: "m4a", hasVideo: false),
+                       YouTubeChoice(id: "opus", label: "Âm thanh · WebM / Opus · 160 kbps", tracks: [], outputExtension: "webm", hasVideo: false),
+                       YouTubeChoice(id: "1080", label: "Video 1080p · MP4 + AAC", tracks: [], outputExtension: "mp4", hasVideo: true),
+                       YouTubeChoice(id: "720", label: "Video 720p · MP4 + AAC", tracks: [], outputExtension: "mp4", hasVideo: true)]
+        let title = "Bài hát mùa thu · Acoustic Session"
+        let controller = YouTubeDownloadsViewController(store: store, resolver: { _ in .init(videoID: "aqz-KE-bpKQ", choices: choices, expiresAt: Date().addingTimeInterval(30), title: title) })
+        let navigation = UINavigationController(rootViewController: controller)
+        navigation.loadViewIfNeeded(); navigation.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844); navigation.view.layoutIfNeeded()
+        controller.input.text = "https://youtu.be/aqz-KE-bpKQ"; controller.input.sendActions(for: .editingChanged)
+        controller.analyze.sendActions(for: .touchUpInside)
+        try await wait { controller.notice.text?.contains(title) == true }
+        controller.view.layoutIfNeeded()
+        XCTAssertEqual(controller.tableView.numberOfRows(inSection: 0), 1); XCTAssertTrue(store.jobs.isEmpty)
+        for width in [390, 320] {
+            navigation.view.frame.size.width = CGFloat(width); navigation.view.layoutIfNeeded(); controller.view.layoutIfNeeded()
+            let image = UIGraphicsImageRenderer(bounds: navigation.view.bounds).image { navigation.view.layer.render(in: $0.cgContext) }
+            let attachment = XCTAttachment(image: image); attachment.name = "YouTube-audio-" + String(width); attachment.lifetime = .keepAlways; add(attachment)
+        }
+        let picker = try XCTUnwrap(controller.extras.arrangedSubviews.compactMap { $0 as? UISegmentedControl }.first)
+        picker.selectedSegmentIndex = 1; picker.sendActions(for: .valueChanged)
+        XCTAssertEqual(controller.tableView.numberOfRows(inSection: 0), 2)
+        XCTAssertTrue(controller.extras.arrangedSubviews.compactMap { $0 as? UIButton }.first?.isHidden == true)
+        controller.input.text = ""; controller.input.sendActions(for: .editingChanged)
+        XCTAssertFalse(controller.analyze.isEnabled); XCTAssertTrue(picker.isHidden); XCTAssertTrue(store.jobs.isEmpty)
+    }
+
+    @MainActor
     private func wait(_ condition: () -> Bool) async throws {
         for _ in 0..<200 {
             if condition() { return }
@@ -199,10 +297,10 @@ final class YouTubeTests: XCTestCase {
         XCTFail("Native file completion timed out")
         throw YouTubeDownloadError.interrupted
     }
-    private func prepared(ext: String, bytes: Int, expires: Date = Date().addingTimeInterval(30)) -> YouTubePreparedDownload {
+    private func prepared(ext: String, bytes: Int, expires: Date = Date().addingTimeInterval(30), title: String? = nil, ranges: Bool = false) -> YouTubePreparedDownload {
         .init(label: "Audio fixture", tracks: [.init(role: "audio",
-            source: .init(url: sourceURL, fileExtension: ext, bytes: Int64(bytes), expiresAt: expires))],
-              outputExtension: ext, hasVideo: false, expiresAt: expires)
+            source: .init(url: sourceURL, fileExtension: ext, bytes: Int64(bytes), expiresAt: expires, acceptsRanges: ranges))],
+              outputExtension: ext, hasVideo: false, expiresAt: expires, sourceTitle: title)
     }
 
     // Generated locally from black frames and silence with FFmpeg; no external media.

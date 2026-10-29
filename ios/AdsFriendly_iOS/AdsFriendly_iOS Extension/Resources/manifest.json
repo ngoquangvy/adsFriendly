@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "default_locale": "en",
   "name": "AdsFriendly",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "description": "Trinh chan popup va banner quang cao thong minh cho Safari",
   "permissions": [
     "activeTab",

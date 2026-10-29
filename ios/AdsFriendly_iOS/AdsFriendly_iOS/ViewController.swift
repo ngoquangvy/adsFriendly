@@ -31,9 +31,11 @@ class ViewController: UIViewController, WKNavigationDelegate, WKScriptMessageHan
         #if !AF_PROTECTION_ONLY
         if let catalog = try? MobileModuleCatalog.load(), catalog.includes("media") {
             let button = UIButton(type: .system)
-            button.setTitle("Media Tools · Downloads", for: .normal)
+            button.setTitle("Tải nhạc & video · Link trực tiếp", for: .normal)
             button.accessibilityIdentifier = "media-downloads"
             button.titleLabel?.font = .preferredFont(forTextStyle: .headline)
+            button.titleLabel?.adjustsFontForContentSizeCategory = true
+            button.titleLabel?.numberOfLines = 0
             button.backgroundColor = .secondarySystemBackground
             button.layer.cornerRadius = 12
             button.addTarget(self, action: #selector(openMedia), for: .touchUpInside)
@@ -49,10 +51,13 @@ class ViewController: UIViewController, WKNavigationDelegate, WKScriptMessageHan
             #if AF_YOUTUBE
             if catalog.includes("youtube") {
                 let youtube = UIButton(type: .system)
-                youtube.setTitle("YouTube · Video / Audio (test)", for: .normal)
+                youtube.setTitle("Tải từ YouTube · Nhạc & video", for: .normal)
                 youtube.accessibilityIdentifier = "youtube-downloads"
                 youtube.backgroundColor = .secondarySystemBackground
                 youtube.layer.cornerRadius = 12
+                youtube.titleLabel?.font = .preferredFont(forTextStyle: .headline)
+                youtube.titleLabel?.adjustsFontForContentSizeCategory = true
+                youtube.titleLabel?.numberOfLines = 0
                 youtube.addTarget(self, action: #selector(openYouTube), for: .touchUpInside)
                 youtube.translatesAutoresizingMaskIntoConstraints = false
                 view.addSubview(youtube)

@@ -1,4 +1,4 @@
-# iOS 1.5.2: two test builds
+# iOS 1.5.3: two test builds
 
 These are separate unsigned IPAs for Sideloadly:
 
@@ -128,3 +128,5 @@ Profiles are managed/removed in Settings → General → VPN & Device Management
 The profile contains removable DNS-over-HTTPS configuration, without a VPN or
 decryption certificate. Queries go to the chosen DNS provider; domain filtering
 does not block arbitrary HTTPS paths or every in-app advertisement.
+
+See [download UI, naming and parallel transfers](DOWNLOAD_EXPERIENCE.md) for the 1.5.3 flow, migration and validation boundaries.

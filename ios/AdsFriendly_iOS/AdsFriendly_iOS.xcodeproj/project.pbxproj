@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        AF3000000000000000000005 /* MobileDownloadsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF3000000000000000000006; };
+        AF3000000000000000000003 /* MobileRangeTransfer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF3000000000000000000004; };
+        AF3000000000000000000001 /* MobileDownloadSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF3000000000000000000002; };
         AFD100000000000000000001 /* DNSProfileDelivery.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFD100000000000000000002; };
         AFD100000000000000000003 /* AdsFriendly-Default-DNS.mobileconfig in Resources */ = {isa = PBXBuildFile; fileRef = AFD100000000000000000004; };
 		AF1000000000000000000011 /* MobileModuleCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF1000000000000000000001; };
@@ -82,6 +85,9 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+        AF3000000000000000000006 /* MobileDownloadsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileDownloadsTests.swift; sourceTree = "<group>"; };
+        AF3000000000000000000004 /* MobileRangeTransfer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileRangeTransfer.swift; sourceTree = "<group>"; };
+        AF3000000000000000000002 /* MobileDownloadSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileDownloadSupport.swift; sourceTree = "<group>"; };
         AFD100000000000000000002 /* DNSProfileDelivery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DNSProfileDelivery.swift; sourceTree = "<group>"; };
         AFD100000000000000000004 /* AdsFriendly-Default-DNS.mobileconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = "AdsFriendly-Default-DNS.mobileconfig"; sourceTree = "<group>"; };
 		AF1000000000000000000001 /* MobileModuleCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileModuleCatalog.swift; sourceTree = "<group>"; };
@@ -157,7 +163,7 @@
 /* Begin PBXGroup section */
 		AF1000000000000000000006 /* Modules */ = {
 			isa = PBXGroup;
-			children = (AF1000000000000000000001, AF1000000000000000000002, AF1000000000000000000003, AF1000000000000000000004, );
+			children = (AF1000000000000000000001, AF1000000000000000000002, AF1000000000000000000003, AF1000000000000000000004, AF3000000000000000000002, AF3000000000000000000004, );
 			path = Modules;
 			sourceTree = "<group>";
 		};
@@ -217,6 +223,7 @@
 			isa = PBXGroup;
 			children = (
 				C1980DE62FD18E0E00001364 /* AdsFriendly_iOSTests.swift */,
+                AF3000000000000000000006 /* MobileDownloadsTests.swift */,
 			);
 			path = AdsFriendly_iOSTests;
 			sourceTree = "<group>";
@@ -446,6 +453,8 @@
 				AF1000000000000000000012 /* MobileSourceProbe.swift in Sources */,
 				AF1000000000000000000013 /* MobileDownloadStore.swift in Sources */,
 				AF1000000000000000000014 /* MobileDownloadsViewController.swift in Sources */,
+                AF3000000000000000000001 /* MobileDownloadSupport.swift in Sources */,
+                AF3000000000000000000003 /* MobileRangeTransfer.swift in Sources */,
 				C1980DC92FD18DFE00001364 /* AppDelegate.swift in Sources */,
 				C1980DD32FD18DFE00001364 /* SceneDelegate.swift in Sources */,
 			);
@@ -456,6 +465,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C1980DE72FD18E0E00001364 /* AdsFriendly_iOSTests.swift in Sources */,
+                AF3000000000000000000005 /* MobileDownloadsTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

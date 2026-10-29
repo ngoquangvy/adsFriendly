@@ -53,8 +53,25 @@ jobs:
           xcodebuild test -project AdsFriendly_YouTube.xcodeproj \
             -scheme AdsFriendly_iOS -configuration Debug \
             -destination "platform=iOS Simulator,id=$DEVICE_ID" \
+            -resultBundlePath build/NativeTests.xcresult \
             -only-testing:AdsFriendly_iOSTests/AdsFriendly_iOSTests \
+            -only-testing:AdsFriendly_iOSTests/MobileDownloadsTests \
             -only-testing:AdsFriendly_iOSTests/YouTubeTests CODE_SIGNING_ALLOWED=NO
+      - name: Export native download UI previews
+        if: always()
+        continue-on-error: true
+        working-directory: ios/AdsFriendly_iOS
+        run: |
+          if test -d build/NativeTests.xcresult; then
+            xcrun xcresulttool export attachments --path build/NativeTests.xcresult --output-path build/NativeScreens
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: AdsFriendly-iOS-YouTube-UI
+          path: ios/AdsFriendly_iOS/build/NativeScreens
+          if-no-files-found: warn
+          retention-days: 14
       - name: Live YouTube source diagnostic (network dependent)
         if: github.event_name == 'push' || inputs.live_probe
         continue-on-error: true
@@ -75,7 +92,7 @@ jobs:
           xcodebuild -project AdsFriendly_YouTube.xcodeproj \
             -scheme AdsFriendly_iOS -sdk iphoneos -configuration Debug \
             -derivedDataPath build/YouTube \
-            CURRENT_PROJECT_VERSION="${{ github.run_number }}" MARKETING_VERSION=1.5.2 \
+            CURRENT_PROJECT_VERSION="${{ github.run_number }}" MARKETING_VERSION=1.5.3 \
             INFOPLIST_KEY_CFBundleDisplayName='AdsFriendly YouTube' \
             CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO build
           APP_PATH="build/YouTube/Build/Products/Debug-iphoneos/AdsFriendly_iOS.app"

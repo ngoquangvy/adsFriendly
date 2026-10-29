@@ -54,7 +54,23 @@ jobs:
           xcodebuild test -project AdsFriendly_iOS.xcodeproj \
             -scheme AdsFriendly_iOS -configuration Debug \
             -destination "platform=iOS Simulator,id=$DEVICE_ID" \
+            -resultBundlePath build/NativeTests.xcresult \
             -only-testing:AdsFriendly_iOSTests CODE_SIGNING_ALLOWED=NO
+      - name: Export native download UI previews
+        if: always()
+        continue-on-error: true
+        working-directory: ios/AdsFriendly_iOS
+        run: |
+          if test -d build/NativeTests.xcresult; then
+            xcrun xcresulttool export attachments --path build/NativeTests.xcresult --output-path build/NativeScreens
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: AdsFriendly-iOS-UI
+          path: ios/AdsFriendly_iOS/build/NativeScreens
+          if-no-files-found: warn
+          retention-days: 14
       - name: Build unsigned IPA for Sideloadly
         working-directory: ios/AdsFriendly_iOS
         run: |
@@ -65,7 +81,7 @@ jobs:
             -configuration Debug \
             -derivedDataPath build/DerivedData \
             CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
-            MARKETING_VERSION=1.5.2 \
+            MARKETING_VERSION=1.5.3 \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \

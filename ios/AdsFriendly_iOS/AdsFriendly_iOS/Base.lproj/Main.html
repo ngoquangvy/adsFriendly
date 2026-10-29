@@ -11,12 +11,14 @@
 </head>
 <body>
     <main>
-      <header><span class="brand">A</span><div><h1>AdsFriendly</h1><p>1.5.2 · Bảo vệ theo từng lớp</p></div></header>
+      <header><span class="brand">A</span><div><h1>AdsFriendly</h1><p>1.5.3 · Bảo vệ & tải nội dung</p></div></header>
       <section>
         <h2>Safari</h2>
         <p>Bật AdsFriendly trong Cài đặt → Ứng dụng → Safari → Tiện ích và cấp quyền trên website.</p>
+        <details><summary>Cách chặn quảng cáo và nhập Package</summary>
         <p>Trong popup AdsFriendly, kiểm tra “Safari URL filter active”. Block sẽ chặn URL quảng cáo, tab đáng ngờ và tự ẩn banner có bằng chứng rõ. Nội dung chưa chắc chắn mới được hỏi Hide / Keep.</p>
         <p>Package Chrome: mở AdsFriendly trong Safari → Import Settings Package. Allow và ngoại lệ Keep vẫn được tôn trọng.</p>
+        </details>
       </section>
       <section>
         <h2>DNS cho các ứng dụng khác</h2>
@@ -24,11 +26,13 @@
         <label class="consent"><input id="dns-consent" type="checkbox"><span>Tôi đồng ý gửi truy vấn domain tới máy chủ DNS đã chọn. Việc lọc có thể ảnh hưởng app dùng chung domain.</span></label>
         <button id="install-dns" type="button" disabled>Cài DNS mặc định · AdGuard</button>
         <p id="dns-status" role="status" aria-live="polite">Chưa xác nhận DNS hệ thống. Nhận profile không có nghĩa DNS đã bật.</p>
+        <details><summary>Cách cài DNS lần đầu</summary>
         <ol id="dns-steps">
           <li>Tích ô đồng ý rồi bấm <strong>Cài DNS mặc định</strong>; trình duyệt mặc định sẽ nhận profile từ app. Nên dùng Safari.</li>
           <li>Cho phép tải profile. Nếu Safari lưu thành file, mở file <strong>AdsFriendly-DNS.mobileconfig</strong> đã tải.</li>
           <li>Vào <strong>Cài đặt → Đã tải về hồ sơ → Cài đặt</strong> và xác nhận. Không cần gửi file qua Mail.</li>
         </ol>
+        </details>
         <details id="dns-controls"><summary>Bật / tắt DNS trong Cài đặt</summary>
           <p>Mở <strong>Cài đặt → Cài đặt chung → VPN &amp; Quản lý thiết bị → DNS</strong>. Chọn AdsFriendly DNS để dùng cấu hình, hoặc chọn <strong>Tự động</strong> để trở về DNS mạng.</p>
           <p>Để gỡ hoàn toàn: VPN &amp; Quản lý thiết bị → AdsFriendly DNS → Xóa cấu hình. App không có công tắc thay đổi trực tiếp profile của iOS và không tự xác nhận được trạng thái này.</p>

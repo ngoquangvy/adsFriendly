@@ -45,19 +45,19 @@ enum MobileSourceError: LocalizedError {
     case configuration, invalidURL, resolverRequired, rejected(Int), unsupported, expired, network, historyFull
     var errorDescription: String? {
         switch self {
-        case .configuration: return "Media module configuration is unavailable. Safari protection is unchanged."
-        case .invalidURL: return "Paste one public HTTPS link without embedded credentials or a local address."
+        case .configuration: return "Chưa tải được cấu hình tải file. Đóng màn hình và thử lại."
+        case .invalidURL: return "Dán một link HTTPS công khai, không chứa tài khoản hay địa chỉ mạng nội bộ."
         case .resolverRequired:
             #if AF_YOUTUBE
-            return "Đây là link YouTube. Đóng Media Tools và mở mục YouTube · Video / Audio để chọn nguồn tải."
+            return "Đây là link YouTube. Quay lại và chọn Tải từ YouTube để chọn âm thanh hoặc video."
             #else
             return "Link YouTube cần bản YouTube thử nghiệm riêng. Bản cơ bản này tải link file nhạc/video HTTPS trực tiếp."
             #endif
-        case .rejected(let status): return "Source rejected the request (HTTP \(status)). Browser sessions are not copied."
-        case .unsupported: return "Not a supported direct audio/video file. Player pages, playlists and DRM require a separate resolver."
-        case .expired: return "The source check expired. Check again before downloading."
-        case .network: return "Source check failed. Check your network or the source's browser-session requirements."
-        case .historyFull: return "Download history is full (50 items). Forget a finished item before starting another. Files are kept."
+        case .rejected(let status): return "Máy chủ từ chối yêu cầu (HTTP \(status)). Hãy kiểm tra link hoặc thử lại sau."
+        case .unsupported: return "Link chưa trỏ tới file nhạc/video được hỗ trợ. Trang phát, playlist hoặc nội dung DRM cần bộ phân tích riêng."
+        case .expired: return "Nguồn kiểm tra đã hết hạn. Bấm Phân tích link lại trước khi tải."
+        case .network: return "Chưa kiểm tra được nguồn. Kiểm tra mạng hoặc thử link file công khai khác."
+        case .historyFull: return "Lịch sử đã đủ 50 mục. Xóa lịch sử các lượt đã kết thúc để tải tiếp; file được giữ lại."
         }
     }
 }

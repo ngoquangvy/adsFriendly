@@ -34,6 +34,13 @@ private final class MobileProbeFixtureProtocol: URLProtocol {
         case "html.mp3": headers["Content-Type"] = "text/html"
         case "missing.mp3": status = 404
         case "unknown.mp4": headers = ["Content-Type": "video/mp4"]
+        case "ranges.mp3", "ignores-range.mp3", "rejects-range.mp3":
+            headers["Content-Length"] = "9000000"; headers["Accept-Ranges"] = "bytes"; headers["ETag"] = "\"fixture-v1\""
+            headers["Content-Disposition"] = "attachment; filename=Named-song.mp3"
+            if request.httpMethod == "GET", url.lastPathComponent == "ranges.mp3" {
+                status = 206; headers["Content-Range"] = "bytes 0-0/9000000"; headers["Content-Length"] = "1"
+            }
+            if request.httpMethod == "GET", url.lastPathComponent == "rejects-range.mp3" { status = 416 }
         default: status = 404
         }
         guard let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers) else { return }
@@ -137,6 +144,13 @@ final class AdsFriendly_iOSTests: XCTestCase {
         }
         let unknown = try await check("unknown.mp4").get()
         XCTAssertNil(unknown.bytes)
+        let ranges = try await check("ranges.mp3").get()
+        XCTAssertTrue(ranges.acceptsRanges); XCTAssertEqual(ranges.bytes, 9_000_000)
+        XCTAssertEqual(ranges.filename, "Named-song.mp3"); XCTAssertEqual(ranges.rangeValidator, "\"fixture-v1\"")
+        let ignored = try await check("ignores-range.mp3").get()
+        XCTAssertFalse(ignored.acceptsRanges, "An Accept-Ranges claim alone must not enable parallel file transfer")
+        let rejected = try await check("rejects-range.mp3").get()
+        XCTAssertFalse(rejected.acceptsRanges); XCTAssertEqual(rejected.bytes, 9_000_000)
         probe.cancel()
     }
 
@@ -156,8 +170,8 @@ final class AdsFriendly_iOSTests: XCTestCase {
         let media = MobileDownloadsViewController(catalog: try MobileModuleCatalog.load())
         media.loadViewIfNeeded()
         let all = descendants(media.view)
-        let download = try XCTUnwrap(all.compactMap { $0 as? UIButton }.first { $0.accessibilityIdentifier == "media-confirm" })
-        XCTAssertFalse(download.isEnabled, "Opening Media Tools must not start or authorize a download.")
+        let analyze = try XCTUnwrap(all.compactMap { $0 as? UIButton }.first { $0.accessibilityIdentifier == "media-check" })
+        XCTAssertFalse(analyze.isEnabled, "An empty form must not start analysis or a transfer.")
         let html = try String(contentsOf: XCTUnwrap(Bundle.main.url(forResource: "Main", withExtension: "html")), encoding: .utf8)
         XCTAssertTrue(html.contains("export-dns"))
     }
