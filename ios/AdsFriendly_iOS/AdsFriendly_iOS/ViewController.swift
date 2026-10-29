@@ -11,6 +11,8 @@ import WebKit
 class ViewController: UIViewController, WKNavigationDelegate, WKScriptMessageHandler {
 
     @IBOutlet var webView: WKWebView!
+    private var dnsDelivery: DNSProfileDelivery?
+    private var dnsBackgroundTask: UIBackgroundTaskIdentifier = .invalid
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -90,7 +92,10 @@ class ViewController: UIViewController, WKNavigationDelegate, WKScriptMessageHan
     #endif
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        // Override point for customization.
+        let endpoint = UserDefaults.standard.string(forKey: "dns.customEndpointDraft") ?? DNSProfile.defaultEndpoint
+        guard let data = try? JSONSerialization.data(withJSONObject: ["endpoint": endpoint]),
+              let json = String(data: data, encoding: .utf8) else { return }
+        webView.evaluateJavaScript("window.handleDNSPreferences && window.handleDNSPreferences(" + json + ")", completionHandler: nil)
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -103,11 +108,19 @@ class ViewController: UIViewController, WKNavigationDelegate, WKScriptMessageHan
             UIApplication.shared.open(URL(string: "https://adguard-dns.io/en/public-dns.html")!)
             return
         }
-        guard action == "exportDNSProfile", request["consent"] as? Bool == true else {
+        guard ["installDefaultDNSProfile", "installCustomDNSProfile", "exportDNSProfile"].contains(action),
+              request["consent"] as? Bool == true else {
             reply("error", "Tích ô đồng ý trước khi xuất file DNS."); return
         }
         do {
-            let data = try DNSProfile.make(endpoint: request["endpoint"] as? String ?? "")
+            let data: Data
+            if action == "installDefaultDNSProfile" { data = try DNSProfile.bundledDefault() }
+            else {
+                let endpoint = request["endpoint"] as? String ?? ""
+                data = try DNSProfile.make(endpoint: endpoint)
+                UserDefaults.standard.set(endpoint.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "dns.customEndpointDraft")
+            }
+            if action != "exportDNSProfile" { deliverDNSProfile(data); return }
             let file = FileManager.default.temporaryDirectory.appendingPathComponent("AdsFriendly-DNS.mobileconfig")
             try data.write(to: file, options: .atomic)
             let share = UIActivityViewController(activityItems: [file], applicationActivities: nil)
@@ -124,6 +137,43 @@ class ViewController: UIViewController, WKNavigationDelegate, WKScriptMessageHan
             }
             present(share, animated: true)
         } catch { reply("error", error.localizedDescription) }
+    }
+
+    private func deliverDNSProfile(_ data: Data) {
+        dnsDelivery?.stop()
+        let delivery = DNSProfileDelivery()
+        dnsDelivery = delivery
+        dnsBackgroundTask = UIApplication.shared.beginBackgroundTask(withName: "DNS profile handoff") { [weak self, weak delivery] in
+            guard let self = self, let delivery = delivery, self.dnsDelivery === delivery else { return }
+            delivery.stop()
+        }
+        delivery.start(data: data, ready: { [weak self, weak delivery] result in
+            guard let self = self, let delivery = delivery, self.dnsDelivery === delivery else { return }
+            switch result {
+            case .success(let url):
+                UIApplication.shared.open(url, options: [:]) { [weak self, weak delivery] opened in
+                    guard let self = self, let delivery = delivery, self.dnsDelivery === delivery else { return }
+                    if !opened {
+                        delivery.stop()
+                        self.reply("error", "Không mở được trình duyệt. Dùng Xuất file dự phòng trong DNS riêng.")
+                    } else {
+                        self.reply("ready", "Đã mở trình duyệt để nhận profile. Cho phép tải, rồi vào Cài đặt → Đã tải về hồ sơ → Cài đặt. App chưa xác nhận DNS đã bật.")
+                    }
+                }
+            case .failure:
+                self.reply("error", "Không chuẩn bị được profile cho trình duyệt. Thử lại hoặc dùng Xuất file dự phòng.")
+            }
+        }, completion: { [weak self, weak delivery] served in
+            guard let self = self, let delivery = delivery, self.dnsDelivery === delivery else { return }
+            if self.dnsBackgroundTask != .invalid {
+                UIApplication.shared.endBackgroundTask(self.dnsBackgroundTask)
+                self.dnsBackgroundTask = .invalid
+            }
+            self.dnsDelivery = nil
+            self.reply(served ? "ready" : "error", served
+                ? "Đã chuyển file tới trình duyệt, chưa xác nhận DNS đã bật. Hoàn tất cài trong Cài đặt; bật/tắt cũng thực hiện tại đó."
+                : "Lượt nhận profile đã kết thúc. Nếu chưa nhận được, bấm Cài DNS lần nữa hoặc dùng Xuất file dự phòng.")
+        })
     }
 
     private func reply(_ kind: String, _ message: String) {
@@ -143,9 +193,21 @@ class ViewController: UIViewController, WKNavigationDelegate, WKScriptMessageHan
 
 enum DNSProfile {
     static let defaultEndpoint = "https://dns.adguard-dns.com/dns-query"
+    static func bundledDefault() throws -> Data {
+        guard let url = Bundle.main.url(forResource: "AdsFriendly-Default-DNS", withExtension: "mobileconfig") else {
+            throw NSError(domain: "AdsFriendlyDNS", code: 2, userInfo: [NSLocalizedDescriptionKey: "Thiếu profile DNS mặc định. Cài lại app từ bản build đã kiểm tra."])
+        }
+        let data = try Data(contentsOf: url)
+        let actual = try PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? NSDictionary
+        let expected = try PropertyListSerialization.propertyList(from: make(endpoint: defaultEndpoint), options: [], format: nil) as? NSDictionary
+        guard let actual = actual, let expected = expected, actual == expected else {
+            throw NSError(domain: "AdsFriendlyDNS", code: 3, userInfo: [NSLocalizedDescriptionKey: "Profile mặc định không khớp. Dùng bản build đã kiểm tra."])
+        }
+        return data
+    }
     static func make(endpoint: String) throws -> Data {
         let input = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard input.count <= 2048, !input.isEmpty,
+        guard input.count <= 2048, input.utf8.count <= 8192, !input.isEmpty,
               input.rangeOfCharacter(from: .controlCharacters) == nil,
               let parts = URLComponents(string: input), parts.scheme?.lowercased() == "https",
               let host = parts.host, !host.isEmpty,

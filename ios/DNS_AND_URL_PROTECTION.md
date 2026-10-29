@@ -148,6 +148,11 @@ are added.
 
 ## DNS first stage (no special signing entitlement)
 
+In 1.5.1 the default profile is bundled and an explicit install action hands it
+to the default browser over a bounded loopback listener. File export is now a
+fallback. See [profile handoff and manual system controls](DNS_PROFILE_HANDOFF.md).
+The limitations below about system activation and domain filtering still apply.
+
 The containing app creates a removable, unsigned .mobileconfig DNS-over-HTTPS
 profile. It requires explicit consent, validates HTTPS endpoint syntax, and
 exports through the native share sheet. The default is AdGuard public filtering
@@ -155,7 +160,7 @@ DNS; a custom provider endpoint may be supplied. The profile contains only the
 DNS payload, no certificate, VPN, enrollment or device-management payload.
 Stable identifiers support replacing an earlier AdsFriendly profile.
 
-Install manually from Mail/Files in iOS Settings. If Files does not offer the
+Install manually in iOS Settings after browser delivery (or Mail/Files fallback). If Files does not offer the
 installation flow on a device version, use Mail or the provider's Safari
 download instructions. If installation is deferred too long, iOS can delete
 the pending download; export/open it again. The app never reports profile
@@ -192,6 +197,7 @@ On a physical iPhone, verify:
    VPN interactions, cancellation and malformed endpoint inputs.
 
 References:
+
 - https://developer.apple.com/documentation/safariservices/blocking-content-with-your-safari-web-extension
 - https://developer.apple.com/documentation/networkextension/dns-settings
 - https://developer.apple.com/documentation/devicemanagement/dnssettings

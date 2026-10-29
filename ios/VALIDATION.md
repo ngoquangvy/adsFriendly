@@ -86,4 +86,6 @@ YouTube/HLS resolver. See [media composition and acceptance](MEDIA_DOWNLOADS.md)
 The separate 1.5.0 YouTube test edition is documented in
 [two-build isolation and acceptance](YOUTUBE_TEST_EDITION.md); basic builds keep
 the direct-file boundary.
+The 1.5.1 bundled DNS profile/browser handoff and actual enable/disable limits
+are covered in [DNS profile validation](DNS_PROFILE_HANDOFF.md).
 Export/import transfers the shared package explicitly, without background sync.

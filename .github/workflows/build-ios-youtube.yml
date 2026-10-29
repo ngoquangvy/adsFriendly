@@ -75,13 +75,14 @@ jobs:
           xcodebuild -project AdsFriendly_YouTube.xcodeproj \
             -scheme AdsFriendly_iOS -sdk iphoneos -configuration Debug \
             -derivedDataPath build/YouTube \
-            CURRENT_PROJECT_VERSION="${{ github.run_number }}" MARKETING_VERSION=1.5.0 \
+            CURRENT_PROJECT_VERSION="${{ github.run_number }}" MARKETING_VERSION=1.5.1 \
             INFOPLIST_KEY_CFBundleDisplayName='AdsFriendly YouTube' \
             CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO build
           APP_PATH="build/YouTube/Build/Products/Debug-iphoneos/AdsFriendly_iOS.app"
           python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); assert c["profile"] == "youtube"; assert "youtube" in [m["id"] for m in c["modules"]]' "$APP_PATH/mobile-modules.json"
           test -f "$APP_PATH/YouTubeKit-LICENSE.txt"
           test -f "$APP_PATH/DNS.js"
+          test -f "$APP_PATH/AdsFriendly-Default-DNS.mobileconfig"
           test -f "$APP_PATH/PlugIns/AdsFriendly_iOS Extension.appex/packages/default-settings-package.json"
           for binary in "$APP_PATH/AdsFriendly_iOS" "$APP_PATH"/*.dylib; do
             if test -f "$binary"; then nm "$binary" >> build/youtube-symbols.txt; fi

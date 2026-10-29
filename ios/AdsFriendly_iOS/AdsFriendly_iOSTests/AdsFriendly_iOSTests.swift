@@ -183,6 +183,79 @@ final class AdsFriendly_iOSTests: XCTestCase {
         XCTAssertNil(profile["PayloadCertificateFileName"])
     }
 
+    func testBundledDefaultDNSMatchesNativeProfileAndStableReplacementIdentity() throws {
+        let bundled = try DNSProfile.bundledDefault()
+        let actual = try XCTUnwrap(PropertyListSerialization.propertyList(from: bundled, options: [], format: nil) as? NSDictionary)
+        let generated = try XCTUnwrap(PropertyListSerialization.propertyList(from: DNSProfile.make(endpoint: DNSProfile.defaultEndpoint), options: [], format: nil) as? NSDictionary)
+        XCTAssertEqual(actual, generated)
+        let custom = try XCTUnwrap(PropertyListSerialization.propertyList(from: DNSProfile.make(endpoint: "https://private.example/dns-query?id=test"), options: [], format: nil) as? NSDictionary)
+        XCTAssertEqual(actual["PayloadUUID"] as? String, custom["PayloadUUID"] as? String)
+        XCTAssertEqual(actual["PayloadIdentifier"] as? String, custom["PayloadIdentifier"] as? String)
+    }
+
+    func testDNSHandoffAcceptsOnlyExactRouteAndLoopbackHost() {
+        let path = "/test-token/AdsFriendly-DNS.mobileconfig"
+        let valid = "GET \(path) HTTP/1.1\r\nHost: 127.0.0.1:32000\r\n\r\n"
+        XCTAssertTrue(DNSProfileDelivery.allows(valid, path: path, port: 32000))
+        XCTAssertTrue(DNSProfileDelivery.allows(valid.replacingOccurrences(of: "GET ", with: "HEAD "), path: path, port: 32000))
+        for invalid in [
+            valid.replacingOccurrences(of: "GET ", with: "POST "),
+            valid.replacingOccurrences(of: "/test-token/", with: "/wrong-token/"),
+            valid.replacingOccurrences(of: "127.0.0.1:32000", with: "evil.example:32000"),
+            valid.replacingOccurrences(of: "HTTP/1.1", with: "HTTP/2"),
+            valid.replacingOccurrences(of: "\r\n\r\n", with: "\r\nHost: evil.example\r\n\r\n"),
+            valid.replacingOccurrences(of: "\r\n\r\n", with: "\r\nTransfer-Encoding: chunked\r\n\r\n"),
+            valid.replacingOccurrences(of: "\r\n\r\n", with: "\r\nContent-Length: 10\r\n\r\n")
+        ] { XCTAssertFalse(DNSProfileDelivery.allows(invalid, path: path, port: 32000)) }
+    }
+
+    @MainActor
+    func testDNSProfileLoopbackHandoffServesExactBytesWithBoundedBrowserRetries() async throws {
+        let server = DNSProfileDelivery()
+        defer { server.stop() }
+        let data = try DNSProfile.bundledDefault()
+        let url: URL = try await withCheckedThrowingContinuation { continuation in
+            server.start(data: data, ready: { continuation.resume(with: $0) }, completion: { _ in })
+        }
+        XCTAssertEqual(url.host, "127.0.0.1")
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 3
+        let client = URLSession(configuration: config)
+        defer { client.invalidateAndCancel() }
+        let wrong = url.deletingLastPathComponent().appendingPathComponent("wrong.mobileconfig")
+        let (_, notFound) = try await client.data(from: wrong)
+        XCTAssertEqual((notFound as? HTTPURLResponse)?.statusCode, 404)
+        var head = URLRequest(url: url); head.httpMethod = "HEAD"
+        let (empty, headerResponse) = try await client.data(for: head)
+        XCTAssertEqual((headerResponse as? HTTPURLResponse)?.statusCode, 200)
+        XCTAssertEqual(empty.count, 0)
+        let (received, response) = try await client.data(from: url)
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+        XCTAssertEqual(response.mimeType, "application/x-apple-aspen-config")
+        XCTAssertEqual(received, data)
+        for _ in 0..<2 {
+            let (retried, retriedResponse) = try await client.data(from: url)
+            XCTAssertEqual((retriedResponse as? HTTPURLResponse)?.statusCode, 200)
+            XCTAssertEqual(retried, data)
+        }
+        let (_, replay) = try await client.data(from: url)
+        XCTAssertEqual((replay as? HTTPURLResponse)?.statusCode, 404)
+    }
+
+    @MainActor
+    func testDNSHandoffExpiresAndCompletesOnlyOnceWithoutActivation() async throws {
+        let server = DNSProfileDelivery(lifetime: 0.1)
+        var completions: [Bool] = []
+        let outcome: Result<URL, Error> = await withCheckedContinuation { continuation in
+            server.start(data: Data("profile-fixture".utf8), ready: { continuation.resume(returning: $0) },
+                         completion: { completions.append($0) })
+        }
+        if case .failure(let error) = outcome { XCTAssertEqual(error as? DNSProfileDelivery.DeliveryError, .expired) }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        server.stop()
+        XCTAssertEqual(completions, [false], "Expiration/stop must end the handoff once without claiming delivery or activation.")
+    }
+
     func testDNSProfileRejectsInsecureOrCredentialBearingEndpoints() {
         for endpoint in ["", "http://dns.example/query", "https://user:secret@dns.example/query",
                          "https://dns.example/query#fragment", "javascript:alert(1)", "https://",

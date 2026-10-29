@@ -65,7 +65,7 @@ jobs:
             -configuration Debug \
             -derivedDataPath build/DerivedData \
             CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
-            MARKETING_VERSION=1.5.0 \
+            MARKETING_VERSION=1.5.1 \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
@@ -78,6 +78,7 @@ jobs:
           test -f "$EXT_PATH/packages/default-settings-package.json"
           test -f "$EXT_PATH/packages/advertising-rules.json"
           test -f "$APP_PATH/DNS.js"
+          test -f "$APP_PATH/AdsFriendly-Default-DNS.mobileconfig"
           test -f "$APP_PATH/mobile-modules.json"
           python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); assert c["profile"] == "full"; assert "media" in [m["id"] for m in c["modules"]]' "$APP_PATH/mobile-modules.json"
           for binary in "$APP_PATH/AdsFriendly_iOS" "$APP_PATH"/*.dylib; do

@@ -105,6 +105,10 @@ Hide/Keep/Show, Package import/undo and DNS export after replacing the IPA.
 
 ## DNS profile instructions
 
+Version 1.5.1 replaces the default Mail/export path with a bundled profile and
+browser handoff; see [DNS handoff](DNS_PROFILE_HANDOFF.md). The paragraph below
+describes the older 1.5.0 fallback, which is still available under custom DNS.
+
 The main screen now shows the full sequence: keep the default endpoint unless
 using your own resolver → consent → Export DNS file → Files/Mail → open the
 `.mobileconfig` → Settings → Profile Downloaded → Install. If opening a local

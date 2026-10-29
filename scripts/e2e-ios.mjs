@@ -1484,6 +1484,47 @@ try {
     await session.evaluate("document.getElementById('export-dns').disabled"),
     false,
   );
+  await session.evaluate(
+    "document.getElementById('dns-custom').open=true;document.getElementById('dns-controls').open=true",
+  );
+  for (const width of [320, 390, 768]) {
+    await session.send("Emulation.setDeviceMetricsOverride", {
+      width,
+      height: 844,
+      deviceScaleFactor: 1,
+      mobile: true,
+    });
+    assert.equal(
+      await session.evaluate(
+        "document.documentElement.scrollWidth<=innerWidth",
+      ),
+      true,
+      "Expanded DNS settings must remain within the phone viewport",
+    );
+  }
+  await session.evaluate(
+    "document.getElementById('dns-endpoint').value='invalid-custom-address';document.getElementById('install-dns').click();document.getElementById('install-dns').click()",
+  );
+  assert.equal(
+    await session.evaluate("nativeDNSMessages.length"),
+    2,
+    "Repeated default install taps are coalesced",
+  );
+  assert.equal(
+    await session.evaluate("nativeDNSMessages[1].action"),
+    "installDefaultDNSProfile",
+  );
+  assert.equal(
+    await session.evaluate("'endpoint' in nativeDNSMessages[1]"),
+    false,
+  );
+  await session.evaluate(
+    "handleDNSResult({kind:'ready',message:'File delivered; DNS state remains unconfirmed.'})",
+  );
+  assert.equal(
+    await session.evaluate("document.getElementById('install-dns').disabled"),
+    false,
+  );
   console.log(
     "Chrome/iOS review browser checks passed: visible-content gates, automatic exact-region marker, stale-target cancellation, correct target fingerprint, storage verification vs quota errors, Show after quota failure, saved choices, dedupe and 320–980px layout.",
   );
