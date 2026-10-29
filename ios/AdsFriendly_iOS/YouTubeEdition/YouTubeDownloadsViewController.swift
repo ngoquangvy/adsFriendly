@@ -25,6 +25,9 @@ final class YouTubeDownloadsViewController: MobileDownloadScreen {
         super.viewDidLoad()
         input.accessibilityIdentifier = "youtube-source"; analyze.accessibilityIdentifier = "youtube-check"; notice.accessibilityIdentifier = "youtube-status"
         kind.selectedSegmentIndex = 0; kind.isHidden = true
+        kind.selectedSegmentTintColor = .systemBlue
+        kind.setTitleTextAttributes([.foregroundColor: UIColor.white], for: .selected)
+        kind.setTitleTextAttributes([.foregroundColor: UIColor.label], for: .normal)
         kind.accessibilityIdentifier = "youtube-media-kind"
         kind.addTarget(self, action: #selector(selectionChanged), for: .valueChanged)
         originals.isHidden = true; originals.configuration = .plain(); originals.setTitle("Định dạng khác · WebM", for: .normal)

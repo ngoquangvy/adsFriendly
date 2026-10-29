@@ -113,7 +113,15 @@ class MobileDownloadScreen: UITableViewController, QLPreviewControllerDataSource
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .systemGroupedBackground
+        let appearance = UINavigationBarAppearance(); appearance.configureWithOpaqueBackground()
+        appearance.backgroundColor = .systemGroupedBackground
+        appearance.titleTextAttributes = [.foregroundColor: UIColor.label]
+        appearance.largeTitleTextAttributes = [.foregroundColor: UIColor.label]
+        navigationItem.standardAppearance = appearance; navigationItem.scrollEdgeAppearance = appearance; navigationItem.compactAppearance = appearance
+        navigationController?.navigationBar.tintColor = .systemBlue
         navigationItem.leftBarButtonItem = UIBarButtonItem(barButtonSystemItem: .close, target: self, action: #selector(closeScreen))
+        navigationItem.leftBarButtonItem?.tintColor = .systemBlue
+        clear.tintColor = .systemBlue
         clear.setImage(UIImage(systemName: "clock.badge.xmark"), for: .normal)
         clear.accessibilityLabel = "Xóa lịch sử tải"; clear.accessibilityIdentifier = "downloads-clear-history"
         clear.addTarget(self, action: #selector(clearTapped), for: .touchUpInside)
@@ -146,6 +154,7 @@ class MobileDownloadScreen: UITableViewController, QLPreviewControllerDataSource
         [input, paste, analyze].forEach { $0.heightAnchor.constraint(greaterThanOrEqualToConstant: 48).isActive = true }
         tableView.tableHeaderView = header; tableView.keyboardDismissMode = .interactive
         tableView.rowHeight = UITableView.automaticDimension; tableView.estimatedRowHeight = 92
+        tableView.sectionHeaderTopPadding = 12
         tableView.register(MobileTransferCell.self, forCellReuseIdentifier: "transfer")
     }
     override func viewDidLayoutSubviews() {
@@ -196,6 +205,13 @@ class MobileDownloadScreen: UITableViewController, QLPreviewControllerDataSource
         let cell = UITableViewCell(style: .default, reuseIdentifier: nil); cell.textLabel?.text = text
         cell.textLabel?.numberOfLines = 0; cell.textLabel?.font = .preferredFont(forTextStyle: .subheadline)
         cell.textLabel?.textColor = .secondaryLabel; cell.selectionStyle = .none; return cell
+    }
+    override func tableView(_ tableView: UITableView, heightForHeaderInSection section: Int) -> CGFloat {
+        self.tableView(tableView, numberOfRowsInSection: section) == 0 ? .leastNormalMagnitude : UITableView.automaticDimension
+    }
+    override func tableView(_ tableView: UITableView, heightForFooterInSection section: Int) -> CGFloat {
+        if self.tableView(tableView, numberOfRowsInSection: section) == 0 { return .leastNormalMagnitude }
+        return self.tableView(tableView, titleForFooterInSection: section) == nil ? 8 : UITableView.automaticDimension
     }
     func openFile(_ url: URL) {
         if url.pathExtension.lowercased() == "webm" || !QLPreviewController.canPreview(url as NSURL) {

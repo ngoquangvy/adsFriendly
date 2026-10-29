@@ -95,6 +95,24 @@ final class MobileDownloadsTests: XCTestCase {
         store.cancel(active); try store.clearHistory(); XCTAssertTrue(store.records.isEmpty)
     }
     @MainActor
+    func testReceivedRangePartsRecoverAfterAppRestart() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let id = UUID().uuidString, data = Data("0123456789".utf8)
+        var parts = try XCTUnwrap(MobileRangeTransfer.plan(source(), minimum: 3))
+        for index in parts.indices {
+            parts[index].bytes = parts[index].length; parts[index].received = true
+            try data.subdata(in: Int(parts[index].offset)..<Int(parts[index].offset + parts[index].length)).write(to: directory.appendingPathComponent("\(id)-\(index).range"))
+        }
+        let record = MobileDownloadRecord(id: id, filename: "Khôi phục.mp3", state: "finishing", bytes: 10, total: 10, folder: id, parts: parts)
+        try JSONEncoder().encode([record]).write(to: directory.appendingPathComponent("history.json"))
+        let store = MobileDownloadStore(directory: directory, configuration: configuration())
+        defer { store.invalidate(); try? FileManager.default.removeItem(at: directory) }
+        for _ in 0..<100 where store.records.first?.state != "saved" { try await Task.sleep(nanoseconds: 50_000_000) }
+        XCTAssertEqual(store.records.first?.state, "saved")
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(store.output(id))), data)
+    }
+    @MainActor
     func testIgnoredRangeUsesOneValidatedFullResponseAndBadRangeCannotSave() throws {
         for ignored in [true, false] {
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

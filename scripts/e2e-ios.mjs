@@ -479,6 +479,10 @@ try {
     testOther.style.cssText = 'position:fixed;top:220px;width:300px;height:70px';
     testOther.textContent = 'Advertisement'; document.body.appendChild(testOther); AF_scanBanners();
   `);
+  await waitForPageCondition(
+    "document.getElementById('adsfriendly-popup-container') !== null",
+    "A separate visible ad receives its own review after the scheduled scan",
+  );
   assert.equal(
     await session.evaluate(
       "document.getElementById('adsfriendly-popup-container') !== null",
