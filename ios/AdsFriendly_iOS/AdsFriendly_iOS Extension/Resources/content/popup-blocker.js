@@ -256,7 +256,7 @@
           ready: !!window.AF_DOM,
           enabled: isProtectionEnabled(),
           host: window.location.hostname,
-          version: "1.5.1",
+          version: "1.5.2",
           dom: window.AF_DOM?.state(),
         });
       });

@@ -57,11 +57,16 @@ struct YouTubeChoice {
     let tracks: [YouTubeTrack]
     let outputExtension: String
     let hasVideo: Bool
+    var isIPhoneCompatible: Bool { hasVideo ? outputExtension == "mp4" : outputExtension == "m4a" }
 }
 struct YouTubeSources {
     let videoID: String
     let choices: [YouTubeChoice]
     let expiresAt: Date
+    var hasOriginalFormats: Bool { choices.contains { !$0.isIPhoneCompatible } }
+    func choicesForDisplay(includeOriginals: Bool) -> [YouTubeChoice] {
+        choices.filter { includeOriginals || $0.isIPhoneCompatible }
+    }
 }
 struct YouTubePreparedTrack {
     let role: String
@@ -81,9 +86,11 @@ struct YouTubeAudioCandidate {
     let bitrate: Int?
     static func bestPerFormat(_ candidates: [YouTubeAudioCandidate]) -> [YouTubeAudioCandidate] {
         let sorted = candidates.sorted {
+            // Prefer native AAC playback, then the best reported bitrate within
+            // each format. Opus and AAC bitrate are not quality-equivalent.
+            if ($0.fileExtension == "m4a") != ($1.fileExtension == "m4a") { return $0.fileExtension == "m4a" }
             let a = max($0.bitrate ?? 0, 0), b = max($1.bitrate ?? 0, 0)
-            if a != b { return a > b }
-            return $0.fileExtension == "m4a" && $1.fileExtension != "m4a"
+            return a > b
         }
         var seen = Set<String>()
         return sorted.filter { ["m4a", "webm"].contains($0.fileExtension) && seen.insert($0.fileExtension).inserted }
@@ -136,9 +143,9 @@ enum YouTubeSourceResolver {
             let ext = audio.fileExtension
             let known = (audio.bitrate ?? 0) > 0
             let bitrate = known ? " · \((audio.bitrate ?? 0) / 1000) kbps" : " · chưa biết bitrate"
-            let best = choices.isEmpty && known ? " · bitrate cao nhất tìm được" : ""
             let format = ext == "m4a" ? "M4A / AAC" : "WebM / Opus"
-            choices.append(.init(id: "audio-\(ext)", label: "Audio · \(format)\(bitrate)\(best)",
+            let playback = ext == "m4a" ? (known ? " · AAC tốt nhất tìm được · phù hợp iPhone" : " · phù hợp iPhone") : " · cần trình phát hỗ trợ WebM"
+            choices.append(.init(id: "audio-\(ext)", label: "Audio · \(format)\(bitrate)\(playback)",
                 tracks: [.init(role: "audio", url: audio.url, fileExtension: ext)], outputExtension: ext, hasVideo: false))
         }
         var resolutions = Set<Int>()

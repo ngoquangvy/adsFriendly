@@ -2,7 +2,7 @@ name: Diagnose iOS YouTube provider
 on:
   workflow_dispatch:
   push:
-    branches: ["codex/**"]
+    branches: ["ios/**"]
     paths:
       - "ios/AdsFriendly_iOS/YouTubeEdition/Tools/ProviderProbe/**"
       - ".github/workflows/diagnose-ios-youtube.yml"

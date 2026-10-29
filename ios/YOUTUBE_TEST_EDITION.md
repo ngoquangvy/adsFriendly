@@ -1,4 +1,4 @@
-# iOS 1.5.0: two test builds
+# iOS 1.5.2: two test builds
 
 These are separate unsigned IPAs for Sideloadly:
 
@@ -56,12 +56,17 @@ In the YouTube edition:
    confirmation dialog; signed source URLs/checks expire.
 4. Confirm download. Swipe a job to cancel, or Share a saved result to Files.
 
-Audio selects the highest declared average bitrate (otherwise declared bitrate)
-among available AAC/M4A and Opus/WebM sources, with one best choice per format.
-That is an explicit ranking of reported source data, not a guarantee that a
-higher bitrate in one codec always sounds better than another. Unknown bitrate
-ranks below known data. Files stay original; there is no MP3 conversion.
-WebM/Opus is exported as WebM, not relabeled M4A; native preview may be unavailable.
+Audio defaults to native AAC/M4A. Within that format it selects the highest
+declared average bitrate (otherwise declared bitrate); unknown bitrate ranks
+below known data. Files stay original; there is no re-encoding or MP3 conversion.
+The optional "Xem thêm nguồn WebM" button reveals the best original Opus/WebM
+source with a separate compatibility warning. Bitrate across different codecs
+is not a guarantee of relative quality. If AAC is unavailable, the screen says
+so and never silently falls back to WebM. Video MP4 remains available if found.
+WebM is saved/exported as WebM, never relabeled M4A. Tapping an existing saved
+WebM explains its playback limits and offers export instead of Quick Look.
+To get native playback for an old WebM download, analyze its YouTube link again
+and download the M4A choice; this update does not convert existing files.
 
 Video uses compatible H.264 MP4 and the best separately available AAC track,
 even when a combined source also exists. If no separate AAC exists, a complete
@@ -87,9 +92,13 @@ file; uninstall removes app-owned files, so export files you want to keep.
 
 Existing Safari/Package/DNS/desktop suites must pass in addition to composition
 checks. Advanced native tests use self-generated black video and silent AAC/Opus
-fixtures to test byte-exact original audio, native mux audio+video, invalid files,
+fixtures to test byte-exact original audio, native AAC-to-PCM decoding of the
+saved M4A and merged MP4, native mux audio+video, invalid files,
 expiry, cancellation, history privacy and strict links. Synthetic requests are
 intercepted by URLProtocol; they never reach YouTube.
+Ranking/visibility tests cover higher-bitrate Opus alongside AAC, the best AAC
+within its format, unknown bitrate, optional originals and Opus-only sources.
+Workflows run on `main` and `ios/**`; the working branch is `ios/protection-dns`.
 
 After deterministic tests, a separate live diagnostic on pushes (or the manual
 `live_probe` input) analyzes the public Big Buck Bunny YouTube video and

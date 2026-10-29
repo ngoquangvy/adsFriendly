@@ -6,9 +6,12 @@ final class YouTubeDownloadsViewController: UIViewController, UITableViewDataSou
     private let input = UITextField()
     private let status = UILabel()
     private let check = UIButton(type: .system)
+    private let originals = UIButton(type: .system)
     private let table = UITableView(frame: .zero, style: .insetGrouped)
     private let store = YouTubeDownloadStore.shared
     private var sources: YouTubeSources?
+    private var showOriginals = false
+    private var displayedChoices: [YouTubeChoice] { sources?.choicesForDisplay(includeOriginals: showOriginals) ?? [] }
     private var work: Task<Void, Never>?
     private var epoch = 0
     private var timer: Timer?
@@ -30,10 +33,16 @@ final class YouTubeDownloadsViewController: UIViewController, UITableViewDataSou
         check.addTarget(self, action: #selector(resolve), for: .touchUpInside)
         status.numberOfLines = 0; status.font = .preferredFont(forTextStyle: .footnote)
         status.adjustsFontForContentSizeCategory = true; status.accessibilityIdentifier = "youtube-status"
-        status.text = "Chọn Video MP4 hoặc Audio gốc. Audio ưu tiên bitrate cao nhất tìm được; WebM/Opus có thể không xem trước được trên iPhone nhưng vẫn xuất file được. Không đổi sang MP3."
-        let stack = UIStackView(arrangedSubviews: [input, paste, check, status])
+        status.text = "Chọn Audio M4A / AAC chất lượng cao nhất tìm được hoặc Video MP4, phù hợp iPhone. File giữ nguyên chất lượng nguồn."
+        originals.isHidden = true
+        originals.setTitle("Xem thêm nguồn WebM", for: .normal)
+        originals.accessibilityIdentifier = "youtube-originals"
+        originals.addTarget(self, action: #selector(toggleOriginals), for: .touchUpInside)
+        let stack = UIStackView(arrangedSubviews: [input, paste, check, status, originals])
         stack.axis = .vertical; stack.spacing = 8; stack.translatesAutoresizingMaskIntoConstraints = false
         [input, paste, check].forEach { $0.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true }
+        let originalsHeight = originals.heightAnchor.constraint(greaterThanOrEqualToConstant: 44)
+        originalsHeight.priority = .defaultHigh; originalsHeight.isActive = true
         table.dataSource = self; table.delegate = self
         table.rowHeight = UITableView.automaticDimension; table.estimatedRowHeight = 70
         table.translatesAutoresizingMaskIntoConstraints = false
@@ -60,6 +69,13 @@ final class YouTubeDownloadsViewController: UIViewController, UITableViewDataSou
     @objc private func pasteLink() { input.text = UIPasteboard.general.string; edited() }
     @objc private func edited() {
         work?.cancel(); epoch += 1; sources = nil; check.isEnabled = true; table.reloadData()
+        showOriginals = false; originals.isHidden = true
+        originals.setTitle("Xem thêm nguồn WebM", for: .normal)
+    }
+    @objc private func toggleOriginals() {
+        showOriginals.toggle()
+        originals.setTitle(showOriginals ? "Ẩn nguồn WebM" : "Xem thêm nguồn WebM", for: .normal)
+        table.reloadData()
     }
     @objc private func resolve() {
         view.endEditing(true); edited()
@@ -70,7 +86,10 @@ final class YouTubeDownloadsViewController: UIViewController, UITableViewDataSou
                 let result = try await YouTubeSourceResolver.resolve(text)
                 guard let self = self, self.epoch == current, !Task.isCancelled else { return }
                 self.sources = result; self.check.isEnabled = true
-                self.status.text = "Đã thấy \(result.choices.count) lựa chọn cho video \(result.videoID). Chọn một mục bên dưới; chưa bắt đầu tải."
+                self.originals.isHidden = !result.hasOriginalFormats
+                let hasAAC = result.choices.contains { !$0.hasVideo && $0.isIPhoneCompatible }
+                self.status.text = "Đã thấy \(self.displayedChoices.count) lựa chọn phù hợp iPhone. Chọn một mục bên dưới; chưa bắt đầu tải."
+                    + (hasAAC ? "" : " Chưa tìm được audio AAC/M4A riêng; không tự chuyển sang WebM. Hãy thử phân tích lại hoặc xem thêm nguồn WebM nếu có trình phát hỗ trợ.")
                 self.table.reloadData()
             } catch {
                 guard let self = self, self.epoch == current, !Task.isCancelled else { return }
@@ -84,14 +103,15 @@ final class YouTubeDownloadsViewController: UIViewController, UITableViewDataSou
         section == 0 ? "Chọn nguồn · chưa tải" : "Lượt tải của bản YouTube"
     }
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        section == 0 ? (sources?.choices.count ?? 0) : store.jobs.count
+        section == 0 ? displayedChoices.count : store.jobs.count
     }
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
-        cell.textLabel?.numberOfLines = 2; cell.detailTextLabel?.numberOfLines = 0
-        if indexPath.section == 0, let choice = sources?.choices[indexPath.row] {
+        cell.textLabel?.numberOfLines = 0; cell.detailTextLabel?.numberOfLines = 0
+        if indexPath.section == 0 {
+            let choice = displayedChoices[indexPath.row]
             cell.textLabel?.text = choice.label
-            cell.detailTextLabel?.text = choice.tracks.count == 2 ? "Tải hai track và ghép trên iPhone, giữ nguyên codec." : "Tải nguồn gốc, giữ nguyên định dạng."
+            cell.detailTextLabel?.text = !choice.isIPhoneCompatible ? "Nguồn gốc tùy chọn. Có thể không phát trong Tệp hoặc xem trước trên iPhone." : choice.tracks.count == 2 ? "Tải hai track và ghép trên iPhone, giữ nguyên codec." : "Tải nguồn gốc, giữ nguyên định dạng."
             cell.accessoryType = .disclosureIndicator
         } else { configure(cell, row: store.jobs[indexPath.row]) }
         return cell
@@ -107,6 +127,7 @@ final class YouTubeDownloadsViewController: UIViewController, UITableViewDataSou
         } else if row.state == "failed" {
             detail += row.reason == "session_ended" ? " · App/phiên tải đã kết thúc; phân tích lại link để thử lại." : " · Nguồn, mạng, dung lượng hoặc bước ghép không đạt. Phân tích lại link để thử lại."
         }
+        if row.state == "saved", row.outputExtension == "webm" { detail += " · WebM: chạm để xuất file; tải lại M4A để phát thuận tiện trên iPhone." }
         cell.detailTextLabel?.text = detail
         cell.accessoryType = row.state == "saved" ? .disclosureIndicator : .none
     }
@@ -120,11 +141,19 @@ final class YouTubeDownloadsViewController: UIViewController, UITableViewDataSou
         table.deselectRow(at: indexPath, animated: true)
         if indexPath.section == 1 {
             guard indexPath.row < store.jobs.count, let url = store.output(store.jobs[indexPath.row].id) else { return }
+            if url.pathExtension.lowercased() == "webm" {
+                let alert = UIAlertController(title: "Audio WebM / Opus", message: "File này giữ định dạng gốc WebM, có thể không phát bằng trình xem mặc định trên iPhone. Bạn có thể xuất cho trình phát hỗ trợ, hoặc phân tích lại link và chọn M4A / AAC. Đổi đuôi file không chuyển được định dạng.", preferredStyle: .alert)
+                alert.addAction(UIAlertAction(title: "Đóng", style: .cancel))
+                alert.addAction(UIAlertAction(title: "Xuất file", style: .default) { [weak self] _ in
+                    self?.present(UIDocumentPickerViewController(forExporting: [url], asCopy: true), animated: true)
+                })
+                present(alert, animated: true); return
+            }
             preview = url; let controller = QLPreviewController(); controller.dataSource = self; present(controller, animated: true)
             return
         }
-        guard work == nil || check.isEnabled, let sources = sources, indexPath.row < sources.choices.count else { return }
-        let current = epoch, choice = sources.choices[indexPath.row]
+        guard work == nil || check.isEnabled, let sources = sources, indexPath.row < displayedChoices.count else { return }
+        let current = epoch, choice = displayedChoices[indexPath.row]
         check.isEnabled = false; status.text = "Đang kiểm tra phản hồi của nguồn đã chọn…"
         work = Task { @MainActor [weak self] in
             do {
@@ -134,9 +163,10 @@ final class YouTubeDownloadsViewController: UIViewController, UITableViewDataSou
                 let known = prepared.tracks.allSatisfy { $0.source.bytes != nil }
                 let bytes = prepared.tracks.reduce(Int64(0)) { $0 + ($1.source.bytes ?? 0) }
                 let size = known ? ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file) : "Chưa biết tổng dung lượng"
-                let alert = UIAlertController(title: choice.label, message: "\(size). Tải nguồn gốc; bitrate là thông số nguồn khai báo, không phải thước đo chất lượng tuyệt đối giữa codec. Video MP4 dùng AAC phù hợp iPhone; giữ app mở lúc ghép. Dùng Chia sẻ để lưu ra Tệp.", preferredStyle: .alert)
+                let playback = !choice.isIPhoneCompatible ? "Đây là WebM/Opus gốc, có thể không phát bằng trình xem mặc định trên iPhone. Chỉ tải nếu bạn có trình phát hỗ trợ WebM." : choice.hasVideo ? "MP4 + AAC phù hợp iPhone; giữ app mở lúc ghép." : "Audio AAC trong file M4A, phù hợp iPhone. Giữ nguyên nguồn AAC tốt nhất tìm được."
+                let alert = UIAlertController(title: choice.label, message: "\(size). \(playback) Dùng Chia sẻ để lưu ra Tệp.", preferredStyle: .alert)
                 alert.addAction(UIAlertAction(title: "Hủy", style: .cancel))
-                alert.addAction(UIAlertAction(title: "Tải", style: .default) { [weak self] _ in
+                alert.addAction(UIAlertAction(title: choice.isIPhoneCompatible ? "Tải" : "Tải WebM gốc", style: .default) { [weak self] _ in
                     guard let self = self, self.epoch == current else { return }
                     do {
                         try self.store.start(prepared)

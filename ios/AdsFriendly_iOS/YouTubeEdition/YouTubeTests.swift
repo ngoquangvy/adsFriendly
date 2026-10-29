@@ -1,6 +1,7 @@
 #if AF_YOUTUBE && !AF_PROTECTION_ONLY
 import XCTest
 import AVFoundation
+import AudioToolbox
 @testable import AdsFriendly_iOS
 
 private final class YouTubePendingProtocol: URLProtocol {
@@ -30,16 +31,50 @@ final class YouTubeTests: XCTestCase {
         }
     }
 
-    func testAudioRankingKeepsHighestReportedSourceAndBestOfEachOriginalFormat() {
+    func testAudioRankingPrefersIPhoneAACAndKeepsHighestBitrateWithinEachFormat() {
         let ranked = YouTubeAudioCandidate.bestPerFormat([
             .init(url: sourceURL, fileExtension: "m4a", bitrate: 96_000),
             .init(url: sourceURL, fileExtension: "webm", bitrate: nil),
             .init(url: sourceURL, fileExtension: "m4a", bitrate: 128_000),
             .init(url: sourceURL, fileExtension: "webm", bitrate: 160_000),
+            .init(url: sourceURL, fileExtension: "mp3", bitrate: 320_000),
         ])
-        XCTAssertEqual(ranked.map { $0.fileExtension }, ["webm", "m4a"])
-        XCTAssertEqual(ranked.map { $0.bitrate }, [160_000, 128_000])
+        XCTAssertEqual(ranked.map { $0.fileExtension }, ["m4a", "webm"])
+        XCTAssertEqual(ranked.map { $0.bitrate }, [128_000, 160_000])
+        let unknownAAC = YouTubeAudioCandidate.bestPerFormat([
+            .init(url: sourceURL, fileExtension: "webm", bitrate: 160_000),
+            .init(url: sourceURL, fileExtension: "m4a", bitrate: nil),
+        ])
+        XCTAssertEqual(unknownAAC.map { $0.fileExtension }, ["m4a", "webm"])
         XCTAssertTrue(YouTubeAudioCandidate.bestPerFormat([]).isEmpty)
+    }
+
+    func testSourceDisplayRequiresOptInForWebMAndNeverSilentlyFallsBack() {
+        let audio = YouTubeChoice(id: "aac", label: "AAC", tracks: [], outputExtension: "m4a", hasVideo: false)
+        let original = YouTubeChoice(id: "opus", label: "Opus", tracks: [], outputExtension: "webm", hasVideo: false)
+        let video = YouTubeChoice(id: "video", label: "Video", tracks: [], outputExtension: "mp4", hasVideo: true)
+        let sources = YouTubeSources(videoID: "aqz-KE-bpKQ", choices: [audio, original, video], expiresAt: Date())
+        XCTAssertTrue(sources.hasOriginalFormats)
+        XCTAssertEqual(sources.choicesForDisplay(includeOriginals: false).map { $0.id }, ["aac", "video"])
+        XCTAssertEqual(sources.choicesForDisplay(includeOriginals: true).map { $0.id }, ["aac", "opus", "video"])
+        let opusOnly = YouTubeSources(videoID: sources.videoID, choices: [original], expiresAt: Date())
+        XCTAssertTrue(opusOnly.choicesForDisplay(includeOriginals: false).isEmpty)
+        XCTAssertEqual(opusOnly.choicesForDisplay(includeOriginals: true).first?.outputExtension, "webm")
+        XCTAssertFalse(YouTubeSources(videoID: sources.videoID, choices: [audio, video], expiresAt: Date()).hasOriginalFormats)
+    }
+
+    private func assertNativeAudioDecodes(_ url: URL) async throws {
+        let asset = AVURLAsset(url: url)
+        let tracks = try await asset.loadTracks(withMediaType: .audio)
+        let track = try XCTUnwrap(tracks.first)
+        let reader = try AVAssetReader(asset: asset)
+        let output = AVAssetReaderTrackOutput(track: track, outputSettings: [AVFormatIDKey: kAudioFormatLinearPCM])
+        XCTAssertTrue(reader.canAdd(output)); reader.add(output)
+        XCTAssertTrue(reader.startReading(), reader.error?.localizedDescription ?? "Cannot start native decoder")
+        var sampleCount = 0
+        while let buffer = output.copyNextSampleBuffer() { sampleCount += CMSampleBufferGetNumSamples(buffer) }
+        XCTAssertEqual(reader.status, .completed, reader.error?.localizedDescription ?? "Native decoding failed")
+        XCTAssertGreaterThan(sampleCount, 0, "AAC must decode to PCM samples, not just have a declared track")
     }
 
     @MainActor
@@ -88,6 +123,8 @@ final class YouTubeTests: XCTestCase {
             XCTAssertEqual(store.jobs.first?.state, "saved", "Original \(ext): \(store.jobs.first?.reason ?? "no reason")")
             let output = try XCTUnwrap(store.output(id))
             XCTAssertEqual(try Data(contentsOf: output), data)
+            XCTAssertEqual(output.pathExtension, ext)
+            if ext == "m4a" { try await assertNativeAudioDecodes(output) }
             let history = try String(contentsOf: directory.appendingPathComponent("history.json"), encoding: .utf8)
             XCTAssertFalse(history.contains("googlevideo")); XCTAssertFalse(history.contains("never-store-this"))
             store.forget(id)
@@ -132,6 +169,7 @@ final class YouTubeTests: XCTestCase {
         let videos = try await asset.loadTracks(withMediaType: .video)
         let audios = try await asset.loadTracks(withMediaType: .audio)
         XCTAssertEqual(videos.count, 1); XCTAssertEqual(audios.count, 1)
+        try await assertNativeAudioDecodes(output)
         let duration = try await asset.load(.duration).seconds
         XCTAssertEqual(duration, 1, accuracy: 0.1)
         let invalid = directory.appendingPathComponent("invalid")
