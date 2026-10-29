@@ -84,12 +84,16 @@ final class YouTubeDownloadsViewController: MobileDownloadScreen {
     }
     override func numberOfSections(in tableView: UITableView) -> Int { 3 }
     override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
-        ["3. Chọn nguồn để tải", "Đang tải · \(active.count)", "Lịch sử · \(history.count)"][section]
+        if section == 0 { return sources == nil ? nil : "3. Chọn nguồn để tải" }
+        if section == 1 { return active.isEmpty ? nil : "Đang tải · \(active.count)" }
+        return history.isEmpty ? "Lịch sử" : "Lịch sử · \(history.count)"
     }
     override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
-        section == 2 ? "Chạm file đã lưu để mở. Nút ⋯ có Lưu vào Tệp và Xóa lịch sử." : nil
+        section == 2 && !history.isEmpty ? "Chạm file đã lưu để mở. Nút ⋯ có Lưu vào Tệp và Xóa lịch sử." : nil
     }
-    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { max(1, section == 0 ? displayedChoices.count : section == 1 ? active.count : history.count) }
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        section == 0 ? (sources == nil ? 0 : max(1, displayedChoices.count)) : section == 1 ? active.count : max(1, history.count)
+    }
     private func job(at path: IndexPath) -> YouTubeJob? {
         let rows = path.section == 1 ? active : history
         return rows.indices.contains(path.row) ? rows[path.row] : nil

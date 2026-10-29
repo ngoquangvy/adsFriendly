@@ -34,7 +34,7 @@ now also run concurrently, at most two, with sibling cancellation and stable
 track ordering. Downloads use a non-discretionary background URLSession with
 four connections per host and high task priority. iOS still controls scheduling.
 
-Files at least 8 MiB can use three contiguous byte ranges. A bounded GET 0-0
+Files at least 2 MiB can use three contiguous byte ranges. A bounded GET 0-0
 checks that the origin actually returns valid 206/Content-Range; merely seeing
 Accept-Ranges is insufficient. Mutable direct-file origins additionally require
 an ETag or Last-Modified for If-Range. Signed googlevideo source URLs identify

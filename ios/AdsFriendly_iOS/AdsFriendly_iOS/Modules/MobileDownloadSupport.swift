@@ -128,6 +128,9 @@ class MobileDownloadScreen: UITableViewController, QLPreviewControllerDataSource
         paste.addTarget(self, action: #selector(pasteTapped), for: .touchUpInside)
         paste.accessibilityIdentifier = "downloads-paste"
         let entry = UIStackView(arrangedSubviews: [input, paste]); entry.spacing = 8
+        input.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        input.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        paste.widthAnchor.constraint(equalToConstant: 56).isActive = true
         paste.setContentHuggingPriority(.required, for: .horizontal)
         analyze.configuration = .filled(); analyze.setTitle("2. Phân tích link", for: .normal)
         analyze.addTarget(self, action: #selector(analyzeTapped), for: .touchUpInside); analyze.isEnabled = false
@@ -158,6 +161,7 @@ class MobileDownloadScreen: UITableViewController, QLPreviewControllerDataSource
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated); timer?.invalidate(); timer = nil; stopCue(); cancelAnalysis(); setBusy(false)
     }
+    deinit { timer?.invalidate() }
     @objc private func closeScreen() { dismiss(animated: true) }
     @objc private func inputChanged() {
         cancelAnalysis(); setBusy(false); notice.text = input.text?.isEmpty == false ? "Bấm Phân tích link để xem các lựa chọn tải." : hint

@@ -268,15 +268,15 @@ final class YouTubeTests: XCTestCase {
                        YouTubeChoice(id: "720", label: "Video 720p · MP4 + AAC", tracks: [], outputExtension: "mp4", hasVideo: true)]
         let title = "Bài hát mùa thu · Acoustic Session"
         let controller = YouTubeDownloadsViewController(store: store, resolver: { _ in .init(videoID: "aqz-KE-bpKQ", choices: choices, expiresAt: Date().addingTimeInterval(30), title: title) })
-        let navigation = UINavigationController(rootViewController: controller)
-        navigation.loadViewIfNeeded(); navigation.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844); navigation.view.layoutIfNeeded()
+        let host = DownloadPreviewHost(controller, width: 390); defer { host.close() }
+        let navigation = host.navigation
         controller.input.text = "https://youtu.be/aqz-KE-bpKQ"; controller.input.sendActions(for: .editingChanged)
         controller.analyze.sendActions(for: .touchUpInside)
         try await wait { controller.notice.text?.contains(title) == true }
         controller.view.layoutIfNeeded()
         XCTAssertEqual(controller.tableView.numberOfRows(inSection: 0), 1); XCTAssertTrue(store.jobs.isEmpty)
         for width in [390, 320] {
-            navigation.view.frame.size.width = CGFloat(width); navigation.view.layoutIfNeeded(); controller.view.layoutIfNeeded()
+            host.resize(CGFloat(width)); controller.view.layoutIfNeeded()
             let image = UIGraphicsImageRenderer(bounds: navigation.view.bounds).image { navigation.view.layer.render(in: $0.cgContext) }
             let attachment = XCTAttachment(image: image); attachment.name = "YouTube-audio-" + String(width); attachment.lifetime = .keepAlways; add(attachment)
         }

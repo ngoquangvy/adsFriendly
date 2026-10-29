@@ -10,7 +10,7 @@ struct MobileRangePart: Codable {
 }
 
 enum MobileRangeTransfer {
-    static let minimumBytes: Int64 = 8 * 1024 * 1024
+    static let minimumBytes: Int64 = 2 * 1024 * 1024
     static func plan(_ source: CheckedMobileSource, minimum: Int64 = minimumBytes) -> [MobileRangePart]? {
         guard source.acceptsRanges, let total = source.bytes, total >= max(3, minimum), total < Int64.max / 4,
               source.rangeValidator != nil || source.url.host?.lowercased().hasSuffix(".googlevideo.com") == true else { return nil }

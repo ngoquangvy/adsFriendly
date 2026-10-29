@@ -10,6 +10,24 @@ private final class PendingMediaProtocol: URLProtocol {
     override func stopLoading() {}
 }
 
+@MainActor
+final class DownloadPreviewHost {
+    let window: UIWindow
+    let navigation: UINavigationController
+    private let previous: UIWindow?
+    init(_ controller: UIViewController, width: CGFloat) {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        previous = scenes.flatMap { $0.windows }.first { $0.isKeyWindow }
+        if let scene = previous?.windowScene ?? scenes.first { window = UIWindow(windowScene: scene) }
+        else { window = UIWindow(frame: .zero) }
+        navigation = UINavigationController(rootViewController: controller)
+        window.frame = CGRect(x: 0, y: 0, width: width, height: 844)
+        window.rootViewController = navigation; window.makeKeyAndVisible(); navigation.view.layoutIfNeeded()
+    }
+    func resize(_ width: CGFloat) { window.frame = CGRect(x: 0, y: 0, width: width, height: 844); navigation.view.setNeedsLayout(); navigation.view.layoutIfNeeded() }
+    func close() { window.isHidden = true; window.rootViewController = nil; previous?.makeKeyAndVisible() }
+}
+
 final class MobileDownloadsTests: XCTestCase {
     private let url = URL(string: "https://media.example/song.mp3?token=private")!
     private func configuration() -> URLSessionConfiguration {
@@ -111,8 +129,8 @@ final class MobileDownloadsTests: XCTestCase {
         let store = MobileDownloadStore(directory: directory, configuration: configuration())
         defer { store.invalidate(); try? FileManager.default.removeItem(at: directory) }
         let controller = MobileDownloadsViewController(catalog: try MobileModuleCatalog.load(), store: store)
-        let navigation = UINavigationController(rootViewController: controller)
-        navigation.loadViewIfNeeded(); navigation.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844); navigation.view.layoutIfNeeded()
+        let host = DownloadPreviewHost(controller, width: 390); defer { host.close() }
+        let navigation = host.navigation
         XCTAssertFalse(controller.analyze.isEnabled)
         UIPasteboard.general.string = url.absoluteString
         let paste = try XCTUnwrap(find(controller.view, id: "downloads-paste") as? UIButton)
@@ -120,6 +138,8 @@ final class MobileDownloadsTests: XCTestCase {
         XCTAssertEqual(controller.input.text, url.absoluteString); XCTAssertTrue(controller.analyze.isEnabled); XCTAssertTrue(store.records.isEmpty)
         if !UIAccessibility.isReduceMotionEnabled { XCTAssertEqual(controller.analyze.layer.animation(forKey: "next-step")?.repeatCount, 3) }
         XCTAssertGreaterThanOrEqual(controller.analyze.bounds.height, 48)
+        let pasteFrame = paste.convert(paste.bounds, to: controller.view)
+        XCTAssertGreaterThanOrEqual(pasteFrame.width, 44); XCTAssertLessThanOrEqual(pasteFrame.maxX, controller.view.bounds.width - 16)
         let image = UIGraphicsImageRenderer(bounds: navigation.view.bounds).image { navigation.view.layer.render(in: $0.cgContext) }
         let attachment = XCTAttachment(image: image); attachment.name = "Direct-download-390"; attachment.lifetime = .keepAlways; add(attachment)
         controller.input.text = ""; controller.input.sendActions(for: .editingChanged); XCTAssertFalse(controller.analyze.isEnabled)
