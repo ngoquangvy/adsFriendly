@@ -88,10 +88,12 @@ fixtures to test byte-exact original audio, native mux audio+video, invalid file
 expiry, cancellation, history privacy and strict links. Synthetic requests are
 intercepted by URLProtocol; they never reach YouTube.
 
-The advanced workflow has a manual `live_probe` input. Enabling it analyzes the
-public Big Buck Bunny YouTube video and preflights audio/video sources. It does
-not download the full video. This is separate from deterministic validation and
-can fail due to the provider, region or GitHub runner's network.
+After deterministic tests, a separate live diagnostic on pushes (or the manual
+`live_probe` input) analyzes the public Big Buck Bunny YouTube video and
+preflights audio/video sources, without downloading the full video. This step
+can fail due to the provider, region or GitHub runner's network and does not
+prevent packaging the test IPA. Its outcome must be reported separately;
+a green overall build must not be presented as proof that live extraction works.
 
 On the iPhone, test at least one music-file link, one YouTube audio choice and
 one video choice, then background/return, cancel, reopen during transfer, export,

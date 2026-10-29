@@ -1042,7 +1042,10 @@ try {
     "A passive transparent layer must not be mistaken for a click catcher",
   );
   await session.evaluate("testChange('blacklist',[])");
-  await new Promise((resolve) => setTimeout(resolve, 450));
+  await waitForPageCondition(
+    "[unknownLinkedBanner,cssAd,invisibleTrap].every(el=>getComputedStyle(el).display!=='none')",
+    "Default must restore each strict-only hidden region on a throttled long page",
+  );
   assert.equal(
     await session.evaluate(
       "[unknownLinkedBanner,cssAd,invisibleTrap].every(el=>getComputedStyle(el).display!=='none')",

@@ -40,7 +40,7 @@ jobs:
         timeout-minutes: 15
         working-directory: ios/AdsFriendly_iOS
         env:
-          AF_YOUTUBE_LIVE_PROBE: ${{ inputs.live_probe && '1' || '0' }}
+          AF_YOUTUBE_LIVE_PROBE: "0"
         run: |
           set -euo pipefail
           DEVICE_ID="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(v["udid"] for group in d["devices"].values() for v in group if "iPhone" in v["name"]))')"
@@ -48,6 +48,19 @@ jobs:
             -scheme AdsFriendly_iOS -configuration Debug \
             -destination "platform=iOS Simulator,id=$DEVICE_ID" \
             -only-testing:AdsFriendly_iOSTests AF_YOUTUBE_LIVE_PROBE="$AF_YOUTUBE_LIVE_PROBE" CODE_SIGNING_ALLOWED=NO
+      - name: Live YouTube source diagnostic (network dependent)
+        if: github.event_name == 'push' || inputs.live_probe
+        continue-on-error: true
+        timeout-minutes: 4
+        working-directory: ios/AdsFriendly_iOS
+        run: |
+          set -euo pipefail
+          DEVICE_ID="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(v["udid"] for group in d["devices"].values() for v in group if "iPhone" in v["name"]))')"
+          xcodebuild test -project AdsFriendly_YouTube.xcodeproj \
+            -scheme AdsFriendly_iOS -configuration Debug \
+            -destination "platform=iOS Simulator,id=$DEVICE_ID" \
+            -only-testing:AdsFriendly_iOSTests/YouTubeTests/testLivePublicYouTubeSourceWhenExplicitlyEnabled \
+            AF_YOUTUBE_LIVE_PROBE=1 CODE_SIGNING_ALLOWED=NO
       - name: Build separate unsigned YouTube IPA
         working-directory: ios/AdsFriendly_iOS
         run: |
