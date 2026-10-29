@@ -16,3 +16,5 @@ dist/
 .env
 _metadata/
 server/storage/*.jsonl
+ios/AdsFriendly_iOS/AdsFriendly_YouTube.xcodeproj/project.xcworkspace/
+ios/AdsFriendly_iOS/AdsFriendly_YouTube.xcodeproj/xcuserdata/

@@ -1,0 +1,79 @@
+name: Build iOS YouTube (test edition)
+
+on:
+  workflow_dispatch:
+    inputs:
+      live_probe:
+        description: "Also test a live public YouTube video (network/region dependent)"
+        type: boolean
+        default: false
+  push:
+    branches: [main, "codex/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install and validate separated composition
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile
+          pnpm ios:check
+          pnpm ios:settings:check
+          pnpm test:ios
+          plutil -lint ios/AdsFriendly_iOS/AdsFriendly_YouTube.xcodeproj/project.pbxproj
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+      - name: Native media, mux, recovery and protection tests
+        timeout-minutes: 15
+        working-directory: ios/AdsFriendly_iOS
+        env:
+          AF_YOUTUBE_LIVE_PROBE: ${{ inputs.live_probe && '1' || '0' }}
+        run: |
+          set -euo pipefail
+          DEVICE_ID="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(v["udid"] for group in d["devices"].values() for v in group if "iPhone" in v["name"]))')"
+          xcodebuild test -project AdsFriendly_YouTube.xcodeproj \
+            -scheme AdsFriendly_iOS -configuration Debug \
+            -destination "platform=iOS Simulator,id=$DEVICE_ID" \
+            -only-testing:AdsFriendly_iOSTests AF_YOUTUBE_LIVE_PROBE="$AF_YOUTUBE_LIVE_PROBE" CODE_SIGNING_ALLOWED=NO
+      - name: Build separate unsigned YouTube IPA
+        working-directory: ios/AdsFriendly_iOS
+        run: |
+          set -euo pipefail
+          xcodebuild -project AdsFriendly_YouTube.xcodeproj \
+            -scheme AdsFriendly_iOS -sdk iphoneos -configuration Debug \
+            -derivedDataPath build/YouTube \
+            CURRENT_PROJECT_VERSION="${{ github.run_number }}" MARKETING_VERSION=1.5.0 \
+            INFOPLIST_KEY_CFBundleDisplayName='AdsFriendly YouTube' \
+            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO build
+          APP_PATH="build/YouTube/Build/Products/Debug-iphoneos/AdsFriendly_iOS.app"
+          python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); assert c["profile"] == "youtube"; assert "youtube" in [m["id"] for m in c["modules"]]' "$APP_PATH/mobile-modules.json"
+          test -f "$APP_PATH/YouTubeKit-LICENSE.txt"
+          test -f "$APP_PATH/DNS.js"
+          test -f "$APP_PATH/PlugIns/AdsFriendly_iOS Extension.appex/packages/default-settings-package.json"
+          for binary in "$APP_PATH/AdsFriendly_iOS" "$APP_PATH"/*.dylib; do
+            if test -f "$binary"; then nm "$binary" >> build/youtube-symbols.txt; fi
+          done
+          grep -E 'YouTubeSourceResolver|YouTubeDownloadStore' build/youtube-symbols.txt
+          mkdir -p build/YouTubePayload/Payload
+          cp -R "$APP_PATH" build/YouTubePayload/Payload/
+          cd build/YouTubePayload
+          zip -r AdsFriendly_YouTube.ipa Payload/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AdsFriendly-iOS-YouTube-TEST
+          path: ios/AdsFriendly_iOS/build/YouTubePayload/AdsFriendly_YouTube.ipa
+          if-no-files-found: error
+          retention-days: 14

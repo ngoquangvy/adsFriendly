@@ -14,6 +14,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
     #if !AF_PROTECTION_ONLY
     func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String, completionHandler: @escaping () -> Void) {
+        #if AF_YOUTUBE
+        if identifier == YouTubeDownloadStore.identifier {
+            YouTubeDownloadStore.shared.backgroundCompletion = completionHandler
+            return
+        }
+        #endif
         guard identifier == MobileDownloadStore.identifier else { completionHandler(); return }
         MobileDownloadStore.shared.backgroundCompletion = completionHandler
     }

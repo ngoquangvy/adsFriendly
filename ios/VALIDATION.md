@@ -83,4 +83,7 @@ Direct injection can be denied by site CSP; diagnostics report this limitation.
 Desktop-only media/video settings are preserved in imported packages. iOS 1.4.0
 adds an independent native direct-file downloader, not the desktop Helper or
 YouTube/HLS resolver. See [media composition and acceptance](MEDIA_DOWNLOADS.md).
+The separate 1.5.0 YouTube test edition is documented in
+[two-build isolation and acceptance](YOUTUBE_TEST_EDITION.md); basic builds keep
+the direct-file boundary.
 Export/import transfers the shared package explicitly, without background sync.

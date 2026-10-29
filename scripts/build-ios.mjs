@@ -1,5 +1,6 @@
 import { build } from "esbuild";
 import "./mobile-config.mjs";
+import "./build-ios-youtube-project.mjs";
 import { readFile, readdir, writeFile } from "node:fs/promises";
 import { iosNetworkRules } from "../src/ios/network-rules.js";
 import vm from "node:vm";

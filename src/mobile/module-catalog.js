@@ -16,10 +16,17 @@ export const MOBILE_MODULES = Object.freeze({
     title: "Media Tools",
     capabilities: ["media.inspect", "media.direct.original"],
   }),
+  youtube: Object.freeze({
+    id: "youtube",
+    productId: PRODUCT_IDS.MEDIA_TOOLS,
+    title: "YouTube (test edition)",
+    capabilities: ["media.youtube.resolve.local", "media.youtube.download"],
+  }),
 });
 export const MOBILE_PROFILES = Object.freeze({
   protection: ["protection"],
   full: ["protection", "media"],
+  youtube: ["protection", "media", "youtube"],
 });
 export const MOBILE_BACKENDS = Object.freeze({
   "ios-safari": {
@@ -45,6 +52,11 @@ export function mobileComposition(profile = "full") {
   const ids = MOBILE_PROFILES[profile];
   if (!ids) throw Error("Unknown mobile build profile.");
   const backends = structuredClone(MOBILE_BACKENDS);
+  if (ids.includes("youtube")) {
+    backends["ios-app"].youtubeResolve = true;
+    backends["ios-app"].reason =
+      "Separate YouTube test edition; local extraction only.";
+  }
   if (!ids.includes("media"))
     for (const backend of Object.values(backends)) {
       backend.directDownload = false;

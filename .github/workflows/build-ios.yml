@@ -61,7 +61,7 @@ jobs:
             -configuration Debug \
             -derivedDataPath build/DerivedData \
             CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
-            MARKETING_VERSION=1.4.0 \
+            MARKETING_VERSION=1.5.0 \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
@@ -76,6 +76,15 @@ jobs:
           test -f "$APP_PATH/DNS.js"
           test -f "$APP_PATH/mobile-modules.json"
           python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); assert c["profile"] == "full"; assert "media" in [m["id"] for m in c["modules"]]' "$APP_PATH/mobile-modules.json"
+          for binary in "$APP_PATH/AdsFriendly_iOS" "$APP_PATH"/*.dylib; do
+            if test -f "$binary"; then nm "$binary" >> build/basic-symbols.txt; fi
+          done
+          if grep -E 'YouTubeKit|YouTubeSourceResolver|YouTubeDownloadStore|YouTubeDownloadsViewController' build/basic-symbols.txt; then
+            echo "YouTube code leaked into the basic edition"; exit 1
+          fi
+          if find "$APP_PATH" -name '*YouTubeKit*' | grep .; then
+            echo "YouTube dependency resource leaked into the basic edition"; exit 1
+          fi
           mkdir -p build/Payload
           cp -R "$APP_PATH" build/Payload/
           cd build

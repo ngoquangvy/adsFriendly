@@ -11,7 +11,7 @@
 </head>
 <body>
     <main>
-      <header><span class="brand">A</span><div><h1>AdsFriendly</h1><p>1.4.0 · Bảo vệ theo từng lớp</p></div></header>
+      <header><span class="brand">A</span><div><h1>AdsFriendly</h1><p>1.5.0 · Bảo vệ theo từng lớp</p></div></header>
       <section>
         <h2>Safari</h2>
         <p>Bật AdsFriendly trong Cài đặt → Ứng dụng → Safari → Tiện ích và cấp quyền trên website.</p>
@@ -20,12 +20,20 @@
       </section>
       <section>
         <h2>DNS cho các ứng dụng khác</h2>
+        <p>Đây là file cài đặt DNS của iPhone. Bạn tạo file trong app, sau đó tự xác nhận cài trong Cài đặt; app không tự bật DNS.</p>
+        <ol id="dns-steps">
+          <li>Giữ máy chủ mặc định bên dưới nếu bạn chưa có DNS riêng.</li>
+          <li>Tích ô đồng ý, bấm <strong>Xuất file DNS</strong>, rồi chọn <strong>Lưu vào Tệp</strong> hoặc gửi file cho chính bạn qua Mail.</li>
+          <li>Mở file <strong>AdsFriendly-DNS.mobileconfig</strong>. Nếu mở từ Tệp không hiện yêu cầu cài, mở file đính kèm từ Mail hoặc dùng hướng dẫn AdGuard bên dưới.</li>
+          <li>Mở <strong>Cài đặt → Đã tải về hồ sơ → Cài đặt</strong>, xem nội dung và nhập mật mã iPhone khi được hỏi.</li>
+        </ol>
+        <p class="hint">Xem/gỡ tại Cài đặt → Cài đặt chung → VPN &amp; Quản lý thiết bị → AdsFriendly DNS → Xóa cấu hình. Nếu mạng hoặc app bị lỗi sau khi cài, bạn có thể gỡ ở đây.</p>
         <p>Chặn domain quảng cáo qua DNS-over-HTTPS. Không cần VPN hoặc chứng chỉ giải mã HTTPS. DNS không lọc đường dẫn URL; không bảo đảm chặn mọi quảng cáo hay mọi app.</p>
         <label for="dns-endpoint">Máy chủ DNS-over-HTTPS</label>
         <input id="dns-endpoint" type="url" value="https://dns.adguard-dns.com/dns-query" autocomplete="off" autocapitalize="off" spellcheck="false">
         <p class="hint">Mặc định: AdGuard DNS public. Có thể nhập endpoint của máy chủ riêng. Block/Allow trong Safari không tự đồng bộ sang nhà cung cấp DNS.</p>
         <label class="consent"><input id="dns-consent" type="checkbox"><span>Tôi hiểu domain truy vấn sẽ gửi tới máy chủ DNS đã chọn và việc chặn có thể ảnh hưởng app dùng chung domain.</span></label>
-        <button id="export-dns" type="button" disabled>Tạo profile DNS</button>
+        <button id="export-dns" type="button" disabled>Xuất file DNS</button>
         <button id="dns-guide" class="secondary" type="button">Hướng dẫn AdGuard DNS</button>
         <p id="dns-status" role="status" aria-live="polite">Chưa xác nhận cấu hình DNS hệ thống. Tạo/xuất profile không có nghĩa DNS đã bật.</p>
         <details><summary>Cài đặt và gỡ DNS</summary>

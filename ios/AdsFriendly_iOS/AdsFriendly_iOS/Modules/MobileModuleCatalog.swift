@@ -15,7 +15,7 @@ struct MobileModuleCatalog: Decodable {
     func validate() throws {
         guard schemaVersion == 1, Set(modules.map { $0.id }).count == modules.count,
               modules.contains(where: { $0.id == "protection" }),
-              modules.allSatisfy({ ["protection", "media"].contains($0.id) }),
+              modules.allSatisfy({ ["protection", "media", "youtube"].contains($0.id) }),
               Set(directFormats.map { $0.extension }).count == directFormats.count,
               directFormats.allSatisfy({ format in
                   format.extension.range(of: "^[a-z0-9]{2,5}$", options: .regularExpression) != nil &&
@@ -24,6 +24,13 @@ struct MobileModuleCatalog: Decodable {
         if includes("media") {
             guard modules.first(where: { $0.id == "media" })?.capabilities.contains("media.direct.original") == true,
                   !directFormats.isEmpty else { throw MobileSourceError.configuration }
+        }
+        if includes("youtube") {
+            #if AF_YOUTUBE && !AF_PROTECTION_ONLY
+            guard includes("media"), modules.first(where: { $0.id == "youtube" })?.capabilities.contains("media.youtube.download") == true else { throw MobileSourceError.configuration }
+            #else
+            throw MobileSourceError.configuration
+            #endif
         }
     }
     func includes(_ id: String) -> Bool { modules.contains { $0.id == id } }
@@ -40,7 +47,7 @@ enum MobileSourceError: LocalizedError {
         switch self {
         case .configuration: return "Media module configuration is unavailable. Safari protection is unchanged."
         case .invalidURL: return "Paste one public HTTPS link without embedded credentials or a local address."
-        case .resolverRequired: return "YouTube page detected. A mobile YouTube resolver is not available yet; this is not a direct media file."
+        case .resolverRequired: return "This is a YouTube page, not a direct file. YouTube downloads use the separate YouTube test edition and screen."
         case .rejected(let status): return "Source rejected the request (HTTP \(status)). Browser sessions are not copied."
         case .unsupported: return "Not a supported direct audio/video file. Player pages, playlists and DRM require a separate resolver."
         case .expired: return "The source check expired. Check again before downloading."

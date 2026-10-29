@@ -44,6 +44,25 @@ class ViewController: UIViewController, WKNavigationDelegate, WKScriptMessageHan
                 button.heightAnchor.constraint(greaterThanOrEqualToConstant: 48)
             ])
             bottom = button.topAnchor
+            #if AF_YOUTUBE
+            if catalog.includes("youtube") {
+                let youtube = UIButton(type: .system)
+                youtube.setTitle("YouTube · Video / Audio (test)", for: .normal)
+                youtube.accessibilityIdentifier = "youtube-downloads"
+                youtube.backgroundColor = .secondarySystemBackground
+                youtube.layer.cornerRadius = 12
+                youtube.addTarget(self, action: #selector(openYouTube), for: .touchUpInside)
+                youtube.translatesAutoresizingMaskIntoConstraints = false
+                view.addSubview(youtube)
+                NSLayoutConstraint.activate([
+                    youtube.leadingAnchor.constraint(equalTo: button.leadingAnchor),
+                    youtube.trailingAnchor.constraint(equalTo: button.trailingAnchor),
+                    youtube.bottomAnchor.constraint(equalTo: button.topAnchor, constant: -8),
+                    youtube.heightAnchor.constraint(greaterThanOrEqualToConstant: 48)
+                ])
+                bottom = youtube.topAnchor
+            }
+            #endif
         }
         #endif
         NSLayoutConstraint.activate([
@@ -62,6 +81,14 @@ class ViewController: UIViewController, WKNavigationDelegate, WKScriptMessageHan
     }
     #endif
 
+    #if AF_YOUTUBE && !AF_PROTECTION_ONLY
+    @objc private func openYouTube() {
+        guard presentedViewController == nil,
+              let catalog = try? MobileModuleCatalog.load(), catalog.includes("youtube") else { return }
+        present(UINavigationController(rootViewController: YouTubeDownloadsViewController()), animated: true)
+    }
+    #endif
+
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         // Override point for customization.
     }
@@ -77,7 +104,7 @@ class ViewController: UIViewController, WKNavigationDelegate, WKScriptMessageHan
             return
         }
         guard action == "exportDNSProfile", request["consent"] as? Bool == true else {
-            reply("error", "Confirm the DNS privacy notice before exporting."); return
+            reply("error", "Tích ô đồng ý trước khi xuất file DNS."); return
         }
         do {
             let data = try DNSProfile.make(endpoint: request["endpoint"] as? String ?? "")
@@ -91,9 +118,9 @@ class ViewController: UIViewController, WKNavigationDelegate, WKScriptMessageHan
             share.completionWithItemsHandler = { [weak self] _, completed, _, error in
                 self?.reply(error == nil ? "ready" : "error",
                     error == nil ? (completed
-                      ? "Profile exported, not activated. Open it from Mail or Files, then install in Settings > General > VPN & Device Management."
-                      : "Export cancelled. No DNS settings were changed.")
-                    : "Could not export the DNS profile. No DNS settings were changed.")
+                      ? "Đã xuất file, DNS chưa được bật. Mở file từ Mail hoặc Tệp, rồi vào Cài đặt → Đã tải về hồ sơ → Cài đặt. Có thể xem/gỡ tại Cài đặt chung → VPN & Quản lý thiết bị."
+                      : "Đã hủy xuất file. DNS hệ thống chưa thay đổi.")
+                    : "Không xuất được file. DNS hệ thống chưa thay đổi.")
             }
             present(share, animated: true)
         } catch { reply("error", error.localizedDescription) }
