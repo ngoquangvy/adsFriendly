@@ -107,7 +107,8 @@ final class MobileDownloadStore: NSObject, URLSessionDownloadDelegate, URLSessio
         let identity = (downloadTask.taskDescription ?? "").split(separator: "|").map(String.init)
         guard let id = identity.first, let index = records.firstIndex(where: { $0.id == id && $0.state == "downloading" }) else { return }
         if identity.count == 2, let part = Int(identity[1]), records[index].parts?.indices.contains(part) == true {
-            records[index].parts?[part].bytes = min(max(0, totalBytesWritten), records[index].parts?[part].length ?? 0)
+            let length = records[index].parts?[part].length ?? 0
+            records[index].parts?[part].bytes = min(max(0, totalBytesWritten), length)
             records[index].bytes = records[index].parts?.reduce(0) { $0 + $1.bytes } ?? 0
         } else if identity.count == 1 { records[index].bytes = min(max(0, totalBytesWritten), Int64.max / 4) }
     }

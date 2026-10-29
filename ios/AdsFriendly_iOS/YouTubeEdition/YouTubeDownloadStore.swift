@@ -195,7 +195,8 @@ final class YouTubeDownloadStore: NSObject, URLSessionDownloadDelegate, URLSessi
         guard let (id, role, part) = taskIdentity(downloadTask), let index = jobs.firstIndex(where: { $0.id == id && $0.state == "downloading" }),
               let track = jobs[index].tracks.firstIndex(where: { $0.role == role && !$0.received }) else { return }
         if let part = part, jobs[index].tracks[track].parts?.indices.contains(part) == true {
-            jobs[index].tracks[track].parts?[part].bytes = min(max(0, totalBytesWritten), jobs[index].tracks[track].parts?[part].length ?? 0)
+            let length = jobs[index].tracks[track].parts?[part].length ?? 0
+            jobs[index].tracks[track].parts?[part].bytes = min(max(0, totalBytesWritten), length)
             jobs[index].tracks[track].bytes = jobs[index].tracks[track].parts?.reduce(0) { $0 + $1.bytes } ?? 0
         } else if part == nil { jobs[index].tracks[track].bytes = min(max(0, totalBytesWritten), Int64.max / 4) }
     }
