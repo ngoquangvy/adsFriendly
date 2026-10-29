@@ -2,6 +2,11 @@
 import Foundation
 import YouTubeKit
 
+struct YouTubeResolutionFailure: LocalizedError {
+    let code: String
+    var errorDescription: String? { YouTubeDownloadError.unavailable.localizedDescription + " (Mã: " + code + ")" }
+}
+
 enum YouTubeDownloadError: LocalizedError {
     case invalidLink, unavailable, expired, full, sourceChanged, storage, interrupted
     var errorDescription: String? {
@@ -91,7 +96,23 @@ enum YouTubeSourceResolver {
         // Explicitly local: never enable the dependency's remote fallback.
         let video = YouTube(videoID: id, useOAuth: false, allowOAuthCache: false, methods: [.local])
         let streams: [YouTubeKit.Stream]
-        do { streams = try await video.streams } catch { throw YouTubeDownloadError.unavailable }
+        do { streams = try await video.streams } catch {
+            let code: String
+            if let provider = error as? YouTubeKitError { code = "YT_" + provider.rawValue }
+            else if let network = error as? URLError { code = "NETWORK_" + String(network.code.rawValue) }
+            else if let solver = error as? SignatureSolverError {
+                switch solver {
+                case .contextCreationFailed: code = "JS_CONTEXT"
+                case .resourceNotFound: code = "JS_RESOURCE"
+                case .evaluationFailed: code = "JS_EVALUATION"
+                case .resultConversionFailed: code = "JS_RESULT"
+                case .encodingFailed: code = "JS_ENCODING"
+                case .jsonDecodingFailed: code = "JS_JSON"
+                case .solverError: code = "JS_SOLVER"
+                }
+            } else { code = "EXTRACTOR_OTHER" }
+            throw YouTubeResolutionFailure(code: code)
+        }
         try Task.checkCancellation()
         func reportedBitrate(_ stream: YouTubeKit.Stream) -> Int {
             let average = stream.averageBitrate ?? 0

@@ -75,7 +75,7 @@ final class YouTubeDownloadsViewController: UIViewController, UITableViewDataSou
             } catch {
                 guard let self = self, self.epoch == current, !Task.isCancelled else { return }
                 self.check.isEnabled = true
-                self.status.text = (error as? YouTubeDownloadError)?.localizedDescription ?? YouTubeDownloadError.unavailable.localizedDescription
+                self.status.text = (error as? YouTubeResolutionFailure)?.localizedDescription ?? (error as? YouTubeDownloadError)?.localizedDescription ?? (error as? MobileSourceError)?.localizedDescription ?? YouTubeDownloadError.unavailable.localizedDescription
             }
         }
     }
