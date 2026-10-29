@@ -158,7 +158,9 @@ final class MobileDownloadsTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(controller.analyze.bounds.height, 48)
         let pasteFrame = paste.convert(paste.bounds, to: controller.view)
         XCTAssertGreaterThanOrEqual(pasteFrame.width, 44); XCTAssertLessThanOrEqual(pasteFrame.maxX, controller.view.bounds.width - 16)
-        let image = UIGraphicsImageRenderer(bounds: navigation.view.bounds).image { navigation.view.layer.render(in: $0.cgContext) }
+        let image = UIGraphicsImageRenderer(bounds: host.window.bounds).image { _ in
+            XCTAssertTrue(host.window.drawHierarchy(in: host.window.bounds, afterScreenUpdates: true))
+        }
         let attachment = XCTAttachment(image: image); attachment.name = "Direct-download-390"; attachment.lifetime = .keepAlways; add(attachment)
         controller.input.text = ""; controller.input.sendActions(for: .editingChanged); XCTAssertFalse(controller.analyze.isEnabled)
     }

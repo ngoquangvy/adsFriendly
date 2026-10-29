@@ -277,7 +277,9 @@ final class YouTubeTests: XCTestCase {
         XCTAssertEqual(controller.tableView.numberOfRows(inSection: 0), 1); XCTAssertTrue(store.jobs.isEmpty)
         for width in [390, 320] {
             host.resize(CGFloat(width)); controller.view.layoutIfNeeded()
-            let image = UIGraphicsImageRenderer(bounds: navigation.view.bounds).image { navigation.view.layer.render(in: $0.cgContext) }
+            let image = UIGraphicsImageRenderer(bounds: host.window.bounds).image { _ in
+                XCTAssertTrue(host.window.drawHierarchy(in: host.window.bounds, afterScreenUpdates: true))
+            }
             let attachment = XCTAttachment(image: image); attachment.name = "YouTube-audio-" + String(width); attachment.lifetime = .keepAlways; add(attachment)
         }
         let picker = try XCTUnwrap(controller.extras.arrangedSubviews.compactMap { $0 as? UISegmentedControl }.first)

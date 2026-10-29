@@ -119,6 +119,10 @@ class MobileDownloadScreen: UITableViewController, QLPreviewControllerDataSource
         appearance.largeTitleTextAttributes = [.foregroundColor: UIColor.label]
         navigationItem.standardAppearance = appearance; navigationItem.scrollEdgeAppearance = appearance; navigationItem.compactAppearance = appearance
         navigationController?.navigationBar.tintColor = .systemBlue
+        navigationController?.navigationBar.barStyle = traitCollection.userInterfaceStyle == .dark ? .black : .default
+        navigationController?.navigationBar.standardAppearance = appearance
+        navigationController?.navigationBar.scrollEdgeAppearance = appearance
+        navigationController?.navigationBar.compactAppearance = appearance
         navigationItem.leftBarButtonItem = UIBarButtonItem(barButtonSystemItem: .close, target: self, action: #selector(closeScreen))
         navigationItem.leftBarButtonItem?.tintColor = .systemBlue
         clear.tintColor = .systemBlue
