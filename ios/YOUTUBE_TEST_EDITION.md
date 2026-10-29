@@ -10,6 +10,9 @@ These are separate unsigned IPAs for Sideloadly:
 Both currently use the same app/extension bundle identifiers. Installing one
 replaces the other; it is an upgrade/downgrade test rather than side-by-side apps.
 Keep the same Sideloadly signing identity to retain the container and settings.
+Cancel active YouTube transfers before switching back to the basic edition,
+which does not include their session handler or history UI. Saved YouTube files
+remain in the app container and are accessible again in the advanced edition.
 No website, payments, licensing or upgrade prompt is introduced at this stage.
 
 ## Source and build isolation

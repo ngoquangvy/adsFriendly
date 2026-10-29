@@ -70,6 +70,21 @@ struct YouTubePreparedDownload {
     let expiresAt: Date
 }
 
+struct YouTubeAudioCandidate {
+    let url: URL
+    let fileExtension: String
+    let bitrate: Int?
+    static func bestPerFormat(_ candidates: [YouTubeAudioCandidate]) -> [YouTubeAudioCandidate] {
+        let sorted = candidates.sorted {
+            let a = max($0.bitrate ?? 0, 0), b = max($1.bitrate ?? 0, 0)
+            if a != b { return a > b }
+            return $0.fileExtension == "m4a" && $1.fileExtension != "m4a"
+        }
+        var seen = Set<String>()
+        return sorted.filter { ["m4a", "webm"].contains($0.fileExtension) && seen.insert($0.fileExtension).inserted }
+    }
+}
+
 enum YouTubeSourceResolver {
     static func resolve(_ text: String) async throws -> YouTubeSources {
         let id = try YouTubeLink.videoID(text)
@@ -78,22 +93,29 @@ enum YouTubeSourceResolver {
         let streams: [YouTubeKit.Stream]
         do { streams = try await video.streams } catch { throw YouTubeDownloadError.unavailable }
         try Task.checkCancellation()
+        func reportedBitrate(_ stream: YouTubeKit.Stream) -> Int {
+            let average = stream.averageBitrate ?? 0
+            return average > 0 ? average : max(stream.bitrate ?? 0, 0)
+        }
         let valid = streams.filter { (try? YouTubeLink.mediaURL($0.url)) != nil }
         let compatible = valid.filter { $0.isNativelyPlayable }
         let allAudio = valid.filter { !$0.includesVideoTrack && $0.includesAudioTrack &&
             (($0.fileExtension == .m4a && $0.audioCodec == AudioCodec.BaseCodec.mp4a) ||
              ($0.fileExtension == .webm && $0.audioCodec == AudioCodec.BaseCodec.opus)) }
-            .sorted { ($0.averageBitrate ?? $0.bitrate ?? 0) > ($1.averageBitrate ?? $1.bitrate ?? 0) }
+            .sorted { reportedBitrate($0) > reportedBitrate($1) }
         let audios = compatible.filter { !$0.includesVideoTrack && $0.includesAudioTrack &&
             $0.fileExtension == .m4a && $0.audioCodec == AudioCodec.BaseCodec.mp4a }
-            .sorted { ($0.averageBitrate ?? $0.bitrate ?? 0) > ($1.averageBitrate ?? $1.bitrate ?? 0) }
+            .sorted { reportedBitrate($0) > reportedBitrate($1) }
         var choices: [YouTubeChoice] = []
-        var audioFormats = Set<String>()
-        for audio in allAudio {
-            let ext = audio.fileExtension == .m4a ? "m4a" : "webm"
-            guard audioFormats.insert(ext).inserted else { continue }
-            let bitrate = (audio.averageBitrate ?? audio.bitrate).map { " · \($0 / 1000) kbps" } ?? ""
-            let best = choices.isEmpty ? " · bitrate cao nhất tìm được" : ""
+        let audioChoices = YouTubeAudioCandidate.bestPerFormat(allAudio.map {
+            .init(url: $0.url, fileExtension: $0.fileExtension == .m4a ? "m4a" : "webm",
+                  bitrate: reportedBitrate($0) > 0 ? reportedBitrate($0) : nil)
+        })
+        for audio in audioChoices {
+            let ext = audio.fileExtension
+            let known = (audio.bitrate ?? 0) > 0
+            let bitrate = known ? " · \((audio.bitrate ?? 0) / 1000) kbps" : " · chưa biết bitrate"
+            let best = choices.isEmpty && known ? " · bitrate cao nhất tìm được" : ""
             let format = ext == "m4a" ? "M4A / AAC" : "WebM / Opus"
             choices.append(.init(id: "audio-\(ext)", label: "Audio · \(format)\(bitrate)\(best)",
                 tracks: [.init(role: "audio", url: audio.url, fileExtension: ext)], outputExtension: ext, hasVideo: false))

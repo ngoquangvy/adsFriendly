@@ -44,6 +44,43 @@ final class YouTubeTests: XCTestCase {
         }
     }
 
+    func testAudioRankingKeepsHighestReportedSourceAndBestOfEachOriginalFormat() {
+        let ranked = YouTubeAudioCandidate.bestPerFormat([
+            .init(url: sourceURL, fileExtension: "m4a", bitrate: 96_000),
+            .init(url: sourceURL, fileExtension: "webm", bitrate: nil),
+            .init(url: sourceURL, fileExtension: "m4a", bitrate: 128_000),
+            .init(url: sourceURL, fileExtension: "webm", bitrate: 160_000),
+        ])
+        XCTAssertEqual(ranked.map { $0.fileExtension }, ["webm", "m4a"])
+        XCTAssertEqual(ranked.map { $0.bitrate }, [160_000, 128_000])
+        XCTAssertTrue(YouTubeAudioCandidate.bestPerFormat([]).isEmpty)
+    }
+
+    @MainActor
+    func testRecoveryMarksLostTransfersAndResumesValidatedStaging() async throws {
+        for received in [false, true] {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let data = try fixture("m4a"), id = UUID().uuidString
+            let record = YouTubeJob(id: id, label: "Audio fixture", outputExtension: "m4a", hasVideo: false,
+                state: received ? "finishing" : "downloading",
+                tracks: [.init(role: "audio", fileExtension: "m4a", expectedBytes: Int64(data.count), bytes: received ? Int64(data.count) : 0, received: received)])
+            try JSONEncoder().encode([record]).write(to: directory.appendingPathComponent("history.json"))
+            if received { try data.write(to: directory.appendingPathComponent("\(id)-audio.staging.m4a")) }
+            let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [YouTubePendingProtocol.self]
+            let store = YouTubeDownloadStore(directory: directory, configuration: config, observeApp: false)
+            defer { store.invalidate(); try? FileManager.default.removeItem(at: directory) }
+            try await wait { ["saved", "failed"].contains(store.jobs.first?.state ?? "") }
+            if received {
+                XCTAssertEqual(store.jobs.first?.state, "saved", store.jobs.first?.reason ?? "")
+                XCTAssertEqual(try Data(contentsOf: XCTUnwrap(store.output(id))), data)
+            } else {
+                XCTAssertEqual(store.jobs.first?.reason, "session_ended")
+                XCTAssertNil(store.output(id))
+            }
+        }
+    }
+
     @MainActor
     func testOriginalAudioCommitIsByteExactAndHistoryDoesNotStoreURLs() async throws {
         for ext in ["m4a", "webm"] {

@@ -47,7 +47,12 @@ enum MobileSourceError: LocalizedError {
         switch self {
         case .configuration: return "Media module configuration is unavailable. Safari protection is unchanged."
         case .invalidURL: return "Paste one public HTTPS link without embedded credentials or a local address."
-        case .resolverRequired: return "This is a YouTube page, not a direct file. YouTube downloads use the separate YouTube test edition and screen."
+        case .resolverRequired:
+            #if AF_YOUTUBE
+            return "Đây là link YouTube. Đóng Media Tools và mở mục YouTube · Video / Audio để chọn nguồn tải."
+            #else
+            return "Link YouTube cần bản YouTube thử nghiệm riêng. Bản cơ bản này tải link file nhạc/video HTTPS trực tiếp."
+            #endif
         case .rejected(let status): return "Source rejected the request (HTTP \(status)). Browser sessions are not copied."
         case .unsupported: return "Not a supported direct audio/video file. Player pages, playlists and DRM require a separate resolver."
         case .expired: return "The source check expired. Check again before downloading."

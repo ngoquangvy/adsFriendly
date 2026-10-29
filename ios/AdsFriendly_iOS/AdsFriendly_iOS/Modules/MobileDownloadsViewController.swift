@@ -21,11 +21,11 @@ final class MobileDownloadsViewController: UIViewController, UITableViewDataSour
     override func viewDidLoad() {
         super.viewDidLoad(); title = "Media Tools"; view.backgroundColor = .systemBackground
         navigationItem.leftBarButtonItem = UIBarButtonItem(barButtonSystemItem: .close, target: self, action: #selector(close))
-        input.placeholder = "HTTPS media URL"; input.keyboardType = .URL; input.autocorrectionType = .no; input.autocapitalizationType = .none
+        input.placeholder = "Link file nhạc / video HTTPS"; input.keyboardType = .URL; input.autocorrectionType = .no; input.autocapitalizationType = .none
         input.accessibilityIdentifier = "media-source"
         input.borderStyle = .roundedRect; input.addTarget(self, action: #selector(edited), for: .editingChanged)
         message.numberOfLines = 0; message.font = .preferredFont(forTextStyle: .footnote)
-        message.text = "Original direct audio/video only. Browser sessions are not copied. YouTube pages and playlists need a future mobile resolver."
+        message.text = "Tải file nhạc/video gốc từ link HTTPS trực tiếp, không đổi định dạng. Link trang web cần bộ phân tích riêng; với YouTube, dùng mục YouTube ở bản YouTube thử nghiệm."
         check.setTitle("Check source", for: .normal); check.addTarget(self, action: #selector(checkSource), for: .touchUpInside)
         download.setTitle("Download original", for: .normal); download.isEnabled = false; download.addTarget(self, action: #selector(confirm), for: .touchUpInside)
         check.accessibilityIdentifier = "media-check"
