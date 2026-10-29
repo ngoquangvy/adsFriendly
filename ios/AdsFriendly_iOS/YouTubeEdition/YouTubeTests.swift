@@ -62,7 +62,7 @@ final class YouTubeTests: XCTestCase {
                 headerFields: ["Content-Type": mime, "Content-Length": String(data.count)]))
             store.receive(id: id, role: "audio", response: response, location: incoming)
             try await wait { store.jobs.first?.state == "saved" || store.jobs.first?.state == "failed" }
-            XCTAssertEqual(store.jobs.first?.state, "saved")
+            XCTAssertEqual(store.jobs.first?.state, "saved", "Original \(ext): \(store.jobs.first?.reason ?? "no reason")")
             let output = try XCTUnwrap(store.output(id))
             XCTAssertEqual(try Data(contentsOf: output), data)
             let history = try String(contentsOf: directory.appendingPathComponent("history.json"), encoding: .utf8)

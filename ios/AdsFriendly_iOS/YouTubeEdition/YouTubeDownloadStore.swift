@@ -91,7 +91,9 @@ final class YouTubeDownloadStore: NSObject, URLSessionDownloadDelegate, URLSessi
         try JSONEncoder().encode(jobs).write(to: ledger, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     }
     private func trackFile(_ id: String, _ role: String) -> URL {
-        directory.appendingPathComponent("\(id)-\(role).part")
+        let ext = jobs.first(where: { $0.id == id })?.tracks.first(where: { $0.role == role })?.fileExtension ?? "part"
+        // AVFoundation uses the suffix as well as media headers for local assets.
+        return directory.appendingPathComponent("\(id)-\(role).staging.\(ext)")
     }
     func start(_ prepared: YouTubePreparedDownload) throws {
         guard prepared.expiresAt > Date(), prepared.tracks.allSatisfy({ $0.source.expiresAt > Date() }) else { throw YouTubeDownloadError.expired }
