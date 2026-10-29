@@ -13,20 +13,6 @@ private final class YouTubePendingProtocol: URLProtocol {
 final class YouTubeTests: XCTestCase {
     private let sourceURL = URL(string: "https://r1---sn-fixture.googlevideo.com/videoplayback?token=never-store-this")!
 
-    @MainActor
-    func testLivePublicYouTubeSourceWhenExplicitlyEnabled() async throws {
-        guard ProcessInfo.processInfo.environment["AF_YOUTUBE_LIVE_PROBE"] == "1" else {
-            throw XCTSkip("Live network probe disabled; deterministic tests do not contact YouTube.")
-        }
-        let sources = try await YouTubeSourceResolver.resolve("https://www.youtube.com/watch?v=aqz-KE-bpKQ")
-        let audio = try XCTUnwrap(sources.choices.first(where: { !$0.hasVideo }))
-        let video = try XCTUnwrap(sources.choices.first(where: { $0.hasVideo }))
-        let preparedAudio = try await YouTubeSourceResolver.prepare(audio, expiresAt: sources.expiresAt)
-        let preparedVideo = try await YouTubeSourceResolver.prepare(video, expiresAt: sources.expiresAt)
-        XCTAssertFalse(preparedAudio.hasVideo); XCTAssertTrue(preparedVideo.hasVideo)
-        XCTAssertTrue(preparedAudio.tracks.allSatisfy { $0.source.expiresAt > Date() })
-    }
-
     func testYouTubeLinksRejectSpoofingAmbiguityAndPlaylistsWithoutVideo() throws {
         for link in ["https://youtu.be/aqz-KE-bpKQ", "https://www.youtube.com/watch?v=aqz-KE-bpKQ",
                      "https://m.youtube.com/shorts/aqz-KE-bpKQ", "https://music.youtube.com/watch?v=aqz-KE-bpKQ"] {
@@ -192,6 +178,21 @@ final class YouTubeTests: XCTestCase {
         default: throw YouTubeDownloadError.sourceChanged
         }
         return try XCTUnwrap(Data(base64Encoded: encoded))
+    }
+}
+
+// Excluded by the default test scheme; the Live scheme must run this without
+// environment-variable skip conditions so a skipped test cannot look successful.
+final class YouTubeLiveTests: XCTestCase {
+    @MainActor
+    func testPublicYouTubeSources() async throws {
+        let sources = try await YouTubeSourceResolver.resolve("https://www.youtube.com/watch?v=aqz-KE-bpKQ")
+        let audio = try XCTUnwrap(sources.choices.first(where: { !$0.hasVideo }))
+        let video = try XCTUnwrap(sources.choices.first(where: { $0.hasVideo }))
+        let preparedAudio = try await YouTubeSourceResolver.prepare(audio, expiresAt: sources.expiresAt)
+        let preparedVideo = try await YouTubeSourceResolver.prepare(video, expiresAt: sources.expiresAt)
+        XCTAssertFalse(preparedAudio.hasVideo); XCTAssertTrue(preparedVideo.hasVideo)
+        XCTAssertTrue(preparedAudio.tracks.allSatisfy { $0.source.expiresAt > Date() })
     }
 }
 #endif

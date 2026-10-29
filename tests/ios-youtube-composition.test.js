@@ -45,4 +45,9 @@ test("basic project has no YouTube sources/package; generated edition pins the d
     ["scripts/build-ios-youtube-project.mjs", "--check"],
     { stdio: "pipe" },
   );
+  const live = await readFile(
+    "ios/AdsFriendly_iOS/AdsFriendly_YouTube.xcodeproj/xcshareddata/xcschemes/AdsFriendly_iOS-Live.xcscheme",
+    "utf8",
+  );
+  assert.doesNotMatch(live, /SkippedTests|AF_YOUTUBE_LIVE_PROBE/);
 });

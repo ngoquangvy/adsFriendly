@@ -146,8 +146,8 @@ const schemeXML = `<?xml version="1.0" encoding="UTF-8"?>
   <TestAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.IDEFoundation.Launcher.LLDB" shouldUseLaunchSchemeArgsEnv="NO">
     <Testables><TestableReference skipped="NO">
       <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="C1980DE12FD18E0E00001364" BuildableName="AdsFriendly_iOSTests.xctest" BlueprintName="AdsFriendly_iOSTests" ReferencedContainer="container:AdsFriendly_YouTube.xcodeproj"/>
+      <SkippedTests><Test Identifier="YouTubeLiveTests/testPublicYouTubeSources"/></SkippedTests>
     </TestableReference></Testables>
-    <EnvironmentVariables><EnvironmentVariable key="AF_YOUTUBE_LIVE_PROBE" value="$(AF_YOUTUBE_LIVE_PROBE)" isEnabled="YES"/></EnvironmentVariables>
   </TestAction>
   <LaunchAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.IDEFoundation.Launcher.LLDB" launchStyle="0" useCustomWorkingDirectory="NO" ignoresPersistentStateOnLaunch="NO" debugDocumentVersioning="YES" debugServiceExtension="internal" allowLocationSimulation="YES">
     <BuildableProductRunnable runnableDebuggingMode="0"><BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="C1980DC42FD18DFE00001364" BuildableName="AdsFriendly_iOS.app" BlueprintName="AdsFriendly_iOS" ReferencedContainer="container:AdsFriendly_YouTube.xcodeproj"/></BuildableProductRunnable>
@@ -163,4 +163,15 @@ if (process.argv.includes("--check")) {
 } else {
   await mkdir(new URL("./", scheme), { recursive: true });
   await writeFile(scheme, schemeXML);
+}
+const liveScheme = new URL("./AdsFriendly_iOS-Live.xcscheme", scheme);
+const liveXML = schemeXML.replace(
+  '      <SkippedTests><Test Identifier="YouTubeLiveTests/testPublicYouTubeSources"/></SkippedTests>\n',
+  "",
+);
+if (process.argv.includes("--check")) {
+  if ((await readFile(liveScheme, "utf8")).replace(/\r\n/g, "\n") !== liveXML)
+    throw Error("Stale live YouTube scheme.");
+} else {
+  await writeFile(liveScheme, liveXML);
 }
